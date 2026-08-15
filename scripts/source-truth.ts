@@ -43,6 +43,25 @@ const EXCLUDED = [
   /docs[\\/]v1\.3-source-manifest\.json$/,
 ];
 
+/**
+ * Git may check text files out with CRLF on Windows and LF on Linux. Source
+ * truth is a repository identity, so its digest must be independent of that
+ * checkout policy. Valid UTF-8 text is canonicalized to LF; binary or invalid
+ * UTF-8 content remains byte-for-byte unchanged.
+ */
+function canonicalFileBytes(raw: Uint8Array): Uint8Array {
+  if (raw.includes(0)) return raw;
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(raw);
+    if (!text.includes("\u0000") && (text.includes("\r\n") || text.includes("\r"))) {
+      return new TextEncoder().encode(text.replace(/\r\n?/gu, "\n"));
+    }
+  } catch {
+    // Non-UTF-8 content is treated as binary and hashed as-is.
+  }
+  return raw;
+}
+
 export interface SourceTruthEntry {
   readonly path: string;
   readonly bytes: number;
@@ -89,7 +108,7 @@ export async function buildSourceTruthManifest(repo = process.cwd()): Promise<So
   for await (const relative of historicalGlob.scan({ cwd: repo, onlyFiles: true, dot: true })) {
     const normalized = relative.replaceAll("\\", "/");
     if (["node_modules/", "dist/", "target/", "__pycache__/"] .some((prefix) => normalized.includes(prefix))) continue;
-    const bytes = new Uint8Array(await Bun.file(resolve(repo, relative)).arrayBuffer());
+    const bytes = canonicalFileBytes(new Uint8Array(await Bun.file(resolve(repo, relative)).arrayBuffer()));
     historicalArtifacts.push({ path: normalized, bytes: bytes.byteLength, sha256: await sha256(bytes), classification: "historical-backup" });
   }
   historicalArtifacts.sort((left, right) => left.path.localeCompare(right.path));
@@ -97,14 +116,14 @@ export async function buildSourceTruthManifest(repo = process.cwd()): Promise<So
     const glob = new Bun.Glob(`${root}/**/*`);
     for await (const relative of glob.scan({ cwd: repo, onlyFiles: true, dot: true })) {
       if (EXCLUDED.some((pattern) => pattern.test(relative))) continue;
-      const bytes = new Uint8Array(await Bun.file(resolve(repo, relative)).arrayBuffer());
+      const bytes = canonicalFileBytes(new Uint8Array(await Bun.file(resolve(repo, relative)).arrayBuffer()));
       files.push({ path: relative.replaceAll("\\", "/"), bytes: bytes.byteLength, sha256: await sha256(bytes) });
     }
   }
   files.sort((left, right) => left.path.localeCompare(right.path));
   for (const rootFile of ROOT_FILES) {
     try {
-      const bytes = new Uint8Array(await Bun.file(resolve(repo, rootFile)).arrayBuffer());
+      const bytes = canonicalFileBytes(new Uint8Array(await Bun.file(resolve(repo, rootFile)).arrayBuffer()));
       files.push({ path: rootFile, bytes: bytes.byteLength, sha256: await sha256(bytes) });
     } catch {
       // An absent optional root file (e.g. a lockfile in a pruned archive)
