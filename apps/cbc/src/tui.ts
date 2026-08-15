@@ -618,6 +618,7 @@ export class InteractiveUi {
       thinkingVisibility: this.#thinkingVisibility,
       toolDetail: this.#toolDetail,
       subagentDetail: this.#subagentDetail,
+      ...(this.#fullScreen ? {} : { compactTasks: false }),
       nowMs: this.#options.host.now(),
       ...(model.currentTurnId !== undefined ? { currentTurnId: model.currentTurnId } : {}),
       turnActive: !["idle", "completed", "cancelled", "failed", "partial"].includes(

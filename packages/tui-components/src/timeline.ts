@@ -620,8 +620,31 @@ export class ProjectedTimeline {
     options: TimelineRenderOptions,
   ): StyledLine[] {
     this.#stats.renderedGroups += 1;
-    const perItem = this.#groupOptions(group, index, options);
 
+    // Commentary entries share one stable visual group for indexing, but each
+    // durable provider item remains its own rendered block. Joining distinct
+    // items here would diverge from the authoritative renderer and would make
+    // row heights change as history grows.
+    if (group.kind === "commentary") {
+      const lines: StyledLine[] = [];
+      for (const [entryIndex, entry] of group.entries.entries()) {
+        const rendered = this.#renderCache.renderItem(
+          entry.item,
+          entry.sourceRevision,
+          context,
+          this.#optionsForItem(
+            entry.item,
+            this.#entryOptions(group, index, entryIndex, options),
+          ),
+        );
+        if (rendered.length === 0) continue;
+        if (lines.length > 0) lines.push(blank());
+        lines.push(...rendered);
+      }
+      return lines;
+    }
+
+    const perItem = this.#groupOptions(group, index, options);
     if (group.kind === "succeeded_reads" && group.entries.length <= 2) {
       const lines: StyledLine[] = [];
       for (const entry of group.entries) {
@@ -656,11 +679,12 @@ export class ProjectedTimeline {
     maxLines: number,
   ): TimelineItemTailRender | undefined {
     if (group.kind === "succeeded_reads") return undefined;
-    const item =
-      group.kind === "commentary"
-        ? group.entries[0]?.item
-        : this.#materializeGroup(group);
-    if (item?.type !== "commentary" && item?.type !== "final") return undefined;
+    if (group.kind === "commentary" && group.entries.length > 1) {
+      return this.#renderCommentaryGroupTail(group, index, context, options, maxLines);
+    }
+
+    const item = this.#materializeGroup(group);
+    if (item.type !== "commentary" && item.type !== "final") return undefined;
     const markdownIndex = this.#markdownIndexForGroup(group, item);
     if (markdownIndex === undefined) return undefined;
     const result = renderTimelineItemTail(
@@ -676,6 +700,80 @@ export class ProjectedTimeline {
     if (result.bounded) this.#stats.boundedMarkdownRenders += 1;
     else this.#stats.fullMarkdownFallbacks += 1;
     return result;
+  }
+
+  #renderCommentaryGroupTail(
+    group: InternalVisualGroup,
+    groupIndex: number,
+    context: BlockContext,
+    options: TimelineRenderOptions,
+    maxLines: number,
+  ): TimelineItemTailRender | undefined {
+    const rows = Math.max(1, Math.floor(maxLines));
+    const chunks: StyledLine[][] = [];
+    let usedRows = 0;
+    let sourceLinesRendered = 0;
+    let bounded = true;
+    let complete = true;
+    let entriesVisited = 0;
+
+    for (let entryIndex = group.entries.length - 1; entryIndex >= 0; entryIndex -= 1) {
+      const entry = group.entries[entryIndex];
+      if (entry === undefined) continue;
+      const markdownIndex =
+        entry.markdownIndex ??
+        (entry.item.type === "commentary"
+          ? createMarkdownSourceIndex(entry.item.text)
+          : undefined);
+      if (markdownIndex === undefined) return undefined;
+      const remaining = Math.max(1, rows - usedRows);
+      const result = renderTimelineItemTail(
+        entry.item,
+        context,
+        this.#optionsForItem(
+          entry.item,
+          this.#entryOptions(group, groupIndex, entryIndex, options),
+        ),
+        remaining,
+        markdownIndex,
+      );
+      if (result === undefined) return undefined;
+      entriesVisited += 1;
+      sourceLinesRendered += result.sourceLinesRendered;
+      bounded = bounded && result.bounded;
+      chunks.unshift(result.lines);
+      if (result.lines.length > 0) {
+        usedRows += result.totalLines ?? result.lines.length;
+        if (chunks.length > 1) usedRows += 1;
+      }
+      if (result.totalLines === undefined) {
+        complete = false;
+        break;
+      }
+      if (usedRows >= rows) break;
+    }
+
+    const lines: StyledLine[] = [];
+    for (const chunk of chunks) {
+      if (chunk.length === 0) continue;
+      if (lines.length > 0) lines.push(blank());
+      lines.push(...chunk);
+    }
+    const allEntriesVisited = complete && entriesVisited === group.entries.length;
+    const totalLines = allEntriesVisited ? lines.length : undefined;
+    // `lines` contains the chronological suffix; row clipping belongs to the
+    // caller so the separator immediately before a visible item is retained.
+    const clipped = lines.slice(Math.max(0, lines.length - rows));
+    this.#stats.renderedGroups += 1;
+    this.#stats.markdownSourceLinesRendered += sourceLinesRendered;
+    if (bounded) this.#stats.boundedMarkdownRenders += 1;
+    else this.#stats.fullMarkdownFallbacks += 1;
+    return {
+      lines: clipped,
+      ...(totalLines !== undefined ? { totalLines } : {}),
+      sourceLinesRendered,
+      bounded,
+    };
   }
 
   #groupOptions(
@@ -698,6 +796,30 @@ export class ProjectedTimeline {
     return perItem;
   }
 
+  #entryOptions(
+    group: InternalVisualGroup,
+    groupIndex: number,
+    entryIndex: number,
+    options: TimelineRenderOptions,
+  ): TimelineRenderOptions {
+    const assistant = group.kind === "commentary";
+    const newest =
+      assistant &&
+      group.id === this.#newestCommentaryGroupId &&
+      entryIndex === group.entries.length - 1;
+    const previousAssistant =
+      entryIndex > 0 || this.#groups[groupIndex - 1]?.kind === "commentary";
+    const perItem: TimelineRenderOptions = {
+      ...options,
+      isNewestCommentary: newest,
+      groupAssistant:
+        options.groupAssistant === true && assistant && previousAssistant,
+    };
+    if (assistant && !newest) {
+      delete (perItem as { reasoningElapsedMs?: number }).reasoningElapsedMs;
+    }
+    return perItem;
+  }
   #markdownIndexForGroup(
     group: InternalVisualGroup,
     item: TimelineItem,

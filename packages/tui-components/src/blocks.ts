@@ -1010,7 +1010,7 @@ export function renderTaskCard(
     ];
   }
   const headSegments: Segment[] = [
-    segment("● ", { fg: roleToken }),
+    segment("[SUB]", { fg: roleToken, bold: true }),
     segment(` Subagent \u00b7 ${roleName} `, { fg: "bg.base", bg: roleToken, bold: true }),
   ];
   if (goalText && goalText.length > 0) {
@@ -2076,6 +2076,8 @@ export interface TimelineRenderOptions {
   readonly turnActive?: boolean;
   /** Collapse task cards to one line each (§6.10). */
   readonly collapseTasks?: boolean;
+  /** Internal presentation override used by append-only plain output. */
+  readonly compactTasks?: boolean;
   readonly expandDiscovery?: boolean;
   /** Suppress the phase header when the previous item was also assistant text. */
   readonly groupAssistant?: boolean;
@@ -2224,7 +2226,7 @@ export function renderTimelineItem(
     case "task":
       return renderTaskCard(item, context, {
         ...(options.collapseTasks !== undefined ? { collapsed: options.collapseTasks } : {}),
-        compact: resolvePresentationPolicy(options).subagentDetail === "drawer",
+        compact: options.compactTasks ?? resolvePresentationPolicy(options).subagentDetail === "drawer",
         ...(options.nowMs !== undefined ? { nowMs: options.nowMs } : {}),
         ...(options.hideSubagentEvents === true ? { hideToolTree: true } : {}),
         ...(options.hideSubagentEvents === true ? { hideLiveState: true } : {}),

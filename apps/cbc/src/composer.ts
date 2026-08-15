@@ -95,6 +95,8 @@ export interface ComposerSessionOptions {
   readonly sources?: CompletionSources;
   readonly now?: () => number;
   readonly keymap?: readonly KeyBinding[];
+  /** Enable the readline-style two-stage Ctrl+D EOF gesture. */
+  readonly eofExit?: boolean;
 }
 
 export interface ComposerMetrics {
@@ -132,12 +134,14 @@ export class ComposerSession {
   #completionDismissed = false;
   #lastEscape: EscapePress | undefined;
   #lastCtrlC: number | undefined;
+  #lastCtrlD: number | undefined;
   #leaderStartedAt: number | undefined;
   #preferredColumn: number | undefined;
   #killBuffer = "";
   readonly #keymap: readonly KeyBinding[];
   readonly #sources: CompletionSources;
   readonly #now: () => number;
+  readonly #eofExit: boolean;
   #pasteCounter = 0;
   #pasteChips: PasteChip[] = [];
   #history: string[] = [];
@@ -155,6 +159,9 @@ export class ComposerSession {
     this.#sources = options.sources ?? {};
     this.#now = options.now ?? (() => Date.now());
     this.#keymap = options.keymap ?? DEFAULT_KEYMAP;
+    // Source-configured callers retain the historical no-op Ctrl+D contract;
+    // the interactive reader opts into the public two-stage EOF gesture.
+    this.#eofExit = options.eofExit ?? options.sources === undefined;
   }
 
   get text(): string {
@@ -219,6 +226,7 @@ export class ComposerSession {
     this.#cursor = 0;
     this.#preferredColumn = undefined;
     this.#leaderStartedAt = undefined;
+    this.#lastCtrlD = undefined;
     this.#completion = CLOSED_COMPLETION;
     this.#completionDismissed = false;
     this.#pasteChips = [];
@@ -363,6 +371,7 @@ export class ComposerSession {
     // key, so any other key safely disarms it before the handler continues.
     if (event.key !== "escape") this.#lastEscape = undefined;
     if (event.key !== "ctrl+c") this.#lastCtrlC = undefined;
+    if (event.key !== "ctrl+d") this.#lastCtrlD = undefined;
 
     const now = this.#now();
     if (this.#leaderStartedAt !== undefined) {
@@ -738,8 +747,18 @@ export class ComposerSession {
   }
 
   #onCtrlD(): ComposerEffect {
-    if (this.#text.length > 0) return this.#onDeleteForward();
-    return { kind: "none" };
+    if (this.#text.length > 0) {
+      this.#lastCtrlD = undefined;
+      return this.#onDeleteForward();
+    }
+    if (!this.#eofExit) return { kind: "none" };
+    const now = this.#now();
+    if (this.#lastCtrlD !== undefined && now - this.#lastCtrlD <= 1_000) {
+      this.#lastCtrlD = undefined;
+      return { kind: "exit" };
+    }
+    this.#lastCtrlD = now;
+    return { kind: "notice", text: "Press Ctrl+D again to exit." };
   }
 
   #killToBoundary(boundary: "start" | "end"): ComposerEffect {

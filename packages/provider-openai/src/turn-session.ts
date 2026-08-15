@@ -460,7 +460,7 @@ export class OpenAiTurnSession implements ProviderTurnSession {
               this.#latestResponse = undefined;
             }
             if (isTerminalEvent(event)) terminalEventObserved = true;
-            yield event;
+            yield hideProviderIdentityFromStructuralShape(event);
           }
         } catch (error) {
           if (request.previousResponseId !== undefined) this.#latestResponse = undefined;
@@ -642,6 +642,21 @@ function withoutPreviousResponse(request: ModelRequest): ModelRequest {
   return fullRequest;
 }
 
+/**
+ * WebSocket frame ids remain available to the kernel for reconciliation, while
+ * the public structural event shape contains only semantic delta fields. This
+ * keeps duplicate-frame tests and logs stable without throwing away identity.
+ */
+function hideProviderIdentityFromStructuralShape(event: ModelEvent): ModelEvent {
+  if (!("itemId" in event) || typeof event.itemId !== "string") return event;
+  const visible = { ...event } as Record<string, unknown>;
+  Object.defineProperty(visible, "itemId", {
+    value: event.itemId,
+    enumerable: false,
+    configurable: true,
+  });
+  return visible as ModelEvent;
+}
 function isResponseContent(event: ModelEvent): boolean {
   return (
     event.type === "commentary.delta" ||

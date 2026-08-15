@@ -1309,6 +1309,9 @@ export function runActiveFrameSurrogateScenario(config: HarnessConfig): Scenario
       phase: "commentary",
       turnId: "turn-active",
       agentId: "root",
+      // Every frame is another revision of the same provider item. Supplying
+      // its identity keeps unrelated uncorrelated spans from being coalesced.
+      itemId: "streaming-commentary",
       nowMs: frame,
     });
     const live = registry.rootViews("turn-active").map((view) => ({

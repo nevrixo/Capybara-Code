@@ -91,6 +91,7 @@ export class InputReader {
       ...(options.sources !== undefined ? { sources: options.sources } : {}),
       ...(options.keymap !== undefined ? { keymap: options.keymap } : {}),
       ...(options.now !== undefined ? { now: options.now } : {}),
+      eofExit: true,
     });
   }
 

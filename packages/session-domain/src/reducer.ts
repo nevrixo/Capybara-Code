@@ -721,6 +721,19 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
         next.taskLive = taskLive;
         break;
       }
+      // An explicit root scope is an ownership marker from the provider. It
+      // updates the root sampling state without replacing the turn-level label.
+      // Unscoped legacy deltas below still expose their phase-specific label.
+      if (event.agentId === "root") {
+        next.turnStatus = "sampling";
+        // The explicit root final envelope owns the answer-writing phase. Keep
+        // reasoning/commentary revisions on the turn banner established by the
+        // turn start so child/root ownership cannot overwrite it spuriously.
+        if (phase === "final") {
+          next.live = { kind: "working", label: "Writing...", interruptHint: "esc" };
+        }
+        break;
+      }
       // Candidate-final text is visible in the timeline itself. Keeping this
       // live label empty avoids a second provisional "Writing final answer"
       // banner in the frame chrome.
