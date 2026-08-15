@@ -1,0 +1,92 @@
+{
+  "x-note": "PRD §25.8. `input` is a sequence of §20.6 event payloads to feed the reducer; `expectPlain` is the expected plain-text rendering at 100 columns. Golden output is asserted as text and semantic cells rather than ANSI bytes, so a palette change does not churn this file (§6.5 keeps meaning in markers, not colour).",
+  "columns": 100,
+  "capabilities": {
+    "colorDepth": "none",
+    "unicode": true,
+    "italic": false,
+    "stableEmojiWidth": true,
+    "reducedMotion": true,
+    "mouse": false,
+    "hyperlinks": false
+  },
+  "events": [
+    {
+      "kind": "session.started",
+      "payload": { "modelId": "gpt-5.6", "permissionMode": "auto-review" }
+    },
+    { "kind": "user.message", "payload": { "text": "Install sharp and run the tests" } },
+    {
+      "kind": "assistant.commentary",
+      "payload": { "text": "I'll check the manifest first, then install." }
+    },
+    {
+      "kind": "tool.discovery",
+      "payload": {
+        "query": "install a dependency",
+        "activated": ["process.run"],
+        "activeCount": 6,
+        "totalCount": 6,
+        "limit": 10,
+        "matches": [
+          { "toolId": "process.run", "title": "Run", "description": "install, dependency", "score": 0.9 }
+        ]
+      }
+    },
+    {
+      "kind": "approval.requested",
+      "payload": {
+        "approvalId": "apr_1",
+        "callId": "call_1",
+        "action": "process.run",
+        "display": "npm install sharp",
+        "cwd": ".",
+        "riskClass": "R3",
+        "reason": "modifies dependency files and uses network",
+        "network": true,
+        "sideEffects": ["writes package-lock.json", "downloads packages"],
+        "offeredScopes": ["once", "turn", "session", "project"],
+        "actionHash": "1a2b3c4d"
+      }
+    },
+    {
+      "kind": "approval.resolved",
+      "payload": { "approvalId": "apr_1", "decision": "deny", "reason": "offline build" }
+    },
+    {
+      "kind": "assistant.final",
+      "payload": {
+        "text": "I could not install sharp: the install was denied.",
+        "report": {
+          "status": "partial",
+          "summary": "I could not install sharp: the install was denied.",
+          "changedFiles": [],
+          "verification": [
+            {
+              "command": "npm test",
+              "status": "not_run",
+              "evidence": "the dependency was never installed, so the suite would fail for the wrong reason"
+            }
+          ],
+          "delegatedTasks": [],
+          "risks": ["sharp is still missing from the dependency tree"],
+          "nextStep": "Approve the install, or add sharp to package.json manually and re-run."
+        }
+      }
+    },
+    { "kind": "turn.completed", "payload": { "status": "partial", "exitCode": 8 } }
+  ],
+  "expect": {
+    "mustContain": [
+      "Install sharp and run the tests",
+      "status: partial",
+      "not_run",
+      "sharp is still missing from the dependency tree"
+    ],
+    "mustNotContain": [
+      "\u001b[",
+      "Idle"
+    ],
+    "x-note-mustNotContain": "No ANSI in a colorDepth:none render (AC-45), and §6.3 removes the live line when idle rather than printing 'Idle'."
+  }
+}

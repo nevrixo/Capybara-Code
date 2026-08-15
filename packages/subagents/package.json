@@ -1,0 +1,12 @@
+{
+  "name": "@cbc/subagents",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Capybara Code subagent system: roles, task contracts, scheduler, writer leases, and parent synthesis",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts"
+}

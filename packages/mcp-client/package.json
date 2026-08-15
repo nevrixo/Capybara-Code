@@ -1,0 +1,12 @@
+{
+  "name": "@cbc/mcp-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Capybara Code MCP client: dual-era protocol negotiation, stdio and Streamable HTTP transports, capability catalog, permissions, OAuth, and doctor",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts"
+}

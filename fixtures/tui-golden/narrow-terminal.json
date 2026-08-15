@@ -1,0 +1,51 @@
+{
+  "x-note": "PRD §6.16 and §25.8. The same session rendered at four widths. §6.13's status bar drops fields from the lowest priority upward, and AC-07 is only meaningful if the drop order is the documented one — so each width lists which fields must survive.",
+  "events": [
+    {
+      "kind": "session.started",
+      "payload": { "modelId": "gpt-5.6", "permissionMode": "auto-review" }
+    },
+    { "kind": "user.message", "payload": { "text": "짧은 질문" } },
+    {
+      "kind": "usage.updated",
+      "payload": {
+        "inputTokens": 12000,
+        "cachedInputTokens": 9000,
+        "outputTokens": 800,
+        "reasoningTokens": 240,
+        "estimatedCostUsd": 0.0431
+      }
+    }
+  ],
+  "widths": [
+    {
+      "columns": 130,
+      "breakpoint": "wide",
+      "mustContain": ["gpt-5.6", "auto-review", "$"],
+      "note": "Everything fits, including cost."
+    },
+    {
+      "columns": 100,
+      "breakpoint": "target",
+      "mustContain": ["gpt-5.6", "auto-review"],
+      "note": "The reference width from §6.1."
+    },
+    {
+      "columns": 70,
+      "breakpoint": "narrow",
+      "mustContain": ["gpt-5.6"],
+      "note": "Lower-priority fields drop; the model must still be visible per §6.13."
+    },
+    {
+      "columns": 50,
+      "breakpoint": "compact",
+      "mustContain": ["gpt-5.6"],
+      "expectWarning": true,
+      "note": "§6.16 shows the compact-terminal warning once below 60 columns."
+    }
+  ],
+  "expect": {
+    "x-note": "The Korean input is here on purpose: AC-05 requires correct grapheme width for CJK, and a naive length check silently mis-wraps it. Every width must render the message without splitting a cluster.",
+    "mustContain": ["짧은 질문"]
+  }
+}

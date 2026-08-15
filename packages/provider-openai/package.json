@@ -1,0 +1,12 @@
+{
+  "name": "@cbc/provider-openai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenAI Responses provider adapter, reasoning policy, and mock provider",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts"
+}

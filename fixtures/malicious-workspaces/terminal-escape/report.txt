@@ -1,0 +1,13 @@
+Build report
+csi-clear [2J[H cleared-your-screen
+osc-title ]0;pwned title-was-set
+osc8-link ]8;;file:///etc/passwd\innocent text]8;;\ end-link
+osc52-clipboard ]52;c;cGF5bG9hZA== clipboard-written
+dcs Pq#0garbage\ device-control
+alt-screen [?1049h switched
+bare-esc  lone-escape
+c1-csi 2J eight-bit
+cr-overwrite visibleHIDDEN
+bs-overwrite visibleHIDDEN
+sgr-only [31mred[0m and [1mbold[0m
+end of report

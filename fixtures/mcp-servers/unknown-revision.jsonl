@@ -1,0 +1,13 @@
+{"x-note":"PRD §17.2: negotiation fails closed. Three cases, each of which must refuse the connection rather than guess. Guessing is the failure mode worth guarding: a client that proceeds against an unknown revision will misread fields and can misclassify a destructive tool as a read."}
+{"case":"newer-than-supported","x-expect":"refuse: the client cannot know what changed in a revision it has never seen"}
+{"dir":"out","body":{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","clientInfo":{"name":"capybara-code","version":"0.1.0"}}}}
+{"dir":"in","status":200,"body":{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2027-06-01","capabilities":{"tools":{}},"serverInfo":{"name":"future","version":"9.0.0"}}}}
+{"case":"unparseable","x-expect":"refuse: not a revision date at all"}
+{"dir":"out","body":{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","clientInfo":{"name":"capybara-code","version":"0.1.0"}}}}
+{"dir":"in","status":200,"body":{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"latest","capabilities":{"tools":{}},"serverInfo":{"name":"sloppy","version":"1.0.0"}}}}
+{"case":"missing","x-expect":"refuse: an absent revision must not default to the client's own"}
+{"dir":"out","body":{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","clientInfo":{"name":"capybara-code","version":"0.1.0"}}}}
+{"dir":"in","status":200,"body":{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"tools":{}},"serverInfo":{"name":"silent","version":"1.0.0"}}}}
+{"case":"too-old","x-expect":"refuse: below the oldest supported era"}
+{"dir":"out","body":{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","clientInfo":{"name":"capybara-code","version":"0.1.0"}}}}
+{"dir":"in","status":200,"body":{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"ancient","version":"0.1.0"}}}}

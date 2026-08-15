@@ -1,0 +1,9 @@
+{
+  "name": "cbc-bench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CBC Bench harness and task suite (PRD §26)",
+  "bin": { "cbc-bench": "./src/cli.ts" },
+  "main": "./src/cli.ts"
+}

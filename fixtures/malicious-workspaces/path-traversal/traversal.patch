@@ -1,0 +1,13 @@
+--- a/../../../tmp/owned.txt
++++ b/../../../tmp/owned.txt
+@@ -0,0 +1 @@
++written outside the workspace
+--- a/src/legit.ts
++++ b/src/legit.ts
+@@ -1 +1 @@
+-export const value = 1;
++export const value = 2;
+--- a//etc/passwd
++++ b//etc/passwd
+@@ -0,0 +1 @@
++root::0:0:root:/root:/bin/sh

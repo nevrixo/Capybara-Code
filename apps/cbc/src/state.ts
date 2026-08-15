@@ -1,0 +1,431 @@
+/**
+ * Host-side persistent state — PRD §13.6, §18.6, §21.2, §21.3, PERM-001.
+ *
+ * Three stores live here: the effective configuration, the project trust record, and
+ * the session index. All three are read before anything else happens, because §13.6
+ * makes trust a precondition for loading project config at all — an untrusted
+ * workspace must not get a vote on its own permissions.
+ */
+
+import {
+  defaultConfig,
+  loadConfig,
+  normalizeConfigPath,
+  readPath,
+  writePath,
+  type CbcConfig,
+  type ConfigIssue,
+  type ConfigSource,
+  type LoadConfigResult,
+} from "@cbc/config-schema";
+import type { TrustState } from "@cbc/permissions";
+
+import { join, type Host } from "./host.ts";
+import { resolvePaths, type CbcPaths } from "./host.ts";
+
+// ---------------------------------------------------------------------------
+// §13.6 trust
+// ---------------------------------------------------------------------------
+
+/** One trust decision, keyed by canonical workspace path. */
+export interface TrustRecord {
+  readonly path: string;
+  readonly state: Exclude<TrustState, "trusted-once">;
+  readonly decidedAt: string;
+  /**
+   * §13.6: a trust record stores filesystem identity, not just the symlink path.
+   * The Rust guard supplies this; it is recorded so a moved or replaced directory
+   * does not silently inherit the decision.
+   */
+  readonly fingerprint?: string;
+}
+
+export interface TrustStore {
+  readonly version: 1;
+  readonly records: Record<string, TrustRecord>;
+}
+
+export function emptyTrustStore(): TrustStore {
+  return { version: 1, records: {} };
+}
+
+export async function readTrustStore(host: Host, paths: CbcPaths): Promise<TrustStore> {
+  const raw = await host.fs.read(paths.trustStore);
+  if (raw === undefined) return emptyTrustStore();
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return emptyTrustStore();
+    const store = parsed as { version?: unknown; records?: unknown };
+    if (typeof store.records !== "object" || store.records === null) return emptyTrustStore();
+    // The runtime is the trust authority (P0-01) and persists records in its own
+    // shape (`{records: {canonical: {canonicalPath, filesystemId, state, ...}}}`,
+    // no `version` key). Accept both shapes so the host and the runtime agree.
+    if (store.version !== undefined && store.version !== 1) return emptyTrustStore();
+    const records: Record<string, TrustRecord> = {};
+    for (const [key, value] of Object.entries(store.records as Record<string, unknown>)) {
+      if (typeof value !== "object" || value === null) continue;
+      const entry = value as Record<string, unknown>;
+      const state = entry.state;
+      if (
+        state !== "trusted-always" &&
+        state !== "read-only" &&
+        state !== "untrusted"
+      ) {
+        continue;
+      }
+      const decidedAt = typeof entry.decidedAt === "string" ? entry.decidedAt : "";
+      if (typeof entry.canonicalPath === "string") {
+        // Runtime-format record.
+        records[key] = {
+          path: entry.canonicalPath,
+          state,
+          decidedAt,
+          ...(typeof entry.filesystemId === "string" && entry.filesystemId.length > 0
+            ? { fingerprint: entry.filesystemId }
+            : {}),
+        };
+      } else if (typeof entry.path === "string") {
+        records[key] = {
+          path: entry.path,
+          state,
+          decidedAt,
+          ...(typeof entry.fingerprint === "string" ? { fingerprint: entry.fingerprint } : {}),
+        };
+      }
+    }
+    return { version: 1, records };
+  } catch {
+    // A corrupt trust store must not be read as "everything is trusted". Failing
+    // to an empty store means the user is asked again (§13.6, fail closed).
+    return emptyTrustStore();
+  }
+}
+
+export async function writeTrustStore(
+  host: Host,
+  paths: CbcPaths,
+  store: TrustStore,
+): Promise<void> {
+  await host.fs.mkdirp(paths.data);
+  // Persist in the runtime's shape (`canonicalPath`/`filesystemId` records, no
+  // `version` wrapper) so the Rust trust authority reads exactly what the host
+  // wrote — one store, one format (P0-01).
+  const runtimeShape = {
+    records: Object.fromEntries(
+      Object.entries(store.records).map(([key, record]) => [
+        key,
+        {
+          canonicalPath: record.path,
+          filesystemId: record.fingerprint ?? "",
+          state: record.state,
+          decidedAt: record.decidedAt,
+        },
+      ]),
+    ),
+  };
+  await host.fs.atomicWrite(paths.trustStore, `${JSON.stringify(runtimeShape, null, 2)}\n`);
+}
+
+/**
+ * Look up the trust state for a workspace.
+ *
+ * An unknown workspace is `untrusted`, which is the whole point: §7.1's first-run
+ * flow exists because a fresh directory has made no promises.
+ */
+export function trustStateFor(
+  store: TrustStore,
+  workspacePath: string,
+  filesystemIdentity?: string,
+): TrustState {
+  const normalized = workspacePath.replace(/\\/g, "/").replace(/\/+$/, "");
+  const byKey = store.records[trustKey(workspacePath)] ?? store.records[normalized];
+  const record = byKey ?? Object.values(store.records).find(
+    (candidate) => candidate.path.replace(/\\/g, "/").replace(/\/+$/, "") === normalized,
+  );
+  if (
+    record === undefined ||
+    filesystemIdentity === undefined ||
+    filesystemIdentity.length === 0 ||
+    record.fingerprint === undefined ||
+    record.fingerprint.length === 0 ||
+    record.fingerprint !== filesystemIdentity
+  ) {
+    return "untrusted";
+  }
+  return record.state;
+}
+
+export function trustKey(workspacePath: string): string {
+  return workspacePath.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+export function withTrust(
+  store: TrustStore,
+  record: TrustRecord,
+): TrustStore {
+  return {
+    version: 1,
+    records: { ...store.records, [trustKey(record.path)]: record },
+  };
+}
+
+export function withoutTrust(store: TrustStore, workspacePath: string): TrustStore {
+  const records = { ...store.records };
+  delete records[trustKey(workspacePath)];
+  return { version: 1, records };
+}
+
+// ---------------------------------------------------------------------------
+// §21.2 configuration
+// ---------------------------------------------------------------------------
+
+export interface LoadedConfig extends LoadConfigResult {
+  readonly userConfigPath: string;
+  readonly projectConfigPath: string;
+  readonly projectLocalConfigPath: string;
+  readonly trust: TrustState;
+}
+
+/**
+ * Assemble the effective configuration.
+ *
+ * §21.2's precedence is implemented by `loadConfig`; the job here is deciding
+ * whether the project layer is even offered to it. §21.3 says project config applies
+ * only after trust, and `loadConfig` drops the layer entirely when `projectTrusted`
+ * is false rather than merging and then filtering — a dropped layer cannot leak.
+ */
+export async function loadEffectiveConfig(
+  host: Host,
+  options: {
+    readonly workspacePath: string;
+    readonly trust: TrustState;
+    readonly cliOverrides?: Record<string, unknown>;
+    readonly sessionOverrides?: Record<string, unknown>;
+  },
+): Promise<LoadedConfig> {
+  const paths = resolvePaths(host);
+  const projectConfigPath = join(options.workspacePath, ".capybara", "config.toml");
+  const projectLocalConfigPath = join(options.workspacePath, ".capybara", "config.local.toml");
+
+  const userToml = await host.fs.read(paths.configFile);
+  const projectToml = await host.fs.read(projectConfigPath);
+  const projectLocalToml = await host.fs.read(projectLocalConfigPath);
+
+  const trusted = options.trust === "trusted-always" || options.trust === "trusted-once";
+
+  const result = loadConfig({
+    ...(userToml !== undefined ? { userToml } : {}),
+    ...(projectToml !== undefined ? { projectToml } : {}),
+    ...(projectLocalToml !== undefined ? { projectLocalToml } : {}),
+    projectTrusted: trusted,
+    env: host.env,
+    ...(options.cliOverrides !== undefined ? { cliOverrides: options.cliOverrides } : {}),
+    ...(options.sessionOverrides !== undefined
+      ? { sessionOverrides: options.sessionOverrides }
+      : {}),
+  });
+
+  return {
+    ...result,
+    userConfigPath: paths.configFile,
+    projectConfigPath,
+    projectLocalConfigPath,
+    trust: options.trust,
+  };
+}
+
+/** Read one dotted config path from the effective config. */
+export function configValue(config: CbcConfig, path: string): unknown {
+  return readPath(config, normalizeConfigPath(path));
+}
+
+/**
+ * Write one dotted path into the *user* config file.
+ *
+ * Always the user file, never the project one: §21.3 forbids a project config from
+ * carrying credentials and §17.5 forbids it from weakening policy, so `capy config
+ * set` writing there would be a way to smuggle either into a repository.
+ */
+export async function setUserConfigValue(
+  host: Host,
+  path: string,
+  value: string,
+): Promise<{ issues: ConfigIssue[]; written: string }> {
+  const paths = resolvePaths(host);
+  const existing = await host.fs.read(paths.configFile);
+  const canonicalPath = normalizeConfigPath(path);
+
+  // Round-trip through the schema so an invalid key or type is rejected before it
+  // reaches disk.
+  const probe = defaultConfig();
+  const parsed = coerceConfigValue(value);
+  writePath(probe, canonicalPath, parsed);
+
+  const merged = loadConfig({
+    ...(existing !== undefined ? { userToml: existing } : {}),
+    projectTrusted: false,
+    env: {},
+    cliOverrides: { [canonicalPath]: parsed },
+  });
+
+  const blocking = merged.issues.filter(
+    (issue) => issue.severity === "error" && issue.path === canonicalPath,
+  );
+  if (blocking.length > 0) return { issues: blocking, written: paths.configFile };
+
+  const lines = existing === undefined ? [] : existing.split("\n");
+  const updated = upsertTomlValue(lines, canonicalPath, parsed);
+
+  await host.fs.mkdirp(paths.config);
+  await host.fs.write(paths.configFile, `${updated.join("\n").replace(/\n+$/, "")}\n`);
+  return { issues: merged.issues.filter((i) => i.path === canonicalPath), written: paths.configFile };
+}
+
+/** Interpret a CLI string as a boolean, number, or string. */
+export function coerceConfigValue(raw: string): unknown {
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  if (/^-?\d+$/.test(raw)) return Number(raw);
+  if (/^-?\d*\.\d+$/.test(raw)) return Number(raw);
+  return raw;
+}
+
+/**
+ * Insert or replace a dotted key in a TOML document, preserving the rest.
+ *
+ * Rewriting the whole file from the parsed model would drop comments the user
+ * wrote, so the existing text is edited in place. Only the flat `[section] key =`
+ * shape §21.4 documents is handled; anything deeper is appended as a new section.
+ */
+export function upsertTomlValue(
+  lines: readonly string[],
+  dottedPath: string,
+  value: unknown,
+): string[] {
+  const segments = dottedPath.split(".");
+  const key = segments.pop() as string;
+  const section = segments.join(".");
+  const rendered = renderTomlValue(value);
+  const snakeKey = toSnakeCase(key);
+
+  const out = [...lines];
+
+  let sectionStart = -1;
+  let sectionEnd = out.length;
+  if (section.length === 0) {
+    sectionStart = -1;
+    sectionEnd = out.findIndex((line) => /^\s*\[/.test(line));
+    if (sectionEnd === -1) sectionEnd = out.length;
+  } else {
+    const header = `[${section}]`;
+    sectionStart = out.findIndex((line) => line.trim() === header);
+    if (sectionStart !== -1) {
+      sectionEnd = out.length;
+      for (let i = sectionStart + 1; i < out.length; i += 1) {
+        if (/^\s*\[/.test(out[i] as string)) {
+          sectionEnd = i;
+          break;
+        }
+      }
+    }
+  }
+
+  if (section.length > 0 && sectionStart === -1) {
+    // A brand-new section goes at the end.
+    if (out.length > 0 && (out.at(-1) ?? "").trim().length > 0) out.push("");
+    out.push(`[${section}]`, `${snakeKey} = ${rendered}`);
+    return out;
+  }
+
+  const searchFrom = sectionStart === -1 ? 0 : sectionStart + 1;
+  const keyPattern = new RegExp(`^\\s*${escapeRegex(snakeKey)}\\s*=`);
+  for (let i = searchFrom; i < sectionEnd; i += 1) {
+    if (keyPattern.test(out[i] as string)) {
+      out[i] = `${snakeKey} = ${rendered}`;
+      return out;
+    }
+  }
+
+  out.splice(sectionEnd, 0, `${snakeKey} = ${rendered}`);
+  return out;
+}
+
+function renderTomlValue(value: unknown): string {
+  if (typeof value === "boolean" || typeof value === "number") return String(value);
+  if (Array.isArray(value)) return `[${value.map(renderTomlValue).join(", ")}]`;
+  return JSON.stringify(String(value));
+}
+
+/** `softContextTokens` in code is `soft_context_tokens` in TOML (§21.4). */
+export function toSnakeCase(key: string): string {
+  return key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+}
+
+function escapeRegex(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// ---------------------------------------------------------------------------
+// §18.6 session index
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// §18.6 legacy session index — read-only, for the one-shot migration (P0-05)
+//
+// The runtime's SQLite store is the single session authority now. These helpers
+// exist only so bootstrap can import an old `<data>/sessions/index.json` into the
+// store and then archive the file. New code must not read or write the index.
+// ---------------------------------------------------------------------------
+
+export interface SessionIndexEntry {
+  readonly id: string;
+  readonly workspacePath: string;
+  readonly title: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly state: "active" | "completed" | "interrupted" | "archived";
+  readonly turnCount: number;
+}
+
+export interface SessionIndex {
+  readonly version: 1;
+  readonly sessions: SessionIndexEntry[];
+}
+
+export function sessionIndexPath(paths: CbcPaths): string {
+  return join(paths.sessions, "index.json");
+}
+
+export async function readSessionIndex(host: Host, paths: CbcPaths): Promise<SessionIndex> {
+  const raw = await host.fs.read(sessionIndexPath(paths));
+  if (raw === undefined) return { version: 1, sessions: [] };
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return { version: 1, sessions: [] };
+    const index = parsed as Partial<SessionIndex>;
+    if (!Array.isArray(index.sessions)) return { version: 1, sessions: [] };
+    return { version: 1, sessions: index.sessions };
+  } catch {
+    return { version: 1, sessions: [] };
+  }
+}
+
+export async function writeSessionIndex(
+  host: Host,
+  paths: CbcPaths,
+  index: SessionIndex,
+): Promise<void> {
+  await host.fs.mkdirp(paths.sessions);
+  await host.fs.write(sessionIndexPath(paths), `${JSON.stringify(index, null, 2)}\n`);
+}
+
+/** Generate a session id that sorts chronologically. */
+export function newSessionId(nowMs: number, random = Math.random): string {
+  const stamp = new Date(nowMs).toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
+  const suffix = Math.floor(random() * 0xffff)
+    .toString(16)
+    .padStart(4, "0");
+  return `ses_${stamp}_${suffix}`;
+}
+
+export type { CbcConfig, ConfigIssue, ConfigSource };

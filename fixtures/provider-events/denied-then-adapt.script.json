@@ -1,0 +1,31 @@
+{
+  "x-note": "AC-19 and §13.8: run this under `cbc run --permission deny-on-ask`. The first call is denied, the model observes the structured denial, and the second step proceeds without it. A script that instead retried the same call would show the denial observation was not reaching the model.",
+  "steps": [
+    {
+      "commentary": "Checking whether the dependency is installed.",
+      "toolCalls": [
+        {
+          "callId": "call_install_1",
+          "name": "process.run",
+          "arguments": { "program": "npm", "args": ["install", "sharp"], "cwd": "." }
+        }
+      ],
+      "usage": { "inputTokens": 1500, "outputTokens": 30 }
+    },
+    {
+      "commentary": "That was denied, so I'll read the manifest instead of installing.",
+      "toolCalls": [
+        {
+          "callId": "call_read_1",
+          "name": "fs.read",
+          "arguments": { "path": "package.json" }
+        }
+      ],
+      "usage": { "inputTokens": 2000, "outputTokens": 34 }
+    },
+    {
+      "text": "I could not install anything: the install was denied because it modifies dependency files and uses the network.\n\nFrom package.json, sharp is not currently a dependency. Adding it requires an approved install.",
+      "usage": { "inputTokens": 2500, "outputTokens": 58 }
+    }
+  ]
+}

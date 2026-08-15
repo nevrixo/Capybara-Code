@@ -1,0 +1,1101 @@
+{
+  "x-dialect": "json-schema-draft-2020-12",
+  "$id": "cbc:config/config",
+  "title": "Capybara Code configuration",
+  "description": "PRD 21.4. Keys are written snake_case in config.toml and camelCase in code; packages/config-schema normalizes between them, and scripts/check-protocol-drift.ts checks that defaultConfig() and this file describe the same shape. 21.3 forbids a project config from carrying a credential value, which is why no property here is a secret.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ui",
+    "model",
+    "agent",
+    "subagents",
+    "tools",
+    "permissions",
+    "sandbox",
+    "sessions",
+    "privacy",
+    "updates",
+    "provider",
+    "perf",
+    "mcpServers",
+    "keymap"
+  ],
+  "properties": {
+    "ui": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "theme",
+        "color",
+        "mouse",
+        "animations",
+        "showCost",
+        "statusDensity",
+        "thinkingVisibility",
+        "toolDetail",
+        "subagentDetail",
+        "sidebar"
+      ],
+      "properties": {
+        "theme": {
+          "type": "string",
+          "default": "capybara-dark"
+        },
+        "color": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "always",
+            "never"
+          ],
+          "default": "auto"
+        },
+        "mouse": {
+          "type": "boolean",
+          "default": true
+        },
+        "animations": {
+          "type": "boolean",
+          "default": true
+        },
+        "showCost": {
+          "description": "P9: cost is a product surface, so this defaults on.",
+          "type": "boolean",
+          "default": true
+        },
+        "statusDensity": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "compact",
+            "full"
+          ],
+          "default": "auto"
+        },
+        "thinkingVisibility": {
+          "type": "string",
+          "enum": [
+            "full",
+            "summary",
+            "hidden"
+          ],
+          "default": "full"
+        },
+        "toolDetail": {
+          "type": "string",
+          "enum": [
+            "compact",
+            "full"
+          ],
+          "default": "compact"
+        },
+        "subagentDetail": {
+          "type": "string",
+          "enum": [
+            "drawer",
+            "inline"
+          ],
+          "default": "drawer"
+        },
+        "sidebar": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "show",
+            "hide"
+          ],
+          "default": "auto"
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile",
+        "default",
+        "reasoningMode",
+        "reasoningEffort",
+        "softContextTokens",
+        "maxOutputTokens",
+        "router",
+        "reasoning",
+        "context",
+        "cache",
+        "profiles"
+      ],
+      "properties": {
+        "profile": {
+          "type": "string",
+          "default": "auto"
+        },
+        "default": {
+          "type": "string",
+          "default": "gpt-5.6-sol"
+        },
+        "reasoningMode": {
+          "$ref": "#/$defs/reasoningMode",
+          "default": "standard"
+        },
+        "reasoningEffort": {
+          "$ref": "#/$defs/reasoningEffort",
+          "default": "medium"
+        },
+        "softContextTokens": {
+          "description": "10.10 soft budget for the root agent. Compaction triggers at 70 percent of this.",
+          "type": "integer",
+          "minimum": 8000,
+          "default": 96000
+        },
+        "maxOutputTokens": {
+          "type": "integer",
+          "minimum": 256,
+          "default": 32000
+        },
+        "router": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "strategy",
+            "phasePolicy",
+            "cheapTier",
+            "defaultTier",
+            "escalationTier",
+            "maxCostUsdPerTurn",
+            "targetLatencyMs",
+            "recordDecisions"
+          ],
+          "properties": {
+            "strategy": {
+              "type": "string",
+              "enum": [
+                "utility",
+                "latency",
+                "cost"
+              ],
+              "default": "utility"
+            },
+            "phasePolicy": {
+              "type": "boolean",
+              "default": true
+            },
+            "cheapTier": {
+              "type": "string",
+              "default": "gpt-5.6-luna"
+            },
+            "defaultTier": {
+              "type": "string",
+              "default": "gpt-5.6-terra"
+            },
+            "escalationTier": {
+              "type": "string",
+              "default": "gpt-5.6-sol"
+            },
+            "maxCostUsdPerTurn": {
+              "type": "number",
+              "minimum": 0,
+              "default": 2
+            },
+            "targetLatencyMs": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 90000
+            },
+            "recordDecisions": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
+        "reasoning": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "summary",
+            "continuity",
+            "proPolicy",
+            "maxPolicy",
+            "resetOnWorkspaceChange",
+            "preserveOpaqueItems"
+          ],
+          "properties": {
+            "summary": {
+              "description": "Provider reasoning-summary generation; independent from UI visibility.",
+              "type": "string",
+              "enum": [
+                "auto",
+                "none"
+              ],
+              "default": "auto"
+            },
+            "continuity": {
+              "const": "task-epoch"
+            },
+            "proPolicy": {
+              "const": "eval-gated"
+            },
+            "maxPolicy": {
+              "const": "eval-gated"
+            },
+            "resetOnWorkspaceChange": {
+              "type": "boolean",
+              "default": true
+            },
+            "preserveOpaqueItems": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
+        "context": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "bands",
+            "defaultBand",
+            "premiumThresholdTokens",
+            "premiumBandPolicy",
+            "compaction",
+            "reserveOutputTokens",
+            "orientationMode",
+            "providerCompaction",
+            "compactionThresholdTokens"
+          ],
+          "properties": {
+            "bands": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "minItems": 1,
+              "default": [
+                64000,
+                192000,
+                272000,
+                512000,
+                1000000
+              ]
+            },
+            "defaultBand": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 192000
+            },
+            "premiumThresholdTokens": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 272000
+            },
+            "premiumBandPolicy": {
+              "type": "string",
+              "enum": [
+                "deny",
+                "allow",
+                "utility-gated"
+              ],
+              "default": "utility-gated"
+            },
+            "compaction": {
+              "const": "evidence-ledger"
+            },
+            "reserveOutputTokens": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 32000
+            },
+            "orientationMode": {
+              "type": "string",
+              "enum": [
+                "strict",
+                "progressive"
+              ],
+              "default": "progressive"
+            },
+            "providerCompaction": {
+              "type": "boolean",
+              "default": true
+            },
+            "compactionThresholdTokens": {
+              "type": "integer",
+              "minimum": 1024,
+              "default": 80000
+            }
+          }
+        },
+        "cache": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "maxWritesPerTurn",
+            "ttlMinutes",
+            "minimumReuseProbability",
+            "recordReadWriteTokens"
+          ],
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "roi",
+                "always",
+                "off"
+              ],
+              "default": "roi"
+            },
+            "maxWritesPerTurn": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 2
+            },
+            "ttlMinutes": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 30
+            },
+            "minimumReuseProbability": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.55
+            },
+            "recordReadWriteTokens": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
+        "profiles": {
+          "description": "10.3 profile table. Each entry resolves to a concrete model plus reasoning settings.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/modelProfile"
+          }
+        }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "permissionMode",
+        "interactionMode",
+        "reviewMode",
+        "maxSteps",
+        "maxToolCalls",
+        "maxWallTimeMinutes",
+        "visibleCommentary",
+        "tokenSaving",
+        "promptCompiler",
+        "compoundTools",
+        "toolGraph",
+        "verification"
+      ],
+      "properties": {
+        "permissionMode": {
+          "$ref": "#/$defs/permissionMode",
+          "default": "ask"
+        },
+        "interactionMode": {
+          "$ref": "#/$defs/interactionMode",
+          "default": "build"
+        },
+        "reviewMode": {
+          "$ref": "#/$defs/reviewMode",
+          "default": "auto"
+        },
+        "maxSteps": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 32
+        },
+        "maxToolCalls": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 64
+        },
+        "maxWallTimeMinutes": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 30
+        },
+        "visibleCommentary": {
+          "description": "P4: commentary, not hidden chain-of-thought.",
+          "type": "boolean",
+          "default": true
+        },
+        "tokenSaving": {
+          "description": "Integrated token saving intensity. User-only: a project config may not set it.",
+          "type": "string",
+          "enum": [
+            "off",
+            "light",
+            "balanced",
+            "strong"
+          ],
+          "default": "off"
+        },
+        "promptCompiler": {
+          "type": "string",
+          "enum": [
+            "v1",
+            "v2"
+          ],
+          "default": "v2"
+        },
+        "compoundTools": {
+          "type": "boolean",
+          "default": true
+        },
+        "toolGraph": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "maxParallelReads",
+            "maxParallelTests",
+            "serializeMutations",
+            "stableResultOrder",
+            "commandClassification",
+            "providerParallelTools"
+          ],
+          "properties": {
+            "maxParallelReads": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 8
+            },
+            "maxParallelTests": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 2
+            },
+            "serializeMutations": {
+              "type": "boolean",
+              "default": true
+            },
+            "stableResultOrder": {
+              "type": "boolean",
+              "default": true
+            },
+            "commandClassification": {
+              "type": "boolean",
+              "default": true
+            },
+            "providerParallelTools": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
+        "verification": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "completionRequiresFreshEvidence",
+            "independentReviewRiskThreshold",
+            "falseCompletePolicy",
+            "reviewPolicy"
+          ],
+          "properties": {
+            "completionRequiresFreshEvidence": {
+              "type": "boolean",
+              "default": true
+            },
+            "independentReviewRiskThreshold": {
+              "type": "string",
+              "enum": [
+                "R0",
+                "R1",
+                "R2",
+                "R3",
+                "R4",
+                "R5",
+                "R6"
+              ],
+              "default": "R3"
+            },
+            "falseCompletePolicy": {
+              "type": "string",
+              "enum": [
+                "block",
+                "warn"
+              ],
+              "default": "block"
+            },
+            "reviewPolicy": {
+              "type": "string",
+              "enum": [
+                "always",
+                "risk"
+              ],
+              "default": "risk"
+            }
+          }
+        }
+      }
+    },
+    "subagents": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxConcurrent",
+        "maxDepth",
+        "maxPerTurn",
+        "writerPolicy"
+      ],
+      "properties": {
+        "maxConcurrent": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8,
+          "default": 3
+        },
+        "maxDepth": {
+          "description": "15.7: one level in P0. A child may not spawn its own children.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 1
+        },
+        "maxPerTurn": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3,
+          "default": 3
+        },
+        "writerPolicy": {
+          "description": "P6 and 15.8: one writer at a time. No other value is supported.",
+          "const": "single-lease"
+        }
+      }
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "activationLimit",
+        "inlineOutputBytes",
+        "inlineOutputLines"
+      ],
+      "properties": {
+        "activationLimit": {
+          "description": "R-08: caps discovered schemas per turn. Always-active tools are excluded from this budget.",
+          "type": "integer",
+          "minimum": 1,
+          "default": 10
+        },
+        "inlineOutputBytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "default": 65536
+        },
+        "inlineOutputLines": {
+          "type": "integer",
+          "minimum": 10,
+          "default": 200
+        }
+      }
+    },
+    "permissions": {
+      "description": "13.3 policy inputs. 17.5 forbids a project config from weakening any of these.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "projectWrite",
+        "shell",
+        "network",
+        "destructive",
+        "credentials",
+        "externalSideEffect",
+        "rules"
+      ],
+      "properties": {
+        "preset": {
+          "type": "string",
+          "enum": [
+            "read",
+            "edit",
+            "auto",
+            "yolo"
+          ]
+        },
+        "projectWrite": {
+          "type": "string",
+          "enum": [
+            "plan",
+            "ask",
+            "auto"
+          ],
+          "default": "auto"
+        },
+        "shell": {
+          "type": "string",
+          "enum": [
+            "deny",
+            "ask",
+            "safe-auto"
+          ],
+          "default": "safe-auto"
+        },
+        "network": {
+          "type": "string",
+          "enum": [
+            "deny",
+            "ask",
+            "allow"
+          ],
+          "default": "ask"
+        },
+        "destructive": {
+          "type": "string",
+          "enum": [
+            "deny",
+            "ask"
+          ],
+          "default": "ask"
+        },
+        "credentials": {
+          "description": "13.2: reading a credential is R5, so this defaults to deny.",
+          "type": "string",
+          "enum": [
+            "deny",
+            "ask"
+          ],
+          "default": "deny"
+        },
+        "externalSideEffect": {
+          "type": "string",
+          "enum": [
+            "deny",
+            "ask"
+          ],
+          "default": "ask"
+        },
+        "rules": {
+          "description": "13.3 declarative approval rules merged with persisted grants (P0-13). A config rule never weakens a monotonic policy key; the engine re-checks trust before honouring it.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "tool",
+              "decision",
+              "risk"
+            ],
+            "properties": {
+              "tool": {
+                "type": "string",
+                "minLength": 1
+              },
+              "decision": {
+                "type": "string",
+                "enum": [
+                  "allow",
+                  "deny"
+                ]
+              },
+              "risk": {
+                "type": "string",
+                "enum": [
+                  "R0",
+                  "R1",
+                  "R2",
+                  "R3",
+                  "R4",
+                  "R5",
+                  "R6"
+                ]
+              },
+              "program": {
+                "type": "string"
+              },
+              "argsPrefix": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "paths": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "server": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "sandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "level",
+        "networkForShell"
+      ],
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": [
+            "none",
+            "workspace",
+            "standard",
+            "strict"
+          ],
+          "default": "workspace"
+        },
+        "networkForShell": {
+          "type": "string",
+          "enum": [
+            "deny",
+            "ask",
+            "allow"
+          ],
+          "default": "ask"
+        }
+      }
+    },
+    "sessions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "retain",
+        "artifactRetentionDays",
+        "autoSnapshotEvents"
+      ],
+      "properties": {
+        "retain": {
+          "type": "boolean",
+          "default": true
+        },
+        "artifactRetentionDays": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 30
+        },
+        "autoSnapshotEvents": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 100
+        }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "telemetry",
+        "crashReports",
+        "providerStore"
+      ],
+      "properties": {
+        "telemetry": {
+          "description": "23.5: off by default, and opt-in only.",
+          "type": "boolean",
+          "default": false
+        },
+        "crashReports": {
+          "type": "string",
+          "enum": [
+            "off",
+            "ask",
+            "on"
+          ],
+          "default": "ask"
+        },
+        "providerStore": {
+          "description": "23.6: store:false by default, so prompts are not retained by the provider.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "updates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "channel",
+        "check",
+        "intervalHours"
+      ],
+      "properties": {
+        "channel": {
+          "type": "string",
+          "enum": [
+            "stable",
+            "beta",
+            "nightly"
+          ],
+          "default": "stable"
+        },
+        "check": {
+          "type": "boolean",
+          "default": true
+        },
+        "intervalHours": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 24
+        }
+      }
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "openai"
+      ],
+      "properties": {
+        "openai": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "native",
+            "transport",
+            "serviceTier",
+            "toolSearch"
+          ],
+          "properties": {
+            "native": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "programmaticToolCalling",
+                "hostedMultiAgent",
+                "maxHostedAgents",
+                "maxProgramToolCalls",
+                "maxProgramParallelCalls",
+                "allowHostedShell",
+                "allowHostedApplyPatch",
+                "allowComputerUse"
+              ],
+              "properties": {
+                "programmaticToolCalling": {
+                  "type": "string",
+                  "enum": [
+                    "read-only",
+                    "disabled"
+                  ],
+                  "default": "read-only"
+                },
+                "hostedMultiAgent": {
+                  "type": "string",
+                  "enum": [
+                    "read-only",
+                    "disabled"
+                  ],
+                  "default": "read-only"
+                },
+                "maxHostedAgents": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "default": 3
+                },
+                "maxProgramToolCalls": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "default": 24
+                },
+                "maxProgramParallelCalls": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 6
+                },
+                "allowHostedShell": {
+                  "const": false
+                },
+                "allowHostedApplyPatch": {
+                  "const": false
+                },
+                "allowComputerUse": {
+                  "const": false
+                }
+              }
+            },
+            "transport": {
+              "type": "string",
+              "enum": [
+                "http_full",
+                "http_previous",
+                "websocket"
+              ],
+              "default": "websocket"
+            },
+            "serviceTier": {
+              "type": "string",
+              "enum": [
+                "standard",
+                "fast"
+              ],
+              "default": "standard"
+            },
+            "toolSearch": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        }
+      }
+    },
+    "perf": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "telemetry",
+        "sampleRate"
+      ],
+      "properties": {
+        "telemetry": {
+          "type": "boolean",
+          "default": true
+        },
+        "sampleRate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 1
+        }
+      }
+    },
+    "mcpServers": {
+      "description": "17.3. Written as [mcp.servers.<name>] in TOML. 8.8 stores command and args as an array to remove shell-parsing ambiguity.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/mcpServer"
+      }
+    },
+    "keymap": {
+      "description": "6.15 remapping. Keys are action names, values are key descriptors.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  },
+  "$defs": {
+    "reasoningEffort": {
+      "type": "string",
+      "enum": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    "reasoningMode": {
+      "type": "string",
+      "enum": [
+        "standard",
+        "pro"
+      ]
+    },
+    "permissionMode": {
+      "description": "13.1. There is deliberately no 'full' or 'dangerously-skip-permissions' value.",
+      "type": "string",
+      "enum": [
+        "plan",
+        "ask",
+        "auto",
+        "auto-review"
+      ]
+    },
+    "interactionMode": {
+      "type": "string",
+      "enum": [
+        "build",
+        "plan"
+      ]
+    },
+    "reviewMode": {
+      "type": "string",
+      "enum": [
+        "off",
+        "auto"
+      ]
+    },
+    "modelProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model",
+        "reasoningMode",
+        "reasoningEffort"
+      ],
+      "properties": {
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reasoningMode": {
+          "$ref": "#/$defs/reasoningMode"
+        },
+        "reasoningEffort": {
+          "$ref": "#/$defs/reasoningEffort"
+        }
+      }
+    },
+    "mcpServer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transport"
+      ],
+      "properties": {
+        "transport": {
+          "type": "string",
+          "enum": [
+            "stdio",
+            "streamable_http"
+          ]
+        },
+        "command": {
+          "type": "string"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "url": {
+          "type": "string"
+        },
+        "env": {
+          "description": "14.5: variable NAMES only. A value here would be a credential in a config file, which 21.3 forbids.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "auth": {
+          "type": "string",
+          "enum": [
+            "none",
+            "oauth",
+            "bearer"
+          ]
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "connectOnStartup": {
+          "description": "Whether the configured server connects during session bootstrap. Disabled servers never connect.",
+          "type": "boolean",
+          "default": true
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 100
+        }
+      }
+    }
+  }
+}

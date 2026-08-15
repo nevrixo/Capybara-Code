@@ -1,0 +1,2 @@
+{"type":"response.created","response":{"id":"resp_fixture_4","model":"gpt-5.6","status":"in_progress"}}
+{"type":"error","error":{"type":"rate_limit_exceeded","code":"rate_limit_exceeded","message":"Rate limit reached for gpt-5.6. Retry after 4 seconds.","param":null}}

@@ -1,0 +1,207 @@
+{
+  "x-dialect": "json-schema-draft-2020-12",
+  "$id": "cbc:protocol/handshake",
+  "title": "runtime.initialize",
+  "description": "PRD 20.2. The first exchange on the framed transport. 24.5 forbids overclaiming a sandbox, so every capability in the result is a literal fact about the host rather than an aspirational default; crates/cbc-protocol/src/handshake.rs and packages/protocol-ts/src/client.ts both mirror this.",
+  "type": "object",
+  "$defs": {
+    "clientCapabilities": {
+      "description": "What the control plane is prepared to handle. Absent fields default to false, so an older client never appears to support something it does not.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pty": {
+          "type": "boolean",
+          "default": false
+        },
+        "eventJournal": {
+          "type": "boolean",
+          "default": false
+        },
+        "credentialLease": {
+          "type": "boolean",
+          "default": false
+        },
+        "artifactHandles": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "interactionMode": {
+      "description": "Initial runtime enforcement mode. Plan is read-only and only accepted after startup recovery is quiescent.",
+      "type": "string",
+      "enum": [
+        "build",
+        "plan"
+      ],
+      "default": "build"
+    },
+    "runtimeCapabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enhancedSandbox",
+        "keychain",
+        "pty",
+        "git",
+        "sandboxLevel",
+        "sandboxBackends",
+        "platform",
+        "arch",
+        "maxFrameBytes",
+        "artifactStore",
+        "eventJournal"
+      ],
+      "properties": {
+        "enhancedSandbox": {
+          "description": "R-06: true only when an OS-level confinement beyond the path guard is actually active.",
+          "type": "boolean"
+        },
+        "keychain": {
+          "description": "9.3 storage backend. 'session-only' and 'encrypted-file' are weaker promises than 'os-native' and must be reported as such.",
+          "type": "string",
+          "enum": [
+            "os-native",
+            "encrypted-file",
+            "session-only",
+            "unavailable"
+          ]
+        },
+        "pty": {
+          "type": "boolean"
+        },
+        "git": {
+          "type": "boolean"
+        },
+        "sandboxLevel": {
+          "description": "14.4 enforcement level actually achieved on this host.",
+          "type": "string",
+          "enum": [
+            "none",
+            "workspace",
+            "standard",
+            "strict"
+          ]
+        },
+        "sandboxBackends": {
+          "description": "Named mechanisms in use, e.g. landlock, seccomp, seatbelt. Empty means the path guard alone.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "platform": {
+          "type": "string"
+        },
+        "arch": {
+          "type": "string"
+        },
+        "maxFrameBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "artifactStore": {
+          "type": "boolean"
+        },
+        "eventJournal": {
+          "type": "boolean"
+        }
+      }
+    },
+    "initializeParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocolVersion",
+        "clientVersion",
+        "workspace"
+      ],
+      "properties": {
+        "protocolVersion": {
+          "type": "string",
+          "pattern": "^\\d+(\\.\\d+)?$"
+        },
+        "clientVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workspace": {
+          "description": "Absolute path. The runtime canonicalizes it independently (14.2); the client's spelling is a request, not a fact.",
+          "type": "string",
+          "minLength": 1
+        },
+        "capabilities": {
+          "$ref": "#/$defs/clientCapabilities"
+        },
+        "dataDir": {
+          "description": "Overrides the durable data directory. Used by CAPYBARA_DATA_DIR and by tests (21.1).",
+          "type": "string"
+        },
+        "sandboxLevel": {
+          "description": "Requested sandbox level from configuration (sandbox.level). The runtime clamps it to what the host can actually enforce (RT-006) and reports only the effective level in its capabilities (24.5); enforcement lives in the runtime, never the control plane (P0-04).",
+          "type": "string",
+          "enum": [
+            "none",
+            "workspace",
+            "standard",
+            "strict"
+          ]
+        },
+        "networkForShell": {
+          "description": "sandbox.networkForShell. 'deny' forces network isolation on raw shells; 'ask' and 'allow' leave the per-call decision to the approval flow.",
+          "type": "string",
+          "enum": [
+            "deny",
+            "ask",
+            "allow"
+          ]
+        },
+        "interactionMode": {
+          "$ref": "#/$defs/interactionMode",
+          "default": "build"
+        },
+        "capabilityIssuerToken": {
+          "description": "Secret control-plane token required for runtime capability issuance.",
+          "type": "string",
+          "minLength": 32
+        }
+      }
+    },
+    "initializeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocolVersion",
+        "runtimeVersion",
+        "workspaceId",
+        "capabilities"
+      ],
+      "properties": {
+        "protocolVersion": {
+          "type": "string",
+          "pattern": "^\\d+(\\.\\d+)?$"
+        },
+        "runtimeVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capabilities": {
+          "$ref": "#/$defs/runtimeCapabilities"
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/initializeParams"
+    },
+    {
+      "$ref": "#/$defs/initializeResult"
+    }
+  ]
+}

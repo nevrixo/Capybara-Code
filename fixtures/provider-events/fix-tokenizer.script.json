@@ -1,0 +1,66 @@
+{
+  "x-note": "Drives the bf-off-by-one bench task with no network. The patch fixes the word-token slice from `end - 1` to the already-exclusive `end`. Used by `bun run bench run --filter bf-off-by-one` with CBC_MOCK_PROVIDER pointing here.",
+  "steps": [
+    {
+      "commentary": "Reading the failing test and the tokenizer.",
+      "toolCalls": [
+        {
+          "callId": "call_read_test",
+          "name": "fs.read",
+          "arguments": { "path": "test/tokenizer.test.ts" }
+        }
+      ],
+      "usage": { "inputTokens": 1800, "cachedInputTokens": 1024, "outputTokens": 28 }
+    },
+    {
+      "commentary": "Now the implementation.",
+      "toolCalls": [
+        {
+          "callId": "call_read_src",
+          "name": "fs.read",
+          "arguments": { "path": "src/tokenizer.ts" }
+        }
+      ],
+      "usage": { "inputTokens": 2400, "cachedInputTokens": 2048, "outputTokens": 24 }
+    },
+    {
+      "commentary": "The word slice end is decremented even though slice uses an exclusive end. Activating the patch tool.",
+      "toolCalls": [
+        {
+          "callId": "call_discover",
+          "name": "tool.discover",
+          "arguments": { "query": "apply a patch to a source file", "limit": 4 }
+        }
+      ],
+      "usage": { "inputTokens": 3000, "cachedInputTokens": 2048, "outputTokens": 30 }
+    },
+    {
+      "commentary": "Fixing the word-token branch.",
+      "toolCalls": [
+        {
+          "callId": "call_patch",
+          "name": "fs.apply_patch",
+          "arguments": {
+            "diff": "--- a/src/tokenizer.ts\n+++ b/src/tokenizer.ts\n@@ -31,5 +31,5 @@\n     if (WORD.test(char)) {\n       let end = index;\n       while (end < input.length && WORD.test(input[end] as string)) end += 1;\n-      tokens.push({ kind: \"word\", text: input.slice(index, end - 1), start: index, end });\n+      tokens.push({ kind: \"word\", text: input.slice(index, end), start: index, end });\n       index = end;\n"
+          }
+        }
+      ],
+      "usage": { "inputTokens": 3400, "cachedInputTokens": 2048, "outputTokens": 96 }
+    },
+    {
+      "commentary": "Running the tests.",
+      "toolCalls": [
+        {
+          "callId": "call_test",
+          "name": "process.run",
+          "arguments": { "program": "bun", "args": ["test", "--run"], "cwd": "." }
+        }
+      ],
+      "usage": { "inputTokens": 3800, "cachedInputTokens": 2048, "outputTokens": 34 }
+    },
+    {
+      "text": "Fixed the off-by-one in src/tokenizer.ts.\n\nThe word branch sliced to `end - 1`, dropping the last character even though `end` is already exclusive. It now slices to `end`.\n\nVerified with `bun test`: all tokenizer tests pass.",
+      "usage": { "inputTokens": 4400, "cachedInputTokens": 3072, "outputTokens": 82 }
+    }
+  ]
+}

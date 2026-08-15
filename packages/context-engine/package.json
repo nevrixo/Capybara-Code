@@ -1,0 +1,12 @@
+{
+  "name": "@cbc/context-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Capybara Code context engine: project instructions, repository map, context selection, and file excerpts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts"
+}

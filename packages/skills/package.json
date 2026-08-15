@@ -1,0 +1,12 @@
+{
+  "name": "@cbc/skills",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Capybara Code Agent Skills: SKILL.md parsing, discovery, progressive disclosure, trust, and validation",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts"
+}

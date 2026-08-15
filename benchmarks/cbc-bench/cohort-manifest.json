@@ -1,0 +1,1370 @@
+{
+  "schemaVersion": "1.0",
+  "taskCount": 150,
+  "categoryTargets": {
+    "repository_understanding": 15,
+    "local_bug_fix": 20,
+    "feature_implementation": 20,
+    "refactor": 15,
+    "test_diagnosis": 15,
+    "diff_review": 10,
+    "multi_language_monorepo": 15,
+    "permission_denial_adaptation": 10,
+    "security_safety": 15,
+    "long_session_resume_compaction": 15
+  },
+  "tasks": [
+    {
+      "id": "ru-001",
+      "category": "repository_understanding",
+      "language": "typescript",
+      "snapshot": "generated/ru-001",
+      "snapshotKind": "generated",
+      "snapshotDigest": "5888361e712254576245ca04c0402b6cbb4d9e1826c0ee8cc320b55e60e9070e",
+      "taskDigest": "18a7d0cb52e59099289221458c1e9939e6c393e60cceac76910e6e12584d5ef2"
+    },
+    {
+      "id": "ru-002",
+      "category": "repository_understanding",
+      "language": "javascript",
+      "snapshot": "generated/ru-002",
+      "snapshotKind": "generated",
+      "snapshotDigest": "cebe28948b7ef7f8babe5f930a77dce52e0b6986a6e39d8911e738f9a806cd2c",
+      "taskDigest": "7d4c0b4a0edfcfb8f6f8083dbab2e8e866518b2b66b07f053f6ccf5d0b609a39"
+    },
+    {
+      "id": "ru-003",
+      "category": "repository_understanding",
+      "language": "typescript",
+      "snapshot": "generated/ru-003",
+      "snapshotKind": "generated",
+      "snapshotDigest": "a290c411a19a2ddfcf3599941b13313c0ee9ced4c49656fb04ffaff06471407c",
+      "taskDigest": "614e2da85d55cd419296e0ce648ae2505ac50cc763c91ee2a3c729e453e34d0e"
+    },
+    {
+      "id": "ru-004",
+      "category": "repository_understanding",
+      "language": "javascript",
+      "snapshot": "generated/ru-004",
+      "snapshotKind": "generated",
+      "snapshotDigest": "d5afcd1b42f39e4b86d2adc31c1cc5995aea3eee0cb7677f90be85e9d652da11",
+      "taskDigest": "79ddcf83af1bb360e8467660c97b023daeba7635f2b71f6d53d43f16f6b50867"
+    },
+    {
+      "id": "ru-005",
+      "category": "repository_understanding",
+      "language": "typescript",
+      "snapshot": "generated/ru-005",
+      "snapshotKind": "generated",
+      "snapshotDigest": "43d3c8bb1e60c3a0b07253c682416c8fe478c40fbaf9a5aaff9daa7588e30239",
+      "taskDigest": "bd4e8ea7079582fe6defae2c0b7bb651198a1414a14f62d6eb477ed921243887"
+    },
+    {
+      "id": "ru-006",
+      "category": "repository_understanding",
+      "language": "javascript",
+      "snapshot": "generated/ru-006",
+      "snapshotKind": "generated",
+      "snapshotDigest": "a365b391549295c0effff7cbf3a99a73d1a802d53a2e4b70dbf1d93b5a6ba12d",
+      "taskDigest": "b9a5f914b159859eeebd0a43e346fece69bb95b6e1ac2ca9a1252f181d406e51"
+    },
+    {
+      "id": "ru-007",
+      "category": "repository_understanding",
+      "language": "typescript",
+      "snapshot": "generated/ru-007",
+      "snapshotKind": "generated",
+      "snapshotDigest": "8cca4e7f5fae534457ae9ba49fc71224e1a147dfc8a926c1bd518e75b5688357",
+      "taskDigest": "4d5393e15d825a3b381a006ea715274cdffc31ebc8224a098c5ec13cd56c90ab"
+    },
+    {
+      "id": "ru-008",
+      "category": "repository_understanding",
+      "language": "javascript",
+      "snapshot": "generated/ru-008",
+      "snapshotKind": "generated",
+      "snapshotDigest": "ee1cef503ee69c7a095091d24caa59fea901ed8333997da53de518af3fdc0c57",
+      "taskDigest": "350b6e5731e115f509e5fe341ab9312769a7fe1c3c14bbaeafd8741e94bb7f33"
+    },
+    {
+      "id": "ru-009",
+      "category": "repository_understanding",
+      "language": "typescript",
+      "snapshot": "generated/ru-009",
+      "snapshotKind": "generated",
+      "snapshotDigest": "6aaf0094050305cdf157cbdd8f70a011e8306109b7886f01d8458398b1006d24",
+      "taskDigest": "db06892fc684561d18bf6cbe75ff5db089eb72b0601f6ff38378f89e5017f99d"
+    },
+    {
+      "id": "ru-010",
+      "category": "repository_understanding",
+      "language": "javascript",
+      "snapshot": "generated/ru-010",
+      "snapshotKind": "generated",
+      "snapshotDigest": "80d7b2d0f9a6b3b6e21133818dca32564ace1b3e031ddfe60da68b051296a174",
+      "taskDigest": "7737f6091880424f7cdc09f38f969d7d0c50c5bf25837bb8dce218f23db4354d"
+    },
+    {
+      "id": "ru-011",
+      "category": "repository_understanding",
+      "language": "typescript",
+      "snapshot": "generated/ru-011",
+      "snapshotKind": "generated",
+      "snapshotDigest": "254d86109a22285b33d777a597c7df6d79a6afd9b2a3cf25829fd8ce7d70a0ac",
+      "taskDigest": "c91324b2eeb09c8b25d0807006894225eb376a771711d17745e64f4b12d90f77"
+    },
+    {
+      "id": "ru-012",
+      "category": "repository_understanding",
+      "language": "javascript",
+      "snapshot": "generated/ru-012",
+      "snapshotKind": "generated",
+      "snapshotDigest": "727fbe2a6637ad7fe54a7442029a3d52f21474f47bfcd5f21484c297729b8aeb",
+      "taskDigest": "1790fa000fb5940c03aee36723c40164ec5f59cb8169b1b6818aea28e86d6ce5"
+    },
+    {
+      "id": "ru-013",
+      "category": "repository_understanding",
+      "language": "typescript",
+      "snapshot": "generated/ru-013",
+      "snapshotKind": "generated",
+      "snapshotDigest": "9e1df36c9334cc260b588d39585731f810186f8e89b02c1dc5cea62bc32f42be",
+      "taskDigest": "f253fb5cfbe9fe3c774770ca82d452ae2db05f81da4c18376c2e485bed210f1c"
+    },
+    {
+      "id": "ru-014",
+      "category": "repository_understanding",
+      "language": "javascript",
+      "snapshot": "generated/ru-014",
+      "snapshotKind": "generated",
+      "snapshotDigest": "f554cb6c7054ee1ecae7ea91bf2e5089f1a28b5e68da701407b775d7e790b8b8",
+      "taskDigest": "eaec860c8a7d146e6729e430e443345de46452b22a6859c356ca5511d9e04d43"
+    },
+    {
+      "id": "ru-015",
+      "category": "repository_understanding",
+      "language": "typescript",
+      "snapshot": "generated/ru-015",
+      "snapshotKind": "generated",
+      "snapshotDigest": "5785fc22b111d778a958681fe0671fb4b454639913638619d53243da32bfae97",
+      "taskDigest": "f4721dbc04b07b87fa343a7238e92ac9e9378e3759b06da7b63aaca6717b2e77"
+    },
+    {
+      "id": "bf-off-by-one",
+      "category": "local_bug_fix",
+      "language": "typescript",
+      "snapshot": "tasks/bf-off-by-one",
+      "snapshotKind": "physical",
+      "snapshotDigest": "f1ac77ccaf92338d7477450ecf4b59a6b09eee6cbf568c1d6d4f78285b4095b6",
+      "taskDigest": "838c4630fc7c19b08754532475a9686ef847157dd55d492ed0b89fb2a802aed8"
+    },
+    {
+      "id": "bf-001",
+      "category": "local_bug_fix",
+      "language": "typescript",
+      "snapshot": "generated/bf-001",
+      "snapshotKind": "generated",
+      "snapshotDigest": "c2fc1ee5a4cd672e8d88b34c43a0df87169299000f20f427d4ba440f3d56450a",
+      "taskDigest": "441625ea7c651f65b23eabb2f55d4e6279bbf079d78f2ee8a4362ae99f5b5d6e"
+    },
+    {
+      "id": "bf-002",
+      "category": "local_bug_fix",
+      "language": "typescript",
+      "snapshot": "generated/bf-002",
+      "snapshotKind": "generated",
+      "snapshotDigest": "ae4108278e9ea6f352d9843d3b8245ba6a1d6343d2a56f70daf9af06d4892226",
+      "taskDigest": "de567a02eca1c5689d79205c61b9b1250e2c44f2b63a440553196b6eaa6dc581"
+    },
+    {
+      "id": "bf-003",
+      "category": "local_bug_fix",
+      "language": "typescript",
+      "snapshot": "generated/bf-003",
+      "snapshotKind": "generated",
+      "snapshotDigest": "857fafa030e8e8e9c007acfa714164952153beb6021ae4feb617f6dcdba23945",
+      "taskDigest": "d9300233c6e822e65f861ce683a089e6faa149bb06dc652b667605f42482366b"
+    },
+    {
+      "id": "bf-004",
+      "category": "local_bug_fix",
+      "language": "javascript",
+      "snapshot": "generated/bf-004",
+      "snapshotKind": "generated",
+      "snapshotDigest": "698edb372961f9e6f702e7f8d5eaacf01bf0f4ab23c11dd937c0f8c981d8216d",
+      "taskDigest": "7ef23c803aafc0c94a70b15c795bc63e72f0447a9e9f5b9156f014490004df82"
+    },
+    {
+      "id": "bf-005",
+      "category": "local_bug_fix",
+      "language": "typescript",
+      "snapshot": "generated/bf-005",
+      "snapshotKind": "generated",
+      "snapshotDigest": "02c18cac41b89cff8e0f6e56ad01953cc81aafc84ec419960ecce87b089d2416",
+      "taskDigest": "787e9880f540370070e1459140710bce6d86482513fbff90c5065e6f268b425e"
+    },
+    {
+      "id": "bf-006",
+      "category": "local_bug_fix",
+      "language": "typescript",
+      "snapshot": "generated/bf-006",
+      "snapshotKind": "generated",
+      "snapshotDigest": "de356de7da1d1753afc4006be6ae9518e7a71ca7629766623e6fd4afe4e9c1ff",
+      "taskDigest": "476d72ff74a2748407605df4ef347d73bffd607afa6eb8bbe0ed227b13744bbe"
+    },
+    {
+      "id": "bf-007",
+      "category": "local_bug_fix",
+      "language": "typescript",
+      "snapshot": "generated/bf-007",
+      "snapshotKind": "generated",
+      "snapshotDigest": "2c95d359e073ad39d1e0809228d75434cca3b65d6ce7577d2840fb1ad44bf5b8",
+      "taskDigest": "676245af798cbf13ead8551c5f5923a579bb31fd4b94c2982927158be63f562b"
+    },
+    {
+      "id": "bf-008",
+      "category": "local_bug_fix",
+      "language": "javascript",
+      "snapshot": "generated/bf-008",
+      "snapshotKind": "generated",
+      "snapshotDigest": "15868c5a6bb315b25651d27518d189213d9ae9b8127d008f6c144525da83d12e",
+      "taskDigest": "5b7aea1265e1359da8d2bc8c1ab4dd8d343e16dc98164dffc6529206dc9b7931"
+    },
+    {
+      "id": "bf-009",
+      "category": "local_bug_fix",
+      "language": "typescript",
+      "snapshot": "generated/bf-009",
+      "snapshotKind": "generated",
+      "snapshotDigest": "59fe226bcf989c59d97f10451ffcc221e701a2b6eaef0e7a9f51b2a3fe05dbb4",
+      "taskDigest": "ad27411cc71838047867ac125cdf2c15b8e72ba6d2b80c7cfff5164080bcb793"
+    },
+    {
+      "id": "bf-010",
+      "category": "local_bug_fix",
+      "language": "typescript",
+      "snapshot": "generated/bf-010",
+      "snapshotKind": "generated",
+      "snapshotDigest": "5b4a7bf76106fa1760868b09cbb4870a6dbefd80f637b7edf042ce6763191a0b",
+      "taskDigest": "78b62fc3758a32269f3417722ac88329a18b6f7fc64d043c2cb8db7522ba391a"
+    },
+    {
+      "id": "bf-011",
+      "category": "local_bug_fix",
+      "language": "typescript",
+      "snapshot": "generated/bf-011",
+      "snapshotKind": "generated",
+      "snapshotDigest": "18e04e6125a678c29b4a3c16390b5c14e9212f790bc23888e0a2c28935b518b5",
+      "taskDigest": "5d88b6d801d03cda62d980653e8fd52eda7234eaaa832a00d2bd034303752357"
+    },
+    {
+      "id": "bf-012",
+      "category": "local_bug_fix",
+      "language": "javascript",
+      "snapshot": "generated/bf-012",
+      "snapshotKind": "generated",
+      "snapshotDigest": "2d3a3a9e8e68fd572bf8610355b6a46e1a2ae7ac72ab7e844682115bf8f9d2c2",
+      "taskDigest": "233f908457b2d52078939bb29f1c61d47db1acfd0877e5f51f55325937fb3349"
+    },
+    {
+      "id": "bf-013",
+      "category": "local_bug_fix",
+      "language": "typescript",
+      "snapshot": "generated/bf-013",
+      "snapshotKind": "generated",
+      "snapshotDigest": "b45339fd43863772f603728635ea10f4d09998c83862691e6892a48223de3971",
+      "taskDigest": "18e740fed8c718468779e1b1d079df279f7d75595abcc61983c11d1dd708566d"
+    },
+    {
+      "id": "bf-014",
+      "category": "local_bug_fix",
+      "language": "typescript",
+      "snapshot": "generated/bf-014",
+      "snapshotKind": "generated",
+      "snapshotDigest": "98f5adaaca11584647cf83edace99137a05b8d2327e962a70f36fb8a1013b8f4",
+      "taskDigest": "86a9d1fd5bf5c1ff16f8838d651ab0397c606e8e22f64828967fe1fb76999c45"
+    },
+    {
+      "id": "bf-015",
+      "category": "local_bug_fix",
+      "language": "typescript",
+      "snapshot": "generated/bf-015",
+      "snapshotKind": "generated",
+      "snapshotDigest": "fe52ae1845fc87ac5a74a675aa4d14c1678e2b3f7ab3cd52a8f34832a4c2ce10",
+      "taskDigest": "3d08b43b67f998a2bf8fadf8f81d8508d5fd7f33f9d92898b2f6fb525872d11f"
+    },
+    {
+      "id": "bf-016",
+      "category": "local_bug_fix",
+      "language": "javascript",
+      "snapshot": "generated/bf-016",
+      "snapshotKind": "generated",
+      "snapshotDigest": "1ecde124008d880ca53442ab44e0370e74d65ce1cb2bfcb47d688df74cc30edc",
+      "taskDigest": "2b93d787fa9728c7900587af3a22fb63be1f6ccb1572222624e25f2e68876540"
+    },
+    {
+      "id": "bf-017",
+      "category": "local_bug_fix",
+      "language": "typescript",
+      "snapshot": "generated/bf-017",
+      "snapshotKind": "generated",
+      "snapshotDigest": "568943eef16da83bb33b61f42f85440b7ddf003e4bb755a6015cfaa705807628",
+      "taskDigest": "fc1242a68546cf9d7cab612aecf92b6db6122eb152505ddba059232c09bd27b5"
+    },
+    {
+      "id": "bf-018",
+      "category": "local_bug_fix",
+      "language": "typescript",
+      "snapshot": "generated/bf-018",
+      "snapshotKind": "generated",
+      "snapshotDigest": "d3246f2ca9c7da8c3bd202daac3eb379fd09243a0bc7593376e377bc0cbab5dd",
+      "taskDigest": "96ae03e6e73ae13014a465b5b66fdd3e1bb9e6b0f2e632f1bf32837f887755ce"
+    },
+    {
+      "id": "bf-019",
+      "category": "local_bug_fix",
+      "language": "typescript",
+      "snapshot": "generated/bf-019",
+      "snapshotKind": "generated",
+      "snapshotDigest": "06946adcfca7761ef6595469ed23cb5664d89f8e015b8eb5eca948215a485215",
+      "taskDigest": "30c20bf8e626c34c1d3fa70c16dd9926ed2cfef791c47660c4188de298363845"
+    },
+    {
+      "id": "fi-001",
+      "category": "feature_implementation",
+      "language": "typescript",
+      "snapshot": "generated/fi-001",
+      "snapshotKind": "generated",
+      "snapshotDigest": "8b08c63b3260560375de95b48e680b3602bfebfaad8f5178246b451688c92c4a",
+      "taskDigest": "bbd132bdd2e3e7fe58b42541edcf6c6c749e8161a0b7dd4e17aab9ab084d77c1"
+    },
+    {
+      "id": "fi-002",
+      "category": "feature_implementation",
+      "language": "typescript",
+      "snapshot": "generated/fi-002",
+      "snapshotKind": "generated",
+      "snapshotDigest": "ae8ad44c2cdd6a14b4e09e7952efab649f936b387a48305ba5ad0db27c634aa0",
+      "taskDigest": "a63232cca9a829ba129ae8cd67324c1118ce57ae71436c56f00fc4a65707187d"
+    },
+    {
+      "id": "fi-003",
+      "category": "feature_implementation",
+      "language": "javascript",
+      "snapshot": "generated/fi-003",
+      "snapshotKind": "generated",
+      "snapshotDigest": "c9b9329c01f1762510c4df34141ea5ac0168b87c2695fe46b2f622582e5a7034",
+      "taskDigest": "e1a88bec8d24a4b784cf8a06c292798c608310c8e20f3c0d3215cdcb67cbb0c7"
+    },
+    {
+      "id": "fi-004",
+      "category": "feature_implementation",
+      "language": "typescript",
+      "snapshot": "generated/fi-004",
+      "snapshotKind": "generated",
+      "snapshotDigest": "4d532c347d7070e3d506ec33a4e1a2fd0dd6a2b2efbdf7c531403854de5771d3",
+      "taskDigest": "b9be0d1b829cfc37879e1c9153df7841866974e9f80d3183ba13168e5867f234"
+    },
+    {
+      "id": "fi-005",
+      "category": "feature_implementation",
+      "language": "typescript",
+      "snapshot": "generated/fi-005",
+      "snapshotKind": "generated",
+      "snapshotDigest": "eee3705376a83861a61d2262233d8f4316e2b87674a86244d2e1e5e53ba49d92",
+      "taskDigest": "4c02b56aea2c338d38270e123332bbdf289c28ca994d94a8a80845bc5b90cf04"
+    },
+    {
+      "id": "fi-006",
+      "category": "feature_implementation",
+      "language": "javascript",
+      "snapshot": "generated/fi-006",
+      "snapshotKind": "generated",
+      "snapshotDigest": "80ddcba3b8bc15b33259207c6ff20708477974530bc27cfe6d51434ae84d32cd",
+      "taskDigest": "cc8f1d2147fee7bbb2d6b7083c5e667770729494e57f467c6c60d2aaf4662a69"
+    },
+    {
+      "id": "fi-007",
+      "category": "feature_implementation",
+      "language": "typescript",
+      "snapshot": "generated/fi-007",
+      "snapshotKind": "generated",
+      "snapshotDigest": "b810ccf112fcacb6f28f058bb8cbdca6e5712b9de94ea1d2193ac54bce437324",
+      "taskDigest": "7ea80d954801a0d00a1ce935e9b93e6a981649dd4ae1f9cc2ca8dbc4c6b02384"
+    },
+    {
+      "id": "fi-008",
+      "category": "feature_implementation",
+      "language": "typescript",
+      "snapshot": "generated/fi-008",
+      "snapshotKind": "generated",
+      "snapshotDigest": "69f3b36b61890f87e804e54c88777ff3e7660dfbf02baa08e32d5f53093f720e",
+      "taskDigest": "cd2fd64318b6b06f3ba0bc3f7ae66a75eb1f6e1a9dcb2597603bead25493ae90"
+    },
+    {
+      "id": "fi-009",
+      "category": "feature_implementation",
+      "language": "javascript",
+      "snapshot": "generated/fi-009",
+      "snapshotKind": "generated",
+      "snapshotDigest": "97d6312536d03abd385c54bc7796d4d71e3c3ffa0db64d71de29e3f5d48dcfc1",
+      "taskDigest": "bfa229dd154a3279d90fcf24d6cf69022f8894fb07288ddf873ca007ede33005"
+    },
+    {
+      "id": "fi-010",
+      "category": "feature_implementation",
+      "language": "typescript",
+      "snapshot": "generated/fi-010",
+      "snapshotKind": "generated",
+      "snapshotDigest": "7941222bcd1f943dddf207d6f008268178d88fcf7a70be05f6e4c2f2d3dd80b3",
+      "taskDigest": "5d5cbb6893ec53881e1a0bf3a6b079dca4f8d6e2a7f5b4c0bb71474183ac1615"
+    },
+    {
+      "id": "fi-011",
+      "category": "feature_implementation",
+      "language": "typescript",
+      "snapshot": "generated/fi-011",
+      "snapshotKind": "generated",
+      "snapshotDigest": "3ef5f2ebeb3353ee0839d739590220063b41a0b1076513c6e7580a0ec45a8bbe",
+      "taskDigest": "e9f8cbc03adc590be2cfa57d5e0ce71145bb5974fa6ef1c2be3f2b438bb355da"
+    },
+    {
+      "id": "fi-012",
+      "category": "feature_implementation",
+      "language": "javascript",
+      "snapshot": "generated/fi-012",
+      "snapshotKind": "generated",
+      "snapshotDigest": "6bedcb898a90d9b49f3b7393bd004e516208dd5f8606b135e00cd93229bb4f2a",
+      "taskDigest": "24b429a885936bcfb2dac2b1a009537e88406e79f25420f28a51c75599a2ebf2"
+    },
+    {
+      "id": "fi-013",
+      "category": "feature_implementation",
+      "language": "typescript",
+      "snapshot": "generated/fi-013",
+      "snapshotKind": "generated",
+      "snapshotDigest": "d417e0bac03e7112e725d250384585fc638ac82eab01b456a1616f6f87716448",
+      "taskDigest": "6c32f802e0792f43e5468493426f9bed045bee5c840e8a7e975675d3c825b640"
+    },
+    {
+      "id": "fi-014",
+      "category": "feature_implementation",
+      "language": "typescript",
+      "snapshot": "generated/fi-014",
+      "snapshotKind": "generated",
+      "snapshotDigest": "f28860e1b1cce8d20f8bc3a4cc2e761c16bc0630206e39b921361237369fd184",
+      "taskDigest": "3fb3ab3bd9b101e81e5f22dfa000002fb66c350285519ad2d5143b3af3875c75"
+    },
+    {
+      "id": "fi-015",
+      "category": "feature_implementation",
+      "language": "javascript",
+      "snapshot": "generated/fi-015",
+      "snapshotKind": "generated",
+      "snapshotDigest": "288a22fe5512de557756917166a2793ad8b85803f68ba3a7c1da4586f831bcb5",
+      "taskDigest": "365a8d71e883ead2413b3204d826098a3da2f678e34e188c36cb6846dc98196d"
+    },
+    {
+      "id": "fi-016",
+      "category": "feature_implementation",
+      "language": "typescript",
+      "snapshot": "generated/fi-016",
+      "snapshotKind": "generated",
+      "snapshotDigest": "db078b80467de91f07a3ae24bc22448330baf50566be9bae9f018d077c864e0b",
+      "taskDigest": "57722a4089ac285a7df83a72f770644e2f50e50c9d45c0383381bf790ba7750c"
+    },
+    {
+      "id": "fi-017",
+      "category": "feature_implementation",
+      "language": "typescript",
+      "snapshot": "generated/fi-017",
+      "snapshotKind": "generated",
+      "snapshotDigest": "79dfe56b04294eca101ce8dd32e36e0b9be25ac6e230ec1589f19a81a732e61a",
+      "taskDigest": "379bc500f8bb3bcffdc88d5f5b77cb94203eee1b945aeaacd701d91f3f62d042"
+    },
+    {
+      "id": "fi-018",
+      "category": "feature_implementation",
+      "language": "javascript",
+      "snapshot": "generated/fi-018",
+      "snapshotKind": "generated",
+      "snapshotDigest": "bc9fe7ebdc0f771c21bfad28c91c67012b0fcecfdf51efce3aea0248d140a81c",
+      "taskDigest": "50041be3d88e09b74f2d92d40602748ddddd76cfa71d9d5dc52e1db8a554c841"
+    },
+    {
+      "id": "fi-019",
+      "category": "feature_implementation",
+      "language": "typescript",
+      "snapshot": "generated/fi-019",
+      "snapshotKind": "generated",
+      "snapshotDigest": "3c8739178dd086165b34fb11f03e999e4524329b2ef862d6fdced734963d1e0e",
+      "taskDigest": "6bc3950d422d65d220607fb48a8dc87599ef07c5aabb8741946b78f6f60d1935"
+    },
+    {
+      "id": "fi-020",
+      "category": "feature_implementation",
+      "language": "typescript",
+      "snapshot": "generated/fi-020",
+      "snapshotKind": "generated",
+      "snapshotDigest": "07ef40f561ad564f44c99cb64193e10ab7d5f5ff05c52f7405b4f309ecc45a5f",
+      "taskDigest": "c722f1f22241191a73c6974a7268887e9eaa75a6fd076ef08657ae7cbdb57e8d"
+    },
+    {
+      "id": "rf-001",
+      "category": "refactor",
+      "language": "typescript",
+      "snapshot": "generated/rf-001",
+      "snapshotKind": "generated",
+      "snapshotDigest": "93d63c92649d37f9f5aa7ae9f653d0b03afec555de524702ad53d72047c0e570",
+      "taskDigest": "700e391441cad9ff86e3935a793a69214f4a0292f25db9f3a1c0cc2d18dffe88"
+    },
+    {
+      "id": "rf-002",
+      "category": "refactor",
+      "language": "typescript",
+      "snapshot": "generated/rf-002",
+      "snapshotKind": "generated",
+      "snapshotDigest": "8ca101d632d9049dbc8322e72730edd96ccdfb6ad58a531402248338b9bfee3d",
+      "taskDigest": "9573f725a05e69890b73b99b36a14055756c6d0b1d7233f1d45f3331eb45ff10"
+    },
+    {
+      "id": "rf-003",
+      "category": "refactor",
+      "language": "typescript",
+      "snapshot": "generated/rf-003",
+      "snapshotKind": "generated",
+      "snapshotDigest": "b60a3a060d0a37a6c481a831485b563c57d56155eccbb7221b0200a820f386cf",
+      "taskDigest": "a11e7c698cde8aad3e9d1df8a96bda44d37c6f93e908eb91ffd88ba4c52e03f4"
+    },
+    {
+      "id": "rf-004",
+      "category": "refactor",
+      "language": "typescript",
+      "snapshot": "generated/rf-004",
+      "snapshotKind": "generated",
+      "snapshotDigest": "9c4375a7e791b0ff8c5452b660e4cf996b9428487d0d1edb2a63e6d63a474ed0",
+      "taskDigest": "e8477bd66621dfdc87b32f49768879de34dcf82c4fcc4556e5437cc975af0169"
+    },
+    {
+      "id": "rf-005",
+      "category": "refactor",
+      "language": "typescript",
+      "snapshot": "generated/rf-005",
+      "snapshotKind": "generated",
+      "snapshotDigest": "f1bd8113efd3fbf43d09801a0ad258777407c689a31f5aeb79ee92317e9b6216",
+      "taskDigest": "177d51d9526082d64fffb535ce7f30f5b39f17e2c1af5a99e19dbac7c0aed6bd"
+    },
+    {
+      "id": "rf-006",
+      "category": "refactor",
+      "language": "typescript",
+      "snapshot": "generated/rf-006",
+      "snapshotKind": "generated",
+      "snapshotDigest": "f51b3c4ceb945be46cc0dad841111d0a1cad8bcaf6c95fbdd11a65317d22cd48",
+      "taskDigest": "0740174802c91d616ea9b92bce8df2676e7f402b5b86c2ca0aed312f78187f6c"
+    },
+    {
+      "id": "rf-007",
+      "category": "refactor",
+      "language": "typescript",
+      "snapshot": "generated/rf-007",
+      "snapshotKind": "generated",
+      "snapshotDigest": "3405e7141e531a5a680bdb03e5a1f809e7bc2278707597ab1b55b2a0d2bf24d4",
+      "taskDigest": "78ec90b8e087deb243f2a49cca2033932ccc0c0dc148d56d519be67957010eab"
+    },
+    {
+      "id": "rf-008",
+      "category": "refactor",
+      "language": "typescript",
+      "snapshot": "generated/rf-008",
+      "snapshotKind": "generated",
+      "snapshotDigest": "87144f53c03e837afba1a60855b6cc5ef51d121af9c832989ade4c9e59d8e6e2",
+      "taskDigest": "01239e8f0decfa6d1c0ba9b17138f07f8c4875c802e13b92f4acdbd545cb066b"
+    },
+    {
+      "id": "rf-009",
+      "category": "refactor",
+      "language": "typescript",
+      "snapshot": "generated/rf-009",
+      "snapshotKind": "generated",
+      "snapshotDigest": "563c974750cb50eb6e877fa51c38bac7830d771c265cb474ace8e60b041680a2",
+      "taskDigest": "e2a5cb66d2f7a424a6ef0041ff4304347706ba3e586c519f61d8d02024c27873"
+    },
+    {
+      "id": "rf-010",
+      "category": "refactor",
+      "language": "typescript",
+      "snapshot": "generated/rf-010",
+      "snapshotKind": "generated",
+      "snapshotDigest": "a2c45fe059e625385e4ec5b24bce458041c172cbd97ebee04d581a4403031575",
+      "taskDigest": "adba0c24bdf68864a9c5b3472524ee70a6a760f0f69e8f9a866f2df79d191202"
+    },
+    {
+      "id": "rf-011",
+      "category": "refactor",
+      "language": "typescript",
+      "snapshot": "generated/rf-011",
+      "snapshotKind": "generated",
+      "snapshotDigest": "1bdae8f18f79d16e205ab12f273bce0cd4d08153bdc830d72b72ef68019d7eb2",
+      "taskDigest": "a2599258cd4a5ce93353345e3a57045539436aa8cfe719400704f49ea2f8c4bc"
+    },
+    {
+      "id": "rf-012",
+      "category": "refactor",
+      "language": "typescript",
+      "snapshot": "generated/rf-012",
+      "snapshotKind": "generated",
+      "snapshotDigest": "cce9c3e2e7013b95bb49055a6c771d445532abfca52cf9bc62c1451081ab6d2e",
+      "taskDigest": "7be9e433246425b2bee1106822b9df27476427b9b4f0462d0c0a56036e3dc6e3"
+    },
+    {
+      "id": "rf-013",
+      "category": "refactor",
+      "language": "typescript",
+      "snapshot": "generated/rf-013",
+      "snapshotKind": "generated",
+      "snapshotDigest": "549a9101edd796ae798816fc2f64180e8991b23436a0cfe253dc19969477ff88",
+      "taskDigest": "74f131e327527ab82024c8f5168552fd591059afc9e6edb710ae4e2603f3bf6b"
+    },
+    {
+      "id": "rf-014",
+      "category": "refactor",
+      "language": "typescript",
+      "snapshot": "generated/rf-014",
+      "snapshotKind": "generated",
+      "snapshotDigest": "43ed16cba4c91b66c5c1fc148277c98b996bc6166024e776fdab02fd339597e4",
+      "taskDigest": "ff32644767664ec16c6906ecce4e1a078a7348c6650dd60b820620fa0818f7de"
+    },
+    {
+      "id": "rf-015",
+      "category": "refactor",
+      "language": "typescript",
+      "snapshot": "generated/rf-015",
+      "snapshotKind": "generated",
+      "snapshotDigest": "cc4e07e9fe8f861e61f70e07c033212cb4067d3ee52b66cc2f81dea8c736627d",
+      "taskDigest": "7b5b9b5dca911d2ac6752af0747e024dc1a89aee7ca0d5299604d662cfb04fdc"
+    },
+    {
+      "id": "td-001",
+      "category": "test_diagnosis",
+      "language": "typescript",
+      "snapshot": "generated/td-001",
+      "snapshotKind": "generated",
+      "snapshotDigest": "d47599b0f5d0bcad6bd2184412a08030bedeb3ef2e6f2de5365f64586546b1d8",
+      "taskDigest": "895ade924c5e1b048d83c13bd962c17ee79b04981f727c6306d40364071b8839"
+    },
+    {
+      "id": "td-002",
+      "category": "test_diagnosis",
+      "language": "typescript",
+      "snapshot": "generated/td-002",
+      "snapshotKind": "generated",
+      "snapshotDigest": "5c90f8bea34ce46c9a18215d7f48dc32262bee8e73733223c6cf798abf1c0d88",
+      "taskDigest": "e25e612f0ce9d9778ab50ed4a3f6634b31f05de9583a80baad460c0d2ef47473"
+    },
+    {
+      "id": "td-003",
+      "category": "test_diagnosis",
+      "language": "typescript",
+      "snapshot": "generated/td-003",
+      "snapshotKind": "generated",
+      "snapshotDigest": "096d1a731f9b55f2def9205d1137f1d7c0d58806011000bd8173aad8e05e5c3e",
+      "taskDigest": "00797ffa37fd4c8530f5be0782dd191ff8b3febc7f83b499a17e9859505140b2"
+    },
+    {
+      "id": "td-004",
+      "category": "test_diagnosis",
+      "language": "typescript",
+      "snapshot": "generated/td-004",
+      "snapshotKind": "generated",
+      "snapshotDigest": "6aed174f0e49032f80b7dd511be91ab86205308c986f0d3d88d2cc10e2c0c8fa",
+      "taskDigest": "9eeb6438f3c3261287e2a11bcc62bb6246e9d10fe884d7c59b6a8271bd899ee7"
+    },
+    {
+      "id": "td-005",
+      "category": "test_diagnosis",
+      "language": "typescript",
+      "snapshot": "generated/td-005",
+      "snapshotKind": "generated",
+      "snapshotDigest": "6559f271e125ebef4532a96a07abe1f64678045a39bc8712dddf71271262d9dc",
+      "taskDigest": "bcd7151221ea3c285388b5b5d5cd92af7b85fa85dfb79402508c91de06012d59"
+    },
+    {
+      "id": "td-006",
+      "category": "test_diagnosis",
+      "language": "typescript",
+      "snapshot": "generated/td-006",
+      "snapshotKind": "generated",
+      "snapshotDigest": "898989e9ef453e857cf3082ce2a33121714e0bf36995648335396330ddcffdf0",
+      "taskDigest": "58454eabf3b5eff1176bb42d7ae40a707c48f00d6b9df979a2cece7a45844437"
+    },
+    {
+      "id": "td-007",
+      "category": "test_diagnosis",
+      "language": "typescript",
+      "snapshot": "generated/td-007",
+      "snapshotKind": "generated",
+      "snapshotDigest": "a3b6a07a9f748f5b70f2b29fb181ab7c6801874a8c9a0158bc7ee4366bf29178",
+      "taskDigest": "c7d64b9af5e55ef5f8add81e04ec05acaff74fff0e155f3fc00b01fac8889069"
+    },
+    {
+      "id": "td-008",
+      "category": "test_diagnosis",
+      "language": "typescript",
+      "snapshot": "generated/td-008",
+      "snapshotKind": "generated",
+      "snapshotDigest": "29c334d51a6a05e018e8536b248099d0041625a02e8f88ad0c7277fd36b423f9",
+      "taskDigest": "0db8d11cbbd1bc6320896648cf0e830810e8e23f2d29653a1becb876a54e1356"
+    },
+    {
+      "id": "td-009",
+      "category": "test_diagnosis",
+      "language": "typescript",
+      "snapshot": "generated/td-009",
+      "snapshotKind": "generated",
+      "snapshotDigest": "6524676b66f50a91d33bf8fdfc1729437e33936e324f3b1caaa85dc889fb4ad8",
+      "taskDigest": "a1b846f06f2b6d6563d8ed2399f72a6b404cf7eea66700da9b66507a890c7e1d"
+    },
+    {
+      "id": "td-010",
+      "category": "test_diagnosis",
+      "language": "typescript",
+      "snapshot": "generated/td-010",
+      "snapshotKind": "generated",
+      "snapshotDigest": "a387f59f61f66a6aca333c3e905cf37ec93bdf941b5a6bc44f2fb93cb20f1125",
+      "taskDigest": "6649fa3464433e160513172f942058f2d9462bef4891d200954810908ef70336"
+    },
+    {
+      "id": "td-011",
+      "category": "test_diagnosis",
+      "language": "typescript",
+      "snapshot": "generated/td-011",
+      "snapshotKind": "generated",
+      "snapshotDigest": "c456fd09dbb63965a7e1f4175c600a780fc7d81efeb5acf157bf7723f3c1ccd7",
+      "taskDigest": "042b6be0e6ac7c1d8127b691ebf4490a751f91e2a719a4e380680654432a3c9e"
+    },
+    {
+      "id": "td-012",
+      "category": "test_diagnosis",
+      "language": "typescript",
+      "snapshot": "generated/td-012",
+      "snapshotKind": "generated",
+      "snapshotDigest": "973261074bc7be00a3b8f287a56d4534c3361dbd0f9be85006324f2a85713f89",
+      "taskDigest": "3de0bf31c61608d4da03b739986a78767819d4159266c7707ae8ba06e58f770d"
+    },
+    {
+      "id": "td-013",
+      "category": "test_diagnosis",
+      "language": "typescript",
+      "snapshot": "generated/td-013",
+      "snapshotKind": "generated",
+      "snapshotDigest": "3e1234e75727d293c6c1fb7ae5f4670a1072117f0edecc1eb894d0184ee58d3c",
+      "taskDigest": "0a9ad2dfd66152473ba117cc068c381bfdcc9ea9d44a826a7ca595473d4c7993"
+    },
+    {
+      "id": "td-014",
+      "category": "test_diagnosis",
+      "language": "typescript",
+      "snapshot": "generated/td-014",
+      "snapshotKind": "generated",
+      "snapshotDigest": "ac2ca741f9ca928e96ba41cf538dd0e12778a6e7c7e6e3a4f99a5db4f2607fa4",
+      "taskDigest": "32fa783d5482ff2843b48cda41f9a7ce275a5b15b6db6dadf49f901530185a2a"
+    },
+    {
+      "id": "td-015",
+      "category": "test_diagnosis",
+      "language": "typescript",
+      "snapshot": "generated/td-015",
+      "snapshotKind": "generated",
+      "snapshotDigest": "a00b5978f317377d4b5c9e7161f7db1498a4b78da19ce5b0d8fc3c9ef1e7d401",
+      "taskDigest": "647b6d964d21b7fa3bfdf0a4ad11da1c4ed263e2e367daeabe94b29777565dbd"
+    },
+    {
+      "id": "dr-001",
+      "category": "diff_review",
+      "language": "typescript",
+      "snapshot": "generated/dr-001",
+      "snapshotKind": "generated",
+      "snapshotDigest": "56098e61ab179cc456d6a7d6d80427d49d789052587e585b7059f99f7cb0084a",
+      "taskDigest": "6eaf9f0bbe740549e3ef40316364394fec8569db8af58aff549da872949e3038"
+    },
+    {
+      "id": "dr-002",
+      "category": "diff_review",
+      "language": "rust",
+      "snapshot": "generated/dr-002",
+      "snapshotKind": "generated",
+      "snapshotDigest": "1b3055f3507b7fa9ba12e06be8674f3cbd50b7164a357798f0dfcc2765f80fd0",
+      "taskDigest": "473a539706f8607c31f7d51ccf0e603a0491543c1c2088d7da883d3193d9bd39"
+    },
+    {
+      "id": "dr-003",
+      "category": "diff_review",
+      "language": "python",
+      "snapshot": "generated/dr-003",
+      "snapshotKind": "generated",
+      "snapshotDigest": "42a0260b58bf7c3ff1fcf8778ae94803c0d8641c49e3bd958bacd75ed7ab7211",
+      "taskDigest": "8ecc8ed4bd36a9cfe09a797478f71180dc72722e544f0f1fd0e6127d37175b3e"
+    },
+    {
+      "id": "dr-004",
+      "category": "diff_review",
+      "language": "go",
+      "snapshot": "generated/dr-004",
+      "snapshotKind": "generated",
+      "snapshotDigest": "7cf6190d4d6cf9717b79218bf7cdcfe7afa4e127858f60b73da1cfa5413f4947",
+      "taskDigest": "1daf2b25f0cb7085fc5993626816ce1b591b5e17447d442226b69e755cdca01b"
+    },
+    {
+      "id": "dr-005",
+      "category": "diff_review",
+      "language": "javascript",
+      "snapshot": "generated/dr-005",
+      "snapshotKind": "generated",
+      "snapshotDigest": "860edd71f99c3ff6760a99fe64a551b3bd8a9891a9cb69fcdef415a02f1108d6",
+      "taskDigest": "c964d07d3bd85ee499cc042494011c853d00a0bb2cfd349077c5d86738e257be"
+    },
+    {
+      "id": "dr-006",
+      "category": "diff_review",
+      "language": "typescript",
+      "snapshot": "generated/dr-006",
+      "snapshotKind": "generated",
+      "snapshotDigest": "7598d24888c8d6722bbfbb6aa092b55535e0c2f02ff9b108b530763469de2b82",
+      "taskDigest": "a70e51a4cab2b53dad0b0f32674ce39ad5a21f8efdaf0299dd916cf547370a5b"
+    },
+    {
+      "id": "dr-007",
+      "category": "diff_review",
+      "language": "rust",
+      "snapshot": "generated/dr-007",
+      "snapshotKind": "generated",
+      "snapshotDigest": "3a191eab7b9ce2863e25d4e2244ef6ffc494ce27648f882d2377ecb09a3d592e",
+      "taskDigest": "85a2b77809e7a5445ed31696d65e240491f57a3fea52331055bab0efa048de83"
+    },
+    {
+      "id": "dr-008",
+      "category": "diff_review",
+      "language": "python",
+      "snapshot": "generated/dr-008",
+      "snapshotKind": "generated",
+      "snapshotDigest": "343926c27743740b7bb132e0a0dce0518b9e225424a72556645a3849287771ec",
+      "taskDigest": "4a04394b86bceb96ebf8735187ec09bc14335c038d154f957b7e394836d80d41"
+    },
+    {
+      "id": "dr-009",
+      "category": "diff_review",
+      "language": "go",
+      "snapshot": "generated/dr-009",
+      "snapshotKind": "generated",
+      "snapshotDigest": "435abe6afe77c3d7b9f6a10b75b8d242c5e02350a54f7763d960298b5bbd8b49",
+      "taskDigest": "d6f153e47ced0cd89e3bab98814807bbda43d500e9009f6c72ae62c09b1937a8"
+    },
+    {
+      "id": "dr-010",
+      "category": "diff_review",
+      "language": "javascript",
+      "snapshot": "generated/dr-010",
+      "snapshotKind": "generated",
+      "snapshotDigest": "bc49bd2e616b9f65cf8792d4aa6d0b80683d701ebc83e4b9fd6f999925054922",
+      "taskDigest": "c76a1bd534a2cb5ff9f6f721f496b407c9e9d84222781327564187db49760164"
+    },
+    {
+      "id": "ml-001",
+      "category": "multi_language_monorepo",
+      "language": "mixed_monorepo",
+      "snapshot": "generated/ml-001",
+      "snapshotKind": "generated",
+      "snapshotDigest": "15c65472e8d8d79764af56eaf200c2180949353bbe804d55c19209bbac425d38",
+      "taskDigest": "504dcfaa776e3a69dbdbf7cd1a53029413355bac1509b5899a4c39b188e337d0"
+    },
+    {
+      "id": "ml-002",
+      "category": "multi_language_monorepo",
+      "language": "mixed_monorepo",
+      "snapshot": "generated/ml-002",
+      "snapshotKind": "generated",
+      "snapshotDigest": "ecd9a38f4818e4c7d02151e779ec81b4c42627eadef6c879bf7e701ae6d70934",
+      "taskDigest": "93cc7e8648f9e3ae87d29632f7ba3656417374423896ee125a4fff5537e4b260"
+    },
+    {
+      "id": "ml-003",
+      "category": "multi_language_monorepo",
+      "language": "mixed_monorepo",
+      "snapshot": "generated/ml-003",
+      "snapshotKind": "generated",
+      "snapshotDigest": "1b72a5ec3de5123b1fdb66fa60902f6766d2e38834bb245fd9cea1d7c3e76728",
+      "taskDigest": "13072f26abdaa323bd47c37ddc5febbef573f4b83b7f49413265bc4382b12568"
+    },
+    {
+      "id": "ml-004",
+      "category": "multi_language_monorepo",
+      "language": "mixed_monorepo",
+      "snapshot": "generated/ml-004",
+      "snapshotKind": "generated",
+      "snapshotDigest": "1d0681cf865e69efa0aa0c715eb8e1403f8ec250829bee95be1ceee159c5bae0",
+      "taskDigest": "e7d1132301258d889be3adcf098f39017eaf7e1948a66f14e757cf917a9476e3"
+    },
+    {
+      "id": "ml-005",
+      "category": "multi_language_monorepo",
+      "language": "mixed_monorepo",
+      "snapshot": "generated/ml-005",
+      "snapshotKind": "generated",
+      "snapshotDigest": "9662b9b7cf83e796c3010cccd7b01a27087d71f97376ff7716df66746b5f157a",
+      "taskDigest": "5f4f7d6fccad31c5790f6d38fc6e797c6613d05c813731eb5ef8f9c051c55451"
+    },
+    {
+      "id": "ml-006",
+      "category": "multi_language_monorepo",
+      "language": "mixed_monorepo",
+      "snapshot": "generated/ml-006",
+      "snapshotKind": "generated",
+      "snapshotDigest": "80853fe42096c3ffb6839879c9ceb911a272227c2350d18cbaf7c17997a1ce25",
+      "taskDigest": "077ab43399b6b85c20bc623a3c057453856330df8092ff5c0c09d3925974203e"
+    },
+    {
+      "id": "ml-007",
+      "category": "multi_language_monorepo",
+      "language": "mixed_monorepo",
+      "snapshot": "generated/ml-007",
+      "snapshotKind": "generated",
+      "snapshotDigest": "3266f2183960ada099a6a5e4de34991f35e9ad913a90ae78d6bf720d0ea0b872",
+      "taskDigest": "cf69d125cff686175921c622489c3432da2139003db3b6a5413b74aaa5951671"
+    },
+    {
+      "id": "ml-008",
+      "category": "multi_language_monorepo",
+      "language": "mixed_monorepo",
+      "snapshot": "generated/ml-008",
+      "snapshotKind": "generated",
+      "snapshotDigest": "9cf70deeb1c4c47c1e7a1e0f566613798d8fbb8ae62ef582193252fa3ceabcaf",
+      "taskDigest": "a2db6e5de59581b2d8f072402a3d30fbb37bff2892fd4aa8471e897bdf030a3d"
+    },
+    {
+      "id": "ml-009",
+      "category": "multi_language_monorepo",
+      "language": "mixed_monorepo",
+      "snapshot": "generated/ml-009",
+      "snapshotKind": "generated",
+      "snapshotDigest": "49d2797b48b090ba53d1136158dc659f1197be5ddfc1f9f9201d003b3bb9feef",
+      "taskDigest": "4d490bcb66ad725a517f026c2651e2b3995169695b7276269bdb48925bf1ff4e"
+    },
+    {
+      "id": "ml-010",
+      "category": "multi_language_monorepo",
+      "language": "mixed_monorepo",
+      "snapshot": "generated/ml-010",
+      "snapshotKind": "generated",
+      "snapshotDigest": "2277b3c84f23f61571f78be8e79a08179c1da98d532a2de11b1f8cd493431e25",
+      "taskDigest": "b7c6b388181ab7953591059e895ae7c40ec9d967f815e9a36c476472f5220ad0"
+    },
+    {
+      "id": "ml-011",
+      "category": "multi_language_monorepo",
+      "language": "mixed_monorepo",
+      "snapshot": "generated/ml-011",
+      "snapshotKind": "generated",
+      "snapshotDigest": "67c034df3a66bb575d4c9f337476b6beadf4671772dbc501b2c12c729bfc07e8",
+      "taskDigest": "0d194adfd97f934d9f59cd9fa00fdaf20f5dd000257234cf32f964a344a2c5de"
+    },
+    {
+      "id": "ml-012",
+      "category": "multi_language_monorepo",
+      "language": "mixed_monorepo",
+      "snapshot": "generated/ml-012",
+      "snapshotKind": "generated",
+      "snapshotDigest": "632743653291e8ded1285c38265bd3016d4f1c7cba5ba09d56120cbeb7c66892",
+      "taskDigest": "17f0aa8176f5f22e8675e2fa16252f86601760ac626cc1e251c78580682ea909"
+    },
+    {
+      "id": "ml-013",
+      "category": "multi_language_monorepo",
+      "language": "mixed_monorepo",
+      "snapshot": "generated/ml-013",
+      "snapshotKind": "generated",
+      "snapshotDigest": "c776cc4638b9af413f54fb0b465a214360ceb9fe439bff33ae593dfa24838702",
+      "taskDigest": "60876f29b8d448add7390f1a490312f47f05a158615a358d240ef2f670dd6222"
+    },
+    {
+      "id": "ml-014",
+      "category": "multi_language_monorepo",
+      "language": "mixed_monorepo",
+      "snapshot": "generated/ml-014",
+      "snapshotKind": "generated",
+      "snapshotDigest": "7306b329c40d0127c115aa6140275ab89236c8a496b99c04cbe0e96a18b8fbc5",
+      "taskDigest": "9176e3a25693dd608f715961871ac45c802a84ebe49041d0dfb7a4a973e72d04"
+    },
+    {
+      "id": "ml-015",
+      "category": "multi_language_monorepo",
+      "language": "mixed_monorepo",
+      "snapshot": "generated/ml-015",
+      "snapshotKind": "generated",
+      "snapshotDigest": "529652d0cbc3d34faef2f0e48e7ec9c963d952c77641038c280467422a80d228",
+      "taskDigest": "e0c3f085c0a12e8824f22326f6e1d1935a7ae29c6dd9ba457225acdecc37a457"
+    },
+    {
+      "id": "pd-001",
+      "category": "permission_denial_adaptation",
+      "language": "typescript",
+      "snapshot": "generated/pd-001",
+      "snapshotKind": "generated",
+      "snapshotDigest": "96a2e47ddd9e503f5daceca328de37739f4f9aa1709781eef84f55bea60294e4",
+      "taskDigest": "cd87a929afae7b3ac2fee45e9d5b9826f26370110c5e52a5000fa51783f0fbd5"
+    },
+    {
+      "id": "pd-002",
+      "category": "permission_denial_adaptation",
+      "language": "typescript",
+      "snapshot": "generated/pd-002",
+      "snapshotKind": "generated",
+      "snapshotDigest": "74563ccbfa9abbfe4c2d9568f6b2285a157361dda75fb6fb547ba93409e36aed",
+      "taskDigest": "96f563f481d057ed8007470ce393ba8af272a47411be592843ef7eb3e22fdf89"
+    },
+    {
+      "id": "pd-003",
+      "category": "permission_denial_adaptation",
+      "language": "typescript",
+      "snapshot": "generated/pd-003",
+      "snapshotKind": "generated",
+      "snapshotDigest": "ede4bd86e4e206460bb0c0c7fa5442c84405554170c6954bf2a07c73b27b051d",
+      "taskDigest": "377fa951d26abfd52263861116293ea5d08780dc741b8241c1fd1e97a652c1a8"
+    },
+    {
+      "id": "pd-004",
+      "category": "permission_denial_adaptation",
+      "language": "typescript",
+      "snapshot": "generated/pd-004",
+      "snapshotKind": "generated",
+      "snapshotDigest": "de13904081f1e68a8e88647d7e9a28fd72e98f0d70ab72ae4137313a0c042299",
+      "taskDigest": "229c8d6b10b410df4d85d6769898a66e5ad9b1d0c404a37e0b4494dc1d795b9a"
+    },
+    {
+      "id": "pd-005",
+      "category": "permission_denial_adaptation",
+      "language": "typescript",
+      "snapshot": "generated/pd-005",
+      "snapshotKind": "generated",
+      "snapshotDigest": "02eb0afe6b1a06859b79cc1007706122f4f7a2118e837bb6de38e41e21a30ebb",
+      "taskDigest": "06e22aa7673a80048a5c73b20faa89e96b034f7da548a81bae809b97229d3d5a"
+    },
+    {
+      "id": "pd-006",
+      "category": "permission_denial_adaptation",
+      "language": "typescript",
+      "snapshot": "generated/pd-006",
+      "snapshotKind": "generated",
+      "snapshotDigest": "9da5a01a3c1e0e41465b40719181161ff87c3864eea92c91ed0b441a6e0b0297",
+      "taskDigest": "7970079a0d825dfbd429953679a81bcced48fa4d2c99c5e6be57ab77465c099d"
+    },
+    {
+      "id": "pd-007",
+      "category": "permission_denial_adaptation",
+      "language": "typescript",
+      "snapshot": "generated/pd-007",
+      "snapshotKind": "generated",
+      "snapshotDigest": "17362aadd14a2f53871960636317049a075d6484c9be33f9f67906674dbf6d83",
+      "taskDigest": "4f1e157cdf966dfa52da1dca36b357fcb2d20d928d2b80eadb846af55dc02b98"
+    },
+    {
+      "id": "pd-008",
+      "category": "permission_denial_adaptation",
+      "language": "typescript",
+      "snapshot": "generated/pd-008",
+      "snapshotKind": "generated",
+      "snapshotDigest": "1f9cfd39854ac533f94c89722d557caf9f5c96ae630000d3194dfef8a5fa6635",
+      "taskDigest": "ac80afac43585a98635cd6eb8eba95616ac689a9c011698b601ab4f9c7a83dc9"
+    },
+    {
+      "id": "pd-009",
+      "category": "permission_denial_adaptation",
+      "language": "typescript",
+      "snapshot": "generated/pd-009",
+      "snapshotKind": "generated",
+      "snapshotDigest": "9e097c1824f51c8cd0c1522f310d28ef4540a86621f02c13fdba505538a647c3",
+      "taskDigest": "2fafd40fa548c3c40025bd113deb38f584e4bed54f07ab6bc65d72a5fdfc1751"
+    },
+    {
+      "id": "pd-010",
+      "category": "permission_denial_adaptation",
+      "language": "typescript",
+      "snapshot": "generated/pd-010",
+      "snapshotKind": "generated",
+      "snapshotDigest": "511b6d253ae0e15e4e1f5765030d51568a1110828f84fba4c47a245d47da552e",
+      "taskDigest": "7bafbc6b366cca1b995a064dc693cfa1b5a1fb44d9ec92a90eb753ed2c76c1c3"
+    },
+    {
+      "id": "ss-001",
+      "category": "security_safety",
+      "language": "typescript",
+      "snapshot": "generated/ss-001",
+      "snapshotKind": "generated",
+      "snapshotDigest": "f31d357a890d3c31c4db50146dbaf1fac555a9f474253236ed128e6b71183536",
+      "taskDigest": "7377089a00e866d887bd54fc5915c71ec74858491ef60b64d4c113f9036aa4cd"
+    },
+    {
+      "id": "ss-002",
+      "category": "security_safety",
+      "language": "javascript",
+      "snapshot": "generated/ss-002",
+      "snapshotKind": "generated",
+      "snapshotDigest": "16312b466668cd81b018633e613ca5818421700f31dd71a455aec0412382bfae",
+      "taskDigest": "250fc7233b3852b232c11e7f25ba4ef03aee5df6152b6e3f8e29f80e24db7ca5"
+    },
+    {
+      "id": "ss-003",
+      "category": "security_safety",
+      "language": "typescript",
+      "snapshot": "generated/ss-003",
+      "snapshotKind": "generated",
+      "snapshotDigest": "2ae3e537831c2083e79f9814a6e696b2ec27af98601c56a086a5038ac857db90",
+      "taskDigest": "801f161d5226ea6a1bb88314098c67d7cf65b49c368784a9fcc30e6c3c3c8a8b"
+    },
+    {
+      "id": "ss-004",
+      "category": "security_safety",
+      "language": "javascript",
+      "snapshot": "generated/ss-004",
+      "snapshotKind": "generated",
+      "snapshotDigest": "29fa3498186c1f13cbbfc2e58d4962ab2da248d14548a3fc9f7e52de68967fec",
+      "taskDigest": "f2337cb1441683cd1d27cfe61836be5067205569eb0168cb559cb97693b43c5e"
+    },
+    {
+      "id": "ss-005",
+      "category": "security_safety",
+      "language": "typescript",
+      "snapshot": "generated/ss-005",
+      "snapshotKind": "generated",
+      "snapshotDigest": "0ef327f9f8b642ad626f6570a596e6a84a4e83b3e0022feb7dd148d9802a4c9a",
+      "taskDigest": "1be4b099bd2ad899cf6691bd90c86de9dfd1c026a3e3fab480eb82b490bb51c5"
+    },
+    {
+      "id": "ss-006",
+      "category": "security_safety",
+      "language": "javascript",
+      "snapshot": "generated/ss-006",
+      "snapshotKind": "generated",
+      "snapshotDigest": "aa6ab91abc4672fa18f7d6cfaf3a6acd95e3801f625005a9133f06f895e2c653",
+      "taskDigest": "8c46d9881a4e066d3d92002ffa900891bddd2283f90d8bec4c93f38a10309cbc"
+    },
+    {
+      "id": "ss-007",
+      "category": "security_safety",
+      "language": "typescript",
+      "snapshot": "generated/ss-007",
+      "snapshotKind": "generated",
+      "snapshotDigest": "d100c3f29e090dfd53ace33755322b5e18446bfdcc4d5be5812fe0a1def44e57",
+      "taskDigest": "008efefd2cca14c9863f76b518a48b862abca2e836a0430f6ec8097b13a1aaf0"
+    },
+    {
+      "id": "ss-008",
+      "category": "security_safety",
+      "language": "javascript",
+      "snapshot": "generated/ss-008",
+      "snapshotKind": "generated",
+      "snapshotDigest": "e0fcedfa61e93e4e68284abfbdba733d3b6bb8c399dbe41f77421eb52ba9b569",
+      "taskDigest": "24acc79fbee0baf3de114b20f70e2deb287a5f1f79c133c6a84ef852cc8d2b4f"
+    },
+    {
+      "id": "ss-009",
+      "category": "security_safety",
+      "language": "typescript",
+      "snapshot": "generated/ss-009",
+      "snapshotKind": "generated",
+      "snapshotDigest": "90058c40280a3cd6ec4e9bbec0a550d6ec1ee19e42a23d34ea01f78d59649bb2",
+      "taskDigest": "eef59ab00b886a909d969165eb6e7b3a96f51e29e15d33b69ce7142118849588"
+    },
+    {
+      "id": "ss-010",
+      "category": "security_safety",
+      "language": "javascript",
+      "snapshot": "generated/ss-010",
+      "snapshotKind": "generated",
+      "snapshotDigest": "27b2aee35c394595ea927fe32886336ac94c2df2bc3ac371845889f168f9bc5d",
+      "taskDigest": "c71bbf1c1ae7d9ae141d2382d2f88958d59578ba759aa359b2d6245a1f8f7b7e"
+    },
+    {
+      "id": "ss-011",
+      "category": "security_safety",
+      "language": "typescript",
+      "snapshot": "generated/ss-011",
+      "snapshotKind": "generated",
+      "snapshotDigest": "2de1c9387e943f303e3042d6ba20c7d99bd3423fc0ca676f1aaaaab09aa65224",
+      "taskDigest": "422e5fcdb6c8b9fccdb0e7dd9fa7c8172386f3762558486fcc4667a66c669d71"
+    },
+    {
+      "id": "ss-012",
+      "category": "security_safety",
+      "language": "javascript",
+      "snapshot": "generated/ss-012",
+      "snapshotKind": "generated",
+      "snapshotDigest": "5b09b41d618bdb50e2ea394319e3d730e65d2a89e9510a8e8a9098533a7d14f3",
+      "taskDigest": "b2f503bbf5b7a279cf7649549c21b889077c244a3079f51eae2a1e85805635f3"
+    },
+    {
+      "id": "ss-013",
+      "category": "security_safety",
+      "language": "typescript",
+      "snapshot": "generated/ss-013",
+      "snapshotKind": "generated",
+      "snapshotDigest": "2745aa1c9605742ba8b7450c9c1fbaafe20ac942a284fb9ce1ba4339c7a62b1c",
+      "taskDigest": "0965b1e2575af909ae4d88a60dea3802647970aa7ed277d42fb9986dce3eaccb"
+    },
+    {
+      "id": "ss-014",
+      "category": "security_safety",
+      "language": "javascript",
+      "snapshot": "generated/ss-014",
+      "snapshotKind": "generated",
+      "snapshotDigest": "20d7e2e7e4ac2f0ad82718adfb3d37594d252a6f6ae755e07ff87728298ac75d",
+      "taskDigest": "4d22647d23d5f48a7cc752a5fa795d892c9d8b88f8c62af77f8acd44d29cc577"
+    },
+    {
+      "id": "ss-015",
+      "category": "security_safety",
+      "language": "typescript",
+      "snapshot": "generated/ss-015",
+      "snapshotKind": "generated",
+      "snapshotDigest": "ab8c78ffa23d6ad0c732c07ed8c7de6650dd30c08db348df6a96e28f4afaed17",
+      "taskDigest": "109c400a8190c9fe7acfb86b879ffd3b2814365454f84381e32bdfa2cfa2692b"
+    },
+    {
+      "id": "ls-001",
+      "category": "long_session_resume_compaction",
+      "language": "typescript",
+      "snapshot": "generated/ls-001",
+      "snapshotKind": "generated",
+      "snapshotDigest": "ce9a73438b6704c955ce763c0d22a16d02178babc1aa56e2561fbe50ae1bbb05",
+      "taskDigest": "7d8252737c6d315eae9c4034e71d19b1e7696931828b9154b3d7403d10fa1826"
+    },
+    {
+      "id": "ls-002",
+      "category": "long_session_resume_compaction",
+      "language": "mixed_monorepo",
+      "snapshot": "generated/ls-002",
+      "snapshotKind": "generated",
+      "snapshotDigest": "44c0ac654b36ae09107ae466e8ea1179e467184a17e6e840c6dc965ef404d588",
+      "taskDigest": "2a105e50cb5269a86a30be3ff82c68fbf051a8b7b9ea9c6816a9ca166ad65076"
+    },
+    {
+      "id": "ls-003",
+      "category": "long_session_resume_compaction",
+      "language": "typescript",
+      "snapshot": "generated/ls-003",
+      "snapshotKind": "generated",
+      "snapshotDigest": "7d4059a2f0c91a1592941d634a3a526eae8529ddc735092a047a5ae037cd39e1",
+      "taskDigest": "4fb3b50f321876df52a904df4fa535fcdce5684b90dd428860c39b9b108d0062"
+    },
+    {
+      "id": "ls-004",
+      "category": "long_session_resume_compaction",
+      "language": "mixed_monorepo",
+      "snapshot": "generated/ls-004",
+      "snapshotKind": "generated",
+      "snapshotDigest": "b320cd6b51e7ab4ec009b12e09c69e835b987606e231e1324bf91e23de7da4bc",
+      "taskDigest": "200af28f9ccb463da5de78f4ebc74f9945a7d833024db56052f6c0a87984df74"
+    },
+    {
+      "id": "ls-005",
+      "category": "long_session_resume_compaction",
+      "language": "typescript",
+      "snapshot": "generated/ls-005",
+      "snapshotKind": "generated",
+      "snapshotDigest": "0e16889619ac0bb701db9376668ddd91e133c70c0ed3ffd0190a92e0217c37a2",
+      "taskDigest": "a71a695b8ed5354b44a9f2ca61eaa25c34fa1bfb07e0b62225eab4d2e696dace"
+    },
+    {
+      "id": "ls-006",
+      "category": "long_session_resume_compaction",
+      "language": "mixed_monorepo",
+      "snapshot": "generated/ls-006",
+      "snapshotKind": "generated",
+      "snapshotDigest": "3114a7f22afc58a923af67aed91912934fe76fa1a756ecfacfbe392b9499124f",
+      "taskDigest": "1ed02a10b11b6a02c48cd7d13c1b7f95c4478a6def3a20c93936c421cfb92c16"
+    },
+    {
+      "id": "ls-007",
+      "category": "long_session_resume_compaction",
+      "language": "typescript",
+      "snapshot": "generated/ls-007",
+      "snapshotKind": "generated",
+      "snapshotDigest": "b47448a5eba08f867122bc6cd7753fbd24202bdd4e00449d8e60d7f37df1cf3f",
+      "taskDigest": "6047f4ae391d91d58c953282a14d7fdcc07f7026e6604be45a8201c21aeda7be"
+    },
+    {
+      "id": "ls-008",
+      "category": "long_session_resume_compaction",
+      "language": "mixed_monorepo",
+      "snapshot": "generated/ls-008",
+      "snapshotKind": "generated",
+      "snapshotDigest": "c56330b699b7baf8c7e5b7b2b41220e99a6fb05b8c797713451c205a28cef0c0",
+      "taskDigest": "379a8ea4f3b3305e5ce5c73db62a579e2db13877589687ae6e38d970572c8ba2"
+    },
+    {
+      "id": "ls-009",
+      "category": "long_session_resume_compaction",
+      "language": "typescript",
+      "snapshot": "generated/ls-009",
+      "snapshotKind": "generated",
+      "snapshotDigest": "59b5cc45c148606e0ac4642d134a92227f4a0da0945d728348bd37a7aa5d7c81",
+      "taskDigest": "aca0bd4ecbac91afa835850f22a4151b274e822b3dfa06f185499edeb588f0c3"
+    },
+    {
+      "id": "ls-010",
+      "category": "long_session_resume_compaction",
+      "language": "mixed_monorepo",
+      "snapshot": "generated/ls-010",
+      "snapshotKind": "generated",
+      "snapshotDigest": "c8e5000e38072dfe379768e9a7e02e77823758bc284bae589d8e8d58afa4cf67",
+      "taskDigest": "a23cfbafeeea4fa8f7330078079f5c059972a70b28c9e9bbb8c721420d666a67"
+    },
+    {
+      "id": "ls-011",
+      "category": "long_session_resume_compaction",
+      "language": "typescript",
+      "snapshot": "generated/ls-011",
+      "snapshotKind": "generated",
+      "snapshotDigest": "cf18419fe229a60e79c1ea3ff328ed7b0662c4fc2aee72e8e182df14a2503707",
+      "taskDigest": "87751177e91a36768eea077d9ddbfad1861d677c79c4ee22c1bc730da57b7756"
+    },
+    {
+      "id": "ls-012",
+      "category": "long_session_resume_compaction",
+      "language": "mixed_monorepo",
+      "snapshot": "generated/ls-012",
+      "snapshotKind": "generated",
+      "snapshotDigest": "5c828e75df8a8abb04d6e5c09e75d7fbed9932eb91053c47801ecd231db3a902",
+      "taskDigest": "e1151a4b624bf6632f4b1c1517c355c7a005c79edb6b38dec8b38b029ce9c837"
+    },
+    {
+      "id": "ls-013",
+      "category": "long_session_resume_compaction",
+      "language": "typescript",
+      "snapshot": "generated/ls-013",
+      "snapshotKind": "generated",
+      "snapshotDigest": "6344ef302fb417c68bb2c7077a175d5b6ba95b6a15c44e7a505dc4114022903f",
+      "taskDigest": "645bbb359ebbdedaf184dd5abcca604a027fd95be0639c27ebbc343bb7ba93c5"
+    },
+    {
+      "id": "ls-014",
+      "category": "long_session_resume_compaction",
+      "language": "mixed_monorepo",
+      "snapshot": "generated/ls-014",
+      "snapshotKind": "generated",
+      "snapshotDigest": "28ebea450c75c045fd095d833cb1742bae71eddc9a7a5889b4fdf07b3ba5d43d",
+      "taskDigest": "5d8f0495b57f23df9b38c76e8f8019b920d6f4e7686b91a4dde9dc2a23142094"
+    },
+    {
+      "id": "ls-015",
+      "category": "long_session_resume_compaction",
+      "language": "typescript",
+      "snapshot": "generated/ls-015",
+      "snapshotKind": "generated",
+      "snapshotDigest": "4f7adad75e934c5b0db027cfc9657f486bb6994bd545a6d82667820da0c616cb",
+      "taskDigest": "e784b08f091c852d7ab5b95fb915328ef265a11448a782a6b1050d93d5455cb8"
+    }
+  ],
+  "generatedAt": "2026-08-12T17:39:56.227Z",
+  "digest": "a00d14e9afccb7610e4aacaa3c72ad4cf3e8960015488c33fe7cfa79bfea1727"
+}

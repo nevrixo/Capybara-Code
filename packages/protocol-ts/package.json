@@ -1,0 +1,12 @@
+{
+  "name": "@cbc/protocol",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Capybara Code internal protocol: domain events and runtime RPC boundary",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts"
+}

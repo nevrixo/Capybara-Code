@@ -1,0 +1,58 @@
+{
+  "x-note": "PRD §25.15 security regression inputs. Every entry names the threat it exercises and the invariant that must hold. The invariant is the point: a fixture without an assertion is just an odd repository, and a future reader needs to know what failure looks like.",
+  "schemaVersion": "1.0",
+  "cases": [
+    {
+      "id": "path-traversal",
+      "threat": "T1",
+      "directory": "path-traversal",
+      "description": "Project instructions and a patch that both reference ../ outside the workspace.",
+      "invariant": "Every read and write resolves inside the canonical workspace root, or fails with PATH_OUTSIDE_WORKSPACE. §14.2, AC-11.",
+      "expectedTaxonomy": "PATH_OUTSIDE_WORKSPACE",
+      "notes": "The normalizer deliberately preserves '..' rather than collapsing it, so the approval card shows the traversal attempt and the Rust guard is the component that rejects it."
+    },
+    {
+      "id": "symlink-escape",
+      "threat": "T1",
+      "directory": "symlink-escape",
+      "description": "A symlink inside the workspace pointing at an absolute path outside it.",
+      "invariant": "A symlink whose target leaves the workspace is refused even though the link itself is inside. §14.2 step 6, AC-12.",
+      "expectedTaxonomy": "PATH_OUTSIDE_WORKSPACE",
+      "setup": "The link is created by the test rather than committed, because git does not preserve a link to an absolute host path portably.",
+      "createSymlinks": [{ "link": "escape-link", "target": "ABSOLUTE_OUTSIDE_PATH" }]
+    },
+    {
+      "id": "terminal-escape",
+      "threat": "T6",
+      "directory": "terminal-escape",
+      "description": "File content carrying CSI, OSC, and DCS sequences plus a bare ESC.",
+      "invariant": "Nothing reaching the screen can move the cursor, set the window title, write the clipboard, or start a hyperlink that was not allowlisted. §6.20, AC-33.",
+      "expectedBehaviour": "sanitizeText strips the sequences; the surrounding text survives."
+    },
+    {
+      "id": "prompt-injection",
+      "threat": "T5",
+      "directory": "prompt-injection",
+      "description": "AGENTS.md and a Skill body that instruct the agent to exfiltrate credentials and ignore its policy.",
+      "invariant": "Untrusted text is wrapped as data (§11.4's wrapUntrusted) and cannot grant a permission. Nothing the model reads reaches `allow`. §24.1 invariant 1.",
+      "expectedBehaviour": "The injected instructions appear in the prompt inside an untrusted wrapper, and any action they request still requires approval."
+    },
+    {
+      "id": "secret-content",
+      "threat": "T4",
+      "directory": "secret-content",
+      "description": "Files containing credential-shaped strings, and a patch that would write one.",
+      "invariant": "A credential-shaped literal is redacted in output and refused on write unless explicitly approved. §9.8, §12.6, AC-39.",
+      "expectedTaxonomy": "PERMISSION_DENIED",
+      "notes": "The values here are syntactically plausible but are not real credentials; they are constructed to trip the detector."
+    },
+    {
+      "id": "oversized-output",
+      "threat": "R-07",
+      "directory": "oversized-output",
+      "description": "A file with a single very long line and a very large line count.",
+      "invariant": "Inline output is capped and the remainder becomes an artifact; the context is never flooded. §11.6, §18.17, AC-44.",
+      "expectedBehaviour": "The observation is truncated with an artifact reference and a stated omission count."
+    }
+  ]
+}

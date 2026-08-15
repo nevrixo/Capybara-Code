@@ -1,0 +1,236 @@
+{
+  "approvalProvenance": {
+    "canOverrideCanonical": false,
+    "path": ".gjc/_session-019fa905-9930-7000-ae83-b3d38846cfc6/plans/ralplan/019fa905-9930-7000-ae83-b3d38846cfc6/pending-approval.md",
+    "role": "non-normative-approval-execution-provenance",
+    "sha256": "130fc54b6402e6f8a933c81ce5dbf250ef30a3c3e8bc6ca103207e3ae60f17f7",
+    "status": "approved"
+  },
+  "baselineCommit": "2f8ef74a4681bcb9356eacd67d15b870c336772c",
+  "baselineEvaluationAttempts": [
+    {
+      "outcome": "failed-before-evaluation",
+      "reason": "Bun 1.3.14 could not resolve bundled node:sqlite",
+      "resultsProduced": false,
+      "runtime": "bun",
+      "runtimeVersion": "1.3.14"
+    },
+    {
+      "outcome": "failed-before-evaluation",
+      "reason": "Node 24.18.0 is below the repository requirement >=26.4.0",
+      "resultsProduced": false,
+      "runtime": "node-via-pnpm",
+      "runtimeVersion": "24.18.0"
+    }
+  ],
+  "capabilitiesNotYetImplemented": [
+    "acyclic v1.2 app-service package composition root and zero-production-agent-core migration",
+    "application protocol and ACP clients",
+    "browser verifier",
+    "durable authorized task graph with optimistic commands",
+    "event-backed unified approval center",
+    "full cross-platform sandbox certification",
+    "hooks and progressively disclosed skills runtime",
+    "isolated writer-agent proposal stages and merge coordinator",
+    "local OTel export and observability completion",
+    "managed read-only LSP with hard per-child resource enforcement",
+    "managed stdio MCP with enforceable RemoteAuthority",
+    "operation intent-status-receipt reconciliation saga and owner tree",
+    "persistent versioned layout manifest and coordinated migrations",
+    "plugin bundles",
+    "pre-persist redacted artifact CAS and reconciled garbage collection",
+    "read-only subagent supervisor",
+    "secret broker and per-operation credential mediator",
+    "semantic filesystem-backed WorkspaceIdentity",
+    "v1.2 process authority and complete launch-closure enforcement"
+  ],
+  "crates": [
+    {
+      "manifest": "crates/capybara-intelligence/Cargo.toml",
+      "name": "capybara-intelligence",
+      "version": "0.1.0-alpha.0"
+    },
+    {
+      "manifest": "crates/capybara-kernel/Cargo.toml",
+      "name": "capybara-kernel",
+      "version": "0.1.0-alpha.0"
+    },
+    {
+      "manifest": "crates/capybara-patch/Cargo.toml",
+      "name": "capybara-patch",
+      "version": "0.1.0-alpha.0"
+    },
+    {
+      "manifest": "crates/capybara-policy/Cargo.toml",
+      "name": "capybara-policy",
+      "version": "0.1.0-alpha.0"
+    },
+    {
+      "manifest": "crates/capybara-protocol/Cargo.toml",
+      "name": "capybara-protocol",
+      "version": "0.1.0-alpha.0"
+    },
+    {
+      "manifest": "crates/capybara-shell/Cargo.toml",
+      "name": "capybara-shell",
+      "version": "0.1.0-alpha.0"
+    },
+    {
+      "manifest": "crates/capybara-workspace/Cargo.toml",
+      "name": "capybara-workspace",
+      "version": "0.1.0-alpha.0"
+    }
+  ],
+  "fileSha256": {
+    "AGENTS.md": "0d4534b9c04e9a64ee8897ddb2596c1ba5c3822873c0e602b9e48e0f914f8ea6",
+    "Cargo.lock": "c51718d987836bd6b18571cd8fed4aacdb8d833da34bbd688ba27d2e89335c34",
+    "Cargo.toml": "4349aeeff231d0b180edd08a7a9d40c659d3d3dbf572cfb97db45ee254dfb87e",
+    "README.md": "83e8138138d9426ef5216723847f0354bc30188b2e07ced00b5687b25ed91444",
+    "SECURITY.md": "767607e1d055b88ab0449104ddc0b0b23208731b78bb517d070f692ead756272",
+    "capybara.toml.example": "ab35024df2b37d0c27d8496088782f9902b40e990ff7ce39f249762d83a35b1a",
+    "crates/capybara-intelligence/Cargo.toml": "c056ab7cd5308a12a2182086158557814d8e2f98ff5ce2f3e8eb23f870972c80",
+    "crates/capybara-kernel/Cargo.toml": "e5705f7991278de153f9cf97fc2602857ca7623c0130933567fab62b20468295",
+    "crates/capybara-patch/Cargo.toml": "f988464456729379009d78c023a035926212c5a60c0b32e9563c8f8858a3746d",
+    "crates/capybara-policy/Cargo.toml": "f1c7bfc787204cc1af41376eb962072c9d363f0867c3a34fe6bddfab3c8a02e4",
+    "crates/capybara-protocol/Cargo.toml": "37e5cf914f77619dc9ce68b3d453c0d0ef0171780b170564a7acf485d9baebed",
+    "crates/capybara-shell/Cargo.toml": "860ee18568456af22f453d59ea2c59650c2788fb94ab68b62af7c4c40eeea0c3",
+    "crates/capybara-workspace/Cargo.toml": "dd6302993b231be2eb2742ea32375af30052e466b05f28e938661d7805012277",
+    "docs/capybara-code-v1.2-approved-implementation-plan.md": "9c14c2695f5855859db8e2aaf2a9165f24560e3d4198e4073f113c4862703319",
+    "docs/capybara-code-sota-final-plan-v1.2.md": "a19e61a8f3f51f1a093ac95a9a11870c8dee2ec49adb274dd37e936f7137a91a",
+    "docs/evals/v1.2-gates.md": "1b687e6f4360961c4fa59e61b4edbb18ced8ad1f91fc91c4f587fe5feb0c49b1",
+    "docs/v1.2-design-freeze.md": "94865f10c54b39b24df45321a7b5e0fda1a816dda6e63b5de865e4eb786ba7b6",
+    "evals/hermetic-mvp.json": "314b01df6fd51c9db8aadfd39f826142ae445b338f501dcfc95df281186830ed",
+    "evals/smoke.json": "363091c0740e1c7dae7ee42fa786443dffb3a2dc5b8e11620c84bdf253c26e2f",
+    "package.json": "b9eaeceadae0c5673c089c709ae9af3eaae4e49b1c70969fe105e7ac486ce33e",
+    "packages/agent-core/package.json": "e12270100d8c5c0ab9b5caaa6b1b2dd6e38235c7f19a56d3e4d2fda0b184ac40",
+    "packages/cli/package.json": "ec9dad82381c16c8a751cd826c094a76fa899e9ab55966a5429e53919c3d8fde",
+    "packages/cognition/package.json": "50c345a31d69b57719548d02101ff0b150642124e4cf73196eab310313ff0ff3",
+    "packages/contracts/package.json": "1d99f45ea0f57e88539cd6be7b36fc428a20c398ea22fce6a7d5b8c6970435ae",
+    "packages/event-store/package.json": "af8cd7a7a3630fc55be7bdd976f31cc6fabe6517d2916a993f1f5e4252936f6e",
+    "packages/kernel-client/package.json": "44ac9b1cec593583c377de5deb137b2cdd674ca55b119aff6ff5eeb41e51dc5b",
+    "packages/kernel-darwin-arm64/package.json": "c79530abb1542a954207fc8aff92c1e5630f34e6609ca5aa82e017ea3af995f7",
+    "packages/kernel-darwin-x64/package.json": "161ebae731b8bb5e14afa7063d652145ebfc800cd5ad7fe09281de5248dad5e1",
+    "packages/kernel-linux-arm64/package.json": "5e0e4ca9c3887d60ae1efc5cdd86af033c4ab48fd7f1c4973d6be5f3644f3778",
+    "packages/kernel-linux-x64/package.json": "08c6e100f467fb5e2aca5b0882a27f60b7097f8184fcce3f88e685a632021e9b",
+    "packages/kernel-win32-arm64/package.json": "6a0042f88a332dc8814924849a4039dd5499c1dad535cf4d6fe9674f9b5cd78b",
+    "packages/kernel-win32-x64/package.json": "5907b7f9d5d2398453da029118c79033d9a2e0327cd4489f87c3eb8285df1bc5",
+    "packages/model-gateway/package.json": "bafcb84e7a5f05c160a35f4138fc27bc01dbe0ee793598333b62f730ad69d895",
+    "packages/repository-intelligence/package.json": "db687f2c832637a6e8b62731c109dfab4fdf2c7e6585febe38a88908ce86ae67",
+    "packages/session-runtime/package.json": "6210b33eaa53e95bc6e7049639a3f85922d85948b70ab1bafe83937eff54cf07",
+    "packages/validation/package.json": "7de3a1b8fa424ddc783b01efcda9f53be431ddbcad25d9abb2abe70190b2b573",
+    "pnpm-lock.yaml": "9ca42fcf20d93c9ad7adea3838c28a06b7463a1f88cbfb55f8421e5e11737c31",
+    "pnpm-workspace.yaml": "253208fa7c1b64372c219b9e19cef15ed70ca93b66a4d5c4c4d2297a5aff8880"
+  },
+  "normativePlan": {
+    "authority": "sole-normative-immutable-alpha-pld-replacement",
+    "path": "docs/capybara-code-v1.2-approved-implementation-plan.md",
+    "role": "canonical-approved-implementation-plan",
+    "sha256": "9c14c2695f5855859db8e2aaf2a9165f24560e3d4198e4073f113c4862703319",
+    "status": "tracked-approved"
+  },
+  "packageManager": {
+    "name": "pnpm",
+    "version": "10.13.1"
+  },
+  "packages": [
+    {
+      "manifest": "packages/agent-core/package.json",
+      "name": "@capybara-code/agent-core",
+      "version": "0.1.0-alpha.0"
+    },
+    {
+      "manifest": "packages/cli/package.json",
+      "name": "@capybara-code/cli",
+      "version": "0.1.0-alpha.0"
+    },
+    {
+      "manifest": "packages/cognition/package.json",
+      "name": "@capybara-code/cognition",
+      "version": "0.1.0-alpha.0"
+    },
+    {
+      "manifest": "packages/contracts/package.json",
+      "name": "@capybara-code/contracts",
+      "version": "0.1.0-alpha.0"
+    },
+    {
+      "manifest": "packages/event-store/package.json",
+      "name": "@capybara-code/event-store",
+      "version": "0.1.0-alpha.0"
+    },
+    {
+      "manifest": "packages/kernel-client/package.json",
+      "name": "@capybara-code/kernel-client",
+      "version": "0.1.0-alpha.0"
+    },
+    {
+      "manifest": "packages/kernel-darwin-arm64/package.json",
+      "name": "@capybara-code/kernel-darwin-arm64",
+      "version": "0.1.0-alpha.0"
+    },
+    {
+      "manifest": "packages/kernel-darwin-x64/package.json",
+      "name": "@capybara-code/kernel-darwin-x64",
+      "version": "0.1.0-alpha.0"
+    },
+    {
+      "manifest": "packages/kernel-linux-arm64/package.json",
+      "name": "@capybara-code/kernel-linux-arm64",
+      "version": "0.1.0-alpha.0"
+    },
+    {
+      "manifest": "packages/kernel-linux-x64/package.json",
+      "name": "@capybara-code/kernel-linux-x64",
+      "version": "0.1.0-alpha.0"
+    },
+    {
+      "manifest": "packages/kernel-win32-arm64/package.json",
+      "name": "@capybara-code/kernel-win32-arm64",
+      "version": "0.1.0-alpha.0"
+    },
+    {
+      "manifest": "packages/kernel-win32-x64/package.json",
+      "name": "@capybara-code/kernel-win32-x64",
+      "version": "0.1.0-alpha.0"
+    },
+    {
+      "manifest": "packages/model-gateway/package.json",
+      "name": "@capybara-code/model-gateway",
+      "version": "0.1.0-alpha.0"
+    },
+    {
+      "manifest": "packages/repository-intelligence/package.json",
+      "name": "@capybara-code/repository-intelligence",
+      "version": "0.1.0-alpha.0"
+    },
+    {
+      "manifest": "packages/session-runtime/package.json",
+      "name": "@capybara-code/session-runtime",
+      "version": "0.1.0-alpha.0"
+    },
+    {
+      "manifest": "packages/validation/package.json",
+      "name": "@capybara-code/validation",
+      "version": "0.1.0-alpha.0"
+    }
+  ],
+  "platform": {
+    "architecture": "x64",
+    "operatingSystem": "linux",
+    "qualification": "not-yet-certified",
+    "supportTier": 1
+  },
+  "runtimeRequirements": {
+    "bun": ">=1.3.10",
+    "node": ">=26.4.0",
+    "rust": ">=1.95"
+  },
+  "schemaVersion": 1,
+  "sourcePlan": {
+    "canOverrideCanonical": false,
+    "path": "docs/capybara-code-sota-final-plan-v1.2.md",
+    "role": "superseded-non-normative-source-background",
+    "sha256": "a19e61a8f3f51f1a093ac95a9a11870c8dee2ec49adb274dd37e936f7137a91a",
+    "status": "tracked-superseded"
+  }
+}

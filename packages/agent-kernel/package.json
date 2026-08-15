@@ -1,0 +1,12 @@
+{
+  "name": "@cbc/agent-kernel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Capybara Code Root Agent kernel: turn loop, prompt assembly, completion contract",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts"
+}

@@ -1,0 +1,47 @@
+{
+  "compilerOptions": {
+    "lib": ["ESNext"],
+    "target": "ESNext",
+    "module": "Preserve",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "types": ["bun"],
+    "jsx": "preserve",
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "useUnknownInCatchVariables": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "baseUrl": ".",
+    "paths": {
+      "@cbc/protocol": ["packages/protocol-ts/src/index.ts"],
+      "@cbc/config-schema": ["packages/config-schema/src/index.ts"],
+      "@cbc/inference-domain": ["packages/inference-domain/src/index.ts"],
+      "@cbc/session-domain": ["packages/session-domain/src/index.ts"],
+      "@cbc/provider-openai": ["packages/provider-openai/src/index.ts"],
+      "@cbc/tool-registry": ["packages/tool-registry/src/index.ts"],
+      "@cbc/permissions": ["packages/permissions/src/index.ts"],
+      "@cbc/agent-kernel": ["packages/agent-kernel/src/index.ts"],
+      "@cbc/context-engine": ["packages/context-engine/src/index.ts"],
+      "@cbc/subagents": ["packages/subagents/src/index.ts"],
+      "@cbc/skills": ["packages/skills/src/index.ts"],
+      "@cbc/mcp-client": ["packages/mcp-client/src/index.ts"],
+      "@cbc/tui-components": ["packages/tui-components/src/index.ts"],
+      "@cbc/evals": ["packages/evals/src/index.ts"]
+    }
+  },
+  "include": ["apps", "packages", "benchmarks", "scripts"],
+  "exclude": ["node_modules", "target", "dist"]
+}

@@ -1,0 +1,710 @@
+{
+  "x-dialect": "json-schema-draft-2020-12",
+  "$id": "cbc:protocol/rpc",
+  "title": "Capybara Code runtime RPC",
+  "description": "PRD 20.1-20.5. Source of truth for the framed JSON-RPC boundary between the TypeScript control plane and the Rust runtime. packages/protocol-ts/src/rpc.ts and crates/cbc-protocol/src/{methods,limits,jsonrpc}.rs must agree with this file; scripts/check-protocol-drift.ts enforces that. Every reference is local, because 19.9 forbids the build from depending on a network fetch.",
+  "type": "object",
+  "$defs": {
+    "protocolVersion": {
+      "description": "19.12: independent of the product version. A differing major refuses to run.",
+      "type": "string",
+      "pattern": "^\\d+(\\.\\d+)?$",
+      "const": "1.0"
+    },
+    "limits": {
+      "description": "20.4 message and rate limits. Enforced by the runtime independently of anything the client claims (19.7).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxFrameBytes",
+        "maxJsonDepth",
+        "maxStringBytes",
+        "maxEventPayloadBytes",
+        "maxOutstandingRequests",
+        "lengthPrefixBytes"
+      ],
+      "properties": {
+        "maxFrameBytes": {
+          "type": "integer",
+          "const": 8388608
+        },
+        "maxJsonDepth": {
+          "type": "integer",
+          "const": 64
+        },
+        "maxStringBytes": {
+          "type": "integer",
+          "const": 4194304
+        },
+        "maxEventPayloadBytes": {
+          "type": "integer",
+          "const": 1048576
+        },
+        "maxOutstandingRequests": {
+          "type": "integer",
+          "const": 128
+        },
+        "lengthPrefixBytes": {
+          "type": "integer",
+          "const": 4
+        }
+      }
+    },
+    "heartbeat": {
+      "description": "20.5 liveness thresholds, in milliseconds.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "intervalMs",
+        "degradedMs",
+        "fatalMs"
+      ],
+      "properties": {
+        "intervalMs": {
+          "type": "integer",
+          "const": 5000
+        },
+        "degradedMs": {
+          "type": "integer",
+          "const": 15000
+        },
+        "fatalMs": {
+          "type": "integer",
+          "const": 30000
+        }
+      }
+    },
+    "readMaxLines": {
+      "description": "Default maximum line count for fs.read and legacy fs.read_many requests.",
+      "type": "integer",
+      "const": 400,
+      "default": 400
+    },
+    "readMode": {
+      "type": "string",
+      "enum": [
+        "preview",
+        "exact"
+      ]
+    },
+    "interactionMode": {
+      "description": "Live runtime interaction ceiling. Plan is read-only and must be entered only after quiescence.",
+      "type": "string",
+      "enum": [
+        "build",
+        "plan"
+      ]
+    },
+    "readRequest": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "startLine": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxLines": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000,
+          "default": 400
+        },
+        "mode": {
+          "$ref": "#/$defs/readMode",
+          "default": "exact"
+        },
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "readExcerpt": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "startLine",
+        "endLine",
+        "endOfFile",
+        "text",
+        "truncatedByBytes"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "checksum": {
+          "type": "string"
+        },
+        "startLine": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "endLine": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "totalLines": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "endOfFile": {
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string"
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "omittedBefore": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "omittedAfter": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncatedByBytes": {
+          "type": "boolean"
+        }
+      }
+    },
+    "readResponse": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "path",
+        "mode",
+        "revisionToken",
+        "authoritativeForWrite",
+        "excerpt"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/readMode"
+        },
+        "revisionToken": {
+          "type": "string",
+          "minLength": 1
+        },
+        "checksum": {
+          "type": "string"
+        },
+        "authoritativeForWrite": {
+          "type": "boolean"
+        },
+        "excerpt": {
+          "$ref": "#/$defs/readExcerpt"
+        },
+        "truncatedByBytes": {
+          "type": "boolean"
+        }
+      }
+    },
+    "readManyRequest": {
+      "type": "object",
+      "additionalProperties": true,
+      "anyOf": [
+        {
+          "required": [
+            "items"
+          ]
+        },
+        {
+          "required": [
+            "paths"
+          ]
+        }
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/readRequest"
+          }
+        },
+        "paths": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "maxLines": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000,
+          "default": 400
+        },
+        "maxTotalLines": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxTotalBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8,
+          "default": 4
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 20
+        }
+      }
+    },
+    "fingerprintRequest": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "includeChecksum": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "fingerprintResponse": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "path",
+        "revisionToken",
+        "fingerprint",
+        "bytes"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "revisionToken": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fingerprint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "checksum": {
+          "type": "string"
+        }
+      }
+    },
+    "requestMethod": {
+      "description": "20.3 TypeScript to Rust requests, in PRD declaration order.",
+      "type": "string",
+      "enum": [
+        "runtime.initialize",
+        "runtime.capabilities",
+        "runtime.shutdown",
+        "runtime.cancel",
+        "runtime.capability.issue",
+        "workspace.inspect",
+        "workspace.mode.write",
+        "workspace.trust.read",
+        "workspace.trust.write",
+        "workspace.trust.list",
+        "workspace.trust.set",
+        "workspace.trust.remove",
+        "fs.list",
+        "fs.glob",
+        "fs.search",
+        "fs.read",
+        "fs.read_many",
+        "fs.fingerprint",
+        "fs.transaction.begin",
+        "fs.patch",
+        "fs.write",
+        "fs.move",
+        "fs.delete",
+        "fs.transaction.commit",
+        "fs.transaction.rollback",
+        "fs.transaction.rollback_to_checkpoint",
+        "process.run",
+        "process.start",
+        "process.input",
+        "process.stop",
+        "process.status",
+        "git.status",
+        "git.diff",
+        "git.log",
+        "git.show",
+        "git.checkpoint",
+        "credential.store",
+        "credential.lease",
+        "credential.delete",
+        "session.open",
+        "session.append",
+        "session.snapshot",
+        "session.load",
+        "session.list",
+        "session.set_status",
+        "session.export",
+        "session.fork",
+        "session.delete",
+        "artifact.create",
+        "artifact.read",
+        "artifact.delete",
+        "update.verify"
+      ]
+    },
+    "notificationMethod": {
+      "description": "20.3 Rust to TypeScript notifications, in PRD declaration order. 20.4 requires consumers to tolerate an unknown method for forward compatibility, so this enum constrains what the runtime may emit rather than what a client must accept.",
+      "type": "string",
+      "enum": [
+        "runtime.heartbeat",
+        "process.output",
+        "process.exited",
+        "process.limit_warning",
+        "workspace.changed",
+        "transaction.conflict",
+        "journal.committed",
+        "artifact.spilled",
+        "sandbox.degraded",
+        "runtime.warning",
+        "runtime.fatal"
+      ]
+    },
+    "preInitializeMethod": {
+      "description": "Methods callable before runtime.initialize succeeds.",
+      "type": "string",
+      "enum": [
+        "runtime.initialize",
+        "runtime.shutdown"
+      ]
+    },
+    "mutatingMethod": {
+      "description": "Methods that mutate the workspace. The runtime revalidates the write lease and the path guard for each of these regardless of any client-side approval (19.7).",
+      "type": "string",
+      "enum": [
+        "fs.patch",
+        "fs.write",
+        "fs.move",
+        "fs.delete",
+        "fs.transaction.rollback_to_checkpoint",
+        "git.checkpoint"
+      ]
+    },
+    "toolErrorCode": {
+      "description": "12.10 tool error taxonomy. Every failure the model observes maps to exactly one of these.",
+      "type": "string",
+      "enum": [
+        "INVALID_ARGUMENT",
+        "PATH_OUTSIDE_WORKSPACE",
+        "PATH_CHANGED",
+        "HASH_MISMATCH",
+        "PERMISSION_DENIED",
+        "APPROVAL_DENIED",
+        "NOT_FOUND",
+        "ALREADY_EXISTS",
+        "UNSUPPORTED_ENCODING",
+        "OUTPUT_LIMIT",
+        "TIMEOUT",
+        "CANCELLED",
+        "PROCESS_EXIT_NONZERO",
+        "SANDBOX_UNAVAILABLE",
+        "NETWORK_DENIED",
+        "MCP_UNAVAILABLE",
+        "TRANSACTION_CONFLICT",
+        "PROTOCOL_INCOMPATIBLE",
+        "LEASE_VIOLATION",
+        "RESOURCE_LIMIT",
+        "NOT_INITIALIZED",
+        "TOO_MANY_REQUESTS",
+        "INTERNAL"
+      ]
+    },
+    "errorCodes": {
+      "description": "JSON-RPC error codes. -32700 to -32603 are the standard set; -32000 and below are Capybara-specific and each maps to a taxonomy entry via codeToTaxonomy.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "parseError",
+        "invalidRequest",
+        "methodNotFound",
+        "invalidParams",
+        "internalError",
+        "pathOutsideWorkspace",
+        "hashMismatch",
+        "pathChanged",
+        "notFound",
+        "alreadyExists",
+        "unsupportedEncoding",
+        "outputLimit",
+        "timeout",
+        "cancelled",
+        "processExitNonzero",
+        "sandboxUnavailable",
+        "networkDenied",
+        "transactionConflict",
+        "protocolIncompatible",
+        "leaseViolation",
+        "resourceLimit",
+        "notInitialized",
+        "tooManyRequests",
+        "invalidArgument",
+        "permissionDenied"
+      ],
+      "properties": {
+        "parseError": {
+          "type": "integer",
+          "const": -32700
+        },
+        "invalidRequest": {
+          "type": "integer",
+          "const": -32600
+        },
+        "methodNotFound": {
+          "type": "integer",
+          "const": -32601
+        },
+        "invalidParams": {
+          "type": "integer",
+          "const": -32602
+        },
+        "internalError": {
+          "type": "integer",
+          "const": -32603
+        },
+        "pathOutsideWorkspace": {
+          "type": "integer",
+          "const": -32000
+        },
+        "hashMismatch": {
+          "type": "integer",
+          "const": -32001
+        },
+        "pathChanged": {
+          "type": "integer",
+          "const": -32002
+        },
+        "notFound": {
+          "type": "integer",
+          "const": -32003
+        },
+        "alreadyExists": {
+          "type": "integer",
+          "const": -32004
+        },
+        "unsupportedEncoding": {
+          "type": "integer",
+          "const": -32005
+        },
+        "outputLimit": {
+          "type": "integer",
+          "const": -32006
+        },
+        "timeout": {
+          "type": "integer",
+          "const": -32007
+        },
+        "cancelled": {
+          "type": "integer",
+          "const": -32008
+        },
+        "processExitNonzero": {
+          "type": "integer",
+          "const": -32009
+        },
+        "sandboxUnavailable": {
+          "type": "integer",
+          "const": -32010
+        },
+        "networkDenied": {
+          "type": "integer",
+          "const": -32011
+        },
+        "transactionConflict": {
+          "type": "integer",
+          "const": -32012
+        },
+        "protocolIncompatible": {
+          "type": "integer",
+          "const": -32013
+        },
+        "leaseViolation": {
+          "type": "integer",
+          "const": -32014
+        },
+        "resourceLimit": {
+          "type": "integer",
+          "const": -32015
+        },
+        "notInitialized": {
+          "type": "integer",
+          "const": -32016
+        },
+        "tooManyRequests": {
+          "type": "integer",
+          "const": -32017
+        },
+        "invalidArgument": {
+          "type": "integer",
+          "const": -32018
+        },
+        "permissionDenied": {
+          "type": "integer",
+          "const": -32019
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jsonrpc",
+        "id",
+        "method"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "type": [
+            "integer",
+            "string"
+          ]
+        },
+        "method": {
+          "$ref": "#/$defs/requestMethod"
+        },
+        "params": true
+      }
+    },
+    "errorBody": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "type": "integer"
+        },
+        "message": {
+          "type": "string"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "taxonomy": {
+              "$ref": "#/$defs/toolErrorCode"
+            }
+          }
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jsonrpc",
+        "id"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "type": [
+            "integer",
+            "string"
+          ]
+        },
+        "result": true,
+        "error": {
+          "$ref": "#/$defs/errorBody"
+        }
+      }
+    },
+    "notification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jsonrpc",
+        "method"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": true
+      }
+    },
+    "workspaceModeWriteRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/interactionMode"
+        }
+      }
+    },
+    "workspaceModeWriteResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "changed"
+      ],
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/interactionMode"
+        },
+        "previousMode": {
+          "$ref": "#/$defs/interactionMode"
+        },
+        "changed": {
+          "type": "boolean"
+        },
+        "quiescent": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/response"
+    },
+    {
+      "$ref": "#/$defs/notification"
+    }
+  ]
+}

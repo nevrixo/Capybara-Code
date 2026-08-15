@@ -1,0 +1,17 @@
+[package]
+name = "cbc-patch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Structured patch parsing and crash-safe file mutation transactions"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+cbc-fs.workspace = true
+cbc-workspace.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "cbc-git"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Git read services, status/diff normalization, and safety checkpoints"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+cbc-patch.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

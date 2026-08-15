@@ -1,0 +1,2 @@
+This file is genuinely inside the workspace and must read successfully.
+It exists so a failure on escape-link is attributable to the symlink, not the fixture.

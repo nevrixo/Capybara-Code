@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+vendor/
+
+# Build outputs
+target/
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Test output & test files
+coverage/
+test-results/
+playwright-report/
+
+# Patch/merge leftovers
+*.orig
+*.rej
+
+# Logs & temp
+*.log
+logs/
+tmp/
+.tmp/
+.cache/
+
+# Generated analysis snapshots (Repomix)
+repomix-output.xml
+
+# OS & editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

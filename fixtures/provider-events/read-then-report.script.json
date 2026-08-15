@@ -1,0 +1,20 @@
+{
+  "x-note": "MockProvider script. Point CBC_MOCK_PROVIDER at this file to drive a real `cbc run` with no network (AC-47). Step order is turn order: the kernel samples once per step.",
+  "steps": [
+    {
+      "commentary": "I'll look at the file you named before changing anything.",
+      "toolCalls": [
+        {
+          "callId": "call_read_1",
+          "name": "fs.read",
+          "arguments": { "path": "README.md" }
+        }
+      ],
+      "usage": { "inputTokens": 1800, "cachedInputTokens": 1024, "outputTokens": 32 }
+    },
+    {
+      "text": "I read README.md and made no changes.\n\nThe file describes the project but does not document how to run the tests, which is the gap you would need to close next.",
+      "usage": { "inputTokens": 2600, "cachedInputTokens": 2048, "outputTokens": 60 }
+    }
+  ]
+}

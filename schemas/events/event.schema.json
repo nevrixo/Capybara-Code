@@ -1,0 +1,318 @@
+{
+  "x-dialect": "json-schema-draft-2020-12",
+  "$id": "cbc:events/event",
+  "title": "Capybara Code domain event",
+  "description": "PRD 20.6 and 20.7. One envelope serves the agent kernel, the TUI reducer, the session journal, and the headless JSONL stream. 20.10 makes this the public contract for `cbc run --jsonl`, so a change here is a consumer-visible change and must be recorded in schemas/CHANGELOG.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "sequence",
+    "id",
+    "timestamp",
+    "sessionId",
+    "kind",
+    "level",
+    "visibility",
+    "durability",
+    "payload"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "description": "19.12: the event schema version is independent of the product and protocol versions.",
+      "const": "1.0"
+    },
+    "sequence": {
+      "description": "20.10: strictly monotonic within a session, so a consumer can detect a dropped line.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "sessionId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "turnId": {
+      "type": "string"
+    },
+    "agentId": {
+      "description": "Present for a subagent's events, so 15.x delegation is inspectable in the stream.",
+      "type": "string"
+    },
+    "parentEventId": {
+      "type": "string"
+    },
+    "correlationId": {
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/kind"
+    },
+    "level": {
+      "$ref": "#/$defs/level"
+    },
+    "visibility": {
+      "$ref": "#/$defs/visibility"
+    },
+    "durability": {
+      "$ref": "#/$defs/durability"
+    },
+    "payload": true,
+    "callerId": {
+      "type": "string"
+    },
+    "taskEpochId": {
+      "type": "string"
+    },
+    "workspaceIdentityDigest": {
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "level": {
+      "type": "string",
+      "enum": [
+        "debug",
+        "info",
+        "success",
+        "warning",
+        "error"
+      ]
+    },
+    "visibility": {
+      "description": "Where the event is shown. A hidden event is journaled but not rendered.",
+      "type": "string",
+      "enum": [
+        "timeline",
+        "live",
+        "drawer",
+        "hidden"
+      ]
+    },
+    "durability": {
+      "description": "20.9: a journaled event is durable once the runtime acknowledges the append. An ephemeral event drives the UI immediately and may be coalesced before storage.",
+      "type": "string",
+      "enum": [
+        "ephemeral",
+        "journaled"
+      ]
+    },
+    "kind": {
+      "description": "20.7 event kinds, in declaration order. 20.10 requires a consumer to skip an unknown kind rather than fail, so adding one is a minor change.",
+      "type": "string",
+      "enum": [
+        "session.started",
+        "session.resumed",
+        "session.forked",
+        "session.compacted",
+        "turn.started",
+        "turn.interrupted",
+        "turn.cancelled",
+        "turn.completed",
+        "run.completed",
+        "user.message",
+        "assistant.delta",
+        "assistant.commentary",
+        "assistant.reasoning",
+        "assistant.reasoning_summary",
+        "assistant.final",
+        "plan.created",
+        "plan.updated",
+        "plan.approved",
+        "mode.changed",
+        "tool.discovery",
+        "tool.started",
+        "tool.progress",
+        "tool.completed",
+        "tool.failed",
+        "approval.requested",
+        "approval.resolved",
+        "transaction.started",
+        "transaction.committed",
+        "transaction.rolled_back",
+        "transaction.conflicted",
+        "diff.updated",
+        "task.created",
+        "task.started",
+        "task.progress",
+        "task.await_interrupted",
+        "task.completed",
+        "task.failed",
+        "task.cancelled",
+        "job.started",
+        "job.output",
+        "job.completed",
+        "job.failed",
+        "notification.update_available",
+        "notification.retry",
+        "error.provider",
+        "error.protocol",
+        "error.internal",
+        "usage.updated",
+        "permission.changed",
+        "token_saving.changed",
+        "token_saving.policy_applied",
+        "token_saving.relaxed",
+        "model.capability_snapshot",
+        "model.route_decided",
+        "model.route_escalated",
+        "reasoning.epoch_started",
+        "reasoning.epoch_reset",
+        "reasoning.context_effective",
+        "context.plan_created",
+        "context.evidence_selected",
+        "context.evidence_invalidated",
+        "context.observation_ingested",
+        "context.pack_compiled",
+        "context.item_evicted",
+        "context.evidence_rejected",
+        "context.cache_segment",
+        "cache.plan_created",
+        "cache.write_observed",
+        "cache.read_observed",
+        "program.started",
+        "program.tool_call_started",
+        "program.tool_call_completed",
+        "program.completed",
+        "program.failed",
+        "hosted_agent.spawned",
+        "hosted_agent.progress",
+        "hosted_agent.completed",
+        "hosted_agent.cancelled",
+        "tool.batch_started",
+        "tool.batch_completed",
+        "evidence.recorded",
+        "evidence.invalidated",
+        "verification.coverage_updated",
+        "verification.blocked_completion",
+        "run.trace_started",
+        "repository.orientation_started",
+        "repository.orientation_completed",
+        "repository.full_scan_started",
+        "repository.full_scan_completed",
+        "context.prepare_started",
+        "context.prepare_completed",
+        "prompt.compile_started",
+        "prompt.compile_completed",
+        "provider.connection_started",
+        "provider.connection_ready",
+        "provider.request_sent",
+        "provider.response_created",
+        "provider.first_delta",
+        "provider.response_completed",
+        "provider.fallback",
+        "verification.started",
+        "verification.completed",
+        "review.started",
+        "review.completed",
+        "run.trace_completed"
+      ]
+    },
+    "mustJournal": {
+      "description": "20.9's MUST-journal set: final text, tool intent and result summaries, approvals, mutations, usage, and task transitions. Every kind here has durability 'journaled' by default and a factory may not weaken it.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/kind"
+      }
+    },
+    "finalStatusPayload": {
+      "description": "8.9: the payload of the run.completed event a `cbc run` appends after the turn's single turn.completed. The exitCode here is the same value the process exits with.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "exitCode",
+        "changedFiles"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "completed",
+            "partial",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "exitCode": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "changedFiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tests": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "passed",
+            "failed",
+            "notRun"
+          ],
+          "properties": {
+            "passed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "failed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "notRun": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "risks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "program.started",
+              "program.tool_call_started",
+              "program.tool_call_completed",
+              "program.completed",
+              "program.failed",
+              "hosted_agent.spawned",
+              "hosted_agent.progress",
+              "hosted_agent.completed",
+              "hosted_agent.cancelled",
+              "tool.batch_started",
+              "tool.batch_completed"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "turnId",
+          "agentId",
+          "callerId",
+          "taskEpochId"
+        ]
+      }
+    }
+  ]
+}

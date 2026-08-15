@@ -1,0 +1,12 @@
+{
+  "name": "@cbc/permissions",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Capybara Code command classification and permission policy",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts"
+}

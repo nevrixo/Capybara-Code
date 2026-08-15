@@ -1,0 +1,12 @@
+{"type":"response.created","response":{"id":"resp_fixture_2","model":"gpt-5.6","status":"in_progress"}}
+{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"delta":"Looking for the failing assertion first."}
+{"type":"response.reasoning_summary_text.done","item_id":"rs_1","output_index":0,"text":"Looking for the failing assertion first."}
+{"type":"response.output_item.added","output_index":1,"item":{"id":"msg_1","type":"message","role":"assistant"}}
+{"type":"response.output_text.delta","item_id":"msg_1","output_index":1,"content_index":0,"delta":"I'll read the test, then patch the smallest safe surface."}
+{"type":"response.output_text.done","item_id":"msg_1","output_index":1,"content_index":0,"text":"I'll read the test, then patch the smallest safe surface."}
+{"type":"response.output_item.added","output_index":2,"item":{"id":"fc_1","type":"function_call","call_id":"call_a1","name":"fs.read","arguments":""}}
+{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":2,"delta":"{\"path\":\"tes"}
+{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":2,"delta":"t/parser.test.ts\"}"}
+{"type":"response.function_call_arguments.done","item_id":"fc_1","output_index":2,"arguments":"{\"path\":\"test/parser.test.ts\"}"}
+{"type":"response.output_item.done","output_index":2,"item":{"id":"fc_1","type":"function_call","call_id":"call_a1","name":"fs.read","arguments":"{\"path\":\"test/parser.test.ts\"}"}}
+{"type":"response.completed","response":{"id":"resp_fixture_2","status":"completed","usage":{"input_tokens":2400,"input_tokens_details":{"cached_tokens":2048},"output_tokens":48,"output_tokens_details":{"reasoning_tokens":16},"total_tokens":2448}}}

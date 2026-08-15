@@ -1,0 +1,14 @@
+[package]
+name = "cbc-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Framed JSON-RPC 2.0 transport and protocol contracts for the Capybara Code runtime boundary"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

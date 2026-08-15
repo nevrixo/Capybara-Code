@@ -1,0 +1,858 @@
+/**
+ * Configuration tests — PRD §21, §25.4 ("config merge is deterministic"),
+ * PERM-001.
+ */
+
+import { describe, expect, test } from "bun:test";
+
+import {
+  configKeyInfo,
+  defaultConfig,
+  environmentLayer,
+  loadConfig,
+  mergeConfig,
+  normalizeConfigPath,
+  normalizeConfigKeys,
+  parseToml,
+  readPath,
+  resolvePaths,
+  writePath,
+} from "../src/index.ts";
+
+/** The example config from PRD §21.4, verbatim. */
+const EXAMPLE_CONFIG = `
+[ui]
+theme = "capybara-dark"
+color = "auto"
+mouse = true
+animations = true
+show_cost = true
+status_density = "auto"
+
+[model]
+profile = "auto"
+default = "gpt-5.6"
+reasoning_mode = "standard"
+reasoning_effort = "medium"
+soft_context_tokens = 96000
+max_output_tokens = 12000
+
+[agent]
+permission_mode = "auto-review"
+max_steps = 32
+max_tool_calls = 64
+max_wall_time_minutes = 30
+visible_commentary = true
+
+[subagents]
+max_concurrent = 3
+max_depth = 1
+max_per_turn = 3
+writer_policy = "single-lease"
+
+[tools]
+activation_limit = 10
+inline_output_bytes = 65536
+inline_output_lines = 200
+
+[permissions]
+project_write = "auto"
+shell = "safe-auto"
+network = "ask"
+destructive = "ask"
+credentials = "deny"
+external_side_effect = "ask"
+
+[sandbox]
+level = "workspace"
+network_for_shell = "ask"
+
+[sessions]
+retain = true
+artifact_retention_days = 30
+auto_snapshot_events = 100
+
+[privacy]
+telemetry = false
+crash_reports = "ask"
+provider_store = false
+
+[updates]
+channel = "stable"
+check = true
+interval_hours = 24
+`;
+
+describe("TOML reader (§21.4)", () => {
+  test("parses the PRD example config without issues", () => {
+    const parsed = parseToml(EXAMPLE_CONFIG);
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.values["ui.theme"]).toBe("capybara-dark");
+    expect(parsed.values["model.soft_context_tokens"]).toBe(96000);
+    expect(parsed.values["agent.visible_commentary"]).toBe(true);
+    expect(parsed.values["privacy.telemetry"]).toBe(false);
+  });
+
+  test("normalizes snake_case to the internal camelCase paths", () => {
+    const normalized = normalizeConfigKeys(parseToml(EXAMPLE_CONFIG).values);
+    expect(normalized["model.softContextTokens"]).toBe(96000);
+    expect(normalized["permissions.externalSideEffect"]).toBe("ask");
+    expect(normalized["ui.statusDensity"]).toBe("auto");
+  });
+
+  test("parses arrays, strips comments, and handles quoted keys", () => {
+    const parsed = parseToml(`
+      # a comment
+      [mcp.servers.local_docs]
+      transport = "stdio"   # trailing comment
+      command = "npx"
+      args = ["-y", "@example/docs-mcp"]
+      env = ["DOCS_TOKEN"]
+    `);
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.values["mcp.servers.local_docs.args"]).toEqual(["-y", "@example/docs-mcp"]);
+    expect(parsed.values["mcp.servers.local_docs.transport"]).toBe("stdio");
+  });
+
+  test("maps mcp.servers.* onto mcpServers.*", () => {
+    const normalized = normalizeConfigKeys(
+      parseToml(`
+        [mcp.servers.github]
+        transport = "streamable_http"
+        url = "https://mcp.example.com/mcp"
+        auth = "oauth"
+      `).values,
+    );
+    expect(normalized["mcpServers.github.transport"]).toBe("streamable_http");
+    expect(normalized["mcpServers.github.url"]).toBe("https://mcp.example.com/mcp");
+  });
+
+  test("does not treat a '#' inside a string as a comment", () => {
+    const parsed = parseToml(`[ui]\ntheme = "dark#not-a-comment"`);
+    expect(parsed.values["ui.theme"]).toBe("dark#not-a-comment");
+  });
+
+  test("reports malformed lines with line numbers", () => {
+    const parsed = parseToml("[ui]\nthis is not an assignment\ntheme = \"ok\"");
+    expect(parsed.issues).toHaveLength(1);
+    expect(parsed.issues[0]?.line).toBe(2);
+    expect(parsed.values["ui.theme"]).toBe("ok");
+  });
+
+  test("reports unterminated strings", () => {
+    const parsed = parseToml('[ui]\ntheme = "unterminated');
+    expect(parsed.issues.some((i) => i.message.includes("unterminated"))).toBe(true);
+  });
+
+  test("supports array-of-tables for approval rules (§13.7)", () => {
+    const parsed = parseToml(`
+      [[allow]]
+      tool = "process.run"
+      program = "pnpm"
+      args_prefix = ["test"]
+
+      [[allow]]
+      tool = "fs.read"
+    `);
+    expect(parsed.values["allow.0.program"]).toBe("pnpm");
+    expect(parsed.values["allow.0.args_prefix"]).toEqual(["test"]);
+    expect(parsed.values["allow.1.tool"]).toBe("fs.read");
+  });
+
+  test("rejects unsupported inline tables rather than misreading them", () => {
+    const parsed = parseToml("[x]\ny = { a = 1 }");
+    expect(parsed.issues.some((i) => i.message.includes("inline tables"))).toBe(true);
+  });
+});
+
+describe("defaults (§21.4)", () => {
+  test("match the documented values", () => {
+    const config = defaultConfig();
+    expect(config.ui.mouse).toBe(true);
+    expect(config.model.default).toBe("gpt-5.6-sol");
+    expect(config.model.reasoningEffort).toBe("medium");
+    expect(config.model.reasoning.summary).toBe("auto");
+    expect(config.model.softContextTokens).toBe(96_000);
+    expect(config.model.maxOutputTokens).toBe(32_000);
+    // Security review interim default: execution asks rather than assumes until
+    // per-process capability leases exist; auto/auto-review stay opt-in.
+    expect(config.agent.permissionMode).toBe("ask");
+    expect(config.agent.maxSteps).toBe(32);
+    expect(config.agent.maxToolCalls).toBe(64);
+    expect(config.subagents.maxConcurrent).toBe(3);
+    expect(config.subagents.maxDepth).toBe(1);
+    // §15.7: three children per turn (P1-04 resolved the old 5-vs-3 mismatch).
+    expect(config.subagents.maxPerTurn).toBe(3);
+    expect(config.tools.activationLimit).toBe(10);
+    // §23.5 / D-014: telemetry is off by default.
+    expect(config.privacy.telemetry).toBe(false);
+    // §10.6: store:false keeps session ownership local.
+    expect(config.privacy.providerStore).toBe(false);
+    expect(config.mcpServers.context7).toEqual({
+      transport: "streamable_http",
+      url: "https://mcp.context7.com/mcp",
+      auth: "none",
+      enabled: true,
+      connectOnStartup: false,
+      timeoutMs: 10_000,
+    });
+  });
+
+  test("include every §10.3 model profile", () => {
+    const profiles = defaultConfig().model.profiles;
+    for (const name of ["auto", "fast", "balanced", "deep", "review", "economy"]) {
+      expect(profiles[name]).toBeDefined();
+    }
+    expect(profiles.fast?.model).toBe("gpt-5.6-terra");
+    expect(profiles.economy?.model).toBe("gpt-5.6-luna");
+    expect(profiles.review?.reasoningMode).toBe("pro");
+  });
+});
+
+describe("CLI config paths", () => {
+  test("normalizes documented snake_case paths", () => {
+    expect(normalizeConfigPath("model.reasoning_effort")).toBe("model.reasoningEffort");
+    expect(normalizeConfigPath("model.reasoning.summary")).toBe("model.reasoning.summary");
+    expect(normalizeConfigPath("model.max_output_tokens")).toBe("model.maxOutputTokens");
+  });
+});
+
+describe("provider reasoning summary configuration", () => {
+  test("keeps provider generation independent from TUI disclosure", () => {
+    const merged = mergeConfig([
+      {
+        source: "user",
+        values: {
+          "ui.thinkingVisibility": "hidden",
+          "model.reasoning.summary": "none",
+        },
+      },
+    ]);
+
+    expect(merged.issues.filter((issue) => issue.severity === "error")).toEqual([]);
+    expect(merged.config.ui.thinkingVisibility).toBe("hidden");
+    expect(merged.config.model.reasoning.summary).toBe("none");
+  });
+
+  test("rejects an unsupported provider reasoning-summary policy", () => {
+    const merged = mergeConfig([
+      { source: "user", values: { "model.reasoning.summary": "always" } },
+    ]);
+    expect(merged.issues.some((issue) => issue.path === "model.reasoning.summary" && issue.severity === "error")).toBe(true);
+  });
+});
+describe("precedence (§21.2)", () => {
+  test("later layers win and provenance is recorded", () => {
+    const merged = mergeConfig([
+      { source: "user", values: { "model.default": "gpt-5.6" } },
+      { source: "project", values: { "model.default": "gpt-5.6-terra" } },
+      { source: "environment", values: { "model.default": "gpt-5.6-luna" } },
+      { source: "cli", values: { "model.default": "gpt-5.6" } },
+    ]);
+    expect(merged.config.model.default).toBe("gpt-5.6");
+    expect(merged.provenance["model.default"]).toBe("cli");
+  });
+
+  test("session override beats every other layer", () => {
+    const merged = mergeConfig([
+      { source: "cli", values: { "agent.permissionMode": "plan" } },
+      { source: "session", values: { "agent.permissionMode": "auto" } },
+    ]);
+    expect(merged.config.agent.permissionMode).toBe("auto");
+    expect(merged.provenance["agent.permissionMode"]).toBe("session");
+  });
+
+  test("merge is deterministic (§25.4)", () => {
+    const layers = [
+      { source: "user" as const, values: { "ui.theme": "a", "agent.maxSteps": 10 } },
+      { source: "project" as const, values: { "ui.theme": "b" } },
+    ];
+    const first = mergeConfig(layers);
+    const second = mergeConfig(layers);
+    expect(first.config).toEqual(second.config);
+    expect(first.provenance).toEqual(second.provenance);
+  });
+});
+
+describe("project config restrictions (§13.6, §21.3, PERM-001)", () => {
+  test("untrusted project config is not applied at all", () => {
+    const result = loadConfig({
+      projectToml: '[agent]\npermission_mode = "auto"\n',
+      projectTrusted: false,
+      env: {},
+    });
+    expect(result.projectLayerApplied).toBe(false);
+    // The default stands.
+    expect(result.config.agent.permissionMode).toBe("ask");
+  });
+
+  test("trusted project config is applied", () => {
+    const result = loadConfig({
+      projectToml: '[agent]\npermission_mode = "ask"\n',
+      projectTrusted: true,
+      env: {},
+    });
+    expect(result.projectLayerApplied).toBe(true);
+    expect(result.config.agent.permissionMode).toBe("ask");
+  });
+
+  test("project config may not set a credential field", () => {
+    const merged = mergeConfig([
+      { source: "project", values: { "auth.apiKey": "sk-should-be-rejected" } },
+    ]);
+    const issue = merged.issues.find((i) => i.path === "auth.apiKey");
+    expect(issue?.severity).toBe("error");
+    expect(issue?.message).toContain("credentials come from the user keychain");
+  });
+
+  test("project config may not bind host environment variables into an MCP server", () => {
+    for (const source of ["project", "project-local"] as const) {
+      const merged = mergeConfig([
+        {
+          source,
+          values: {
+            "mcpServers.local.transport": "stdio",
+            "mcpServers.local.command": "local-mcp",
+            "mcpServers.local.env": ["OPAQUE_HOST_SECRET"],
+          },
+        },
+      ]);
+      expect(merged.config.mcpServers.local?.env).toBeUndefined();
+      expect(merged.issues.some(
+        (issue) => issue.path === "mcpServers.local.env" && issue.severity === "error",
+      )).toBe(true);
+    }
+  });
+
+  test("user MCP config may bind host environment variable names", () => {
+    const merged = mergeConfig([
+      { source: "user", values: { "mcpServers.local.env": ["USER_OWNED_SECRET"] } },
+    ]);
+    expect(merged.config.mcpServers.local?.env).toEqual(["USER_OWNED_SECRET"]);
+    expect(merged.issues.filter((issue) => issue.severity === "error")).toEqual([]);
+  });
+
+  test("the same key from the user layer is not credential-blocked", () => {
+    // The restriction is about *project* provenance, not the key alone.
+    const merged = mergeConfig([{ source: "user", values: { "ui.theme": "x" } }]);
+    expect(merged.issues.filter((i) => i.severity === "error")).toEqual([]);
+  });
+});
+
+describe("monotonic project policy (P0-02)", () => {
+  test("a project cannot weaken user network=deny to allow", () => {
+    const merged = mergeConfig([
+      { source: "user", values: { "permissions.network": "deny" } },
+      { source: "project", values: { "permissions.network": "allow" } },
+    ]);
+    expect(merged.config.permissions.network).toBe("deny");
+    const issue = merged.issues.find((i) => i.path === "permissions.network");
+    expect(issue?.severity).toBe("error");
+    expect(issue?.message).toContain("may not weaken");
+  });
+
+  test("a project can still tighten a user permission", () => {
+    const merged = mergeConfig([
+      { source: "user", values: { "permissions.network": "allow" } },
+      { source: "project", values: { "permissions.network": "deny" } },
+    ]);
+    expect(merged.config.permissions.network).toBe("deny");
+    expect(merged.issues.filter((i) => i.severity === "error")).toEqual([]);
+  });
+
+  test("a project cannot lower the sandbox level", () => {
+    const merged = mergeConfig([
+      { source: "user", values: { "sandbox.level": "strict" } },
+      { source: "project", values: { "sandbox.level": "none" } },
+    ]);
+    expect(merged.config.sandbox.level).toBe("strict");
+    expect(
+      merged.issues.some((i) => i.path === "sandbox.level" && i.severity === "error"),
+    ).toBe(true);
+  });
+
+  test("a project cannot widen permission mode toward auto", () => {
+    const merged = mergeConfig([
+      { source: "user", values: { "agent.permissionMode": "ask" } },
+      { source: "project", values: { "agent.permissionMode": "auto" } },
+    ]);
+    expect(merged.config.agent.permissionMode).toBe("ask");
+    expect(
+      merged.issues.some((i) => i.path === "agent.permissionMode" && i.severity === "error"),
+    ).toBe(true);
+  });
+
+  test("a project cannot enable telemetry the user left off", () => {
+    const merged = mergeConfig([
+      { source: "project", values: { "privacy.telemetry": true } },
+    ]);
+    expect(merged.config.privacy.telemetry).toBe(false);
+    expect(
+      merged.issues.some((i) => i.path === "privacy.telemetry" && i.severity === "error"),
+    ).toBe(true);
+  });
+
+  test("updates and hosted-provider toggles are user-only", () => {
+    const merged = mergeConfig([
+      { source: "project", values: { "updates.channel": "nightly" } },
+      {
+        source: "project",
+        values: { "provider.openai.native.allowHostedShell": true },
+      },
+    ]);
+    expect(merged.config.updates.channel).toBe("stable");
+    expect(merged.config.provider.openai.native.allowHostedShell).toBe(false);
+    expect(
+      merged.issues.filter((i) => i.severity === "error" && i.message.includes("user-only")),
+    ).toHaveLength(2);
+  });
+
+  test("a project cannot override a user-defined MCP server", () => {
+    const merged = mergeConfig([
+      {
+        source: "user",
+        values: { "mcpServers.github.transport": "stdio", "mcpServers.github.command": "gh-mcp" },
+      },
+      { source: "project", values: { "mcpServers.github.command": "evil-mcp" } },
+    ]);
+    expect(merged.config.mcpServers.github?.command).toBe("gh-mcp");
+    expect(
+      merged.issues.some(
+        (i) => i.severity === "error" && i.message.includes("user-defined MCP server"),
+      ),
+    ).toBe(true);
+  });
+
+  test("a project may still define its own new MCP server", () => {
+    const merged = mergeConfig([
+      { source: "project", values: { "mcpServers.local.transport": "stdio" } },
+    ]);
+    expect(merged.config.mcpServers.local?.transport).toBe("stdio");
+    expect(merged.issues.filter((i) => i.severity === "error")).toEqual([]);
+  });
+
+  test("semantic issues are attributed to the layer that set the value", () => {
+    const merged = mergeConfig([
+      { source: "project", values: { "subagents.maxDepth": 3 } },
+    ]);
+    const issue = merged.issues.find((i) => i.path === "subagents.maxDepth");
+    expect(issue?.source).toBe("project");
+  });
+});
+
+describe("validation (§21.7)", () => {
+  test("unknown keys warn but do not fail", () => {
+    const merged = mergeConfig([{ source: "user", values: { "ui.nonexistent": 1 } }]);
+    const issue = merged.issues.find((i) => i.path === "ui.nonexistent");
+    expect(issue?.severity).toBe("warning");
+    expect(issue?.message).toContain("unknown configuration key");
+  });
+
+  test("enum violations are errors", () => {
+    const merged = mergeConfig([
+      { source: "user", values: { "agent.permissionMode": "dangerously-skip-permissions" } },
+    ]);
+    const issue = merged.issues.find((i) => i.path === "agent.permissionMode");
+    expect(issue?.severity).toBe("error");
+    // §13.1: full / dangerously-skip-permissions is not a public option.
+    expect(merged.config.agent.permissionMode).toBe("ask");
+  });
+
+  test("type mismatches are errors and leave the default", () => {
+    const merged = mergeConfig([{ source: "user", values: { "agent.maxSteps": "many" } }]);
+    const issue = merged.issues.find((i) => i.path === "agent.maxSteps");
+    expect(issue?.severity).toBe("error");
+    expect(merged.config.agent.maxSteps).toBe(32);
+  });
+
+  test("deprecated keys migrate with a message", () => {
+    const merged = mergeConfig([{ source: "user", values: { "agent.mode": "ask" } }]);
+    expect(merged.issues.some((i) => i.message.includes("deprecated"))).toBe(true);
+    expect(merged.config.agent.permissionMode).toBe("ask");
+  });
+
+  test("delegation depth above 1 is rejected (§15.7)", () => {
+    const merged = mergeConfig([{ source: "user", values: { "subagents.maxDepth": 3 } }]);
+    expect(
+      merged.issues.some((i) => i.path === "subagents.maxDepth" && i.severity === "error"),
+    ).toBe(true);
+  });
+
+  test("conflicting permissions produce a warning", () => {
+    const merged = mergeConfig([
+      { source: "user", values: { "agent.permissionMode": "plan", "permissions.projectWrite": "auto" } },
+    ]);
+    expect(
+      merged.issues.some(
+        (i) => i.path === "permissions.projectWrite" && i.severity === "warning",
+      ),
+    ).toBe(true);
+  });
+
+  test("an undefined model profile is an error", () => {
+    const merged = mergeConfig([{ source: "user", values: { "model.profile": "nonexistent" } }]);
+    expect(merged.issues.some((i) => i.path === "model.profile" && i.severity === "error")).toBe(
+      true,
+    );
+  });
+
+  test("project maxOutputTokens is not mistaken for a credential token", () => {
+    const merged = mergeConfig([
+      { source: "project", values: { "model.maxOutputTokens": 13_000 } },
+    ]);
+    expect(merged.config.model.maxOutputTokens).toBe(13_000);
+    expect(merged.issues.some((issue) => issue.path === "model.maxOutputTokens" && issue.severity === "error")).toBe(false);
+  });
+
+  test("rejects prototype-polluting dotted paths", () => {
+    const merged = mergeConfig([
+      {
+        source: "user",
+        values: {
+          "__proto__.polluted": true,
+          "mcpServers.constructor.command": "bad",
+        },
+      },
+    ]);
+    expect(merged.issues.filter((issue) => issue.severity === "error")).toHaveLength(2);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(readPath({ inherited: "no" }, "__proto__.inherited")).toBeUndefined();
+    expect(() => writePath({}, "constructor.prototype.polluted", true)).toThrow();
+  });
+
+  test("validates arrays and dynamic map entries", () => {
+    const merged = mergeConfig([
+      {
+        source: "user",
+        values: {
+          "model.context.bands": ["large"],
+          "mcpServers.local.args": "--unsafe",
+          "mcpServers.local.unknown": true,
+          "model.profiles.fast.reasoningEffort": 42,
+          "keymap.submit": 7,
+        },
+      },
+    ]);
+    expect(merged.issues.filter((issue) => issue.severity === "error")).toHaveLength(5);
+    expect(merged.config.mcpServers.local).toBeUndefined();
+  });
+
+  test("does not let a default preset override an explicit ask mode", () => {
+    const merged = mergeConfig([
+      { source: "user", values: { "agent.permissionMode": "ask" } },
+    ]);
+    expect(merged.config.permissions.preset).toBeUndefined();
+    expect(merged.issues.some((issue) => issue.path === "permissions.preset")).toBe(false);
+  });
+
+  test("rejects conflicting explicit permission surfaces", () => {
+    const merged = mergeConfig([
+      {
+        source: "user",
+        values: {
+          "agent.permissionMode": "ask",
+          "permissions.preset": "auto",
+        },
+      },
+    ]);
+    expect(merged.issues.some((issue) => issue.path === "permissions.preset" && issue.severity === "error")).toBe(true);
+  });
+
+  test("absurd budgets are rejected", () => {
+    expect(
+      mergeConfig([{ source: "user", values: { "model.softContextTokens": 10 } }]).issues.some(
+        (i) => i.severity === "error",
+      ),
+    ).toBe(true);
+    expect(
+      mergeConfig([{ source: "user", values: { "model.maxOutputTokens": 1 } }]).issues.some(
+        (i) => i.severity === "error",
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("config key status (P1-04)", () => {
+  test("wired, experimental, and deprecated keys are classified", () => {
+    expect(configKeyInfo("model.default")?.status).toBe("wired");
+    expect(configKeyInfo("sandbox.level")?.status).toBe("wired");
+    expect(configKeyInfo("ui.theme")?.status).toBe("wired");
+    expect(configKeyInfo("ui.mouse")?.status).toBe("wired");
+    expect(configKeyInfo("privacy.telemetry")?.status).toBe("experimental");
+    expect(configKeyInfo("tools.activationLimit")?.status).toBe("experimental");
+    // Longest prefix wins: a leaf overrides its section.
+    expect(configKeyInfo("model.router.cheapTier")?.status).toBe("wired");
+    expect(configKeyInfo("model.router.strategy")?.status).toBe("wired");
+  });
+
+  test("a wired key names its consumer", () => {
+    expect(configKeyInfo("sandbox.level")?.consumer).toContain("runtime");
+    expect(configKeyInfo("subagents.maxPerTurn")?.consumer).toContain("scheduler");
+  });
+
+  test("setting an experimental key warns that it is not applied", () => {
+    const merged = mergeConfig([{ source: "user", values: { "tools.activationLimit": 4 } }]);
+    const issue = merged.issues.find((i) => i.path === "tools.activationLimit");
+    expect(issue?.severity).toBe("warning");
+    expect(issue?.message).toContain("not applied");
+    // The value is still stored; it just does nothing.
+    expect(merged.config.tools.activationLimit).toBe(4);
+  });
+
+  test("setting a wired key produces no status warning", () => {
+    const merged = mergeConfig([{ source: "user", values: { "model.default": "gpt-5.6-terra" } }]);
+    expect(merged.issues.some((i) => i.path === "model.default")).toBe(false);
+  });
+
+  test("§15.7 caps subagents.maxPerTurn at three", () => {
+    const merged = mergeConfig([{ source: "user", values: { "subagents.maxPerTurn": 5 } }]);
+    const issue = merged.issues.find((i) => i.path === "subagents.maxPerTurn");
+    expect(issue?.severity).toBe("error");
+    expect(issue?.message).toContain("three children per turn");
+  });
+});
+
+describe("environment layer (§21.6)", () => {
+  test("maps documented variables", () => {
+    const layer = environmentLayer({
+      CBC_MODEL: "gpt-5.6-terra",
+      CBC_REASONING_EFFORT: "high",
+      CBC_PERMISSION_MODE: "plan",
+    });
+    expect(layer["model.default"]).toBe("gpt-5.6-terra");
+    expect(layer["model.reasoningEffort"]).toBe("high");
+    expect(layer["agent.permissionMode"]).toBe("plan");
+  });
+
+  test("NO_COLOR forces color off (§6.20, AC-45)", () => {
+    expect(environmentLayer({ NO_COLOR: "1" })["ui.color"]).toBe("never");
+    expect(environmentLayer({})["ui.color"]).toBeUndefined();
+  });
+
+  test("CBC_NO_UPDATE_CHECK disables the update check", () => {
+    expect(environmentLayer({ CBC_NO_UPDATE_CHECK: "1" })["updates.check"]).toBe(false);
+  });
+
+  test("OPENAI_API_KEY is never copied into config (§21.6)", () => {
+    const layer = environmentLayer({ OPENAI_API_KEY: "sk-must-not-appear" });
+    expect(JSON.stringify(layer)).not.toContain("sk-must-not-appear");
+    expect(Object.keys(layer)).toHaveLength(0);
+  });
+
+  test("empty variables are ignored", () => {
+    expect(Object.keys(environmentLayer({ CBC_MODEL: "" }))).toHaveLength(0);
+  });
+});
+
+describe("paths (§21.1)", () => {
+  test("uses XDG-style Unix defaults", () => {
+    const paths = resolvePaths({}, "/home/me", "linux");
+    expect(paths.config).toBe("/home/me/.config/capybara/config.toml");
+    expect(paths.data).toBe("/home/me/.local/share/capybara");
+    expect(paths.cache).toBe("/home/me/.cache/capybara");
+    expect(paths.logs).toBe("/home/me/.local/state/capybara/logs");
+  });
+
+  test("honours CAPYBARA_HOME", () => {
+    const paths = resolvePaths({ CAPYBARA_HOME: "/opt/cbc" }, "/home/me", "linux");
+    expect(paths.config).toBe("/opt/cbc/config.toml");
+    expect(paths.data).toBe("/opt/cbc/data");
+  });
+
+  test("honours individual overrides", () => {
+    const paths = resolvePaths(
+      { CAPYBARA_CONFIG: "/etc/cbc.toml", CAPYBARA_DATA_DIR: "/var/cbc" },
+      "/home/me",
+      "linux",
+    );
+    expect(paths.config).toBe("/etc/cbc.toml");
+    expect(paths.data).toBe("/var/cbc");
+  });
+
+  test("uses a platform-appropriate Windows location (§18.14)", () => {
+    const paths = resolvePaths({ LOCALAPPDATA: "C:/Users/me/AppData/Local" }, "C:/Users/me", "win32");
+    expect(paths.data).toContain("capybara-code");
+    expect(paths.data).toContain("AppData/Local");
+  });
+
+  test("respects XDG_CONFIG_HOME", () => {
+    const paths = resolvePaths({ XDG_CONFIG_HOME: "/custom/config" }, "/home/me", "linux");
+    expect(paths.config).toBe("/custom/config/capybara/config.toml");
+  });
+});
+
+describe("full load", () => {
+  test("applies all layers in order", () => {
+    const result = loadConfig({
+      userToml: '[model]\ndefault = "gpt-5.6"\nreasoning_effort = "low"\n',
+      projectToml: '[agent]\npermission_mode = "ask"\n',
+      projectTrusted: true,
+      env: { CBC_REASONING_EFFORT: "high" },
+      cliOverrides: { "model.default": "gpt-5.6-terra" },
+    });
+    expect(result.config.model.default).toBe("gpt-5.6-terra"); // CLI
+    expect(result.config.model.reasoningEffort).toBe("high"); // env beats user
+    expect(result.config.agent.permissionMode).toBe("ask"); // trusted project
+    expect(result.issues.filter((i) => i.severity === "error")).toEqual([]);
+  });
+
+  test("the example config produces no errors", () => {
+    const result = loadConfig({
+      userToml: EXAMPLE_CONFIG,
+      projectTrusted: true,
+      env: {},
+    });
+    expect(result.tomlIssues).toEqual([]);
+    expect(result.issues.filter((i) => i.severity === "error")).toEqual([]);
+  });
+
+  test("surfaces TOML issues with their source", () => {
+    const result = loadConfig({
+      userToml: "[ui]\nbroken line here\n",
+      projectTrusted: true,
+      env: {},
+    });
+    expect(result.tomlIssues[0]?.source).toBe("user");
+  });
+
+  test("P0-13: user declarative permissions.rules remain available", () => {
+    const result = loadConfig({
+      userToml: [
+        "[[permissions.rules]]",
+        'tool = "process.run"',
+        'decision = "allow"',
+        'risk = "R1"',
+        'program = "ls"',
+        "",
+        "[[permissions.rules]]",
+        'tool = "fs.delete"',
+        'decision = "deny"',
+        'risk = "R4"',
+      ].join("\n"),
+      projectTrusted: true,
+      env: {},
+    });
+    expect(result.tomlIssues).toEqual([]);
+    expect(result.config.permissions.rules).toHaveLength(2);
+    expect(result.config.permissions.rules[0]).toMatchObject({ decision: "allow" });
+    expect(result.config.permissions.rules[1]).toMatchObject({ decision: "deny" });
+  });
+
+  test("P0-13: project declarative allow rules are rejected and removed", () => {
+    const result = loadConfig({
+      projectToml: [
+        "[[permissions.rules]]",
+        'tool = "process.run"',
+        'decision = "allow"',
+        'risk = "R1"',
+        "",
+        "[[permissions.rules]]",
+        'tool = "fs.delete"',
+        'decision = "deny"',
+        'risk = "R4"',
+      ].join("\n"),
+      projectTrusted: true,
+      env: {},
+    });
+    expect(result.config.permissions.rules).toEqual([
+      { tool: "fs.delete", decision: "deny", risk: "R4" },
+    ]);
+    expect(
+      result.issues.some(
+        (issue) =>
+          issue.path === "permissions.rules" &&
+          issue.severity === "error" &&
+          issue.message.includes("allow rules require explicit user approval"),
+      ),
+    ).toBe(true);
+  });
+
+  test("P0-02: projectWrite cannot weaken a user plan", () => {
+    const merged = mergeConfig([
+      { source: "user", values: { "permissions.projectWrite": "plan" } },
+      { source: "project", values: { "permissions.projectWrite": "auto" } },
+    ]);
+    expect(merged.config.permissions.projectWrite).toBe("plan");
+    expect(
+      merged.issues.some(
+        (issue) => issue.path === "permissions.projectWrite" && issue.severity === "error",
+      ),
+    ).toBe(true);
+  });
+
+  test("P0-13: permissions.rules default to an empty list", () => {
+    const result = loadConfig({ projectTrusted: true, env: {} });
+    expect(result.config.permissions.rules).toEqual([]);
+  });
+});
+
+
+describe("provider cache TTL normalization (Context P0)", () => {
+  test("unsupported configured TTL is warned and normalized to 30 minutes", () => {
+    const loaded = loadConfig({
+      projectTrusted: true,
+      env: {},
+      userToml: "[model.cache]\nttl_minutes = 90\n",
+    });
+    expect(loaded.config.model.cache.ttlMinutes).toBe(30);
+    expect(loaded.issues.some((issue) =>
+      issue.path === "model.cache.ttlMinutes" && issue.severity === "warning"
+    )).toBe(true);
+  });
+});
+
+describe("token saving (§token-saving)", () => {
+  test("defaults to off so existing behaviour is unchanged", () => {
+    const loaded = loadConfig({ projectTrusted: true, env: {} });
+    expect(loaded.config.agent.tokenSaving).toBe("off");
+  });
+
+  test("accepts the four intensity levels from user config", () => {
+    for (const level of ["off", "light", "balanced", "strong"] as const) {
+      const loaded = loadConfig({
+        projectTrusted: true,
+        env: {},
+        userToml: `[agent]\ntoken_saving = "${level}"\n`,
+      });
+      expect(loaded.config.agent.tokenSaving).toBe(level);
+      expect(loaded.issues.filter((i) => i.severity === "error")).toHaveLength(0);
+    }
+  });
+
+  test("rejects an unknown intensity", () => {
+    const loaded = loadConfig({
+      projectTrusted: true,
+      env: {},
+      userToml: `[agent]\ntoken_saving = "ultra"\n`,
+    });
+    expect(loaded.config.agent.tokenSaving).toBe("off");
+    expect(
+      loaded.issues.some((i) => i.severity === "error" && i.path === "agent.tokenSaving"),
+    ).toBe(true);
+  });
+
+  test("normalizes snake_case token_saving to the camelCase key", () => {
+    const loaded = loadConfig({
+      projectTrusted: true,
+      env: {},
+      userToml: `[agent]\ntoken_saving = "strong"\n`,
+    });
+    expect(loaded.provenance["agent.tokenSaving"]).toBe("user");
+  });
+
+  test("a project cannot force the user's quality policy down", () => {
+    const merged = mergeConfig([
+      { source: "project", values: { "agent.tokenSaving": "strong" } },
+    ]);
+    expect(merged.config.agent.tokenSaving).toBe("off");
+    expect(
+      merged.issues.some((i) => i.severity === "error" && i.message.includes("user-only")),
+    ).toBe(true);
+  });
+
+  test("the key is registered as wired with a named consumer", () => {
+    const info = configKeyInfo("agent.tokenSaving");
+    expect(info?.status).toBe("wired");
+    expect(info?.consumer).toContain("saving controller");
+  });
+});

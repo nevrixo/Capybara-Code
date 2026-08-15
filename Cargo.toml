@@ -1,0 +1,60 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/cbc-protocol",
+  "crates/cbc-redaction",
+  "crates/cbc-workspace",
+  "crates/cbc-fs",
+  "crates/cbc-patch",
+  "crates/cbc-process",
+  "crates/cbc-git",
+  "crates/cbc-keychain",
+  "crates/cbc-sandbox",
+  "crates/cbc-session-store",
+  "crates/cbc-artifacts",
+  "crates/cbc-update",
+  "crates/cbc-runtime",
+]
+
+[workspace.package]
+version = "0.1.0-alpha.1"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+authors = ["Capybara Code Product & Engineering"]
+repository = "https://github.com/Ilbie/Capybara-Code"
+
+[workspace.dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.145", features = ["preserve_order"] }
+sha2 = "0.10.9"
+ed25519-dalek = "2"
+chacha20poly1305 = { version = "0.11.0", features = ["getrandom", "zeroize"] }
+getrandom = "0.3.4"
+zeroize = "1.8.2"
+libc = "0.2.180"
+rusqlite = { version = "0.32.1", features = ["bundled"] }
+tempfile = "3.27.0"
+
+cbc-protocol = { path = "crates/cbc-protocol" }
+cbc-redaction = { path = "crates/cbc-redaction" }
+cbc-workspace = { path = "crates/cbc-workspace" }
+cbc-fs = { path = "crates/cbc-fs" }
+cbc-patch = { path = "crates/cbc-patch" }
+cbc-process = { path = "crates/cbc-process" }
+cbc-git = { path = "crates/cbc-git" }
+cbc-keychain = { path = "crates/cbc-keychain" }
+cbc-sandbox = { path = "crates/cbc-sandbox" }
+cbc-session-store = { path = "crates/cbc-session-store" }
+cbc-artifacts = { path = "crates/cbc-artifacts" }
+cbc-update = { path = "crates/cbc-update" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "unwind"
+strip = "debuginfo"
+
+[profile.dev]
+opt-level = 0

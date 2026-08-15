@@ -1,0 +1,18 @@
+[package]
+name = "cbc-session-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Event-sourced session journal with SQLite WAL storage and integrity chain"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+rusqlite.workspace = true
+cbc-patch.workspace = true
+cbc-redaction.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

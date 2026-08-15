@@ -1,0 +1,12 @@
+{
+  "name": "@cbc/tui-components",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Capybara Code TUI semantics: theme and colour fallbacks, grapheme width, terminal sanitization, timeline blocks, status bar, composer, overlays, and the diff viewer",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts"
+}

@@ -1,0 +1,39 @@
+[package]
+name = "cbc-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Capybara Code trusted execution plane sidecar"
+
+[lib]
+name = "cbc_runtime"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cbc-runtime"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+cbc-protocol.workspace = true
+cbc-redaction.workspace = true
+cbc-workspace.workspace = true
+cbc-fs.workspace = true
+cbc-patch.workspace = true
+cbc-process.workspace = true
+cbc-git.workspace = true
+cbc-keychain.workspace = true
+cbc-sandbox.workspace = true
+cbc-session-store.workspace = true
+cbc-artifacts.workspace = true
+cbc-update.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+rusqlite.workspace = true

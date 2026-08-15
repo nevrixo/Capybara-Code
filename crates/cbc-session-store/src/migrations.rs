@@ -1,0 +1,388 @@
+//! Schema migrations — PRD §18.15 (tables) and §18.18 (forward-only, numbered,
+//! checksummed migrations; a destructive migration backs up the database first).
+
+use rusqlite::{params, Connection};
+use sha2::{Digest, Sha256};
+
+use crate::StoreError;
+
+pub struct Migration {
+    pub version: i64,
+    pub name: &'static str,
+    pub sql: &'static str,
+    /// True when the migration can lose data; §18.18 requires a backup first.
+    pub destructive: bool,
+}
+
+/// All migrations, forward-only and numbered.
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "initial-schema",
+        destructive: false,
+        sql: r#"
+CREATE TABLE schema_migrations (
+    version    INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL,
+    checksum   TEXT NOT NULL,
+    applied_at TEXT NOT NULL
+);
+
+CREATE TABLE workspaces (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    canonical_path_hash  TEXT NOT NULL UNIQUE,
+    trust_state          TEXT NOT NULL,
+    last_seen            TEXT NOT NULL
+);
+
+CREATE TABLE sessions (
+    id                  TEXT PRIMARY KEY,
+    workspace_id        INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    title               TEXT NOT NULL,
+    status              TEXT NOT NULL,
+    model_profile       TEXT NOT NULL,
+    permission_mode     TEXT NOT NULL,
+    workspace_path      TEXT NOT NULL,
+    parent_session_id   TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+    schema_version      TEXT NOT NULL,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    last_event_sequence INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_sessions_updated ON sessions(updated_at DESC);
+CREATE INDEX idx_sessions_workspace ON sessions(workspace_id);
+
+CREATE TABLE turns (
+    id             TEXT PRIMARY KEY,
+    session_id     TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    parent_turn_id TEXT REFERENCES turns(id) ON DELETE SET NULL,
+    status         TEXT NOT NULL,
+    model_profile  TEXT NOT NULL,
+    started_at     TEXT NOT NULL,
+    finished_at    TEXT
+);
+CREATE INDEX idx_turns_session ON turns(session_id);
+
+CREATE TABLE events (
+    session_id     TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    sequence       INTEGER NOT NULL,
+    id             TEXT NOT NULL,
+    kind           TEXT NOT NULL,
+    timestamp      TEXT NOT NULL,
+    turn_id        TEXT,
+    agent_id       TEXT,
+    level          TEXT NOT NULL,
+    visibility     TEXT NOT NULL,
+    schema_version TEXT NOT NULL,
+    payload        TEXT NOT NULL,
+    prev_hash      TEXT NOT NULL,
+    event_hash     TEXT NOT NULL,
+    PRIMARY KEY (session_id, sequence)
+);
+CREATE INDEX idx_events_kind ON events(session_id, kind);
+CREATE INDEX idx_events_turn ON events(session_id, turn_id);
+
+CREATE TABLE snapshots (
+    session_id    TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    sequence      INTEGER NOT NULL,
+    reducer_state TEXT NOT NULL,
+    checksum      TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    PRIMARY KEY (session_id, sequence)
+);
+
+CREATE TABLE transactions (
+    id           TEXT PRIMARY KEY,
+    turn_id      TEXT,
+    agent_id     TEXT,
+    status       TEXT NOT NULL,
+    started_at   TEXT NOT NULL,
+    committed_at TEXT
+);
+CREATE INDEX idx_transactions_turn ON transactions(turn_id);
+
+CREATE TABLE file_operations (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    transaction_id     TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+    path               TEXT NOT NULL,
+    kind               TEXT NOT NULL,
+    pre_hash           TEXT,
+    post_hash          TEXT,
+    pre_image_artifact TEXT,
+    additions          INTEGER NOT NULL DEFAULT 0,
+    deletions          INTEGER NOT NULL DEFAULT 0,
+    new_path           TEXT
+);
+CREATE INDEX idx_file_ops_tx ON file_operations(transaction_id);
+CREATE INDEX idx_file_ops_path ON file_operations(path);
+
+CREATE TABLE approvals (
+    id                   TEXT PRIMARY KEY,
+    turn_id              TEXT,
+    action_hash          TEXT NOT NULL,
+    decision             TEXT NOT NULL,
+    scope                TEXT NOT NULL,
+    normalized_operation TEXT NOT NULL,
+    resolved_at          TEXT NOT NULL
+);
+CREATE INDEX idx_approvals_turn ON approvals(turn_id);
+CREATE INDEX idx_approvals_action ON approvals(action_hash);
+
+CREATE TABLE tasks (
+    id             TEXT PRIMARY KEY,
+    parent_id      TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+    role           TEXT NOT NULL,
+    state          TEXT NOT NULL,
+    title          TEXT NOT NULL,
+    result_summary TEXT,
+    created_at     TEXT NOT NULL
+);
+CREATE INDEX idx_tasks_parent ON tasks(parent_id);
+
+CREATE TABLE jobs (
+    id          TEXT PRIMARY KEY,
+    task_id     TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    display     TEXT NOT NULL,
+    state       TEXT NOT NULL,
+    exit_code   INTEGER,
+    started_at  TEXT NOT NULL,
+    finished_at TEXT
+);
+CREATE INDEX idx_jobs_state ON jobs(state);
+
+CREATE TABLE artifacts (
+    id              TEXT PRIMARY KEY,
+    digest          TEXT NOT NULL,
+    media_type      TEXT NOT NULL,
+    size            INTEGER NOT NULL,
+    redaction_state TEXT NOT NULL,
+    retention       TEXT NOT NULL,
+    created_at      TEXT NOT NULL
+);
+CREATE INDEX idx_artifacts_digest ON artifacts(digest);
+
+CREATE TABLE usage (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    turn_id             TEXT NOT NULL,
+    model               TEXT NOT NULL,
+    input_tokens        INTEGER NOT NULL DEFAULT 0,
+    cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens  INTEGER NOT NULL DEFAULT 0,
+    output_tokens       INTEGER NOT NULL DEFAULT 0,
+    reasoning_tokens    INTEGER NOT NULL DEFAULT 0,
+    estimated_cost      REAL NOT NULL DEFAULT 0,
+    recorded_at         TEXT NOT NULL
+);
+CREATE INDEX idx_usage_turn ON usage(turn_id);
+"#,
+    },
+    Migration {
+        // P0-05: the session list reports turn counts straight from the durable
+        // store; there is no host-side index to keep in sync any more.
+        version: 2,
+        name: "session-turn-count",
+        destructive: false,
+        sql: r#"
+ALTER TABLE sessions ADD COLUMN turn_count INTEGER NOT NULL DEFAULT 0;
+"#,
+    },
+    Migration {
+        // P0-06 journal v2: the client's stream sequence is preserved next to the
+        // store's own journal sequence, the v1.3 lineage fields are persisted, and
+        // a unique event id makes append idempotent under retry.
+        version: 3,
+        name: "journal-v2-lineage",
+        destructive: false,
+        sql: r#"
+ALTER TABLE events ADD COLUMN stream_sequence INTEGER;
+ALTER TABLE events ADD COLUMN caller_id TEXT;
+ALTER TABLE events ADD COLUMN task_epoch_id TEXT;
+ALTER TABLE events ADD COLUMN workspace_identity_digest TEXT;
+ALTER TABLE events ADD COLUMN parent_event_id TEXT;
+ALTER TABLE events ADD COLUMN correlation_id TEXT;
+CREATE UNIQUE INDEX idx_events_event_id ON events(session_id, id);
+"#,
+    },
+    Migration {
+        // P0-06 journal v2: snapshots carry both sequences. `sequence` stays the
+        // journal sequence (what resume reconciles against); the client's stream
+        // sequence is recorded for diagnostics.
+        version: 4,
+        name: "snapshot-stream-sequence",
+        destructive: false,
+        sql: r#"
+ALTER TABLE snapshots ADD COLUMN stream_sequence INTEGER;
+"#,
+    },
+    Migration {
+        // P0-08: artifacts record the session/turn that owns them, so retention
+        // and GC can tell whose output a blob is and when it was produced. Both
+        // are nullable: spills created outside a session own nothing.
+        version: 5,
+        name: "artifact-ownership",
+        destructive: false,
+        sql: r#"
+ALTER TABLE artifacts ADD COLUMN session_id TEXT;
+ALTER TABLE artifacts ADD COLUMN turn_id TEXT;
+"#,
+    },
+    Migration {
+        // P2 resume foundation: legacy rows used a checksum over reducer_state
+        // alone. New rows bind the versioned envelope and its journal boundary
+        // hash, while the version marker lets readers keep accepting legacy rows.
+        version: 6,
+        name: "versioned-snapshot-envelope",
+        destructive: false,
+        sql: r#"
+ALTER TABLE snapshots ADD COLUMN envelope_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE snapshots ADD COLUMN journal_hash TEXT;
+"#,
+    },
+];
+
+pub const CURRENT_SCHEMA_VERSION: i64 = 6;
+
+pub fn checksum(sql: &str) -> String {
+    format!("{:x}", Sha256::digest(sql.as_bytes()))
+}
+
+/// Apply all pending migrations in order, verifying checksums of already-applied
+/// ones (§18.18 "migration file checksum 검증").
+pub fn apply_migrations(conn: &mut Connection) -> Result<Vec<i64>, StoreError> {
+    let mut applied = Vec::new();
+
+    for migration in MIGRATIONS {
+        let already: Option<String> = table_exists(conn, "schema_migrations")?
+            .then(|| {
+                conn.query_row(
+                    "SELECT checksum FROM schema_migrations WHERE version = ?1",
+                    params![migration.version],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok()
+            })
+            .flatten();
+
+        let expected = checksum(migration.sql);
+        if let Some(recorded) = already {
+            if recorded != expected {
+                return Err(StoreError::Sqlite(rusqlite::Error::InvalidQuery));
+            }
+            continue;
+        }
+
+        let tx = conn.transaction()?;
+        tx.execute_batch(migration.sql)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, name, checksum, applied_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                migration.version,
+                migration.name,
+                expected,
+                cbc_patch::now_iso8601()
+            ],
+        )?;
+        tx.commit()?;
+        applied.push(migration.version);
+    }
+
+    Ok(applied)
+}
+
+fn table_exists(conn: &Connection, name: &str) -> Result<bool, StoreError> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+        params![name],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migrations_are_numbered_forward_only() {
+        let mut previous = 0i64;
+        for migration in MIGRATIONS {
+            assert!(
+                migration.version > previous,
+                "migration versions must strictly increase"
+            );
+            previous = migration.version;
+        }
+        assert_eq!(previous, CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn applies_and_is_idempotent() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let first = apply_migrations(&mut conn).unwrap();
+        assert_eq!(first, vec![1, 2, 3, 4, 5, 6]);
+        let second = apply_migrations(&mut conn).unwrap();
+        assert!(second.is_empty(), "re-running must be a no-op");
+    }
+
+    #[test]
+    fn creates_every_prd_table() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply_migrations(&mut conn).unwrap();
+        // §18.15 P0 logical tables.
+        for table in [
+            "schema_migrations",
+            "workspaces",
+            "sessions",
+            "turns",
+            "events",
+            "snapshots",
+            "transactions",
+            "file_operations",
+            "approvals",
+            "tasks",
+            "jobs",
+            "artifacts",
+            "usage",
+        ] {
+            assert!(table_exists(&conn, table).unwrap(), "missing table {table}");
+        }
+    }
+
+    #[test]
+    fn events_have_unique_session_sequence() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply_migrations(&mut conn).unwrap();
+        let sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name='events'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            sql.contains("PRIMARY KEY (session_id, sequence)"),
+            "events must key on (session_id, sequence)"
+        );
+    }
+
+    #[test]
+    fn checksum_detects_tampering() {
+        let a = checksum("CREATE TABLE t (a INT);");
+        let b = checksum("CREATE TABLE t (a TEXT);");
+        assert_ne!(a, b);
+        assert_eq!(a.len(), 64);
+    }
+
+    #[test]
+    fn tampered_checksum_is_rejected() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply_migrations(&mut conn).unwrap();
+        conn.execute(
+            "UPDATE schema_migrations SET checksum = 'tampered' WHERE version = 1",
+            [],
+        )
+        .unwrap();
+        assert!(apply_migrations(&mut conn).is_err());
+    }
+}

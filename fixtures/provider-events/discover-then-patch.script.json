@@ -1,0 +1,33 @@
+{
+  "x-note": "Exercises the §6.9 discovery path followed by a mutation. `fs.apply_patch` is not always-active, so the first step must call tool.discover or validation fails with AC-10's message — which is itself worth asserting.",
+  "steps": [
+    {
+      "commentary": "I need the patch tool before I can edit.",
+      "toolCalls": [
+        {
+          "callId": "call_discover_1",
+          "name": "tool.discover",
+          "arguments": { "query": "apply a patch to a file", "limit": 4 }
+        }
+      ],
+      "usage": { "inputTokens": 1600, "outputTokens": 24 }
+    },
+    {
+      "commentary": "Applying a one-line change.",
+      "toolCalls": [
+        {
+          "callId": "call_patch_1",
+          "name": "fs.apply_patch",
+          "arguments": {
+            "diff": "--- a/notes.txt\n+++ b/notes.txt\n@@ -1 +1 @@\n-before\n+after\n"
+          }
+        }
+      ],
+      "usage": { "inputTokens": 2100, "outputTokens": 40 }
+    },
+    {
+      "text": "Changed notes.txt: replaced the single line 'before' with 'after'.\n\nNo tests cover this file, so nothing was run to verify it.",
+      "usage": { "inputTokens": 2800, "outputTokens": 52 }
+    }
+  ]
+}
