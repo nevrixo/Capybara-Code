@@ -75,7 +75,7 @@ for package in \
   capybara-code-linux-x64
 do
   npm trust github "$package" \
-    --repository Ilbie/Capybara-Code \
+    --repository nevrixo/Capybara-Code \
     --file release.yml \
     --environment npm-publish \
     --allow-publish \

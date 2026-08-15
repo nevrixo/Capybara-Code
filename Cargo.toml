@@ -22,7 +22,7 @@ edition = "2021"
 rust-version = "1.85"
 license = "Apache-2.0"
 authors = ["Capybara Code Product & Engineering"]
-repository = "https://github.com/Ilbie/Capybara-Code"
+repository = "https://github.com/nevrixo/Capybara-Code"
 
 [workspace.dependencies]
 serde = { version = "1.0.229", features = ["derive"] }

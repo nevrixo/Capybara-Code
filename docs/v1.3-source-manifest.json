@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-15T14:03:25.296Z",
+  "generatedAt": "2026-08-15T14:21:40.785Z",
   "git": {
-    "commit": "958bdc8b096dfecb07eda1d3e6b4c3ac7943fa2f",
+    "commit": "1ee4f4bfad9a419a11bde96a1324443760f4d2ac",
     "dirty": true,
-    "dirtyHash": "9e183e61c313661ce76d6c3f44abcaa9b3a87a75bfbb0d55dd90e430f3745843"
+    "dirtyHash": "4dd564ac63ba352d62bb75f8825503ec70f56ca455972a70c2cace0c320734ce"
   },
   "roots": [
     "apps",
@@ -53,7 +53,7 @@
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
     "typescript": "5.9.3"
   },
-  "fileCount": 428,
+  "fileCount": 427,
   "historicalArtifacts": [],
   "files": [
     {
@@ -643,8 +643,8 @@
     },
     {
       "path": "Cargo.toml",
-      "bytes": 1712,
-      "sha256": "42357dcd00421f790788868978a2985388a8ab31a830a68b6326a2d92d8d8d8d"
+      "bytes": 1714,
+      "sha256": "621516bbf27bc58b7b57c4a5e74d62dc18300461b6c559656c1d813ed4860049"
     },
     {
       "path": "crates/cbc-artifacts/Cargo.toml",
@@ -963,8 +963,8 @@
     },
     {
       "path": "docs/public-alpha-release.md",
-      "bytes": 8157,
-      "sha256": "c5b25184570debb262a1db4cc0461ec0f5c6d15dbd6d97655334258973340b5a"
+      "bytes": 8159,
+      "sha256": "42ac81da7901ed6a6c829a38dd93259b5306d28058a894c1648799806e73e68d"
     },
     {
       "path": "docs/release-notes-performance-program.md",
@@ -2158,8 +2158,8 @@
     },
     {
       "path": "scripts/release-common.ts",
-      "bytes": 8287,
-      "sha256": "f068d4bf74ae5b64e4428a6fa424db7a4a40d9914531c083d82cea70150d3c19"
+      "bytes": 8291,
+      "sha256": "e4eff83314d32ba3bdceaafec9b3499e79d31b55915af9ad68ebf5db5f027247"
     },
     {
       "path": "scripts/release-launcher.cjs",
@@ -2170,11 +2170,6 @@
       "path": "scripts/release.test.ts",
       "bytes": 6889,
       "sha256": "2801eb6f9fb2b6e78c40272041b125647259bbe48209c6349eedef2ad3131cc3"
-    },
-    {
-      "path": "scripts/rename-command.ps1",
-      "bytes": 3933,
-      "sha256": "56dfea7b05a585945eb28ff65db5f22191cbfb451d08c9dc89f34cdb3110724e"
     },
     {
       "path": "scripts/smoke-release.ts",
@@ -2197,5 +2192,5 @@
       "sha256": "c69dafb888ab2abc0a1a6bfe0602668806ec94b495ad4f228a4e0486f22ea7e4"
     }
   ],
-  "digest": "689b9f04ac88137a68fd772d9cbf974cf49b07c4c369bb65dd42599f633b979d"
+  "digest": "c0cd7dae27e42ea5313b0a5dafa05248d347d5efea8cfc74b81feffc7080e17e"
 }

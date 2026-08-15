@@ -9,8 +9,8 @@ export const ROOT = new URL("..", import.meta.url).pathname
   .replace(/\/+$/, "");
 
 export const PRODUCT_PACKAGE = "capybara-code";
-export const REPOSITORY_URL = "git+https://github.com/Ilbie/Capybara-Code.git";
-export const HOMEPAGE_URL = "https://github.com/Ilbie/Capybara-Code";
+export const REPOSITORY_URL = "git+https://github.com/nevrixo/Capybara-Code.git";
+export const HOMEPAGE_URL = "https://github.com/nevrixo/Capybara-Code";
 
 export interface ReleaseTarget {
   readonly npmPackage: string;
