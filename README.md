@@ -110,12 +110,12 @@ bun run build
 ## Performance program
 
 The performance work is measured and released through a fixed, capability-bound
-CBC Bench cohort. Start with the [implementation plan](docs/capybara-context-agent-performance-improvement-plan.md),
-then read the [harness latency ADR](docs/adr/0001-harness-latency-program.md), the
-[rollback runbook](docs/performance-program-rollback-runbook.md), and the
-[performance release notes](docs/release-notes-performance-program.md). The
-[benchmarks/cbc-bench/README.md](benchmarks/cbc-bench/README.md) documents commands,
-paired artifacts, and the statistical gate.
+CBC Bench cohort. The [benchmarks/cbc-bench/README.md](benchmarks/cbc-bench/README.md)
+documents commands, paired artifacts, and the statistical gate.
+
+Design notes and release runbooks are optional documentation. They are not part
+of the runtime or verification dependency graph, so they may be removed from a
+checkout without changing `bun run verify` or release artifact identity.
 
 ## Contributing
 

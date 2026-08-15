@@ -6,15 +6,18 @@
  * benchmark or review cannot accidentally import a stale snapshot as source.
  *
  *   bun run source-truth          # print the current canonical manifest
- *   bun run source-truth --write  # update docs/v1.3-source-manifest.json
+ *   bun run source-truth --write  # update .source-truth.json
  *   bun run source-truth:check    # compare the checked-in manifest
  */
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
-const ROOTS = ["apps", "packages", "benchmarks", "crates", "schemas", "scripts", "fixtures", "docs"] as const;
-const MANIFEST_PATH = "docs/v1.3-source-manifest.json";
+// Documentation is intentionally outside the source-truth boundary. It can be
+// added, removed, or kept in a local checkout without changing the canonical
+// implementation identity used by verification and release evidence.
+const ROOTS = ["apps", "packages", "benchmarks", "crates", "schemas", "scripts", "fixtures"] as const;
+const MANIFEST_PATH = ".source-truth.json";
 /**
  * Canonical top-level files (P1-08): root manifests, lockfiles, toolchain pins,
  * and the README are source truth too — a review that fingerprints only code roots
@@ -40,7 +43,7 @@ const EXCLUDED = [
   /\.bak$/i,
   /\.tmp$/i,
   // The manifest cannot fingerprint itself.
-  /docs[\\/]v1\.3-source-manifest\.json$/,
+  /[.]source-truth[.]json$/,
 ];
 
 /**
@@ -141,7 +144,7 @@ export async function buildSourceTruthManifest(repo = process.cwd()): Promise<So
     roots: [...ROOTS],
     rootFiles: [...ROOT_FILES],
     ignoredPatterns: EXCLUDED.map((pattern) => pattern.source),
-    excludedPaths: ["docs/v1.3-source-manifest.json", "**/*.orig (classified historical-backup)", "node_modules/", "dist/", "target/", "__pycache__/", "benchmarks/**/results/"],
+    excludedPaths: [".source-truth.json", "docs/ (optional documentation)", "**/*.orig (classified historical-backup)", "node_modules/", "dist/", "target/", "__pycache__/", "benchmarks/**/results/"],
     toolVersions: await readToolVersions(repo),
     fileCount: files.length,
     historicalArtifacts,
@@ -208,7 +211,7 @@ async function readGitState(repo: string, digest: string): Promise<SourceTruthMa
   let status = "unavailable";
   try {
     const result = Bun.spawnSync(
-      ["git", "status", "--porcelain=v1", "--untracked-files=all", "--", ".", ":!docs/v1.3-source-manifest.json"],
+      ["git", "status", "--porcelain=v1", "--untracked-files=all", "--", ".", ":!" + MANIFEST_PATH],
       { cwd: repo, stdout: "pipe", stderr: "ignore" },
     );
     if (result.exitCode === 0) status = new TextDecoder().decode(result.stdout).replaceAll("\r\n", "\n");
@@ -243,7 +246,7 @@ if (import.meta.main) {
   const repo = process.cwd();
   if (process.argv.includes("--write")) {
     const manifest = await buildSourceTruthManifest(repo);
-    await mkdir(resolve(repo, "docs"), { recursive: true });
+    await mkdir(resolve(repo, dirname(MANIFEST_PATH)), { recursive: true });
     await writeFile(resolve(repo, MANIFEST_PATH), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
     console.log(`wrote ${MANIFEST_PATH} (${manifest.files.length} files, ${manifest.digest})`);
   } else if (process.argv.includes("--check")) {

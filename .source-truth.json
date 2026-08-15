@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-15T14:25:23.793Z",
+  "generatedAt": "2026-08-15T14:35:56.289Z",
   "git": {
-    "commit": "a6c637517d212de1d624c600d9bd906e040cdc4c",
+    "commit": "1ef319224e67439ceb24d9502b290113a1de70d0",
     "dirty": true,
-    "dirtyHash": "15af44286708378d653b71691d5563718ad9d47231e36efcebfc55d087a8f135"
+    "dirtyHash": "70b8d891cf997814744f6d183044fe0899012297e17a62f9937ebfa5c4a24cb7"
   },
   "roots": [
     "apps",
@@ -13,8 +13,7 @@
     "crates",
     "schemas",
     "scripts",
-    "fixtures",
-    "docs"
+    "fixtures"
   ],
   "rootFiles": [
     "package.json",
@@ -35,10 +34,11 @@
     "\\.orig$",
     "\\.bak$",
     "\\.tmp$",
-    "docs[\\\\/]v1\\.3-source-manifest\\.json$"
+    "[.]source-truth[.]json$"
   ],
   "excludedPaths": [
-    "docs/v1.3-source-manifest.json",
+    ".source-truth.json",
+    "docs/ (optional documentation)",
     "**/*.orig (classified historical-backup)",
     "node_modules/",
     "dist/",
@@ -53,7 +53,7 @@
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
     "typescript": "5.9.3"
   },
-  "fileCount": 427,
+  "fileCount": 422,
   "historicalArtifacts": [],
   "files": [
     {
@@ -618,8 +618,8 @@
     },
     {
       "path": "benchmarks/cbc-bench/test/repository-artifacts.test.ts",
-      "bytes": 2153,
-      "sha256": "53d9e86d8bd4fc36a3173f165cfb1c5487e12bfac0787d280528a7e7401c454b"
+      "bytes": 1012,
+      "sha256": "47e5a7fe9694ab073d6e1125e3eae63b7674425d5fd51f8bb658c15de5fbfbf0"
     },
     {
       "path": "benchmarks/cbc-bench/test/suite.test.ts",
@@ -945,31 +945,6 @@
       "path": "crates/cbc-workspace/src/trust.rs",
       "bytes": 16662,
       "sha256": "2e98278eb0999b210625049b31daee340fb0e7ff1a5a05e6a3cf12e5a63bdbb1"
-    },
-    {
-      "path": "docs/adr/0001-harness-latency-program.md",
-      "bytes": 1798,
-      "sha256": "55a0dcf9c45d59f3455dd0427382f392ea926c5809f8eb9f79c53ac2175208bc"
-    },
-    {
-      "path": "docs/capybara-context-agent-performance-improvement-plan.md",
-      "bytes": 2002,
-      "sha256": "50429c56793eee3891da1ab41c7de10823b725ca54450a4899535df3cd76b35f"
-    },
-    {
-      "path": "docs/performance-program-rollback-runbook.md",
-      "bytes": 1640,
-      "sha256": "79f1d14d0aaf398578939ee2505a3406ab5d0698e3e9776c460a095d0fc33ac9"
-    },
-    {
-      "path": "docs/public-alpha-release.md",
-      "bytes": 8148,
-      "sha256": "2d14da5c71b6aaabf84b783712ed3c5dc79dc63b3a3e5d88133d5c1ec6791e77"
-    },
-    {
-      "path": "docs/release-notes-performance-program.md",
-      "bytes": 775,
-      "sha256": "93ebca6471559bff1a56d4d9a1b9d5f2c147b09336fdcaa388e12c9be44d61ad"
     },
     {
       "path": "fixtures/generate.ts",
@@ -2063,8 +2038,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 4920,
-      "sha256": "6d0c3705f917ab72d7371ad4fa378275103e2179a05ff1d4c1902f895927f3d4"
+      "bytes": 4825,
+      "sha256": "bd9b8da88bcc0aa0ad3c18c39c5afbec588c0fcbd6e58251270e8e7766e47467"
     },
     {
       "path": "rust-toolchain.toml",
@@ -2178,8 +2153,8 @@
     },
     {
       "path": "scripts/source-truth.ts",
-      "bytes": 10458,
-      "sha256": "77c476b724d81d0660bbb531f9551f4105ee6220a3ad54dc6eb9db8597a0b5d7"
+      "bytes": 10672,
+      "sha256": "df1dbf164608acb4df1a4069633cd5142ddedabb49af8a6765482816e3db5850"
     },
     {
       "path": "scripts/write-release-checksums.ts",
@@ -2192,5 +2167,5 @@
       "sha256": "c69dafb888ab2abc0a1a6bfe0602668806ec94b495ad4f228a4e0486f22ea7e4"
     }
   ],
-  "digest": "ee170f7bd3688737f5895cb136f2845e06a47cfaa072641f822d1d36ab4a3991"
+  "digest": "e30f8a941982e150e9eaa854c60fd5e607aab3bb0fbe7bb2f7f67bffb8cd99de"
 }
