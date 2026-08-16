@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-16T03:36:21.427Z",
+  "generatedAt": "2026-08-16T04:02:02.090Z",
   "git": {
-    "commit": "aa3762f47fde57bafc4998a9d29d46c888c6fce7",
+    "commit": "1a89a4c56db69fbabf7a017dc286a3ce4b29d34d",
     "dirty": false,
-    "dirtyHash": "db4bb823f37f934442ad491aa31fd71830f60054e9d283344eb8905e2f25e2b8"
+    "dirtyHash": "44dd8d245e40debabc4c7064b435169aa5cd2ee3a661acf78e789f311d158ab7"
   },
   "roots": [
     "apps",
@@ -738,8 +738,8 @@
     },
     {
       "path": "crates/cbc-process/src/lib.rs",
-      "bytes": 76495,
-      "sha256": "ee4b20092ceb090b7462d2146e9d34d79dc324b9dcf127af794fc0fb99670905"
+      "bytes": 77512,
+      "sha256": "56a44da3c385202b9efab83db64efd7b90a496feb8c69e8035bc037d42907b02"
     },
     {
       "path": "crates/cbc-process/src/limits.rs",
@@ -2167,5 +2167,5 @@
       "sha256": "c69dafb888ab2abc0a1a6bfe0602668806ec94b495ad4f228a4e0486f22ea7e4"
     }
   ],
-  "digest": "010d4b1ca85e0bdabb4fad53b5fa503133ee5f6e3f7d22d222fde7eb29819b73"
+  "digest": "965f81564256911bfe3d892c22972b12a67a4a26b131b1e1e4e3e75dc4e52b85"
 }
