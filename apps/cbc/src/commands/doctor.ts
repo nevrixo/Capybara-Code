@@ -500,6 +500,7 @@ async function writeDebugBundle(
     "terminal capability report",
     "effective configuration with credential-shaped values removed",
     "protocol and runtime diagnostics",
+    "path categories only (full local paths are omitted)",
     `session ids only (${sessionIds.length}), no transcripts, no source, no artifacts`,
   ];
 
@@ -526,31 +527,50 @@ async function writeDebugBundle(
     generatedAt: new Date(context.host.now()).toISOString(),
     version: context.version,
     platform: context.host.platform,
-    checks,
+    checks: checks.map((check) => ({ ...check, detail: redactDiagnosticText(check.detail) })),
     renderMode: context.decision.mode,
     capabilities: context.decision.capabilities,
     // §23.4 + §9.8: strip anything credential-shaped before it reaches the file.
     config: redactConfig(loaded.config as unknown as Record<string, unknown>),
-    configIssues: loaded.issues,
-    tomlIssues: loaded.tomlIssues,
+    configIssues: redactDiagnosticValue(loaded.issues),
+    tomlIssues: redactDiagnosticValue(loaded.tomlIssues),
     paths: {
-      config: context.paths.config,
-      data: context.paths.data,
-      cache: context.paths.cache,
-      logs: context.paths.logs,
+      config: shareablePathLabel("config"),
+      data: shareablePathLabel("data"),
+      cache: shareablePathLabel("cache"),
+      logs: shareablePathLabel("logs"),
     },
     sessionIds,
   };
 
-  const path = join(
-    context.paths.logs,
-    `cbc-debug-${new Date(context.host.now()).toISOString().replace(/[:.]/g, "-")}.json`,
-  );
+  const filename = `cbc-debug-${new Date(context.host.now()).toISOString().replace(/[:.]/g, "-")}.json`;
+  const path = join(context.paths.logs, filename);
   await context.host.fs.write(path, `${JSON.stringify(bundle, null, 2)}\n`);
-  return path;
+  return join(shareablePathLabel("logs"), filename);
 }
 
 const SECRET_KEY = /(key|secret|token|password|credential|authorization)/i;
+
+/** Stable labels keep support bundles useful without exposing local paths. */
+export function shareablePathLabel(kind: "config" | "data" | "cache" | "logs"): string {
+  return `<user-${kind}>`;
+}
+
+const ABSOLUTE_PATH = /(?:^|[\s("'])(?:[A-Za-z]:[\\/]|\\\\|\/(?:home|Users|mnt\/[A-Za-z]\/Users|tmp|opt)(?:[\\/]|$))/i;
+
+/** Omit an entire diagnostic value when it contains an absolute local path. */
+export function redactDiagnosticText(value: string): string {
+  return ABSOLUTE_PATH.test(value) ? "<local path omitted>" : value;
+}
+
+export function redactDiagnosticValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactDiagnosticValue);
+  if (typeof value === "string") return redactDiagnosticText(value);
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, redactDiagnosticValue(item)]),
+  );
+}
 
 /** Recursively blank anything whose key looks like a credential (§9.8). */
 export function redactConfig(value: unknown): unknown {

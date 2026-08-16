@@ -128,6 +128,11 @@ export interface SessionManifest {
   state: "active" | "completed" | "interrupted" | "archived";
 }
 
+/** Replace local workspace paths when a manifest crosses an export boundary. */
+export function redactWorkspacePath(_path: string): string {
+  return "<workspace>";
+}
+
 export interface IntegrityReport {
   sessionId: string;
   eventsVerified: number;
@@ -844,7 +849,7 @@ export function exportMarkdown(model: SessionViewModel, manifest: SessionManifes
     `# ${manifest.title}`,
     "",
     `- Session: \`${manifest.id}\``,
-    `- Workspace: \`${manifest.workspacePath}\``,
+    `- Workspace: \`${redactWorkspacePath(manifest.workspacePath)}\``,
     `- Model profile: ${manifest.modelProfile}`,
     `- Permission mode: ${manifest.permissionMode}`,
     ...(manifest.interactionMode === undefined ? [] : [`- Interaction mode: ${manifest.interactionMode}`]),

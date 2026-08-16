@@ -3,7 +3,6 @@
  */
 
 import { OpenAiResponsesProvider, type CredentialValidation } from "@cbc/provider-openai";
-import { sanitizeText } from "@cbc/tui-components";
 
 import {
   ACCOUNT_AUTHORIZATION_TIMEOUT_MS,
@@ -319,10 +318,7 @@ async function exchangeAuthorizationCode(
   });
 
   if (!response.ok) {
-    throw authError(`the token endpoint returned ${response.status}`, [
-      // P1-01: an HTTP error body is untrusted text — sanitize before showing it.
-      sanitizeText(await response.text().catch(() => "")).slice(0, 400),
-    ]);
+    throw authError(`the token endpoint returned ${response.status}`);
   }
 
   const parsed = parseAccountTokenResponse(
@@ -439,9 +435,7 @@ async function runChatGptDeviceFlow(
         );
       });
       if (!tokenResponse.ok) {
-        throw authError(`the token endpoint returned ${tokenResponse.status}`, [
-          sanitizeText(await tokenResponse.text().catch(() => "")).slice(0, 400),
-        ]);
+        throw authError(`the token endpoint returned ${tokenResponse.status}`);
       }
       const parsed = parseAccountTokenResponse(
         await tokenResponse.json().catch(() => undefined),

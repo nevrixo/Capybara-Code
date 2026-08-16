@@ -131,6 +131,15 @@ describe("hardened OAuth networking", () => {
     expect(resolutions).toBe(2);
   });
 
+  test("token endpoint failures do not echo response bodies", async () => {
+    const authSource = await Bun.file(new URL("../src/commands/auth.ts", import.meta.url)).text();
+    const mcpSource = await Bun.file(new URL("../src/commands/mcp.ts", import.meta.url)).text();
+
+    expect(authSource).not.toContain("response.text().catch(() => \"\")).slice(0, 400)");
+    expect(authSource).not.toContain("tokenResponse.text().catch(() => \"\")).slice(0, 400)");
+    expect(mcpSource).not.toContain("tokenResponse.body.slice(0, 400)");
+  });
+
   test("enforces the response cap even for an injected transport", async () => {
     await expect(
       safeOAuthRequest("https://auth.example.com/token", {

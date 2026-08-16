@@ -131,7 +131,7 @@ import {
 import { splitCommand } from "../src/commands/mcp.ts";
 import { COMMAND_TREE, COMMANDS } from "../src/commands/completion.ts";
 import { collapseDotSegments, resolveWorkspace } from "../src/commands/context.ts";
-import { redactConfig } from "../src/commands/doctor.ts";
+import { redactConfig, redactDiagnosticText, shareablePathLabel } from "../src/commands/doctor.ts";
 import { isNewer, checkDue } from "../src/commands/update.ts";
 import { testCommandFor } from "../src/agent.ts";
 import { resolveChildProfile } from "../src/subagent-bridge.ts";
@@ -5267,6 +5267,15 @@ describe("supporting policy", () => {
     expect(JSON.stringify(redacted)).not.toContain("sk-real-value");
     expect(redacted.model?.default).toBe("gpt-5.6");
     expect(JSON.stringify(redacted)).toContain("***REDACTED***");
+  });
+
+  test("§23.4: support bundle path labels never expose local paths", () => {
+    expect(shareablePathLabel("config")).toBe("<user-config>");
+    expect(shareablePathLabel("logs")).toBe("<user-logs>");
+    expect(redactDiagnosticText("could not open C:\\Users\\developer\\AppData\\Local\\capybara\\config.toml")).toBe(
+      "<local path omitted>",
+    );
+    expect(redactDiagnosticText("provider unavailable")).toBe("provider unavailable");
   });
 
   test("version comparison orders releases and pre-releases", () => {

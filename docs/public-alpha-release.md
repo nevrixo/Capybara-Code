@@ -158,7 +158,7 @@ bun run legacy:cleanup -- -Apply
 Get-Command capy -All
 ```
 
-It removes only verified old `capy` source shims under `C:\Users\<USER>\.bun\bin`, the verified manual install at `C:\Users\<USER>\AppData\Local\Programs\capybara-code`, and the matching `capybara-code\bin` User PATH segment. It preserves Bun's own `C:\Users\<USER>\.bun\bin` PATH entry.
+It removes only verified old `capy` source shims under `%USERPROFILE%\.bun\bin`, the verified manual install at `%LOCALAPPDATA%\Programs\capybara-code`, and the matching `capybara-code\bin` User PATH segment. It preserves Bun's own `%USERPROFILE%\.bun\bin` PATH entry.
 
 WSL can also have an old manual Capybara installation and source aliases. From a native WSL shell, preview and then apply the verified cleanup:
 

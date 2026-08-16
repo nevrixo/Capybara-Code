@@ -548,11 +548,9 @@ export async function mcpLogin(
       signal: cancellation.signal,
     });
     if (!tokenResponse.ok) {
-      throw new CliError(
-        EXIT.auth,
-        "the token endpoint returned " + tokenResponse.status,
-        [tokenResponse.body.slice(0, 400)],
-      );
+      // The response body is untrusted and may echo authorization material or
+      // contain account data. Keep diagnostics status-only (§9.8).
+      throw new CliError(EXIT.auth, "the token endpoint returned " + tokenResponse.status);
     }
 
     const token = parseJsonObject(tokenResponse.body, "the token endpoint");

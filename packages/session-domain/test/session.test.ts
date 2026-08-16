@@ -1621,6 +1621,8 @@ describe("markdown export (§8.6, §18.13)", () => {
     expect(markdown).toContain("**passed**");
     expect(markdown).toContain("### Risks");
     expect(markdown).toContain("not a billing source of truth");
+    expect(markdown).toContain("- Workspace: `<workspace>`");
+    expect(markdown).not.toContain("/repo");
   });
 });
 

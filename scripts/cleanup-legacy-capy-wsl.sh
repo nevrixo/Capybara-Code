@@ -16,7 +16,8 @@ legacy_map="$legacy_root/bin/main.js.map"
 legacy_backup="$legacy_root/libexec/cbc-runtime.bak-20260812"
 bashrc="$HOME/.bashrc"
 path_line='export PATH="$HOME/.local/lib/capybara-code/bin:$PATH"'
-source_alias='alias capy="bun run /mnt/c/Users/<USER>/Desktop/Capybara-Code/apps/cbc/src/main.ts"'
+source_alias_pattern='^alias capy="bun run /mnt/[A-Za-z]/Users/[^\"]*/Capybara-Code/apps/cbc/src/main\.ts"$'
+legacy_dist_alias_pattern='^alias capy="/mnt/[A-Za-z]/Users/[^\"]*/Capybara-Code/dist/capybara-code-[^/\"]+-linux-x64/bin/capy"$'
 
 die() {
   echo "error: $*" >&2
@@ -25,8 +26,7 @@ die() {
 
 legacy_bashrc_line() {
   local line="$1"
-  [[ "$line" == "$path_line" || "$line" == "$source_alias" ]] && return 0
-  [[ "$line" =~ ^alias\ capy=\"/mnt/c/Users/<USER>/Desktop/Capybara-Code/dist/capybara-code-[^/\"]+-linux-x64/bin/capy\"$ ]]
+  [[ "$line" == "$path_line" || "$line" =~ $source_alias_pattern || "$line" =~ $legacy_dist_alias_pattern ]]
 }
 
 plan() {

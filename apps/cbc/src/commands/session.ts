@@ -7,7 +7,7 @@
  * store rows that own it) but never a keychain credential.
  */
 
-import { exportMarkdown, type SessionManifest } from "@cbc/session-domain";
+import { exportMarkdown, redactWorkspacePath, type SessionManifest } from "@cbc/session-domain";
 
 import { CliError, EXIT, usageError } from "../exit.ts";
 import { workspaceHash } from "../host.ts";
@@ -198,7 +198,7 @@ function toManifest(entry: RuntimeSessionSummary): SessionManifest {
   return {
     schemaVersion: entry.schemaVersion || "1.0",
     id: entry.id,
-    workspacePath: entry.workspacePath,
+    workspacePath: redactWorkspacePath(entry.workspacePath),
     workspaceFingerprint: entry.workspaceFingerprint || workspaceHash(entry.workspacePath),
     createdAt: entry.createdAt,
     updatedAt: entry.updatedAt,
