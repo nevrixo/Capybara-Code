@@ -1318,7 +1318,9 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
     case "task.progress": {
       const p = payloadOf(event);
       const task = findTask(next.timeline, str(p.taskId), indexes);
-      if (task) {
+      // Progress is ephemeral, so await cleanup may arrive after a durable
+      // terminal event. It must not reactivate a task that has already settled.
+      if (task && activeTaskState(task.state)) {
         task.state = "running";
         const text = str(p.text, str(p.summary));
         if (text.length > 0) task.progress = text;

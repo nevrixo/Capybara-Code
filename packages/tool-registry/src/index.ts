@@ -13,6 +13,24 @@ import { isPlanSafeTool, NATIVE_TOOLS, withExecutionMetadata, type ToolDefinitio
 import { discover, type DiscoveryOptions, type ToolDiscoveryResult } from "./discovery.ts";
 import { parseAndValidate, type ValidationResult } from "./validate.ts";
 
+/** Keep Plan Contracts out of the model-facing Build-mode TODO schema. */
+function buildModeToolView(tool: ToolDefinition): ToolDefinition {
+  if (tool.id !== "todo.write") return tool;
+  const properties = tool.parameters.properties;
+  if (properties === null || typeof properties !== "object" || Array.isArray(properties)) return tool;
+  const record = properties as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(record, "document")) return tool;
+  const { document: _document, ...buildProperties } = record;
+  return {
+    ...tool,
+    description: `${tool.description} In Build mode, submit ordinary TODO items only; structured Plan Contracts are available only in Plan mode.`,
+    parameters: {
+      ...tool.parameters,
+      properties: buildProperties,
+    },
+  };
+}
+
 /**
  * The live catalog: native tools plus anything contributed by Skills and MCP at
  * runtime. §6.9 requires dynamic tools to use the same discovery UI, which is why
@@ -83,7 +101,8 @@ export class ToolRegistry {
     return this.activeIds()
       .map((id) => this.#tools.get(id))
       .filter((tool): tool is ToolDefinition => tool !== undefined)
-      .filter((tool) => mode === "build" || isPlanSafeTool(tool));
+      .filter((tool) => mode === "build" || isPlanSafeTool(tool))
+      .map((tool) => mode === "build" ? buildModeToolView(tool) : tool);
   }
 
   setInteractionMode(mode: "build" | "plan"): void {

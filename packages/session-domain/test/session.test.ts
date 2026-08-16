@@ -813,6 +813,26 @@ describe("task semantics (§6.11, AC-21, AC-25)", () => {
     expect(model.activeTasks).toHaveLength(0);
   });
 
+  test("late await cleanup progress cannot reactivate a completed subagent", () => {
+    const model = replay(
+      "ses_1",
+      build([
+        ["task.created", { taskId: "t1", role: "executor", title: "PythonDemo" }],
+        ["task.started", { taskId: "t1" }],
+        ["task.progress", { taskId: "t1", awaiting: true }],
+        ["task.completed", { taskId: "t1", summary: "created scripts/demo.py", durationMs: 19_700 }],
+        // SubagentBridge emits this from its await-finally cleanup after the
+        // scheduler has already emitted task.completed.
+        ["task.progress", { taskId: "t1", awaiting: false }],
+      ]),
+    );
+
+    const task = model.timeline.find((item) => item.type === "task");
+    expect(task).toMatchObject({ taskId: "t1", state: "completed" });
+    expect(model.activeTasks).toHaveLength(0);
+    expect(model.awaitingTaskId).toBeUndefined();
+  });
+
   test("task card exposes goal, constraints, contract, and lease (§6.10)", () => {
     const model = replay(
       "ses_1",

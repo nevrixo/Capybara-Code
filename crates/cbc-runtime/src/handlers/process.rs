@@ -50,6 +50,9 @@ fn environment_binding(params: &Value) -> String {
 
 fn process_error(e: ProcessError) -> RpcError {
     match &e {
+        ProcessError::ExecutableNotFound { .. } => {
+            RpcError::taxonomy(error_codes::NOT_FOUND, "NOT_FOUND", e.to_string())
+        }
         ProcessError::NetworkDenied { .. } => {
             RpcError::taxonomy(error_codes::NETWORK_DENIED, "NETWORK_DENIED", e.to_string())
         }
@@ -487,5 +490,20 @@ pub fn status(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
                 "activeCount": state.supervisor.active_count(),
             }))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_missing_executable_to_not_found() {
+        let error = process_error(ProcessError::ExecutableNotFound {
+            program: "python".to_string(),
+            message: "No such file or directory".to_string(),
+        });
+        assert_eq!(error.code, error_codes::NOT_FOUND);
+        assert!(error.message.contains("executable file not found"));
     }
 }

@@ -1468,7 +1468,13 @@ export class RuntimeToolExecutor implements ToolExecutor {
       // `rawShell` flag set, so the runtime applies the stricter isolation rather
       // than inferring intent from the program name.
       const script = str(action, "script") ?? str(action, "command") ?? "";
-      return { ...base, program: script, args: [], rawShell: true };
+      return {
+        ...base,
+        program: script,
+        args: [],
+        rawShell: true,
+        capabilityOperation: "shell.run",
+      };
     }
     return base;
   }

@@ -143,7 +143,7 @@ export const DEFAULT_KEYMAP: readonly KeyBinding[] = [
   { action: "close_overlay", key: "escape", description: "close the overlay", when: "overlay" },
   { action: "close_completions", key: "escape", description: "close completions", when: "completion" },
   { action: "delete_forward", key: "ctrl+d", description: "delete forward", when: "composer" },
-  { action: "confirm_exit", key: "ctrl+c", description: "exit session (press twice)", when: "always" },
+  { action: "confirm_exit", key: "ctrl+c", description: "clear draft; exit when empty (press twice)", when: "always" },
   { action: "line_start", key: "ctrl+a", description: "move to logical line start", when: "composer" },
   { action: "line_end", key: "ctrl+e", description: "move to logical line end", when: "composer" },
   { action: "history_search", key: "ctrl+r", description: "reverse history search", when: "composer" },
@@ -397,15 +397,17 @@ export const CTRL_C_EXIT_WINDOW_MS = 3_000;
 export const CTRL_C_EXIT_HINT = "Press Ctrl+C again to exit.";
 
 export type CtrlCOutcome =
-  /** First press: warn, and remember it. */
+  /** A draft is present, so one press clears it without arming exit. */
+  | { readonly kind: "clear_composer" }
+  /** First empty-composer press: warn, and remember it. */
   | { readonly kind: "confirm_exit" }
   /** Second press inside the window: exit the program. */
   | { readonly kind: "exit" };
 
 /**
- * `Ctrl+C` is reserved for exiting the interactive program. It deliberately
- * ignores the current turn and draft state: the first press only arms exit, and
- * the second confirms it.
+ * `Ctrl+C` clears a draft first. Once the composer is empty, a first press arms
+ * exit and a second press confirms it. This keeps an accidental Ctrl+C from
+ * discarding the whole session while the user is editing a prompt.
  */
 export function resolveCtrlC(input: {
   running: boolean;
@@ -413,6 +415,7 @@ export function resolveCtrlC(input: {
   lastCtrlC?: number;
   nowMs?: number;
 }): CtrlCOutcome {
+  if (input.composerHasText) return { kind: "clear_composer" };
   const previous = input.lastCtrlC;
   const now = input.nowMs ?? 0;
   if (previous !== undefined && now - previous <= CTRL_C_EXIT_WINDOW_MS) {

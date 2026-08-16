@@ -538,6 +538,15 @@ export class InputReader {
         case "cancel_turn":
           this.#ui.notice("Stopping the current turn and its subagents...");
           this.#draw();
+          const cancellation = session.cancelAllTasks?.("cancelled with Esc");
+          if (cancellation !== undefined) {
+            void cancellation.catch((error) => {
+              this.#ui.notice(
+                `Could not cancel subagents: ${error instanceof Error ? error.message : String(error)}`,
+              );
+              this.#draw();
+            });
+          }
           controller.abort();
           return;
         case "cancel_task":

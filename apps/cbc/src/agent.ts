@@ -1913,12 +1913,17 @@ export class AgentSession {
       return { result: errorResult("TODO_INVALID_INPUT", "todo.write contains a malformed item") };
     }
     const document = isRecord(input.document) ? input.document as unknown as PlanDocument : undefined;
+    // Build-mode schemas omit `document`, but a provider can replay a stale
+    // schema or emit an extra field. Ignore only that field so an ordinary TODO
+    // update does not create a rejected-mutation marker. The TodoController
+    // still refuses direct Build-mode Plan Contract drafts.
+    const ignoredBuildModeDocument = document !== undefined && this.recorder.model.modeState.selected === "build";
     const result = this.#todoController.replace({
       expectedRevision,
       items,
       reason,
       source: "model",
-      ...(document === undefined ? {} : { document }),
+      ...(document === undefined || ignoredBuildModeDocument ? {} : { document }),
     });
     if (!result.ok) {
       const recoveryState = {
@@ -1935,8 +1940,11 @@ export class AgentSession {
       };
     }
     return {
-      result: okResult(`TODO updated to revision ${result.state.revision}`, result.state),
-      text: JSON.stringify(result.state),
+      result: okResult(
+        `TODO updated to revision ${result.state.revision}${ignoredBuildModeDocument ? "; Build mode ignored the structured Plan Contract field" : ""}`,
+        result.state,
+      ),
+      text: `${ignoredBuildModeDocument ? "Build mode ignored the structured Plan Contract field; ordinary TODO items were saved.\n" : ""}${JSON.stringify(result.state)}`,
     };
   }
 

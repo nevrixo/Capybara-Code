@@ -2849,6 +2849,72 @@ describe("self-correction loop (§11.2, §11.3)", () => {
     );
   });
 
+  for (const [code, message, category] of [
+    [
+      "PERMISSION_DENIED",
+      "capability receipt does not match the requested action",
+      "permission_denied",
+    ],
+    [
+      "SANDBOX_UNAVAILABLE",
+      "sandbox requested but not enforceable",
+      "environment_issue",
+    ],
+  ] as const) {
+    test(`${category} re-planning preserves committed source files`, async () => {
+      const rollbacks: string[] = [];
+      const { kernel, events } = harness({
+        steps: [
+          {
+            toolCalls: [
+              {
+                callId: "write-game",
+                name: "fs.write",
+                arguments: { path: "mini_game.py", content: "print('ready')", intent: "create" },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                callId: "verify-game",
+                name: "process.run",
+                arguments: {
+                  program: "python",
+                  args: ["-m", "py_compile", "mini_game.py"],
+                  timeoutMs: 60_000,
+                },
+              },
+            ],
+          },
+          { text: "Validation is blocked; retaining the source file." },
+        ],
+        toolResults: {
+          "fs.write": { result: okResult("wrote mini_game.py") },
+          "process.run": { result: errorResult(code, message) },
+        },
+        checkpoints: {
+          current: () => "ckpt_game",
+          rollbackTo: async (checkpointId) => {
+            rollbacks.push(checkpointId);
+            return { checkpointId, revertedPaths: ["mini_game.py"] };
+          },
+        },
+        // The exact failure policy can still require a new plan; the regression
+        // is that it must not erase a file merely because validation is blocked.
+        reflector: async () => ({ approachInvalid: true }),
+      });
+
+      const result = await kernel.runTurn("write and validate mini_game.py", new AbortController().signal);
+
+      expect(result.reflections[0]?.errorCategory).toBe(category);
+      expect(rollbacks).toEqual([]);
+      expect(payloadsOf(events, "transaction.rolled_back")).toHaveLength(0);
+      expect(result.report.changedFiles.map((file) => file.path)).toContain("mini_game.py");
+      expect(result.report.risks.some((risk) => risk.includes("kept existing") && risk.includes(category))).toBe(true);
+    });
+  }
+
   test("a reflector cannot talk its way past the three-strikes count", async () => {
     const { kernel } = harness({
       steps: [

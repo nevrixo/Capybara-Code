@@ -36,31 +36,53 @@ interface ClipboardSink {
   end(): number | Promise<number>;
 }
 
-function clipboardCommands(platform: string): readonly (readonly string[])[] {
-  if (platform === "win32") return [["clip.exe"]];
-  if (platform === "darwin") return [["pbcopy"]];
+export type ClipboardInputEncoding = "utf8" | "utf16le";
+
+export interface ClipboardCommand {
+  readonly argv: readonly string[];
+  readonly inputEncoding: ClipboardInputEncoding;
+}
+
+const UTF8_CLIPBOARD_INPUT: ClipboardInputEncoding = "utf8";
+const UTF16LE_CLIPBOARD_INPUT: ClipboardInputEncoding = "utf16le";
+
+export function clipboardCommands(platform: string): readonly ClipboardCommand[] {
+  // `clip.exe` does not reliably interpret piped UTF-8 as Unicode. Supplying
+  // UTF-16LE makes it publish CF_UNICODETEXT instead of decoding through the
+  // active Windows code page, which preserves Hangul and other non-ASCII text.
+  if (platform === "win32") {
+    return [{ argv: ["clip.exe"], inputEncoding: UTF16LE_CLIPBOARD_INPUT }];
+  }
+  if (platform === "darwin") {
+    return [{ argv: ["pbcopy"], inputEncoding: UTF8_CLIPBOARD_INPUT }];
+  }
   // `clip.exe` is available in WSL and is the reliable fallback when OSC 52 is
   // disabled by Windows Terminal. Missing commands simply fail and the next one
   // is tried; no shell is involved, so selected text never becomes command input.
   return [
-    ["wl-copy"],
-    ["xclip", "-selection", "clipboard"],
-    ["xsel", "--clipboard", "--input"],
-    ["clip.exe"],
-    ["/mnt/c/Windows/System32/clip.exe"],
+    { argv: ["wl-copy"], inputEncoding: UTF8_CLIPBOARD_INPUT },
+    { argv: ["xclip", "-selection", "clipboard"], inputEncoding: UTF8_CLIPBOARD_INPUT },
+    { argv: ["xsel", "--clipboard", "--input"], inputEncoding: UTF8_CLIPBOARD_INPUT },
+    { argv: ["clip.exe"], inputEncoding: UTF16LE_CLIPBOARD_INPUT },
+    { argv: ["/mnt/c/Windows/System32/clip.exe"], inputEncoding: UTF16LE_CLIPBOARD_INPUT },
   ];
 }
 
-async function writeClipboardCommand(command: readonly string[], text: string): Promise<boolean> {
+/** Encode text for a clipboard command without relying on the terminal locale. */
+export function encodeClipboardText(text: string, encoding: ClipboardInputEncoding): Uint8Array {
+  return Buffer.from(text, encoding);
+}
+
+async function writeClipboardCommand(command: ClipboardCommand, text: string): Promise<boolean> {
   try {
     const child = Bun.spawn({
-      cmd: [...command],
+      cmd: [...command.argv],
       stdin: "pipe",
       stdout: "ignore",
       stderr: "ignore",
     });
     const stdin = child.stdin as unknown as ClipboardSink;
-    stdin.write(new TextEncoder().encode(text));
+    stdin.write(encodeClipboardText(text, command.inputEncoding));
     await stdin.end();
     return (await child.exited) === 0;
   } catch {

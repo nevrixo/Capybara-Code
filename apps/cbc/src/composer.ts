@@ -848,6 +848,10 @@ export class ComposerSession {
     });
 
     switch (outcome.kind) {
+      case "clear_composer":
+        this.#lastCtrlC = undefined;
+        this.clear();
+        return { kind: "redraw" };
       case "confirm_exit":
         this.#lastCtrlC = now;
         return { kind: "notice", text: CTRL_C_EXIT_HINT };

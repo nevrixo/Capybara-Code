@@ -401,6 +401,20 @@ describe("registry activation (AC-09)", () => {
     expect(active).not.toContain("task.spawn");
   });
 
+  test("Build-mode todo.write does not offer the structured Plan Contract field", () => {
+    const registry = new ToolRegistry();
+    const buildTool = registry.activeToolsFor("build").find((tool) => tool.id === "todo.write");
+    const planTool = registry.activeToolsFor("plan").find((tool) => tool.id === "todo.write");
+
+    expect(buildTool).toBeDefined();
+    expect(planTool).toBeDefined();
+    const buildProperties = buildTool!.parameters.properties as Record<string, unknown>;
+    const planProperties = planTool!.parameters.properties as Record<string, unknown>;
+    expect(buildProperties.document).toBeUndefined();
+    expect(planProperties.document).toBeDefined();
+    expect(buildTool!.description).toContain("ordinary TODO items only");
+  });
+
   test("discovery activates schemas for the next sampling step", () => {
     const registry = new ToolRegistry();
     expect(registry.activeIds()).not.toContain("task.spawn");

@@ -1185,7 +1185,7 @@ describe("timeline blocks (§6.4, §6.7–§6.12, AC-06)", () => {
     expect(lineText(aborted[0]!)).toContain("Operation aborted");
   });
 
-  test("plan items carry their status as a word (AC-45)", () => {
+  test("TODO items carry their status as a word (AC-45)", () => {
     const lines = renderPlan(
       {
         items: [
@@ -1197,6 +1197,8 @@ describe("timeline blocks (§6.4, §6.7–§6.12, AC-06)", () => {
       context(),
     );
     const text = lines.map(lineText).join("\n");
+    expect(text).toContain("TODO");
+    expect(text).not.toContain("Plan");
     expect(text).toContain("[done]");
     expect(text).toContain("[active]");
     expect(text).toContain("[pending]");
@@ -2281,19 +2283,15 @@ describe("keymap (§6.15, §7.7, AC-20, AC-21)", () => {
     expect(waiting?.action).toBe("interrupt_wait");
   });
 
-  test("Ctrl+C is inert in every composer state (§6.15)", () => {
-    for (const input of [
-      { running: true, composerHasText: true },
-      { running: false, composerHasText: true },
-      { running: false, composerHasText: false },
-    ]) {
-      expect(resolveCtrlC({ ...input, nowMs: 1_000 }).kind).toBe("confirm_exit");
-    }
+  test("Ctrl+C clears a draft and exits only from an empty composer (§6.15)", () => {
+    expect(resolveCtrlC({ running: true, composerHasText: true, nowMs: 1_000 }).kind).toBe("clear_composer");
+    expect(resolveCtrlC({ running: false, composerHasText: true, nowMs: 1_000 }).kind).toBe("clear_composer");
+    expect(resolveCtrlC({ running: false, composerHasText: false, nowMs: 1_000 }).kind).toBe("confirm_exit");
     expect(CTRL_C_EXIT_HINT).toContain("again");
 
     expect(resolveCtrlC({
       running: true,
-      composerHasText: true,
+      composerHasText: false,
       lastCtrlC: 1_000,
       nowMs: 1_500,
     }).kind).toBe("exit");

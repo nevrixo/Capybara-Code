@@ -48,6 +48,23 @@ function fakeUi(draws: DrawnComposer[]): InteractiveUi {
 }
 
 describe("input reader composer ownership", () => {
+  test("Ctrl+C clears a draft without leaving the prompt", async () => {
+    const keys = new FakeKeyStream();
+    const draws: DrawnComposer[] = [];
+    const reader = new InputReader({ keys, ui: fakeUi(draws) });
+    reader.start();
+
+    const prompt = reader.readPrompt();
+    keys.emit({ key: "text", text: "discard this" });
+    keys.emit({ key: "ctrl+c" });
+
+    expect(draws.at(-1)).toMatchObject({ text: "", cursor: 0 });
+    keys.emit({ key: "text", text: "keep this" });
+    keys.emit({ key: "enter" });
+    expect(await prompt).toBe("keep this");
+    reader.stop();
+  });
+
   test("keeps the composer visible and preserves a draft across a running turn", async () => {
     const keys = new FakeKeyStream();
     const draws: DrawnComposer[] = [];
@@ -182,6 +199,7 @@ describe("input reader composer ownership", () => {
 
     const controller = new AbortController();
     let awaitingTaskId: string | undefined = "agent_1";
+    const cancellationReasons: Array<string | undefined> = [];
     let release!: () => void;
     const turn = reader.duringTurn(
       controller,
@@ -198,6 +216,9 @@ describe("input reader composer ownership", () => {
           awaitingTaskId = undefined;
           return true;
         },
+        cancelAllTasks: async (reason) => {
+          cancellationReasons.push(reason);
+        },
       },
       () => new Promise<void>((resolve) => {
         release = resolve;
@@ -209,6 +230,8 @@ describe("input reader composer ownership", () => {
 
     keys.emit({ key: "escape" });
     expect(controller.signal.aborted).toBe(true);
+    await Promise.resolve();
+    expect(cancellationReasons).toEqual(["cancelled with Esc"]);
 
     release();
     await turn;

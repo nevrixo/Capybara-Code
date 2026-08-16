@@ -259,6 +259,12 @@ impl ProcessOutcome {
 
 #[derive(Debug)]
 pub enum ProcessError {
+    /// The executable itself could not be resolved. This is distinct from a
+    /// sandbox setup failure even when a strict sandbox was requested.
+    ExecutableNotFound {
+        program: String,
+        message: String,
+    },
     SpawnFailed {
         program: String,
         message: String,
@@ -287,6 +293,9 @@ pub enum ProcessError {
 impl std::fmt::Display for ProcessError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ProcessError::ExecutableNotFound { program, message } => {
+                write!(f, "executable file not found: '{program}': {message}")
+            }
             ProcessError::SpawnFailed { program, message } => {
                 write!(f, "failed to spawn '{program}': {message}")
             }
@@ -307,6 +316,32 @@ impl std::fmt::Display for ProcessError {
 }
 
 impl std::error::Error for ProcessError {}
+
+/// Keep executable lookup failures distinct from setup failures. `Command` can
+/// report both while a child-side sandbox is configured; the former means the
+/// user needs a different interpreter or PATH entry, not a sandbox change.
+fn classify_spawn_error(
+    program: &str,
+    isolation_requested: bool,
+    error: std::io::Error,
+) -> ProcessError {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        ProcessError::ExecutableNotFound {
+            program: program.to_string(),
+            message: error.to_string(),
+        }
+    } else if isolation_requested {
+        ProcessError::SpawnFailed {
+            program: program.to_string(),
+            message: format!("isolation could not be applied at spawn: {error}"),
+        }
+    } else {
+        ProcessError::SpawnFailed {
+            program: program.to_string(),
+            message: error.to_string(),
+        }
+    }
+}
 
 /// Cancellation token propagated to children (§15.12).
 #[derive(Debug, Clone, Default)]
@@ -662,21 +697,9 @@ impl ProcessSupervisor {
             });
         }
 
-        let mut child = command.spawn().map_err(|e| {
-            if isolation_requested {
-                // A failure here usually means isolation itself could not be
-                // applied in the child; say so rather than blaming the program.
-                ProcessError::SpawnFailed {
-                    program: spec.program.clone(),
-                    message: format!("isolation could not be applied at spawn: {e}"),
-                }
-            } else {
-                ProcessError::SpawnFailed {
-                    program: spec.program.clone(),
-                    message: e.to_string(),
-                }
-            }
-        })?;
+        let mut child = command
+            .spawn()
+            .map_err(|error| classify_spawn_error(&spec.program, isolation_requested, error))?;
 
         #[cfg(unix)]
         let pgid = Some(child.id() as i32);
@@ -1590,7 +1613,7 @@ mod tests {
     }
 
     #[test]
-    fn reports_spawn_failure_for_missing_program() {
+    fn reports_executable_not_found_for_missing_program() {
         let sup = ProcessSupervisor::default();
         let spec = ProcessSpec::new(
             "cbc-definitely-not-a-real-binary",
@@ -1598,7 +1621,20 @@ mod tests {
             std::env::temp_dir().to_string_lossy().to_string(),
         );
         let err = sup.start(spec, CancelToken::new()).unwrap_err();
-        assert!(matches!(err, ProcessError::SpawnFailed { .. }));
+        assert!(matches!(err, ProcessError::ExecutableNotFound { .. }));
+    }
+
+    #[test]
+    fn missing_program_is_not_mislabeled_as_an_isolation_failure() {
+        let err = classify_spawn_error(
+            "python",
+            true,
+            std::io::Error::new(std::io::ErrorKind::NotFound, "No such file or directory"),
+        );
+        let message = err.to_string();
+        assert!(matches!(err, ProcessError::ExecutableNotFound { .. }));
+        assert!(message.contains("executable file not found"));
+        assert!(!message.contains("isolation could not be applied"));
     }
 
     #[test]

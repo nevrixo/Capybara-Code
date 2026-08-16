@@ -336,21 +336,21 @@ describe("root TODO completion integration", () => {
 
 
 
-  test("a Plan Contract introduced mid-turn cannot bypass explicit approval", async () => {
+  test("a first Build-mode TODO write ignores a stale Plan Contract field instead of failing", async () => {
     const provider = new MockProvider({
       steps: [
-        { toolCalls: [{ callId: "plan-pending", name: "todo.write", arguments: { expectedRevision: 0, reason: "track work", items: [{ id: "impl", text: "implement parser", status: "pending", kind: "implementation" }] } }] },
+        { toolCalls: [{ callId: "plan-pending", name: "todo.write", arguments: {
+          expectedRevision: 0,
+          reason: "track work",
+          document: { goal: "Fix parser", context: ["Parser source"], criticalFiles: [{ path: "src/parser.ts" }], verification: [{ command: "bun test" }], risks: [], rollback: [] },
+          items: [{ id: "impl", text: "implement parser", status: "pending", kind: "implementation" }],
+        } }] },
         { toolCalls: [{ callId: "plan-active", name: "todo.write", arguments: { expectedRevision: 1, reason: "start work", items: [{ id: "impl", text: "implement parser", status: "active", kind: "implementation" }] } }] },
         { toolCalls: [{ callId: "plan-done", name: "todo.write", arguments: { expectedRevision: 2, reason: "finish work", items: [{ id: "impl", text: "implement parser", status: "done", kind: "implementation", evidence: ["verified"] }] } }] },
-        { toolCalls: [{ callId: "plan-late", name: "todo.write", arguments: {
-          expectedRevision: 3,
-          reason: "attach a contract after completion",
-          document: { goal: "Fix parser", context: ["Parser source"], criticalFiles: [{ path: "src/parser.ts" }], verification: [{ command: "bun test" }], risks: [], rollback: [] },
-          items: [{ id: "impl", text: "implement parser", status: "done", kind: "implementation", evidence: ["verified"] }],
-        } }] },
         { text: "The parser is complete." },
       ],
     });
+    const events: CbcEvent[] = [];
     const session = new AgentSession({
       host: { now: () => 5_000 } as never,
       runtime: sessionRuntime() as never,
@@ -364,11 +364,15 @@ describe("root TODO completion integration", () => {
       granted: new GrantedRules(),
       nonInteractive: false,
       now: () => 5_000,
-      onEvent: () => undefined,
+      onEvent: (event) => { events.push(event); },
     });
     const result = await session.submit("Fix the parser", new AbortController().signal);
-    expect(result.state).not.toBe("completed");
-    expect(result.report.status).not.toBe("completed");
+    expect(result.state).toBe("completed");
+    expect(result.report.status).toBe("completed");
+    expect(session.todo.document).toBeUndefined();
+    expect(session.todo.modelMutationError).toBeUndefined();
+    expect(events.some((event) => event.kind === "tool.failed" && JSON.stringify(event.payload).includes("todo.write"))).toBe(false);
+    expect(JSON.stringify(provider.requests[1]?.input)).toContain("Build mode ignored the structured Plan Contract field");
   });
 
   test("keeps an approved Plan Contract executable after a cancelled turn", async () => {

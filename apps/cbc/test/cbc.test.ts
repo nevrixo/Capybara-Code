@@ -1064,15 +1064,17 @@ describe("composer session (§6.14, §6.15, AC-05, AC-20)", () => {
     expect(composer.handle({ key: "escape" }, awaiting)).toEqual({ kind: "interrupt_wait" });
   });
 
-  test("Ctrl+C twice exits without cancelling a turn or clearing a draft", () => {
+  test("Ctrl+C clears a draft without cancelling a turn, then exits from an empty composer", () => {
     const { composer, clock } = session();
     type(composer, "half a thought");
 
+    expect(composer.handle({ key: "ctrl+c" }, running)).toEqual({ kind: "redraw" });
+    expect(composer.text).toBe("");
+    clock.value += 500;
     expect(composer.handle({ key: "ctrl+c" }, running)).toEqual({
       kind: "notice",
       text: CTRL_C_EXIT_HINT,
     });
-    expect(composer.text).toBe("half a thought");
     clock.value += 500;
     expect(composer.handle({ key: "ctrl+c" }, running)).toEqual({ kind: "exit" });
   });
@@ -5166,6 +5168,67 @@ describe("tool execution helpers", () => {
     expect(result.result.ok).toBe(true);
     expect(runtime.issued).toHaveLength(1);
     expect(runtime.issued[0]?.operation).toBe("fs.transaction");
+  });
+
+  test("shell.run forwards the capability operation used to issue its receipt", async () => {
+    const host = createFakeHost();
+    const script = "command -v python3 || command -v python || true";
+    const runtime = {
+      workspace: "/work/project",
+      issued: [] as Record<string, unknown>[],
+      runs: [] as Record<string, unknown>[],
+      async issueCapability(params: Record<string, unknown>) {
+        this.issued.push(params);
+        return {
+          id: "cap_shell",
+          sessionId: "session-1",
+          callId: "shell-1",
+          actionHash: "hash-shell",
+          workspaceId: "workspace-1",
+          operation: "shell.run",
+          resources: [],
+          network: "deny" as const,
+          expiresAtMs: Number.MAX_SAFE_INTEGER,
+          singleUse: true as const,
+        };
+      },
+      async run(params: Record<string, unknown>) {
+        this.runs.push(params);
+        return {
+          jobId: "job_shell",
+          state: "exited",
+          exitCode: 0,
+          durationMs: 1,
+          display: script,
+          stdout: "",
+          stderr: "",
+          stdoutBytes: 0,
+          stderrBytes: 0,
+          truncated: false,
+          warnings: [],
+        };
+      },
+    };
+    const executor = new RuntimeToolExecutor({ runtime: runtime as never, host, sessionId: "session-1" });
+    const result = await executor.execute(
+      {
+        callId: "shell-1",
+        toolId: "shell.run",
+        arguments: { script, timeoutMs: 5_000 },
+        command: { program: "command", args: [], cwd: ".", rawShell: true, script },
+        display: `shell: ${script}`,
+      },
+      new AbortController().signal,
+    );
+
+    expect(result.result.ok).toBe(true);
+    expect(runtime.issued[0]?.operation).toBe("shell.run");
+    expect(runtime.runs[0]).toMatchObject({
+      program: script,
+      args: [],
+      rawShell: true,
+      capabilityOperation: "shell.run",
+    });
   });
 
   test("fs.list does not require a runtime capability", async () => {

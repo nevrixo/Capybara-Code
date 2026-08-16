@@ -1730,7 +1730,10 @@ export function renderPlan(
   }
   if (item.items.length === 0) return [];
   const lines: StyledLine[] = [
-    line("header", [segment("Plan", { fg: "fg.primary", bold: true })]),
+    // A bare `todo.write` update is a progress checklist, not a switch into
+    // Plan mode. Keep its heading aligned with the tool/state name so users do
+    // not confuse the two surfaces.
+    line("header", [segment("TODO", { fg: "fg.primary", bold: true })]),
   ];
   for (const [index, entry] of item.items.entries()) {
     lines.push(fitLine("body", planItemSegments(entry, index, context), context));

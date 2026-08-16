@@ -379,9 +379,10 @@ export interface ReflectionAnalysis {
   readonly rootCause: string;
   readonly correctiveAction: string;
   /**
-   * True when the failure indicts the approach rather than the last call. This is
-   * the flag that authorizes a checkpoint rollback, so it is deliberately
-   * conservative: a first-time argument mistake never sets it.
+   * True when the failure invalidates continuing the current approach rather
+   * than only its last call. A checkpoint rollback additionally requires a
+   * `logic_bug`: permission and environment failures require re-planning, but
+   * do not prove that already committed workspace changes are wrong.
    */
   readonly approachInvalid: boolean;
   /** Consecutive occurrences of this exact failure, including this one. */
@@ -1004,6 +1005,7 @@ export class AgentKernel {
     let finalItemId: string | undefined;
     let pendingFinalCameFromWrapUp = false;
     let retryAttempt = 0;
+    let abandonedApproach: ReflectionAnalysis | undefined;
 
     // ---- Main loop ----
     while (!machine.terminal) {
@@ -1228,6 +1230,7 @@ export class AgentKernel {
 
           pendingUserInput = renderReflectionPrompt(analysis);
           if (analysis.approachInvalid) {
+            abandonedApproach = analysis;
             machine.apply("plan_invalidated");
           } else {
             machine.apply("hypothesis_updated");
@@ -1236,9 +1239,11 @@ export class AgentKernel {
         }
 
         case "re_planning": {
-          // The approach is being abandoned, so anything it already wrote is
-          // undone before the replacement plan is sampled (§12.5).
-          await this.#rollbackAbandonedApproach(signal, emit);
+          // A logic failure can invalidate the changes themselves. An
+          // authorization or environment failure only blocks continuation, so
+          // preserve already committed files while the replacement plan is made.
+          await this.#rollbackAbandonedApproach(signal, emit, abandonedApproach);
+          abandonedApproach = undefined;
           pendingUserInput = this.#rePlanPrompt(pendingUserInput);
           machine.apply("correction_ready");
           break;
@@ -3037,7 +3042,25 @@ export class AgentKernel {
   async #rollbackAbandonedApproach(
     signal: AbortSignal,
     emit: <T>(kind: CbcEventKind, payload: T) => void,
+    analysis: ReflectionAnalysis | undefined,
   ): Promise<void> {
+    // A failed permission check or unavailable runtime tells us that validation
+    // could not continue; it says nothing about the source already written.
+    // Only a code-level failure authorizes undoing committed workspace changes.
+    if (analysis?.errorCategory !== "logic_bug") {
+      if (this.#workspaceMutated) {
+        const category = analysis?.errorCategory ?? "unknown failure";
+        const toolId = analysis?.toolId ?? "the failed operation";
+        this.#risks.push(
+          `kept existing workspace changes because ${toolId} was blocked by ${category}; the failure did not show those changes were incorrect`,
+        );
+        emit("assistant.commentary", {
+          text: `Keeping existing workspace changes: ${toolId} was blocked by ${category}, so the source was not rolled back.`,
+        });
+      }
+      return;
+    }
+
     const coordinator = this.#options.checkpoints;
     if (coordinator === undefined || !this.#workspaceMutated) return;
     const checkpointId = coordinator.current();
