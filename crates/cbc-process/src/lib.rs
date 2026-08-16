@@ -1276,12 +1276,7 @@ fn open_pty() -> std::io::Result<PtyPair> {
             ));
         }
 
-        let mut name = [0 as libc::c_char; 128];
-        let rc = libc::ptsname_r(master_fd(&master), name.as_mut_ptr(), name.len());
-        if rc != 0 {
-            return Err(std::io::Error::from_raw_os_error(rc));
-        }
-        let slave_path = std::ffi::CStr::from_ptr(name.as_ptr());
+        let slave_path = pty_slave_path(master_fd(&master))?;
         let slave = libc::open(
             slave_path.as_ptr(),
             libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC,
@@ -1304,6 +1299,36 @@ fn open_pty() -> std::io::Result<PtyPair> {
         let _ = libc::ioctl(master_fd(&master), libc::TIOCSWINSZ as _, &ws);
 
         Ok(PtyPair { master, slave_fd })
+    }
+}
+
+/// Return the filesystem path for the slave side of a PTY master.
+///
+/// Darwin provides `TIOCPTYGNAME` for this purpose. Although newer macOS
+/// releases export `ptsname_r`, the Rust `libc` crate intentionally does not
+/// bind it on Apple targets, so using the ioctl keeps the PTY implementation
+/// buildable across the supported macOS release targets.
+#[cfg(all(unix, target_vendor = "apple"))]
+fn pty_slave_path(fd: std::os::fd::RawFd) -> std::io::Result<std::ffi::CString> {
+    let mut name = [0 as libc::c_char; 128];
+    unsafe {
+        if libc::ioctl(fd, libc::TIOCPTYGNAME as _, name.as_mut_ptr()) != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(std::ffi::CStr::from_ptr(name.as_ptr()).to_owned())
+    }
+}
+
+/// Return the filesystem path for the slave side of a PTY master.
+#[cfg(all(unix, not(target_vendor = "apple")))]
+fn pty_slave_path(fd: std::os::fd::RawFd) -> std::io::Result<std::ffi::CString> {
+    let mut name = [0 as libc::c_char; 128];
+    unsafe {
+        let rc = libc::ptsname_r(fd, name.as_mut_ptr(), name.len());
+        if rc != 0 {
+            return Err(std::io::Error::from_raw_os_error(rc));
+        }
+        Ok(std::ffi::CStr::from_ptr(name.as_ptr()).to_owned())
     }
 }
 
