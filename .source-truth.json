@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-15T14:35:56.289Z",
+  "generatedAt": "2026-08-16T03:36:21.427Z",
   "git": {
-    "commit": "1ef319224e67439ceb24d9502b290113a1de70d0",
-    "dirty": true,
-    "dirtyHash": "70b8d891cf997814744f6d183044fe0899012297e17a62f9937ebfa5c4a24cb7"
+    "commit": "aa3762f47fde57bafc4998a9d29d46c888c6fce7",
+    "dirty": false,
+    "dirtyHash": "db4bb823f37f934442ad491aa31fd71830f60054e9d283344eb8905e2f25e2b8"
   },
   "roots": [
     "apps",
@@ -103,8 +103,8 @@
     },
     {
       "path": "apps/cbc/src/commands/auth.ts",
-      "bytes": 34912,
-      "sha256": "6afb278b5bfb40edb034a92a4042d615f8081e6505424d9f2b1b29109cd098c9"
+      "bytes": 34598,
+      "sha256": "6e11e14cbc7f3966317bdff4427dc22da73dffe246ab3ba5c140598f65c2f69c"
     },
     {
       "path": "apps/cbc/src/commands/completion.ts",
@@ -128,8 +128,8 @@
     },
     {
       "path": "apps/cbc/src/commands/doctor.ts",
-      "bytes": 20836,
-      "sha256": "0280d7210175ac2192a4c87c69ebc82bd913dc334762cb6cbc8204a9493eea77"
+      "bytes": 22059,
+      "sha256": "7382908cd63ea733ccd0b34a0d111affb0600d35b7dacfaba44a168f25627987"
     },
     {
       "path": "apps/cbc/src/commands/init.ts",
@@ -143,8 +143,8 @@
     },
     {
       "path": "apps/cbc/src/commands/mcp.ts",
-      "bytes": 24972,
-      "sha256": "0c0276db41ed73dcfd605c66154a95cd4bec2a0e32ff6260f3e61da03201989f"
+      "bytes": 25051,
+      "sha256": "d073958bfe4df38d12551401bfb84d6ff939284a821299c73ab2f64f70b18cc6"
     },
     {
       "path": "apps/cbc/src/commands/model.ts",
@@ -163,8 +163,8 @@
     },
     {
       "path": "apps/cbc/src/commands/session.ts",
-      "bytes": 7670,
-      "sha256": "daf28dc45d96d6e00290c1a071a63db1a7d98edd1e79c2d9cffa3de7e66ce518"
+      "bytes": 7712,
+      "sha256": "a3807e938f990de0d0615efe7c698a8a12c1eea6a688ae3779a6b530aaa0947b"
     },
     {
       "path": "apps/cbc/src/commands/skills.ts",
@@ -373,8 +373,8 @@
     },
     {
       "path": "apps/cbc/test/cbc.test.ts",
-      "bytes": 230137,
-      "sha256": "e48a1d87c64a4f2d7944a3de16abdad667e34f9a2efa39fce666a7d52e8157fa"
+      "bytes": 230629,
+      "sha256": "7d6360f18005925f1838cbf737b5ebd596dde158b4b1e299f83fdc78134a5f5a"
     },
     {
       "path": "apps/cbc/test/context-p0.test.ts",
@@ -418,8 +418,8 @@
     },
     {
       "path": "apps/cbc/test/oauth-security.test.ts",
-      "bytes": 4672,
-      "sha256": "779e6a8fb9252c87c949032ba2467abf0571389717c731532914e72ae4be1c92"
+      "bytes": 5210,
+      "sha256": "7ed9aa322feb7d59c894fda824b99a6d54bdf8705b14b6301d6f8ed23ee4fd62"
     },
     {
       "path": "apps/cbc/test/opentui-view.test.ts",
@@ -1703,8 +1703,8 @@
     },
     {
       "path": "packages/session-domain/src/journal.ts",
-      "bytes": 37827,
-      "sha256": "c2d0ceed28efa96e660edd881417d109cddebe275d0373e449fb6a2a4add8f06"
+      "bytes": 38017,
+      "sha256": "a1c9f4cbb356d84cd6dbab990f0dcaeed87addfedff8358b8c789b11086988ce"
     },
     {
       "path": "packages/session-domain/src/mode.ts",
@@ -1748,8 +1748,8 @@
     },
     {
       "path": "packages/session-domain/test/session.test.ts",
-      "bytes": 69084,
-      "sha256": "0784ab9402b14902f0882303b798c6b9232b2a789fa268100c55ff96dc842052"
+      "bytes": 69191,
+      "sha256": "7c5da5a1125c7e052d1481a2c8f23302243ddacdbb3fe80db99718d18827271e"
     },
     {
       "path": "packages/session-domain/test/todo.test.ts",
@@ -2113,8 +2113,8 @@
     },
     {
       "path": "scripts/cleanup-legacy-capy-wsl.sh",
-      "bytes": 3064,
-      "sha256": "1833cb8fa439599eba39a9ed66c7ec84c0dc7bddf0315326269b225eeb7a51bb"
+      "bytes": 3116,
+      "sha256": "4cfd53ec7ecd9f168f01b1468ff3feed38137b8dddd6485742ddec67c84eefe2"
     },
     {
       "path": "scripts/cleanup-legacy-capy.ps1",
@@ -2167,5 +2167,5 @@
       "sha256": "c69dafb888ab2abc0a1a6bfe0602668806ec94b495ad4f228a4e0486f22ea7e4"
     }
   ],
-  "digest": "e30f8a941982e150e9eaa854c60fd5e607aab3bb0fbe7bb2f7f67bffb8cd99de"
+  "digest": "010d4b1ca85e0bdabb4fad53b5fa503133ee5f6e3f7d22d222fde7eb29819b73"
 }
