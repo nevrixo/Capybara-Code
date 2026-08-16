@@ -10,6 +10,7 @@ import { launcherPackageManifest, platformPackageManifest } from "./package-npm.
 import { runtimePathFor } from "./smoke-release.ts";
 import {
   PRODUCT_PACKAGE,
+  ROOT,
   assertAlphaVersion,
   assertArtifactSafety,
   assertReleaseVersions,
@@ -142,7 +143,18 @@ describe("release artifact safety", () => {
     const directory = await mkdtemp(join(tmpdir(), "capy-release-artifact-"));
     try {
       await writeFile(join(directory, "safe.txt"), "public artifact", "utf8");
-      await assertArtifactSafety(directory, [directory]);
+      await assertArtifactSafety(directory);
+
+      // Bun standalone executables retain compiler debug metadata under the
+      // runner's home directory. That is not a path from this checkout.
+      const home = process.env.HOME ?? process.env.USERPROFILE ?? "/home/runner";
+      await writeFile(join(directory, "bun-runtime.txt"), `${home}/work/_temp/webkit-release`, "utf8");
+      await assertArtifactSafety(directory);
+      await rm(join(directory, "bun-runtime.txt"));
+
+      await writeFile(join(directory, "checkout-path.txt"), `built in ${ROOT}`, "utf8");
+      await expect(assertArtifactSafety(directory)).rejects.toThrow("local build path");
+      await rm(join(directory, "checkout-path.txt"));
 
       await writeFile(join(directory, "main.js.map"), "{}", "utf8");
       await expect(assertArtifactSafety(directory, [directory])).rejects.toThrow("source map");

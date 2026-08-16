@@ -169,7 +169,10 @@ function localPathVariants(path: string): string[] {
 
 export async function assertArtifactSafety(
   directory: string,
-  localPaths: readonly string[] = [ROOT, process.env.USERPROFILE ?? "", process.env.HOME ?? ""],
+  // Bun embeds some of its own compiler paths in standalone executables. Those
+  // can be rooted at the CI user's home directory, so checking a broad home
+  // prefix produces false positives. Check the checkout path instead.
+  localPaths: readonly string[] = [ROOT],
 ): Promise<void> {
   const needles = [...new Set(localPaths.flatMap(localPathVariants))];
   for (const file of await walkFiles(directory)) {

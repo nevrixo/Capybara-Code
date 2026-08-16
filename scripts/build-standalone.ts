@@ -37,8 +37,12 @@ const ROOT = new URL("..", import.meta.url).pathname
   .replace(/^\/([A-Za-z]:)/, "$1")
   .replace(/\/+$/, "");
 
-const LOCAL_BUILD_PATHS = [ROOT, process.env.USERPROFILE, process.env.HOME]
-  .filter((path): path is string => typeof path === "string" && path.length > 0);
+// A compiled Bun runtime can carry debug metadata from Bun's own build machine
+// (for example `/Users/runner/work/_temp/...`). Do not use a generic home
+// directory as a needle: it would reject every such binary despite no path from
+// this checkout being shipped. The checkout root is the meaningful local path
+// that a release artifact must not expose.
+const LOCAL_BUILD_PATHS = [ROOT];
 
 interface BuildOptions {
   readonly target: string;
