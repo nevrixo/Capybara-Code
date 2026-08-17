@@ -25,6 +25,8 @@ export const JOURNAL_BATCH_DELAY_MS = 20;
 export const JOURNAL_BATCH_MAX_BYTES = Math.min(4 * 1024 * 1024, LIMITS.maxFrameBytes / 2);
 export const DEFAULT_RESIDENT_TIMELINE_ITEMS = 4_096;
 export const DEFAULT_RESIDENT_TIMELINE_BYTES = 16 * 1024 * 1024;
+export const DEFAULT_SNAPSHOT_EVERY_EVENTS = 32;
+export const DEFAULT_SNAPSHOT_EVERY_BYTES = 512 * 1024;
 const RESIDENT_TIMELINE_CHECK_INTERVAL = 256;
 
 interface PendingJournalEvent {
@@ -174,6 +176,7 @@ export interface SessionRecorderOptions {
   readonly transport: JournalTransport;
   readonly startAfterSequence?: number;
   readonly snapshotEveryEvents?: number;
+  readonly snapshotEveryBytes?: number;
   readonly contextBudgetTokens?: number;
   /** In-memory timeline bounds; durable journal history is never deleted. */
   readonly residentTimelineMaxItems?: number;
@@ -201,6 +204,9 @@ export class SessionRecorder {
   readonly #options: SessionRecorderOptions;
   #model: SessionViewModel;
   #sinceSnapshot = 0;
+  #sinceSnapshotBytes = 0;
+  #pendingCompletedTurnId: string | undefined;
+  #lastSnapshotTurnId: string | undefined;
   #journalBatch: PendingJournalEvent[] = [];
   #journalBatchBytes = 0;
   #journalBatchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -333,6 +339,13 @@ export class SessionRecorder {
     if (event.durability === "journaled" && shouldPersist(kind)) {
       this.#enqueueJournalEvent(event);
       this.#sinceSnapshot += 1;
+      this.#sinceSnapshotBytes += approximateJsonBytes(payload);
+      if (
+        (kind === "turn.completed" || kind === "turn.cancelled" || kind === "turn.interrupted") &&
+        event.turnId !== undefined
+      ) {
+        this.#pendingCompletedTurnId = event.turnId;
+      }
     }
     return event;
   }
@@ -448,6 +461,14 @@ export class SessionRecorder {
     }
     const maxItems = this.#options.residentTimelineMaxItems ?? DEFAULT_RESIDENT_TIMELINE_ITEMS;
     const maxBytes = this.#options.residentTimelineMaxBytes ?? DEFAULT_RESIDENT_TIMELINE_BYTES;
+    // v3 snapshots already carry a validated <=48-item tail. Avoid cloning it
+    // merely to prove it fits the default resident budget.
+    if (
+      force &&
+      this.#model.timeline.length <= 64 &&
+      this.#model.timeline.length <= maxItems &&
+      approximateJsonBytes(this.#model.timeline) <= maxBytes
+    ) return;
     const byteCheckThreshold = Math.max(
       1,
       Math.floor(maxBytes / RESIDENT_TIMELINE_CHECK_INTERVAL),
@@ -465,10 +486,19 @@ export class SessionRecorder {
     this.#residentTimelineOmitted += bounded.omittedNow;
   }
 
-  /** §18.16 snapshot cadence: every N journaled events, and on clean exit. */
+  /** §18.16 snapshot cadence: event/byte thresholds plus one snapshot per completed turn. */
   async maybeSnapshot(force = false): Promise<boolean> {
-    const cadence = this.#options.snapshotEveryEvents ?? 100;
-    if (!force && this.#sinceSnapshot < cadence) return false;
+    const cadence = this.#options.snapshotEveryEvents ?? DEFAULT_SNAPSHOT_EVERY_EVENTS;
+    const byteCadence = this.#options.snapshotEveryBytes ?? DEFAULT_SNAPSHOT_EVERY_BYTES;
+    const completedTurnDue =
+      this.#pendingCompletedTurnId !== undefined &&
+      this.#pendingCompletedTurnId !== this.#lastSnapshotTurnId;
+    if (
+      !force &&
+      this.#sinceSnapshot < cadence &&
+      this.#sinceSnapshotBytes < byteCadence &&
+      !completedTurnDue
+    ) return false;
     await this.flush();
     // A reducer can be ahead of the durable prefix after an append failure. Never
     // serialize that phantom state under an older journal sequence.
@@ -478,8 +508,15 @@ export class SessionRecorder {
       journalSequence: this.#lastJournalSequence,
       streamSequence: this.#sequencer.lastSequence,
     };
-    const reducerState = this.#options.serializeSnapshot?.(this.#model, position) ??
-      serializeModel(this.#model);
+    let reducerState: Record<string, unknown>;
+    try {
+      reducerState = this.#options.serializeSnapshot?.(this.#model, position) ??
+        serializeModel(this.#model);
+    } catch {
+      // An oversized/unsafe prompt capsule must never replace the last known-good
+      // snapshot. The durable journal remains the fallback source of truth.
+      return false;
+    }
     const envelope = createSnapshotEnvelope({
       sessionId: this.#options.sessionId,
       ...position,
@@ -491,6 +528,10 @@ export class SessionRecorder {
       sequence: envelope.journalSequence,
     });
     this.#sinceSnapshot = 0;
+    this.#sinceSnapshotBytes = 0;
+    if (this.#pendingCompletedTurnId !== undefined) {
+      this.#lastSnapshotTurnId = this.#pendingCompletedTurnId;
+    }
     return true;
   }
 }

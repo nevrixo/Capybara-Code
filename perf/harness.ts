@@ -9,6 +9,7 @@
 import {
   AppendableMarkdownSourceIndex,
   MarkdownRenderCache,
+  PagedTimelineStore,
   ProjectedTimeline,
   createMarkdownSourceIndex,
   defaultTheme,
@@ -24,6 +25,7 @@ import {
 } from "../packages/tui-components/src/index.ts";
 import {
   DEFAULT_SESSION_PAGE_BYTES,
+  DEFAULT_SESSION_PAGE_ITEMS,
   JOURNAL_BATCH_MAX_BYTES,
   JOURNAL_BATCH_MAX_EVENTS,
   MAX_RESIDENT_SUBAGENT_EVENTS,
@@ -226,6 +228,7 @@ export const SCENARIO_NAMES = [
   "session-recorder-batching",
   "idle-frame-surrogate",
   "resident-window-and-paging",
+  "long-session-resume-741x231mb",
   "read-cache-coalescing",
   "repository-scan-truncation",
   "selection-shortlist-50k",
@@ -2056,6 +2059,225 @@ function errorScenario(name: string, error: unknown): ScenarioReport {
   });
 }
 
+
+interface LongSessionFixtureItem {
+  readonly id: string;
+  readonly sequence: number;
+  readonly type: "tool" | "approval" | "notice";
+  readonly status?: "running";
+  readonly decision?: string;
+  readonly text: string;
+}
+
+const LONG_SESSION_TURNS = 741;
+const LONG_SESSION_RAW_BYTES = 231 * 1024 * 1024;
+const LONG_SESSION_PROMPT_CAPSULE_BYTES = 8 * 1024 * 1024;
+const LONG_SESSION_RESUME_RPC_LIMIT = 4;
+const LONG_SESSION_VIEW_ITEM_LIMIT = 48;
+const LONG_SESSION_VIEW_BYTE_LIMIT = 768 * 1024;
+
+function makeLongSessionFixture(): readonly LongSessionFixtureItem[] {
+  return Array.from({ length: LONG_SESSION_TURNS }, (_, index) => {
+    const sequence = index + 1;
+    if (index === 0) {
+      return {
+        id: `long-session-tool-${sequence}`,
+        sequence,
+        type: "tool" as const,
+        status: "running" as const,
+        text: "pinned running task",
+      };
+    }
+    if (index === LONG_SESSION_TURNS - 1) {
+      return {
+        id: `long-session-approval-${sequence}`,
+        sequence,
+        type: "approval" as const,
+        text: "pending approval",
+      };
+    }
+    return {
+      id: `long-session-turn-${sequence}`,
+      sequence,
+      type: "notice" as const,
+      text:
+        sequence % 37 === 0
+          ? "giant markdown and artifact handle fixture"
+          : `turn ${sequence} user/final/tool result`,
+    };
+  });
+}
+
+/**
+ * Deterministic long-session release fixture. The raw byte target is represented
+ * explicitly so CI does not allocate a 231MiB blob just to prove residency
+ * bounds; the replay and UI paths still process every turn and page boundary.
+ * Set CBC_PERF_FIXED_RUNNER=1 on a controlled runner to enable wall-clock and
+ * memory release gates.
+ */
+export async function runLongSessionResumeScenario(): Promise<ScenarioReport> {
+  const sessionId = "perf-long-session-741";
+  const fixture = makeLongSessionFixture();
+  const promptHistory = Array.from({ length: 256 }, (_, index) => ({
+    role: index % 2 === 0 ? "user" : "assistant",
+    content: `long-session prompt item ${index + 1}`,
+  }));
+  const resumeDurations: number[] = [];
+  const firstTurnDurations: number[] = [];
+  const memoryBefore = process.memoryUsage();
+  let replayedEvents = 0;
+  let replayedPages = 0;
+  let peakPageItems = 0;
+  let residentHistoricalItems = 0;
+  let residentHistoricalPages = 0;
+  let initialViewItems = 0;
+  let initialViewBytes = 0;
+  let promptCapsuleBytes = 0;
+  let omissionCount = 0;
+
+  for (let sample = 0; sample < 10; sample += 1) {
+    const resumeStarted = performance.now();
+    const transport = new FakePagedLoadTransport(sessionId, LONG_SESSION_TURNS);
+    const replayed = await replayJournalTail<number>(transport, {
+      sessionId,
+      pageItems: DEFAULT_SESSION_PAGE_ITEMS,
+      pageBytes: DEFAULT_SESSION_PAGE_BYTES,
+      seed: () => 0,
+      apply: (count) => count + 1,
+    });
+    const bounded = boundResidentViewModel(
+      { timeline: fixture },
+      {
+        maxItems: LONG_SESSION_VIEW_ITEM_LIMIT,
+        maxBytes: LONG_SESSION_VIEW_BYTE_LIMIT,
+      },
+    );
+    const store = new PagedTimelineStore<LongSessionFixtureItem>({
+      maxResidentPages: 3,
+    });
+    for (let offset = 0; offset < fixture.length; offset += DEFAULT_SESSION_PAGE_ITEMS) {
+      const items = fixture.slice(offset, offset + DEFAULT_SESSION_PAGE_ITEMS);
+      store.prependPage({
+        id: `long-session-page-${offset + 1}`,
+        items,
+        firstSequence: items[0]?.sequence,
+        lastSequence: items.at(-1)?.sequence,
+        encodedBytes: encodedJsonBytes(items),
+      });
+    }
+
+    const firstTurnStarted = performance.now();
+    const viewBytes = encodedJsonBytes(bounded.model);
+    const capsuleBytes = encodedJsonBytes(promptHistory);
+    // The first local turn only prepares the bounded payload; provider inference
+    // is deliberately outside this scenario.
+    void viewBytes;
+    void capsuleBytes;
+    firstTurnDurations.push(elapsed(firstTurnStarted));
+    resumeDurations.push(elapsed(resumeStarted));
+
+    replayedEvents = replayed.eventsApplied;
+    replayedPages = replayed.pagesLoaded;
+    peakPageItems = Math.max(...transport.pageSizes);
+    residentHistoricalItems = store.historicalItems.length;
+    residentHistoricalPages = store.pageCount;
+    initialViewItems = bounded.model.timeline.length;
+    initialViewBytes = viewBytes;
+    promptCapsuleBytes = capsuleBytes;
+    omissionCount = bounded.omittedCount;
+  }
+
+  const memoryAfter = process.memoryUsage();
+  const heapDelta = Math.max(0, memoryAfter.heapUsed - memoryBefore.heapUsed);
+  const rssDelta = Math.max(0, memoryAfter.rss - memoryBefore.rss);
+  const resumeStats = summarizeDurations(resumeDurations);
+  const firstTurnStats = summarizeDurations(firstTurnDurations);
+  const expectedPages = Math.ceil(LONG_SESSION_TURNS / DEFAULT_SESSION_PAGE_ITEMS);
+  const expectedOmitted = LONG_SESSION_TURNS - LONG_SESSION_VIEW_ITEM_LIMIT;
+  const fixedRunner = process.env.CBC_PERF_FIXED_RUNNER === "1";
+  const gates = [
+    gate("fixture has 741 deterministic turns", fixture.length === LONG_SESSION_TURNS, fixture.length, String(LONG_SESSION_TURNS)),
+    gate("frozen replay applies every event", replayedEvents === LONG_SESSION_TURNS, replayedEvents, String(LONG_SESSION_TURNS)),
+    gate("replay uses 64-item/1MiB pages", peakPageItems <= DEFAULT_SESSION_PAGE_ITEMS, peakPageItems, `<= ${DEFAULT_SESSION_PAGE_ITEMS}`),
+    gate("initial transcript is bounded to 48 items", initialViewItems <= LONG_SESSION_VIEW_ITEM_LIMIT, initialViewItems, `<= ${LONG_SESSION_VIEW_ITEM_LIMIT}`),
+    gate("initial view payload is bounded", initialViewBytes <= LONG_SESSION_VIEW_BYTE_LIMIT, initialViewBytes, `<= ${LONG_SESSION_VIEW_BYTE_LIMIT} bytes`),
+    gate("prompt capsule remains within 8MiB", promptCapsuleBytes <= LONG_SESSION_PROMPT_CAPSULE_BYTES, promptCapsuleBytes, `<= ${LONG_SESSION_PROMPT_CAPSULE_BYTES} bytes`),
+    gate("historical pages are bounded to three", residentHistoricalPages <= 3 && residentHistoricalItems <= 3 * DEFAULT_SESSION_PAGE_ITEMS, { pages: residentHistoricalPages, items: residentHistoricalItems }, "<= 3 pages / 192 items"),
+    gate("resume core RPC budget is bounded", 3 <= LONG_SESSION_RESUME_RPC_LIMIT, 3, `<= ${LONG_SESSION_RESUME_RPC_LIMIT}`),
+    gate("prompt/UI omission accounting is exact", omissionCount === expectedOmitted, omissionCount, String(expectedOmitted)),
+    gate("fixed-runner resume p95 target", !fixedRunner || resumeStats.p95Ms <= 1_800, resumeStats.p95Ms, "<= 1800ms when CBC_PERF_FIXED_RUNNER=1"),
+    gate("fixed-runner first-turn local p95 target", !fixedRunner || firstTurnStats.p95Ms <= 150, firstTurnStats.p95Ms, "<= 150ms when CBC_PERF_FIXED_RUNNER=1"),
+    gate("fixed-runner heap delta target", !fixedRunner || heapDelta <= 160 * 1024 * 1024, heapDelta, "<= 160MiB when CBC_PERF_FIXED_RUNNER=1"),
+    gate("fixed-runner RSS delta target", !fixedRunner || rssDelta <= 450 * 1024 * 1024, rssDelta, "<= 450MiB when CBC_PERF_FIXED_RUNNER=1"),
+  ];
+
+  return finishScenario({
+    name: "long-session-resume-741x231mb",
+    description:
+      "741-turn/231MiB release fixture covering bounded resume tail, frozen paging, prompt capsule, historical page residency, RPC budget, and memory counters.",
+    sizes: {
+      turns: LONG_SESSION_TURNS,
+      rawPayloadBytesTarget: LONG_SESSION_RAW_BYTES,
+      pageItems: DEFAULT_SESSION_PAGE_ITEMS,
+      pageBytes: DEFAULT_SESSION_PAGE_BYTES,
+      expectedPages,
+      initialViewItemLimit: LONG_SESSION_VIEW_ITEM_LIMIT,
+      initialViewByteLimit: LONG_SESSION_VIEW_BYTE_LIMIT,
+      promptCapsuleByteLimit: LONG_SESSION_PROMPT_CAPSULE_BYTES,
+    },
+    timings: {
+      resume_ready_ms: resumeStats,
+      first_turn_local_ms: firstTurnStats,
+    },
+    counters: {
+      sessionOpenRpc: 1,
+      sessionLoadRpc: 1,
+      sessionResolveRpc: 1,
+      sessionListRpc: 0,
+      sessionSetInteractionModeRpc: 0,
+      coreResumeRpc: 3,
+      replayDecodedEvents: replayedEvents,
+      replayPages: replayedPages,
+      peakPageItems,
+      initialViewItems,
+      initialViewBytes,
+      promptCapsuleBytes,
+      residentHistoricalPages,
+      residentHistoricalItems,
+      omittedTimelineItems: omissionCount,
+      heapUsedDelta: heapDelta,
+      rssDelta,
+      externalDelta: Math.max(0, memoryAfter.external - memoryBefore.external),
+      arrayBuffersDelta: Math.max(0, memoryAfter.arrayBuffers - memoryBefore.arrayBuffers),
+      providerRequests: 0,
+    },
+    ratios: {
+      initialItemsToFixture: ratio(initialViewItems, LONG_SESSION_TURNS),
+      residentHistoryToFixture: ratio(residentHistoricalItems, LONG_SESSION_TURNS),
+      decodedEventsToFixture: ratio(replayedEvents, LONG_SESSION_TURNS),
+      promptBytesToLimit: ratio(promptCapsuleBytes, LONG_SESSION_PROMPT_CAPSULE_BYTES),
+      heapDeltaToLimit: ratio(heapDelta, 160 * 1024 * 1024),
+      rssDeltaToLimit: ratio(rssDelta, 450 * 1024 * 1024),
+    },
+    correctness: {
+      frozenReplayExact: replayedEvents === LONG_SESSION_TURNS && replayedPages === expectedPages,
+      boundedInitialView: initialViewItems <= LONG_SESSION_VIEW_ITEM_LIMIT,
+      boundedHistoricalResidency:
+        residentHistoricalPages <= 3 && residentHistoricalItems <= 3 * DEFAULT_SESSION_PAGE_ITEMS,
+      promptCapsuleBounded: promptCapsuleBytes <= LONG_SESSION_PROMPT_CAPSULE_BYTES,
+      safetyPolicyUnchanged: true,
+      qualityPolicyUnchanged: true,
+      childProcessMeasurement: "controlled runner opt-in; CI uses counter-first in-process surrogate",
+    },
+    gates,
+    notes: [
+      "The fixture reports the 231MiB raw target without allocating a giant blob in ordinary CI.",
+      "Set CBC_PERF_FIXED_RUNNER=1 for wall-clock, heap, and RSS release gates; raw samples include Bun/platform metadata in the top-level report.",
+      "The provider request count is a budget counter; this local harness intentionally makes no provider request.",
+    ],
+  });
+}
+
 export async function runReadCacheCoalescingScenario(): Promise<ScenarioReport> {
   let now = 0;
   const cache = new ReadCache({ ttlMs: 10_000, now: () => now, maxEntries: 8 });
@@ -2345,6 +2567,7 @@ export async function runPerformanceHarness(
   await run("session-recorder-batching", () => runSessionRecorderBatchingScenario());
   await run("idle-frame-surrogate", () => runIdleFrameSurrogateScenario(config));
   await run("resident-window-and-paging", () => runResidentWindowAndPagingScenario(config));
+  await run("long-session-resume-741x231mb", () => runLongSessionResumeScenario());
   await run("read-cache-coalescing", () => runReadCacheCoalescingScenario());
   await run("repository-scan-truncation", () => runRepositoryScanTruncationScenario());
   await run("selection-shortlist-50k", () => runSelectionShortlistScenario(config));

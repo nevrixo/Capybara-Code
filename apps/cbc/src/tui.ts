@@ -24,6 +24,7 @@ import type { ApprovalRequest } from "@cbc/permissions";
 import type { CbcEvent } from "@cbc/protocol";
 import type { SessionViewModel, TaskState, TimelineApproval, TimelineItem, TimelineSubagentEvent, TimelineTask } from "@cbc/session-domain";
 import {
+  PagedTimelineStore,
   ProjectedTimeline,
   Theme,
   blockContext,
@@ -240,6 +241,7 @@ export class InteractiveUi {
   #turnTitle: string | undefined;
   #latestModel: SessionViewModel | undefined;
   #residentModel: SessionViewModel | undefined;
+  readonly #pagedTimelineStore = new PagedTimelineStore<TimelineItem>({ maxResidentPages: 3 });
   #historicalTimeline: readonly TimelineItem[] = [];
   #historicalRevision = 0;
   #historicalMergeCache:
@@ -430,6 +432,7 @@ export class InteractiveUi {
     this.#invalidateTimelineScrollRange();
     this.#historyLoaderGeneration += 1;
     this.#loadEarlierHistory = loader;
+    this.#pagedTimelineStore.clear();
     this.#historicalTimeline = [];
     this.#historicalRevision += 1;
     this.#historicalMergeCache = undefined;
@@ -451,7 +454,15 @@ export class InteractiveUi {
         this.#loadEarlierHistory = undefined;
         return;
       }
-      this.#historicalTimeline = historical;
+      const firstSequence = historical[0]?.sequence ?? 0;
+      const lastSequence = historical.at(-1)?.sequence ?? firstSequence;
+      this.#pagedTimelineStore.prependPage({
+        id: `history:${firstSequence}:${lastSequence}`,
+        items: historical,
+        firstSequence,
+        lastSequence,
+      });
+      this.#historicalTimeline = this.#pagedTimelineStore.historicalItems;
       this.#historicalRevision += 1;
       this.#historicalMergeCache = undefined;
       if (this.#residentModel !== undefined) {
@@ -478,7 +489,8 @@ export class InteractiveUi {
   }
 
   #withHistoricalTimeline(model: SessionViewModel): SessionViewModel {
-    if (this.#historicalTimeline.length === 0) return model;
+    const historicalTimeline = this.#pagedTimelineStore.historicalItems;
+    if (historicalTimeline.length === 0) return model;
     const cached = this.#historicalMergeCache;
     if (
       cached?.historicalRevision === this.#historicalRevision &&
@@ -487,7 +499,7 @@ export class InteractiveUi {
       return cached.result;
     }
 
-    const merged = mergeHistoricalTimeline(this.#historicalTimeline, model.timeline);
+    const merged = mergeHistoricalTimeline(historicalTimeline, model.timeline);
     const result = merged.length === model.timeline.length
       ? model
       : { ...model, timeline: merged };
@@ -1699,6 +1711,7 @@ export class InteractiveUi {
     this.#renderedSnapshots?.clear();
     this.#renderedSources?.clear();
     this.#historyLoaderGeneration += 1;
+    this.#pagedTimelineStore.clear();
     this.#historicalTimeline = [];
     this.#historicalRevision += 1;
     this.#historicalMergeCache = undefined;

@@ -34,7 +34,12 @@ import {
   type AgentPermissionScope,
   type ChildAgentResult,
 } from "./instance.ts";
-import { SUBAGENT_LIMITS, roleDefinition, type SubagentRole } from "./roles.ts";
+import {
+  SUBAGENT_HARD_LIMITS,
+  contextReservationForRole,
+  roleDefinition,
+  type SubagentRole,
+} from "./roles.ts";
 import {
   renderTaskContract,
   validateTask,
@@ -120,6 +125,8 @@ export interface SchedulerOptions {
   readonly parentAgentId?: string;
   readonly maxChildrenPerTurn?: number;
   readonly maxConcurrent?: number;
+  /** Disable predictive p75 reservations while retaining actual usage accounting. */
+  readonly enableContextReservations?: boolean;
   readonly leaseTtlMs?: number;
   readonly now?: () => number;
 }
@@ -142,6 +149,8 @@ export class SubagentScheduler {
   #counter = 0;
   #writerLease: WriterLease | undefined;
   #consumedContextTokens = 0;
+  #reservedContextTokens = 0;
+  readonly #reservations = new Map<string, number>();
 
   constructor(options: SchedulerOptions) {
     this.#options = options;
@@ -172,12 +181,30 @@ export class SubagentScheduler {
 
   /** Aggregate context tokens children may consume (§15.7). */
   aggregateContextBudget(): number {
-    return Math.floor(this.#options.parentContextTokens * SUBAGENT_LIMITS.aggregateContextFraction);
+    return Math.floor(
+      Math.max(0, this.#options.parentContextTokens) *
+        SUBAGENT_HARD_LIMITS.aggregateContextFraction,
+    );
   }
 
   /** Context tokens children have actually consumed so far. */
   get consumedContextTokens(): number {
     return this.#consumedContextTokens;
+  }
+
+  /** Context tokens reserved by admitted children whose usage is not settled. */
+  get reservedContextTokens(): number {
+    return this.#reservedContextTokens;
+  }
+
+  /** Remaining aggregate capacity after both spent and active reservations. */
+  get availableContextTokens(): number {
+    return Math.max(
+      0,
+      this.aggregateContextBudget() -
+        this.#consumedContextTokens -
+        this.#reservedContextTokens,
+    );
   }
 
   /**
@@ -190,8 +217,26 @@ export class SubagentScheduler {
    * children unreachable. A ceiling is a per-child cap; this is the shared purse.
    */
   recordChildUsage(agentId: string, inputTokens: number): void {
-    if (!this.#instances.has(agentId)) return;
-    this.#consumedContextTokens += Math.max(0, inputTokens);
+    const instance = this.#instances.get(agentId);
+    if (instance === undefined) return;
+    const actual = Math.max(0, Math.floor(inputTokens));
+    const reserved = this.#reservations.get(agentId);
+    if (reserved !== undefined) {
+      this.#reservations.delete(agentId);
+      this.#reservedContextTokens = Math.max(0, this.#reservedContextTokens - reserved);
+      this.#consumedContextTokens += actual;
+      if (instance.contextReservation !== undefined) {
+        instance.contextReservation.actualTokens = actual;
+        instance.contextReservation.state = "settled";
+      }
+      return;
+    }
+    if (instance.contextReservation?.actualTokens !== undefined) return;
+    this.#consumedContextTokens += actual;
+    if (instance.contextReservation !== undefined) {
+      instance.contextReservation.actualTokens = actual;
+      instance.contextReservation.state = "settled";
+    }
   }
 
   /**
@@ -204,10 +249,10 @@ export class SubagentScheduler {
     const depth = parentDepth + 1;
 
     // ---- SUB-007: depth 1 means a child may not spawn a child ----
-    if (depth > SUBAGENT_LIMITS.maxDepth) {
+    if (depth > SUBAGENT_HARD_LIMITS.maxDepth) {
       throw new SpawnRejected(
         "DEPTH_EXCEEDED",
-        `delegation depth ${depth} exceeds the limit of ${SUBAGENT_LIMITS.maxDepth} (§15.7); a subagent may not spawn another subagent`,
+        `delegation depth ${depth} exceeds the limit of ${SUBAGENT_HARD_LIMITS.maxDepth} (§15.7); a subagent may not spawn another subagent`,
       );
     }
 
@@ -235,7 +280,10 @@ export class SubagentScheduler {
       }
     }
 
-    const perTurn = this.#options.maxChildrenPerTurn ?? SUBAGENT_LIMITS.maxChildrenPerTurn;
+    const perTurn = Math.max(0, Math.min(
+      this.#options.maxChildrenPerTurn ?? SUBAGENT_HARD_LIMITS.maxChildrenPerTurn,
+      SUBAGENT_HARD_LIMITS.maxChildrenPerTurn,
+    ));
     if (this.#spawnedThisTurn >= perTurn) {
       throw new SpawnRejected(
         "TOO_MANY_PER_TURN",
@@ -243,7 +291,10 @@ export class SubagentScheduler {
       );
     }
 
-    const maxConcurrent = this.#options.maxConcurrent ?? SUBAGENT_LIMITS.maxConcurrent;
+    const maxConcurrent = Math.max(0, Math.min(
+      this.#options.maxConcurrent ?? SUBAGENT_HARD_LIMITS.maxConcurrent,
+      SUBAGENT_HARD_LIMITS.maxConcurrent,
+    ));
     if (this.activeCount() >= maxConcurrent) {
       throw new SpawnRejected(
         "TOO_MANY_CONCURRENT",
@@ -252,13 +303,29 @@ export class SubagentScheduler {
     }
 
     // ---- §15.7: children together may use half the parent's budget ----
-    // Checked against tokens already spent. A child cannot be admitted once the
-    // shared purse is empty, but a child that has not run yet costs nothing.
+    // Reserve a conservative p75 estimate at admission. Without a reservation,
+    // concurrent children can all pass the check and oversubscribe the shared
+    // purse before their provider usage arrives.
     const aggregate = this.aggregateContextBudget();
-    if (this.#consumedContextTokens >= aggregate) {
+    const reservationTokens = this.#options.enableContextReservations === false
+      ? 0
+      : contextReservationForRole(
+          options.role,
+          this.#options.parentContextTokens,
+        );
+    if (
+      this.#consumedContextTokens +
+        this.#reservedContextTokens +
+        reservationTokens >
+      aggregate
+    ) {
       throw new SpawnRejected(
         "CONTEXT_BUDGET",
-        `subagents have already used ${this.#consumedContextTokens} of the ${aggregate}-token aggregate context budget (§15.7)`,
+        "admitting this child would use " +
+          (this.#consumedContextTokens + this.#reservedContextTokens + reservationTokens) +
+          " of the " +
+          aggregate +
+          "-token aggregate context budget (§15.7)",
       );
     }
 
@@ -354,6 +421,13 @@ export class SubagentScheduler {
       modelProfile: options.modelProfile ?? definition.modelProfile,
       permissions,
       budget,
+      contextReservation: {
+        agentId: id,
+        estimatedTokens: reservationTokens,
+        reservedAt: new Date(this.#now()).toISOString(),
+        role: options.role,
+        state: "reserved",
+      },
       ...(lease !== undefined ? { writerLease: lease } : {}),
       createdAt: new Date(this.#now()).toISOString(),
       depth,
@@ -361,6 +435,8 @@ export class SubagentScheduler {
     };
 
     this.#instances.set(id, instance);
+    this.#reservations.set(id, reservationTokens);
+    this.#reservedContextTokens += reservationTokens;
     if (lease !== undefined) this.#writerLease = lease;
 
     this.#emit("task.created", {
@@ -377,6 +453,7 @@ export class SubagentScheduler {
       // did it" and "the executor on the fast profile did it" are different facts
       // when a delegated result looks wrong.
       modelProfile: instance.modelProfile,
+      reservedContextTokens: reservationTokens,
       childCount: 0,
     }, id);
 
@@ -585,6 +662,7 @@ export class SubagentScheduler {
     result: ChildAgentResult,
     startedMs: number,
   ): ChildAgentResult {
+    this.#settleReservation(instance);
     instance.result = result;
     instance.state = stateForResult(result);
     instance.finishedAt = new Date(this.#now()).toISOString();
@@ -613,6 +691,21 @@ export class SubagentScheduler {
     );
 
     return result;
+  }
+
+  /** Release an unused reservation or reconcile usage that arrived at settle time. */
+  #settleReservation(instance: AgentInstance): void {
+    const reserved = this.#reservations.get(instance.id);
+    if (reserved === undefined) return;
+    this.#reservations.delete(instance.id);
+    this.#reservedContextTokens = Math.max(0, this.#reservedContextTokens - reserved);
+    if (instance.contextReservation === undefined) return;
+    if (instance.contextReservation.actualTokens === undefined) {
+      instance.contextReservation.state = "released";
+    } else {
+      instance.contextReservation.state = "settled";
+      this.#consumedContextTokens += instance.contextReservation.actualTokens;
+    }
   }
 
   /** Restart a writer lease's TTL at the moment the child actually begins. */

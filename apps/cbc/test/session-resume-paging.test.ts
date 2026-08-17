@@ -243,6 +243,46 @@ describe("paged session resume", () => {
     expect(requests[2]?.beforeHash).toBe(hash(3));
   });
 
+
+  test("accepts a bounded v3 resume capsule and rejects byte-digest drift", () => {
+    const model = serializeModel(emptyViewModel("session-1"));
+    const history = [{
+      content: [{ text: "resume me", type: "input_text" }],
+      role: "user",
+      type: "message",
+    }] as const;
+    const historyDigest = new Bun.CryptoHasher("sha256").update(JSON.stringify(history)).digest("hex");
+    const serializedBytes = encoder.encode(JSON.stringify(history)).byteLength;
+    const valid = parseAgentSessionSnapshot({
+      agentSessionSnapshotVersion: 3,
+      model,
+      promptCapsule: { history, historyDigest, serializedBytes },
+      resumeView: {
+        tailItemLimit: 48,
+        tailByteLimit: 768 * 1024,
+        omittedCount: 0,
+        omittedRanges: [],
+      },
+      turnCounter: 1,
+      residentTimelineOmitted: 0,
+    }, "session-1");
+    expect(valid?.promptHistory as unknown).toEqual(history);
+    expect(valid?.promptHistoryDigest).toBe(historyDigest);
+    expect(valid?.promptSerializedBytes).toBe(serializedBytes);
+    expect(parseAgentSessionSnapshot({
+      agentSessionSnapshotVersion: 3,
+      model,
+      promptCapsule: { history, historyDigest, serializedBytes: serializedBytes + 1 },
+      resumeView: {
+        tailItemLimit: 48,
+        tailByteLimit: 768 * 1024,
+        omittedCount: 0,
+        omittedRanges: [],
+      },
+      turnCounter: 1,
+    }, "session-1")).toBeUndefined();
+  });
+
   test("rejects malformed prompt-history and reducer shapes in app snapshots", () => {
     const model = serializeModel(emptyViewModel("session-1"));
     expect(parseAgentSessionSnapshot({

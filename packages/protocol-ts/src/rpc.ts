@@ -200,6 +200,7 @@ export const REQUEST_METHODS = [
   "session.snapshot",
   "session.load",
   "session.list",
+  "session.resolve",
   "session.set_status",
   "session.export",
   "session.fork",

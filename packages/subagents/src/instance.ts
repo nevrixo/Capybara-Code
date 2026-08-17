@@ -56,6 +56,15 @@ export interface AgentBudget {
   readonly softContextTokens: number;
 }
 
+export interface ChildContextReservation {
+  readonly agentId: string;
+  readonly estimatedTokens: number;
+  readonly reservedAt: string;
+  readonly role: SubagentRole;
+  actualTokens?: number;
+  state: "reserved" | "settled" | "released";
+}
+
 /** §15.3 agent instance. */
 export interface AgentInstance {
   readonly id: string;
@@ -67,6 +76,8 @@ export interface AgentInstance {
   readonly modelProfile: string;
   readonly permissions: AgentPermissionScope;
   readonly budget: AgentBudget;
+  /** Aggregate parent-context admission record, reconciled on terminal state. */
+  contextReservation?: ChildContextReservation;
   writerLease?: WriterLease;
   readonly createdAt: string;
   readonly depth: number;

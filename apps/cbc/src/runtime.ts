@@ -386,6 +386,10 @@ export interface RuntimeSessionSummary {
   readonly turnCount: number;
 }
 
+export interface RuntimeSessionResolveResult {
+  readonly session?: RuntimeSessionSummary;
+  readonly candidates: RuntimeSessionSummary[];
+}
 export interface ProcessOutcome {
   readonly jobId: string;
   readonly state: string;
@@ -961,6 +965,10 @@ export class Runtime {
   }
 
   /** Sessions for the initialized workspace, newest first (§18.6, P0-05). */
+  async resolveSession(params: { selector: string }): Promise<RuntimeSessionResolveResult> {
+    return (await this.#client.request("session.resolve", params)) as RuntimeSessionResolveResult;
+  }
+
   async listSessions(params: { limit?: number; all?: boolean } = {}): Promise<{
     sessions: RuntimeSessionSummary[];
   }> {

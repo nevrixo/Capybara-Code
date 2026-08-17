@@ -947,10 +947,56 @@
       "additionalProperties": false,
       "required": [
         "telemetry",
-        "sampleRate"
+        "sampleRate",
+        "contextPackProjection",
+        "subagentProfileResolutionV2",
+        "subagentContextReservations",
+        "phaseRouting",
+        "budgetEnforcement",
+        "retrievalControllerV2",
+        "verificationPlannerV2",
+        "commentaryPolicyV2"
       ],
       "properties": {
         "telemetry": {
+          "type": "boolean",
+          "default": true
+        },
+        "contextPackProjection": {
+          "type": "boolean",
+          "default": true
+        },
+        "subagentProfileResolutionV2": {
+          "type": "boolean",
+          "default": true
+        },
+        "subagentContextReservations": {
+          "type": "boolean",
+          "default": true
+        },
+        "phaseRouting": {
+          "type": "boolean",
+          "default": true
+        },
+        "budgetEnforcement": {
+          "type": "string",
+          "enum": ["shadow", "advisory", "hard"],
+          "default": "advisory"
+        },
+        "retrievalControllerV2": {
+          "type": "boolean",
+          "default": true
+        },
+        "verificationPlannerV2": {
+          "type": "boolean",
+          "default": true
+        },
+        "commentaryPolicyV2": {
+          "type": "boolean",
+          "default": true
+        },
+        "longSessionFastPath": {
+          "description": "Bounded v3 resume and paged UI fast path; false restores the v2-compatible path.",
           "type": "boolean",
           "default": true
         },

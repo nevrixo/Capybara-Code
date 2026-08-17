@@ -9,8 +9,13 @@
 
 export const SNAPSHOT_ENVELOPE_VERSION = 1 as const;
 export const JOURNAL_GENESIS_HASH = "0".repeat(64);
-export const DEFAULT_SESSION_PAGE_ITEMS = 1_000;
-export const DEFAULT_SESSION_PAGE_BYTES = 4 * 1024 * 1024;
+/** Small immutable pages keep the UI residency budget independent of journal size. */
+export const DEFAULT_SESSION_PAGE_ITEMS = 64;
+export const DEFAULT_SESSION_PAGE_BYTES = 1 * 1024 * 1024;
+export const RESUME_TAIL_ITEM_LIMIT = 48;
+export const RESUME_TAIL_BYTE_LIMIT = 768 * 1024;
+export const PROMPT_CAPSULE_ITEM_LIMIT = 256;
+export const PROMPT_CAPSULE_BYTE_LIMIT = 8 * 1024 * 1024;
 
 const UTF8 = new TextEncoder();
 
@@ -500,6 +505,13 @@ export interface ReplayTailOptions {
   readonly afterJournalSequence?: number;
   readonly afterStreamSequence?: number;
   readonly afterHash?: string;
+  /** Freeze replay to a known durable boundary returned by session.open. */
+  readonly throughJournalSequence?: number;
+  readonly throughHash?: string;
+  /** Omit the snapshot from a tail page when the caller already owns it. */
+  readonly includeSnapshot?: boolean;
+  /** Explicitly ask the runtime not to select/load a snapshot. */
+  readonly tailOnly?: boolean;
   /** Reject incomplete/legacy app payloads and restart from genesis automatically. */
   readonly acceptSnapshot?: (
     snapshot: StoredSnapshotEnvelope,
@@ -530,18 +542,22 @@ export async function* iterateReplayTailPages(
   }
   const firstParams: Record<string, unknown> = {
     sessionId: options.sessionId,
-    tailOnly: true,
+    tailOnly: options.tailOnly ?? true,
     limit: options.pageItems ?? DEFAULT_SESSION_PAGE_ITEMS,
     maxBytes: options.pageBytes ?? DEFAULT_SESSION_PAGE_BYTES,
     ...(options.afterJournalSequence !== undefined
       ? { afterSequence: options.afterJournalSequence }
       : {}),
     ...(options.afterHash !== undefined ? { afterHash: options.afterHash } : {}),
+    ...(options.throughJournalSequence !== undefined
+      ? { throughSequence: options.throughJournalSequence }
+      : {}),
+    ...(options.throughHash !== undefined ? { throughHash: options.throughHash } : {}),
   };
   let page = validateSessionJournalPage(await transport.load(firstParams), {
     expectedSessionId: options.sessionId,
   });
-  if (page.snapshot !== undefined) {
+  if (page.snapshot !== undefined && options.includeSnapshot !== false) {
     const checked = await validateStoredSnapshot(page.snapshot, {
       expectedSessionId: options.sessionId,
     });
@@ -586,6 +602,9 @@ export async function* iterateReplayTailPages(
       const { snapshot: _ignoredSnapshot, ...withoutSnapshot } = page;
       page = withoutSnapshot;
     }
+  } else if (options.includeSnapshot === false && page.snapshot !== undefined) {
+    const { snapshot: _ignoredSnapshot, ...withoutSnapshot } = page;
+    page = withoutSnapshot;
   }
 
   let expectedSequence = page.page.anchorSequence;

@@ -89,6 +89,8 @@ export interface ContextEngineOptions {
   readonly workspaceIdentityDigest?: string;
   /** Test/embedding bound; retained excerpt provenance is rehydrated if trimmed. */
   readonly maxEvidenceRecords?: number;
+  /** P2 retrieval controller rollout; false restores the deterministic scorer only. */
+  readonly retrievalControllerV2?: boolean;
   readonly now?: () => number;
 }
 
@@ -155,6 +157,8 @@ export interface ToolObservation {
   readonly cacheHit: boolean;
   readonly observedAtMs: number;
   readonly agentId?: string;
+  /** Parent working-set owner for child observations; provenance still keeps agentId. */
+  readonly promotionOwner?: string;
   readonly turnId?: string;
 }
 
@@ -647,6 +651,11 @@ export class ContextEngine {
     // contributes bounded LSP data, and every resulting path still traverses the
     // normal sensitive/generated/budget gates in selectContext.
     let enriched = withFailures;
+    if (this.#options.retrievalControllerV2 === false) {
+      this.#lastSelection = selectContext(this.#map, enriched, merged);
+      this.activateSelection(this.#lastSelection);
+      return this.#lastSelection;
+    }
     try {
       const retrieval = this.#repositoryIntelligence.retrieve({
         ...(withFailures.taskText === undefined ? {} : { query: withFailures.taskText }),
@@ -1166,7 +1175,7 @@ export class ContextEngine {
     };
 
     const promotedThisCall: `excerpt-${string}`[] = [];
-    const leaseOwner = event.agentId ?? "root";
+    const leaseOwner = event.promotionOwner ?? event.agentId ?? "root";
     const pendingBeforeCall = new Set<string>(
       [...this.#pendingPromotionOwners]
         .filter(([, owners]) => owners.has(leaseOwner))

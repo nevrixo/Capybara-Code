@@ -31,6 +31,9 @@ import type { CbcConfig, ReasoningEffort } from "@cbc/config-schema";
 import { requestModeChange, TaskEpochManager, type InteractionMode, type ModeChangeSource } from "@cbc/session-domain";
 import {
   ContextEngine,
+  planVerification,
+  projectContextPack,
+  toLegacyVerificationCommand,
   createTaskContextCapsule,
   isSensitivePath,
   scopedExactExcerptBodyDigest,
@@ -47,7 +50,7 @@ import {
   type ToolObservationIngestResult,
 } from "@cbc/context-engine";
 import { canonicalDigest, classifyCommand, mcpActionArgumentsHash, normalizeApprovedPlanScope, type ApprovedPlanScope, type PlanCommandScope, type PermissionContext, type ProposedAction, type StoredRule, type TrustState } from "@cbc/permissions";
-import type { CbcEvent, CbcEventKind } from "@cbc/protocol";
+import type { CbcEvent, CbcEventKind, EventVisibility } from "@cbc/protocol";
 import {
   CachePlanner,
   InferenceUtilityController,
@@ -59,6 +62,10 @@ import {
 } from "@cbc/provider-openai";
 import {
   compact,
+  PROMPT_CAPSULE_BYTE_LIMIT,
+  PROMPT_CAPSULE_ITEM_LIMIT,
+  RESUME_TAIL_BYTE_LIMIT,
+  RESUME_TAIL_ITEM_LIMIT,
   estimateTokens,
   makeContextUsageSnapshot,
   renderCompactState,
@@ -98,7 +105,7 @@ import {
   type ToolObservationAck,
   type ToolObservationEnvelope,
 } from "./tools.ts";
-import { extractPathMentions } from "./path-mentions.ts";
+import { extractPathMentions, extractSymbolMentions } from "./path-mentions.ts";
 import { scanRepository, scanRepositoryDelta } from "./repository-map.ts";
 
 const PERFORMANCE_EVENT_KINDS = new Set<CbcEventKind>([
@@ -243,13 +250,15 @@ export class HostInstructionReader implements InstructionReader {
   }
 }
 
-const AGENT_SESSION_SNAPSHOT_VERSION = 2;
+const AGENT_SESSION_SNAPSHOT_VERSION = 3;
 /** Bounded provenance index; evicted calls fail closed during prompt rewriting. */
 export const MAX_READ_FRESHNESS_RECORDS = 4_096;
 
 export interface AgentSessionSnapshotSeed {
   readonly model: SessionViewModel;
   readonly promptHistory: readonly ModelInputItem[];
+  readonly promptHistoryDigest?: string;
+  readonly promptSerializedBytes?: number;
   readonly compactState?: string;
   readonly turnCounter: number;
   readonly residentTimelineOmitted?: number;
@@ -293,38 +302,91 @@ export function parseAgentSessionSnapshot(
   raw: unknown,
   expectedSessionId: string,
 ): AgentSessionSnapshotSeed | undefined {
-  if (!isRecord(raw) || ![1, AGENT_SESSION_SNAPSHOT_VERSION].includes(raw.agentSessionSnapshotVersion as number)) {
-    return undefined;
-  }
+  if (!isRecord(raw)) return undefined;
+  const version = raw.agentSessionSnapshotVersion;
+  if (typeof version !== "number" || ![1, 2, AGENT_SESSION_SNAPSHOT_VERSION].includes(version)) return undefined;
   const model = deserializeModel(raw.model);
-  if (
-    model === undefined ||
-    model.sessionId !== expectedSessionId ||
-    !Array.isArray(raw.promptHistory)
-  ) return undefined;
-  if (!raw.promptHistory.every(isSnapshotHistoryItem)) return undefined;
-  const turnCounter = raw.turnCounter;
-  if (typeof turnCounter !== "number" || !Number.isSafeInteger(turnCounter) || turnCounter < 0) {
-    return undefined;
+  if (model === undefined || model.sessionId !== expectedSessionId) return undefined;
+
+  let historyRaw: unknown;
+  let historyDigest: string | undefined;
+  let serializedBytes: number | undefined;
+  if (version === AGENT_SESSION_SNAPSHOT_VERSION) {
+    const capsule = isRecord(raw.promptCapsule) ? raw.promptCapsule : undefined;
+    const resumeView = isRecord(raw.resumeView) ? raw.resumeView : undefined;
+    if (capsule === undefined || resumeView === undefined || !Array.isArray(capsule.history)) return undefined;
+    const tailItemLimit = resumeView.tailItemLimit;
+    const tailByteLimit = resumeView.tailByteLimit;
+    const omittedCount = resumeView.omittedCount;
+    if (
+      tailItemLimit !== RESUME_TAIL_ITEM_LIMIT ||
+      tailByteLimit !== RESUME_TAIL_BYTE_LIMIT ||
+      typeof omittedCount !== "number" || !Number.isSafeInteger(omittedCount) || omittedCount < 0 ||
+      !Array.isArray(resumeView.omittedRanges)
+    ) return undefined;
+    historyRaw = capsule.history;
+    if (typeof capsule.historyDigest !== "string" || !/^[a-f0-9]{64}$/u.test(capsule.historyDigest)) return undefined;
+    if (typeof capsule.serializedBytes !== "number" || !Number.isSafeInteger(capsule.serializedBytes) || capsule.serializedBytes < 0) return undefined;
+    historyDigest = capsule.historyDigest;
+    serializedBytes = capsule.serializedBytes;
+    if (capsule.history.length > RESUME_TAIL_ITEM_LIMIT || capsule.history.length > PROMPT_CAPSULE_ITEM_LIMIT) return undefined;
+  } else {
+    historyRaw = raw.promptHistory;
   }
+  if (!Array.isArray(historyRaw) || !historyRaw.every(isSnapshotHistoryItem)) return undefined;
+  const promptHistory = structuredClone(historyRaw) as ModelInputItem[];
+  const actualDigest = stableDigest(promptHistory);
+  const actualBytes = new TextEncoder().encode(JSON.stringify(promptHistory)).byteLength;
+  if (historyDigest !== undefined && historyDigest !== actualDigest) return undefined;
+  if (serializedBytes !== undefined && serializedBytes !== actualBytes) return undefined;
+  if (actualBytes > PROMPT_CAPSULE_BYTE_LIMIT) return undefined;
+
+  const turnCounter = raw.turnCounter;
+  if (typeof turnCounter !== "number" || !Number.isSafeInteger(turnCounter) || turnCounter < 0) return undefined;
   const residentTimelineOmitted = raw.residentTimelineOmitted;
   if (
     residentTimelineOmitted !== undefined &&
-    (typeof residentTimelineOmitted !== "number" ||
-      !Number.isSafeInteger(residentTimelineOmitted) ||
-      residentTimelineOmitted < 0)
+    (typeof residentTimelineOmitted !== "number" || !Number.isSafeInteger(residentTimelineOmitted) || residentTimelineOmitted < 0)
   ) return undefined;
   return {
     model,
-    promptHistory: structuredClone(raw.promptHistory) as ModelInputItem[],
+    promptHistory,
+    ...(historyDigest === undefined ? {} : { promptHistoryDigest: historyDigest }),
+    ...(serializedBytes === undefined ? {} : { promptSerializedBytes: serializedBytes }),
     turnCounter,
     ...(residentTimelineOmitted !== undefined ? { residentTimelineOmitted } : {}),
-    ...(typeof raw.compactState === "string" && raw.compactState.length > 0
-      ? { compactState: raw.compactState }
-      : {}),
+    ...(typeof raw.compactState === "string" && raw.compactState.length > 0 ? { compactState: raw.compactState } : {}),
   };
 }
 
+function promptHistoryCapsule(history: readonly ModelInputItem[]): {
+  readonly history: readonly ModelInputItem[];
+  readonly historyDigest: string;
+  readonly serializedBytes: number;
+  readonly omittedCount: number;
+  readonly omittedRanges: readonly { readonly start: number; readonly end: number }[];
+} {
+  const selected: ModelInputItem[] = [];
+  let bytes = 2;
+  for (let index = history.length - 1; index >= 0 && selected.length < RESUME_TAIL_ITEM_LIMIT; index -= 1) {
+    const item = history[index];
+    if (item === undefined) continue;
+    const itemBytes = new TextEncoder().encode(JSON.stringify(item)).byteLength + 1;
+    if (selected.length > 0 && bytes + itemBytes > RESUME_TAIL_BYTE_LIMIT) break;
+    selected.unshift(structuredClone(item));
+    bytes += itemBytes;
+  }
+  const historyDigest = stableDigest(selected);
+  const serializedBytes = new TextEncoder().encode(JSON.stringify(selected)).byteLength;
+  const omittedCount = Math.max(0, history.length - selected.length);
+  return {
+    history: Object.freeze(selected),
+    historyDigest,
+    serializedBytes,
+    omittedCount,
+    omittedRanges: omittedCount === 0 ? Object.freeze([]) : Object.freeze([{ start: 0, end: omittedCount }]),
+  };
+}
 function verificationProcessClass(toolId: string, display: string): string | undefined {
   if (toolId !== "process.run" && toolId !== "shell.run") return undefined;
   const normalized = display.toLowerCase();
@@ -475,14 +537,27 @@ export class AgentSession {
       transport: new RuntimeJournalTransport(options.runtime),
       contextBudgetTokens: options.config.model.softContextTokens,
       snapshotEveryEvents: options.config.sessions.autoSnapshotEvents,
-      serializeSnapshot: (model) => ({
-        agentSessionSnapshotVersion: AGENT_SESSION_SNAPSHOT_VERSION,
-        model: serializeModel(model),
-        promptHistory: structuredClone(this.kernel.history),
-        ...(this.#compactState !== undefined ? { compactState: this.#compactState } : {}),
-        turnCounter: this.#turnCounter,
-        residentTimelineOmitted: this.recorder.residentTimelineOmitted,
-      }),
+      serializeSnapshot: (model) => {
+        const prompt = promptHistoryCapsule(this.kernel.history);
+        return {
+          agentSessionSnapshotVersion: AGENT_SESSION_SNAPSHOT_VERSION,
+          model: serializeModel(model),
+          promptCapsule: {
+            history: prompt.history,
+            historyDigest: prompt.historyDigest,
+            serializedBytes: prompt.serializedBytes,
+          },
+          resumeView: {
+            tailItemLimit: RESUME_TAIL_ITEM_LIMIT,
+            tailByteLimit: RESUME_TAIL_BYTE_LIMIT,
+            omittedCount: prompt.omittedCount,
+            omittedRanges: prompt.omittedRanges,
+          },
+          ...(this.#compactState !== undefined ? { compactState: this.#compactState } : {}),
+          turnCounter: this.#turnCounter,
+          residentTimelineOmitted: this.recorder.residentTimelineOmitted,
+        };
+      },
       ...(options.startAfterSequence !== undefined
         ? { startAfterSequence: options.startAfterSequence }
         : {}),
@@ -533,7 +608,7 @@ export class AgentSession {
       host: options.host,
       runtime: options.runtime,
       config: options.config,
-      selectedModel: options.config.model.default,
+      selectedModel: () => this.#currentRoute?.model ?? options.config.model.default,
       inferencePolicy: this.inferencePolicy,
       provider: options.provider,
       approvals: options.approvals,
@@ -587,7 +662,7 @@ export class AgentSession {
         });
       },
       cacheKey: (prompt, route) => this.#cacheKeyForPrompt(prompt, route),
-      testCommandFor: (paths) => testCommandFor(paths),
+      testCommandFor: (paths) => testCommandFor(paths, options.config.perf.verificationPlannerV2 !== false),
       ...(options.now !== undefined ? { now: options.now } : {}),
     });
     this.subagents = this.#subagentBridge.scheduler;
@@ -675,7 +750,7 @@ export class AgentSession {
     });
 
     const emitter: KernelEmitter = {
-      emit: <T>(kind: CbcEventKind, payload: T, opts?: { turnId?: string; agentId?: string; callerId?: string; taskEpochId?: string; workspaceIdentityDigest?: string }) => {
+      emit: <T>(kind: CbcEventKind, payload: T, opts?: { turnId?: string; agentId?: string; callerId?: string; taskEpochId?: string; workspaceIdentityDigest?: string; visibility?: EventVisibility }) => {
         this.#emitKernelEvent(kind, payload, opts);
       },
     };
@@ -806,7 +881,7 @@ export class AgentSession {
         if (accumulated) this.#lastToolOutputCompactionHistoryLength = this.kernel.history.length;
         await this.#prepareContextPack();
       },
-      testCommandFor: (paths) => testCommandFor(paths),
+      testCommandFor: (paths) => testCommandFor(paths, options.config.perf.verificationPlannerV2 !== false),
       // 짠11.2: a reflection immediately biases context selection toward the files
       // the failure named, so the next sample re-reads them instead of guessing
       // again (짠18.4).
@@ -1009,7 +1084,10 @@ export class AgentSession {
         }
       }
     }
-    const result = this.context.ingestToolObservation(event);
+    const contextObservation = event.agentId !== undefined && event.agentId !== "root"
+      ? { ...event, promotionOwner: "root" }
+      : event;
+    const result = this.context.ingestToolObservation(contextObservation);
     const scope = {
       ...(event.turnId !== undefined ? { turnId: event.turnId } : {}),
       agentId: event.agentId ?? "root",
@@ -1177,7 +1255,7 @@ export class AgentSession {
 
     // Only suppress an exact read's L7 body when the complete observation is
     // active in the bounded L6 working set. Evidence-only storage is not enough.
-    const leaseOwner = event.agentId ?? "root";
+    const leaseOwner = "root";
     const cancelNewLeases = (): void => {
       this.context.cancelPromotionLeases(result.newlyLeasedExcerptIds, leaseOwner);
     };
@@ -2494,6 +2572,27 @@ export class AgentSession {
       return;
     }
     const task = this.#taskDescription ?? "Continue the current task";
+    // Refresh the bounded materialization ledger before compiling the immutable
+    // pack; provider text still comes only from the projection below.
+    this.context.repositoryContext({
+      ...(this.#turnEvidence !== undefined ? { evidence: this.#turnEvidence } : {}),
+      maxTokens: Math.max(0, this.context.activeExcerptBudget - 64),
+    });
+    const planState = this.#todoController.current();
+    const activePlanItem = planState.items.find((item) => item.status === "active") ??
+      planState.items.find((item) => item.status === "pending");
+    const activePlanStep = activePlanItem === undefined
+      ? undefined
+      : `${activePlanItem.id}: ${activePlanItem.text}`;
+    const mentionedPaths = extractPathMentions(task);
+    const mentionedSymbols = [...new Set([
+      ...extractSymbolMentions(task),
+      ...(activePlanItem?.symbols ?? []),
+    ])].slice(0, 32);
+    const recentFailureRefs = (this.#turnEvidence?.records ?? [])
+      .filter((record) => record.kind === "test_result" || record.kind === "review_finding")
+      .map((record) => record.id)
+      .slice(-12);
     const epoch = this.taskEpoch.current();
     const soft = Math.max(0, this.#options.config.model.softContextTokens);
     const reserve = Math.max(0, this.#options.config.model.context.reserveOutputTokens);
@@ -2506,10 +2605,11 @@ export class AgentSession {
       id: `sample-${this.#options.sessionId}-${this.recorder.model.currentTurnId ?? "pending"}`,
       goal: task,
       phase,
-      mentionedPaths: extractPathMentions(task),
-      mentionedSymbols: [],
+      mentionedPaths,
+      mentionedSymbols,
       changedPaths: [...this.#changedPaths],
-      recentFailureRefs: [],
+      recentFailureRefs,
+      ...(activePlanStep === undefined ? {} : { activePlanStep, subgoal: activePlanStep }),
       ...(epoch === undefined ? {} : {
         workspaceIdentity: epoch.workspaceIdentityDigest,
         taskEpochId: epoch.id,
@@ -2557,6 +2657,15 @@ export class AgentSession {
       const descriptor = this.context.exactExcerptDescriptor(id);
       return descriptor === undefined ? [] : [descriptor];
     });
+    const contextProjection =
+      backgroundJobActive ||
+        this.#preparedContextPack === undefined ||
+        this.#options.config.perf.contextPackProjection === false
+        ? undefined
+        : projectContextPack(this.#preparedContextPack, {
+            recentDialogue: this.kernel.history,
+            virtualizedExcerpts,
+          });
     const staleReadCallIds = new Set(
       [...this.#readObservationGenerations]
         .filter(([, observation]) =>
@@ -2610,7 +2719,7 @@ export class AgentSession {
       } : {}),
       interactionMode: this.recorder.model.modeState.activeTurn ?? this.recorder.model.modeState.selected,
       ...(this.#compactState !== undefined ? { compactState: this.#compactState } : {}),
-      repositoryContext,
+      ...(contextProjection === undefined ? { repositoryContext } : { contextProjection }),
       contextManifest: {
         ...structuredClone(materialized),
         ...(this.#preparedContextPack === undefined ? {} : {
@@ -2638,12 +2747,12 @@ export class AgentSession {
    * unavailable would be a worse trade than running it un-journaled and saying so.
    */
   async open(options: { resumed?: boolean; workspacePath?: string; title?: string; emitEvent?: boolean } = {}): Promise<
-    { ok: true } | { ok: false; detail: string }
+    { ok: true; descriptor?: unknown } | { ok: false; detail: string }
   > {
     const initialInteractionMode: InteractionMode = this.#options.config.agent.interactionMode ?? (this.#options.config.agent.permissionMode === "plan" ? "plan" : "build");
-    let opened: { ok: true } | { ok: false; detail: string } = { ok: true };
+    let opened: { ok: true; descriptor?: unknown } | { ok: false; detail: string } = { ok: true };
     try {
-      await this.#options.runtime.openSession({
+      const descriptor = await this.#options.runtime.openSession({
         sessionId: this.#options.sessionId,
         resume: options.resumed === true,
         title: options.title ?? "Untitled session",
@@ -2651,13 +2760,14 @@ export class AgentSession {
         permissionMode: this.#options.config.agent.permissionMode,
         interactionMode: initialInteractionMode,
       });
+      opened = { ok: true, descriptor };
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       // Resuming a session the store has never seen is a normal case: the index row can
       // outlive the journal. Fall back to creating it.
       if (options.resumed === true) {
         try {
-          await this.#options.runtime.openSession({
+          const descriptor = await this.#options.runtime.openSession({
             sessionId: this.#options.sessionId,
             resume: false,
             title: options.title ?? "Untitled session",
@@ -2665,6 +2775,7 @@ export class AgentSession {
             permissionMode: this.#options.config.agent.permissionMode,
             interactionMode: initialInteractionMode,
           });
+          opened = { ok: true, descriptor };
         } catch (inner) {
           opened = {
             ok: false,
@@ -2812,7 +2923,7 @@ export class AgentSession {
   }
 
   /** Emit an event that did not come from the kernel, e.g. a local notice. */
-  emit<T>(kind: CbcEventKind, payload: T, options?: { turnId?: string; agentId?: string; callerId?: string; taskEpochId?: string; workspaceIdentityDigest?: string }): CbcEvent<T> {
+  emit<T>(kind: CbcEventKind, payload: T, options?: { turnId?: string; agentId?: string; callerId?: string; taskEpochId?: string; workspaceIdentityDigest?: string; visibility?: EventVisibility }): CbcEvent<T> {
     return this.#emit(kind, payload, options);
   }
 
@@ -2831,17 +2942,28 @@ export class AgentSession {
   #emitKernelEvent<T>(
     kind: CbcEventKind,
     payload: T,
-    options?: { turnId?: string; agentId?: string; callerId?: string; taskEpochId?: string; workspaceIdentityDigest?: string },
+    options?: { turnId?: string; agentId?: string; callerId?: string; taskEpochId?: string; workspaceIdentityDigest?: string; visibility?: EventVisibility },
   ): void {
     if (!this.#performanceTelemetryEnabled && PERFORMANCE_EVENT_KINDS.has(kind)) return;
     if (!this.#options.config.model.router.recordDecisions && kind === "model.route_decided") return;
+    if (
+      kind === "assistant.commentary" &&
+      this.#options.config.perf.commentaryPolicyV2 !== false &&
+      this.#options.config.agent.visibleCommentary === false
+    ) {
+      const record = isRecord(payload) ? payload : undefined;
+      const commentaryKind = record?.commentaryKind;
+      const alwaysVisible = record?.alwaysVisible === true;
+      const critical = commentaryKind === "risk" || commentaryKind === "verification" || commentaryKind === "recovery";
+      if (!alwaysVisible && !critical) options = { ...options, visibility: "hidden" };
+    }
     this.#emit(kind, payload, options);
   }
 
   #emit<T>(
     kind: CbcEventKind,
     payload: T,
-    options?: { turnId?: string; agentId?: string; callerId?: string; taskEpochId?: string; workspaceIdentityDigest?: string },
+    options?: { turnId?: string; agentId?: string; callerId?: string; taskEpochId?: string; workspaceIdentityDigest?: string; visibility?: EventVisibility },
   ): CbcEvent<T> {
     const now = this.#options.now ?? (() => Date.now());
     const event = this.recorder.emit(kind, payload, {
@@ -2851,6 +2973,7 @@ export class AgentSession {
       ...(options?.callerId !== undefined ? { callerId: options.callerId } : {}),
       ...(options?.taskEpochId !== undefined ? { taskEpochId: options.taskEpochId } : {}),
       ...(options?.workspaceIdentityDigest !== undefined ? { workspaceIdentityDigest: options.workspaceIdentityDigest } : {}),
+      ...(options?.visibility !== undefined ? { visibility: options.visibility } : {}),
     });
     this.#settlePendingInteractionMode(kind);
     return event;
@@ -3075,8 +3198,14 @@ ot_run` with a reason instead of inventing a command that would
  */
 export function testCommandFor(
   paths: readonly string[],
+  plannerV2 = false,
 ): { command: string; reason: string } | undefined {
   if (paths.length === 0) return undefined;
+  if (plannerV2) {
+    const planned = planVerification({ changedPaths: paths });
+    const legacy = toLegacyVerificationCommand(planned);
+    if (legacy !== undefined) return legacy;
+  }
 
   const hasTs = paths.some((path) => /\.(ts|tsx|mts|cts)$/.test(path));
   const hasRust = paths.some((path) => path.endsWith(".rs"));

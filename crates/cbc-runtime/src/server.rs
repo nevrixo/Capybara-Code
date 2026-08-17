@@ -743,6 +743,7 @@ pub fn dispatch(state: &RuntimeState, request: &RpcRequest) -> Option<Result<Val
         "session.snapshot" => handlers::session::snapshot(state, params),
         "session.load" => handlers::session::load(state, params),
         "session.list" => handlers::session::list(state, params),
+        "session.resolve" => handlers::session::resolve(state, params),
         "session.set_status" => handlers::session::set_status(state, params),
         "session.export" => handlers::session::export(state, params),
         "session.fork" => handlers::session::fork(state, params),

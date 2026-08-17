@@ -36,6 +36,23 @@ describe("performance rollback contract", () => {
       "provider_compaction",
       "tool_search",
       "fast_service_tier",
+      "context_pack_projection",
+      "subagent_profile_resolution_v2",
+      "subagent_context_reservations",
+      "phase_routing",
+      "budget_enforcement",
+      "retrieval_controller_v2",
+      "verification_planner_v2",
+      "commentary_policy_v2",
+      "long_session_fast_path",
+      "context_pack_projection",
+      "subagent_profile_resolution_v2",
+      "subagent_context_reservations",
+      "phase_routing",
+      "budget_enforcement",
+      "retrieval_controller_v2",
+      "verification_planner_v2",
+      "commentary_policy_v2",
     ]));
     for (const entry of PERFORMANCE_KILL_SWITCHES) {
       expect(configKeyInfo(entry.configPath), entry.configPath).toMatchObject({ status: "wired" });
@@ -78,6 +95,9 @@ describe("performance rollback contract", () => {
       { patch: { p95LatencyRatio: 1.1 }, trigger: "p95_regression" },
       { patch: { qualityCiLowerPoints: -1.000_1 }, trigger: "quality_noninferiority" },
       { patch: { promptDigestMismatches: 1 }, trigger: "prompt_digest_mismatch" },
+      { patch: { v3SnapshotFallbackRatio: 0.005_001 }, trigger: "snapshot_fallback" },
+      { patch: { heapLimitExceeded: true }, trigger: "heap_pressure" },
+      { patch: { rssLimitExceeded: true }, trigger: "rss_pressure" },
     ];
 
     for (const { patch, trigger } of cases) {
@@ -116,6 +136,23 @@ describe("performance rollback contract", () => {
       "provider_compaction",
       "tool_search",
       "fast_service_tier",
+      "context_pack_projection",
+      "subagent_profile_resolution_v2",
+      "subagent_context_reservations",
+      "phase_routing",
+      "budget_enforcement",
+      "retrieval_controller_v2",
+      "verification_planner_v2",
+      "commentary_policy_v2",
+      "long_session_fast_path",
+      "context_pack_projection",
+      "subagent_profile_resolution_v2",
+      "subagent_context_reservations",
+      "phase_routing",
+      "budget_enforcement",
+      "retrieval_controller_v2",
+      "verification_planner_v2",
+      "commentary_policy_v2",
     ]));
     expect(decision.overrides).not.toHaveProperty("perf.telemetry");
     expect(decision.overrides).not.toHaveProperty("agent.verification.reviewPolicy");

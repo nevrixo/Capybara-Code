@@ -170,16 +170,50 @@ export async function interactive(
     // never invoked from the composer's key-processing path.
     let pathIndexDirty = false;
     let requestPathIndexRefresh: (() => void) | undefined;
+    let pathMentions: WorkspacePathMentionIndex | undefined;
+    let schedulePathCompletionRefresh: () => void = () => undefined;
     const processMutationCalls = new Set<string>();
     const sink = uiEventSink(ui);
     const onEvent = (event: CbcEvent, model: SessionViewModel): void => {
       if (suppressUiEvents || (activeSessionId !== undefined && event.sessionId !== activeSessionId)) return;
 
+      const dirtyBeforeEvent = pathIndexDirty;
       const invalidation = pathIndexInvalidationForEvent(event, processMutationCalls);
       if (invalidation.dirty) pathIndexDirty = true;
       // Background jobs can finish while the composer is idle, with no later turn
       // boundary available to notice the dirty flag.
       if (invalidation.refreshNow) requestPathIndexRefresh?.();
+      const eventPayload = typeof event.payload === "object" && event.payload !== null
+        ? event.payload as Record<string, unknown>
+        : undefined;
+      if (event.kind === "transaction.committed") {
+        const upserts = new Set<string>();
+        const removed = new Set<string>();
+        const rawPaths = eventPayload?.paths;
+        if (Array.isArray(rawPaths)) {
+          for (const path of rawPaths) {
+            if (typeof path === "string") upserts.add(path);
+          }
+        }
+        const operations = eventPayload?.operations;
+        if (Array.isArray(operations)) {
+          for (const operation of operations) {
+            if (typeof operation !== "object" || operation === null || Array.isArray(operation)) continue;
+            const record = operation as Record<string, unknown>;
+            if (typeof record.path !== "string") continue;
+            const action = String(record.operation ?? record.action ?? record.kind ?? "").toLowerCase();
+            if (action === "delete" || action === "remove" || action === "removed") removed.add(record.path);
+            else upserts.add(record.path);
+          }
+        }
+        if (upserts.size > 0 || removed.size > 0) {
+          pathMentions?.applyDelta([...upserts], [...removed]);
+          // A fully described native transaction has already supplied the exact
+          // delta; do not turn its terminal event into a repository-wide scan.
+          if (!dirtyBeforeEvent) pathIndexDirty = false;
+          schedulePathCompletionRefresh();
+        }
+      }
       sink(event, model);
     };
 
@@ -281,8 +315,16 @@ export async function interactive(
     // `CompletionSources.paths` is synchronous because it runs on every keypress.
     // Populate this in-memory index from the existing background repository scan
     // rather than performing an RPC (or disk walk) from the composer reducer.
-    const pathMentions = new WorkspacePathMentionIndex();
+    pathMentions = new WorkspacePathMentionIndex();
     let refreshPathCompletions: (() => void) | undefined;
+    let pathCompletionRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+    schedulePathCompletionRefresh = (): void => {
+      if (pathCompletionRefreshTimer !== undefined) return;
+      pathCompletionRefreshTimer = setTimeout(() => {
+        pathCompletionRefreshTimer = undefined;
+        refreshPathCompletions?.();
+      }, 50);
+    };
     let scanGeneration = 0;
     const scanSession = (session: typeof boot.session) => {
       const generation = ++scanGeneration;
@@ -291,7 +333,7 @@ export async function interactive(
         if (generation === scanGeneration) {
           const files = session.context.repositoryMap?.files ?? [];
           pathMentions.replaceFiles(files);
-          refreshPathCompletions?.();
+          schedulePathCompletionRefresh();
         }
         return scan;
       });
@@ -644,7 +686,7 @@ export async function interactive(
       keymap: effectiveKeymap,
       sources: {
         commands: SLASH_COMMANDS,
-        paths: (query) => pathMentions.candidates(query),
+        paths: (query) => pathMentions?.candidates(query) ?? [],
         argumentValues: (input) => {
           const values = slashArgumentValues(input, {
             sessions: resumeCandidates,

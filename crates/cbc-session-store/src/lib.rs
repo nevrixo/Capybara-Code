@@ -34,9 +34,9 @@ pub const SNAPSHOT_ENVELOPE_VERSION: u32 = 1;
 
 /// Runtime-friendly journal page defaults. The maximum stays below the 8 MiB RPC
 /// frame ceiling after response metadata and JSON escaping are added.
-pub const DEFAULT_EVENT_PAGE_BYTES: usize = 4 * 1024 * 1024;
+pub const DEFAULT_EVENT_PAGE_BYTES: usize = 1 * 1024 * 1024;
 pub const MAX_EVENT_PAGE_BYTES: usize = 6 * 1024 * 1024;
-pub const DEFAULT_EVENT_PAGE_ITEMS: usize = 1_000;
+pub const DEFAULT_EVENT_PAGE_ITEMS: usize = 64;
 pub const MAX_EVENT_PAGE_ITEMS: usize = 10_000;
 
 #[derive(Debug)]

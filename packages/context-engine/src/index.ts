@@ -25,4 +25,5 @@ export * from "./memory.ts";
 export * from "./context-ops.ts";
 export * from "./optimizer.ts";
 export * from "./retrieval-controller.ts";
-export * from "./retrieval-controller.ts";
+export * from "./projection.ts";
+export * from "./verification-planner.ts";

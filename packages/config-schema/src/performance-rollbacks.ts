@@ -18,7 +18,16 @@ export type PerformanceFeature =
   | "phase_policy"
   | "provider_compaction"
   | "tool_search"
-  | "fast_service_tier";
+  | "fast_service_tier"
+  | "long_session_fast_path"
+  | "context_pack_projection"
+  | "subagent_profile_resolution_v2"
+  | "subagent_context_reservations"
+  | "phase_routing"
+  | "budget_enforcement"
+  | "retrieval_controller_v2"
+  | "verification_planner_v2"
+  | "commentary_policy_v2";
 
 export interface PerformanceKillSwitch {
   readonly feature: PerformanceFeature;
@@ -100,6 +109,60 @@ export const PERFORMANCE_KILL_SWITCHES: readonly PerformanceKillSwitch[] = [
     safeValue: "standard",
     reason: "return to the standard serving and cost profile",
   },
+  {
+    feature: "long_session_fast_path",
+    configPath: "perf.longSessionFastPath",
+    safeValue: false,
+    reason: "restore v2 resume/snapshot and full-history UI behavior",
+  },
+  {
+    feature: "context_pack_projection",
+    configPath: "perf.contextPackProjection",
+    safeValue: false,
+    reason: "restore the legacy repository-context prompt path",
+  },
+  {
+    feature: "subagent_profile_resolution_v2",
+    configPath: "perf.subagentProfileResolutionV2",
+    safeValue: false,
+    reason: "restore static child profile selection",
+  },
+  {
+    feature: "subagent_context_reservations",
+    configPath: "perf.subagentContextReservations",
+    safeValue: false,
+    reason: "disable predictive child context reservations",
+  },
+  {
+    feature: "phase_routing",
+    configPath: "perf.phaseRouting",
+    safeValue: false,
+    reason: "restore one inference route for the whole turn",
+  },
+  {
+    feature: "budget_enforcement",
+    configPath: "perf.budgetEnforcement",
+    safeValue: "shadow",
+    reason: "observe turn budget decisions without blocking requests",
+  },
+  {
+    feature: "retrieval_controller_v2",
+    configPath: "perf.retrievalControllerV2",
+    safeValue: false,
+    reason: "restore sequential retrieval preview behavior",
+  },
+  {
+    feature: "verification_planner_v2",
+    configPath: "perf.verificationPlannerV2",
+    safeValue: false,
+    reason: "restore the legacy fixed verification command",
+  },
+  {
+    feature: "commentary_policy_v2",
+    configPath: "perf.commentaryPolicyV2",
+    safeValue: false,
+    reason: "restore the legacy commentary disclosure policy",
+  },
 ] as const;
 
 export const SAFE_PERFORMANCE_ROLLBACK_OVERRIDES: Readonly<ConfigLayer> = Object.freeze(
@@ -121,6 +184,10 @@ export interface PerformanceHealthWindow {
   /** Candidate-minus-baseline quality CI lower bound, percentage points. */
   readonly qualityCiLowerPoints: number;
   readonly promptDigestMismatches: number;
+  /** Optional long-session rollout signals. */
+  readonly v3SnapshotFallbackRatio?: number;
+  readonly heapLimitExceeded?: boolean;
+  readonly rssLimitExceeded?: boolean;
 }
 
 export type PerformanceRollbackTrigger =
@@ -131,7 +198,10 @@ export type PerformanceRollbackTrigger =
   | "websocket_protocol_error"
   | "p95_regression"
   | "quality_noninferiority"
-  | "prompt_digest_mismatch";
+  | "prompt_digest_mismatch"
+  | "snapshot_fallback"
+  | "heap_pressure"
+  | "rss_pressure";
 
 export interface PerformanceRollbackDecision {
   readonly rollback: boolean;
@@ -160,6 +230,11 @@ export function evaluatePerformanceRollback(
   if (health.p95LatencyRatio >= 1.1) triggers.push("p95_regression");
   if (health.qualityCiLowerPoints < -1) triggers.push("quality_noninferiority");
   if (health.promptDigestMismatches > 0) triggers.push("prompt_digest_mismatch");
+  if (health.v3SnapshotFallbackRatio !== undefined && health.v3SnapshotFallbackRatio > 0.005) {
+    triggers.push("snapshot_fallback");
+  }
+  if (health.heapLimitExceeded === true) triggers.push("heap_pressure");
+  if (health.rssLimitExceeded === true) triggers.push("rss_pressure");
 
   if (triggers.length === 0) return { rollback: false, triggers: [], overrides: {} };
 
@@ -168,7 +243,10 @@ export function evaluatePerformanceRollback(
     trigger === "stale_context_mutation" ||
     trigger === "false_completion" ||
     trigger === "quality_noninferiority" ||
-    trigger === "prompt_digest_mismatch"
+    trigger === "prompt_digest_mismatch" ||
+    trigger === "snapshot_fallback" ||
+    trigger === "heap_pressure" ||
+    trigger === "rss_pressure"
   );
   if (broad) {
     return {
@@ -195,6 +273,15 @@ export function evaluatePerformanceRollback(
       "provider_compaction",
       "tool_search",
       "fast_service_tier",
+      "context_pack_projection",
+      "subagent_profile_resolution_v2",
+      "subagent_context_reservations",
+      "phase_routing",
+      "budget_enforcement",
+      "retrieval_controller_v2",
+      "verification_planner_v2",
+      "commentary_policy_v2",
+      "long_session_fast_path",
     ]));
   }
   return { rollback: true, triggers, overrides };
@@ -213,6 +300,7 @@ export function performanceFeatureOverrides(
 
 function validateHealthWindow(health: PerformanceHealthWindow): void {
   for (const [key, value] of Object.entries(health)) {
+    if (key === "heapLimitExceeded" || key === "rssLimitExceeded") continue;
     if (typeof value !== "number" || !Number.isFinite(value)) {
       throw new TypeError(`performance health '${key}' must be a finite number`);
     }
@@ -234,5 +322,16 @@ function validateHealthWindow(health: PerformanceHealthWindow): void {
   }
   if (health.p95LatencyRatio < 0) {
     throw new RangeError("performance health 'p95LatencyRatio' must be non-negative");
+  }
+  if (
+    health.v3SnapshotFallbackRatio !== undefined &&
+    (health.v3SnapshotFallbackRatio < 0 || health.v3SnapshotFallbackRatio > 1)
+  ) {
+    throw new RangeError("performance health 'v3SnapshotFallbackRatio' must be between 0 and 1");
+  }
+  for (const [key, value] of [["heapLimitExceeded", health.heapLimitExceeded], ["rssLimitExceeded", health.rssLimitExceeded]] as const) {
+    if (value !== undefined && typeof value !== "boolean") {
+      throw new TypeError(`performance health '${key}' must be a boolean`);
+    }
   }
 }

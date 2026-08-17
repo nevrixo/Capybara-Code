@@ -189,12 +189,12 @@ async function main(): Promise<number> {
     // §20.3 lists 39. `fs.transaction.rollback_to_checkpoint` is the 40th, added for
     // the §11.2 self-correction loop; `workspace.trust.{list,set,remove}` are the
     // 41st–43rd, so the CLI manages trust through the runtime (P0-01);
-    // `session.{list,set_status,export,fork,delete}` are the 44th–48th (P0-05); and
+    // `session.{list,resolve,set_status,export,fork,delete}` are the 44th–49th (P0-05); and
     // `runtime.cancel`, `runtime.capability.issue`, `fs.fingerprint`, and
     // `workspace.mode.write` add cancellation, action-bound receipts, preview
     // revision validation, and live plan-mode enforcement.
-    REQUEST_METHODS.length === 52,
-    `§20.3 plus checkpoint rollback, trust, session, cancel, capability receipts, fingerprint, and live mode is 52 request methods; found ${REQUEST_METHODS.length}`,
+    REQUEST_METHODS.length === 53,
+    `§20.3 plus checkpoint rollback, trust, session, cancel, capability receipts, fingerprint, and live mode is 53 request methods; found ${REQUEST_METHODS.length}`,
   );
 
   // ---- §20.3 notifications ----

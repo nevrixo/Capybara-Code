@@ -268,6 +268,8 @@ const EMPTY_STATS: ProjectionCounters = {
 export class ProjectedTimeline {
   readonly #sources: SourceRecord[] = [];
   readonly #sourceById = new Map<string, SourceRecord>();
+  /** Historical page membership; page eviction never touches durable journal rows. */
+  readonly #pageSourceIds = new Map<string, Set<string>>();
   readonly #streamingSources = new Map<string, SourceRecord>();
   readonly #mutableSourceIds = new Set<string>();
   #entries: ProjectionEntry[] = [];
@@ -276,6 +278,7 @@ export class ProjectedTimeline {
   #projectionOptions: TimelineRenderOptions = {};
   #projectionKey = projectionOptionsKey({});
   #nextSourceOrder = 0;
+  #nextPrependOrder = -1;
   #newestSequence = 0;
   #newestCommentaryGroupId: string | undefined;
   readonly #runningTaskGroupIds = new Set<string>();
@@ -346,9 +349,11 @@ export class ProjectedTimeline {
     this.#projectionKey = projectionOptionsKey(options);
     this.#sources.length = 0;
     this.#sourceById.clear();
+    this.#pageSourceIds.clear();
     this.#streamingSources.clear();
     this.#mutableSourceIds.clear();
     this.#nextSourceOrder = 0;
+    this.#nextPrependOrder = -1;
     this.#newestSequence = 0;
 
     for (const item of items) {
@@ -517,6 +522,55 @@ export class ProjectedTimeline {
     for (const entry of generated) this.#insertEntry(entry);
   }
 
+  /** Add one immutable historical page before the live source set. */
+  prependPage(pageId: string, items: readonly TimelineItem[]): number {
+    if (pageId.length === 0) throw new RangeError("pageId must not be empty");
+    if (this.#pageSourceIds.has(pageId)) this.dropPage(pageId);
+    const records: SourceRecord[] = [];
+    const ids = new Set<string>();
+    const startOrder = this.#nextPrependOrder - items.length;
+    for (const [index, item] of items.entries()) {
+      if (this.#sourceById.has(item.id)) continue;
+      const record = this.#makeSourceRecord(item, startOrder + index);
+      records.push(record);
+      ids.add(item.id);
+      this.#sourceById.set(item.id, record);
+      if (record.mutable) this.#mutableSourceIds.add(item.id);
+      this.#newestSequence = Math.max(this.#newestSequence, item.sequence);
+    }
+    this.#nextPrependOrder = startOrder;
+    this.#sources.unshift(...records);
+    this.#pageSourceIds.set(pageId, ids);
+    if (records.length > 0) this.#rebuildEntriesAndGroups(true);
+    return records.length;
+  }
+
+  /** Drop only the in-memory projection for a historical page. */
+  dropPage(pageId: string): boolean {
+    const ids = this.#pageSourceIds.get(pageId);
+    if (ids === undefined) return false;
+    this.#pageSourceIds.delete(pageId);
+    if (ids.size === 0) return true;
+    for (const id of ids) {
+      const record = this.#sourceById.get(id);
+      if (record === undefined) continue;
+      this.#sourceById.delete(id);
+      this.#mutableSourceIds.delete(id);
+      const index = this.#sources.indexOf(record);
+      if (index >= 0) this.#sources.splice(index, 1);
+    }
+    this.#rebuildEntriesAndGroups(true);
+    this.#stats.removed += ids.size;
+    return true;
+  }
+
+  /** Replace one mutable page/live item without rescanning immutable sources. */
+  replaceMutable(item: TimelineItem): boolean {
+    const record = this.#sourceById.get(item.id);
+    if (record === undefined || !record.mutable) return false;
+    this.update(item);
+    return true;
+  }
   update(item: TimelineItem): void {
     const record = this.#sourceById.get(item.id);
     if (record === undefined) {
@@ -902,14 +956,14 @@ export class ProjectedTimeline {
     );
   }
 
-  #makeSourceRecord(item: TimelineItem): SourceRecord {
+  #makeSourceRecord(item: TimelineItem, orderOverride?: number): SourceRecord {
     const streaming = item.id.startsWith("streaming-");
     const mutable = streaming || isPotentiallyMutable(item);
     if (mutable && !streaming) this.#stats.itemFingerprintsComputed += 1;
     const markdownSource = markdownSourceForItem(item);
     return {
       item,
-      order: this.#nextSourceOrder++,
+      order: orderOverride ?? this.#nextSourceOrder++,
       revision: 0,
       // Completed prose/finals never change in place and can contain megabytes;
       // do not duplicate that text merely to fingerprint an immutable record.

@@ -163,6 +163,17 @@ export interface AgentConfig {
 export interface PerformanceConfig {
   telemetry: boolean;
   sampleRate: number;
+  /** Rollout switches for the performance-plan optimizations. */
+  contextPackProjection?: boolean;
+  subagentProfileResolutionV2?: boolean;
+  subagentContextReservations?: boolean;
+  phaseRouting?: boolean;
+  budgetEnforcement?: "shadow" | "advisory" | "hard";
+  retrievalControllerV2?: boolean;
+  verificationPlannerV2?: boolean;
+  commentaryPolicyV2?: boolean;
+  /** Long-session bounded resume optimizations; omitted means enabled. */
+  longSessionFastPath?: boolean;
 }
 
 export interface SubagentsConfig {
@@ -266,7 +277,7 @@ export interface CbcConfig {
 
 /** §21.4 defaults, matching the documented example config exactly. */
 export function defaultConfig(): CbcConfig {
-  return {
+  const config: CbcConfig = {
     ui: {
       theme: "capybara-dark",
       color: "auto",
@@ -424,6 +435,14 @@ export function defaultConfig(): CbcConfig {
     perf: {
       telemetry: true,
       sampleRate: 1,
+      contextPackProjection: true,
+      subagentProfileResolutionV2: true,
+      subagentContextReservations: true,
+      phaseRouting: true,
+      budgetEnforcement: "advisory",
+      retrievalControllerV2: true,
+      verificationPlannerV2: true,
+      commentaryPolicyV2: true,
     },
     // Context7 is available in every installation without requiring a local
     // package or an API key. Keep it enabled, but defer the remote handshake
@@ -441,6 +460,13 @@ export function defaultConfig(): CbcConfig {
     },
     keymap: {},
   };
+  Object.defineProperty(config.perf, "longSessionFastPath", {
+    value: true,
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  });
+  return config;
 }
 
 export type ConfigSource =
@@ -550,6 +576,7 @@ const ENUMS: Record<string, readonly string[]> = {
   "provider.openai.transport": ["http_full", "http_previous", "websocket"],
   "provider.openai.serviceTier": ["standard", "fast"],
   "agent.tokenSaving": ["off", "light", "balanced", "strong"],
+  "perf.budgetEnforcement": ["shadow", "advisory", "hard"],
   "agent.promptCompiler": ["v1", "v2"],
   "agent.verification.reviewPolicy": ["always", "risk"],
   "agent.verification.independentReviewRiskThreshold": ["R0", "R1", "R2", "R3", "R4", "R5", "R6"],

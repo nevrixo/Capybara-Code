@@ -27,7 +27,10 @@ import {
 } from "@cbc/provider-openai";
 import {
   emptyViewModel,
+  DEFAULT_SESSION_PAGE_BYTES,
+  DEFAULT_SESSION_PAGE_ITEMS,
   iterateReplayTailPages,
+  parseSnapshotEnvelope,
   loadEarlierJournalPage,
   reduce,
   ResidentJournalWindow,
@@ -184,16 +187,26 @@ async function resolveResumedSession(
   runtime: Runtime,
   selector: string,
 ): Promise<RuntimeSessionSummary | undefined> {
-  const { sessions } = await runtime.listSessions({ limit: 10_000 });
-  if (selector === "last") return sessions[0];
-  const exact = sessions.find((session) => session.id === selector);
-  if (exact !== undefined) return exact;
-  const byTitle = sessions.find((session) => session.title === selector);
-  if (byTitle !== undefined) return byTitle;
-  const prefixes = sessions.filter(
-    (session) => session.id.startsWith(selector) || session.title.startsWith(selector),
-  );
-  return prefixes.length === 1 ? prefixes[0] : undefined;
+  try {
+    const resolved = await runtime.resolveSession({ selector });
+    if (resolved.session !== undefined) return resolved.session;
+    // Ambiguous prefixes/titles intentionally do not pick a session. The
+    // bounded candidate list is useful to diagnostics without loading 10,000 rows.
+    return undefined;
+  } catch {
+    // Older sidecars do not expose session.resolve yet. Keep a bounded, compatible
+    // fallback while avoiding the previous unbounded list RPC on the hot path.
+    const { sessions } = await runtime.listSessions({ limit: 128 });
+    if (selector === "last") return sessions[0];
+    const exact = sessions.find((session) => session.id === selector);
+    if (exact !== undefined) return exact;
+    const byTitle = sessions.find((session) => session.title === selector);
+    if (byTitle !== undefined) return byTitle;
+    const prefixes = sessions.filter(
+      (session) => session.id.startsWith(selector) || session.title.startsWith(selector),
+    );
+    return prefixes.length === 1 ? prefixes[0] : undefined;
+  }
 }
 
 /**
@@ -564,6 +577,9 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
     trusted: trust === "trusted-always" || trust === "trusted-once",
   });
 
+  // Open the provider transport as soon as skills/instructions are available;
+  // resume tail hydration and repository orientation can overlap this handshake.
+  void session.prewarmProvider().catch(() => undefined);
   // ---- §18.6 the durable session row is created by `session.open` below; there is
   // no host-side index to keep in sync any more (P0-05). ----
 
@@ -581,11 +597,14 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
     warnings.push(`session journal unavailable, so resume will be incomplete: ${opened.detail}`);
   }
 
+  const resumeDescriptor = opened.ok && config.perf.longSessionFastPath !== false
+    ? parseResumeOpenDescriptor(opened.descriptor, sessionId)
+    : undefined;
   let loadEarlierHistory: (() => Promise<readonly TimelineItem[] | undefined>) =
     createEarlierHistoryLoader(runtime, sessionId);
   if (resumedFrom !== undefined) {
     try {
-      const loaded = await loadSessionEvents(runtime, sessionId);
+      const loaded = await loadSessionEvents(runtime, sessionId, resumeDescriptor);
       session.hydrate(loaded.events, {
         ...(loaded.seed !== undefined ? { seed: loaded.seed } : {}),
         ...(loaded.snapshotPosition !== undefined
@@ -659,6 +678,60 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
   };
 }
 
+interface ResumeOpenDescriptor {
+  readonly snapshot?: StoredSnapshotEnvelope;
+  readonly integrityOk: boolean;
+  readonly replay?: {
+    readonly afterJournalSequence: number;
+    readonly afterHash: string;
+    readonly throughJournalSequence: number;
+    readonly throughHash: string;
+  };
+}
+
+function parseResumeOpenDescriptor(
+  raw: unknown,
+  sessionId: string,
+): ResumeOpenDescriptor | undefined {
+  if (!isRecord(raw)) return undefined;
+  const replayRaw = isRecord(raw.replay) ? raw.replay : undefined;
+  let replay: ResumeOpenDescriptor["replay"] | undefined;
+  if (replayRaw !== undefined) {
+    const afterJournalSequence = replayRaw.afterJournalSequence;
+    const throughJournalSequence = replayRaw.throughJournalSequence;
+    const afterHash = replayRaw.afterHash;
+    const throughHash = replayRaw.throughHash;
+    if (
+      typeof afterJournalSequence !== "number" || !Number.isSafeInteger(afterJournalSequence) || afterJournalSequence < 0 ||
+      typeof throughJournalSequence !== "number" || !Number.isSafeInteger(throughJournalSequence) || throughJournalSequence < afterJournalSequence ||
+      typeof afterHash !== "string" || afterHash.length === 0 ||
+      typeof throughHash !== "string" || throughHash.length === 0
+    ) return undefined;
+    replay = {
+      afterJournalSequence,
+      afterHash,
+      throughJournalSequence,
+      throughHash,
+    };
+  }
+  let snapshot: StoredSnapshotEnvelope | undefined;
+  if (raw.snapshot !== undefined && raw.snapshot !== null) {
+    try {
+      snapshot = parseSnapshotEnvelope(raw.snapshot, { expectedSessionId: sessionId });
+    } catch {
+      // A malformed descriptor must never turn a resume request into an unsafe
+      // partial replay. Let the caller use the legacy genesis-replay path.
+      return undefined;
+    }
+  }
+  const integrity = isRecord(raw.integrity) ? raw.integrity : undefined;
+  return {
+    ...(snapshot !== undefined ? { snapshot } : {}),
+    integrityOk: integrity?.ok !== false,
+    ...(replay !== undefined ? { replay } : {}),
+  };
+}
+
 interface LoadedSessionEvents {
   readonly events: CbcEvent[];
   readonly integrityOk: boolean;
@@ -683,32 +756,49 @@ interface CollectedSessionTail {
 async function collectSessionTail(
   runtime: Runtime,
   sessionId: string,
-  afterJournalSequence?: number,
+  descriptor?: ResumeOpenDescriptor,
+  overrideAfterJournalSequence?: number,
 ): Promise<CollectedSessionTail> {
   const events: CbcEvent[] = [];
-  let snapshot: StoredSnapshotEnvelope | undefined;
-  let integrityOk = true;
+  let snapshot: StoredSnapshotEnvelope | undefined =
+    overrideAfterJournalSequence === undefined ? descriptor?.snapshot : undefined;
+  let integrityOk = descriptor?.integrityOk ?? true;
   let eventCount: number | undefined;
   let earlierPage: JournalPageCursor | undefined;
   let earliestLoadedPage: SessionJournalPage | undefined;
+  const replay = descriptor?.replay;
+  const afterJournalSequence = overrideAfterJournalSequence ?? replay?.afterJournalSequence;
+  const useDescriptorBoundary = replay !== undefined;
   let journalSequence = afterJournalSequence ?? 0;
-  let streamSequence = 0;
+  let streamSequence = snapshot?.streamSequence ?? snapshot?.journalSequence ?? 0;
 
   const transport = { load: async (params: Record<string, unknown>) =>
     await runtime.loadSession(params) };
-  for await (const page of iterateReplayTailPages(transport, {
+  const replayOptions = {
     sessionId,
     ...(afterJournalSequence !== undefined ? { afterJournalSequence } : {}),
-  })) {
+    ...(useDescriptorBoundary
+      ? {
+          tailOnly: false,
+          includeSnapshot: false,
+          ...(overrideAfterJournalSequence === undefined
+            ? { afterHash: replay.afterHash }
+            : { afterHash: "0".repeat(64) }),
+          throughJournalSequence: replay.throughJournalSequence,
+          throughHash: replay.throughHash,
+        }
+      : {}),
+  } as const;
+  for await (const page of iterateReplayTailPages(transport, replayOptions)) {
     snapshot ??= page.snapshot;
     earliestLoadedPage ??= page;
     earlierPage ??= page.earlierPage;
-    const integrity = isRecord(page.integrity) ? page.integrity : undefined;
-    if (integrity?.ok === false) integrityOk = false;
+    const pageIntegrity = isRecord(page.integrity) ? page.integrity : undefined;
+    if (pageIntegrity?.ok === false) integrityOk = false;
     if (eventCount === undefined && typeof page.eventCount === "number") {
       eventCount = page.eventCount;
     }
-    if (streamSequence === 0 && afterJournalSequence === undefined && page.snapshot !== undefined) {
+    if (streamSequence === 0 && page.snapshot !== undefined) {
       streamSequence = page.snapshot.streamSequence ?? page.snapshot.journalSequence;
       journalSequence = page.snapshot.journalSequence;
     }
@@ -735,17 +825,20 @@ async function collectSessionTail(
   };
 }
 
-export async function loadSessionEvents(runtime: Runtime, sessionId: string): Promise<LoadedSessionEvents> {
-  const tail = await collectSessionTail(runtime, sessionId);
+export async function loadSessionEvents(
+  runtime: Runtime,
+  sessionId: string,
+  descriptor?: ResumeOpenDescriptor,
+): Promise<LoadedSessionEvents> {
+  const tail = await collectSessionTail(runtime, sessionId, descriptor);
   const seed = tail.snapshot === undefined
     ? undefined
     : parseAgentSessionSnapshot(tail.snapshot.reducerState, sessionId);
 
-  // Legacy/state-only snapshots cannot restore provider history. Replay their
-  // complete immutable journal rather than silently resuming with an incomplete
-  // prompt; all new snapshots use the prompt-complete payload above.
+  // Legacy/state-only snapshots cannot restore provider history. Replay the
+  // complete immutable journal to the same frozen descriptor boundary.
   if (tail.snapshot !== undefined && seed === undefined) {
-    const full = await collectSessionTail(runtime, sessionId, 0);
+    const full = await collectSessionTail(runtime, sessionId, descriptor, 0);
     return {
       events: full.events,
       integrityOk: full.integrityOk,
@@ -779,7 +872,6 @@ export async function loadSessionEvents(runtime: Runtime, sessionId: string): Pr
       : {}),
   };
 }
-
 
 export function createEarlierHistoryLoader(
   runtime: Runtime,
@@ -822,8 +914,8 @@ export function createEarlierHistoryLoader(
           beforeSequence: head.sequence + 1,
           throughSequence: head.sequence,
           throughHash: head.eventHash,
-          limit: 1_000,
-          maxBytes: 4 * 1024 * 1024,
+          limit: DEFAULT_SESSION_PAGE_ITEMS,
+          maxBytes: DEFAULT_SESSION_PAGE_BYTES,
         }),
         { expectedSessionId: sessionId },
       );
@@ -1192,7 +1284,26 @@ function withActiveProfile<T extends Awaited<ReturnType<CommandContext["requireC
 function structuredCloneConfig<T>(config: T): T {
   // The config is plain JSON data, so a structured clone is exact and avoids the
   // aliasing bugs a shallow spread would introduce on nested tables.
-  return structuredClone(config);
+  const cloned = structuredClone(config) as T;
+  // `defaultConfig()` keeps the fast-path flag non-enumerable for backwards
+  // compatibility with the documented default object. Preserve it explicitly
+  // across this clone so an explicit false kill switch cannot disappear.
+  const sourceRecord = config as T & { perf?: { longSessionFastPath?: unknown } };
+  const targetRecord = cloned as T & { perf?: { longSessionFastPath?: unknown } };
+  const fastPath = sourceRecord.perf?.longSessionFastPath;
+  if (
+    typeof fastPath === "boolean" &&
+    targetRecord.perf !== undefined &&
+    !("longSessionFastPath" in targetRecord.perf)
+  ) {
+    Object.defineProperty(targetRecord.perf, "longSessionFastPath", {
+      value: fastPath,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  }
+  return cloned;
 }
 
 /**

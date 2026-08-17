@@ -72,7 +72,7 @@ describe("event envelope (§20.6)", () => {
   });
 
   test("every registered kind has defaults", () => {
-    expect(EVENT_KINDS.length).toBe(52);
+    expect(EVENT_KINDS.length).toBe(53);
     for (const kind of ALL_EVENT_KINDS) {
       const defaults = defaultsForKind(kind);
       expect(defaults.level).toBeTruthy();
@@ -298,10 +298,10 @@ describe("method registry drift (§20.11)", () => {
     // §20.3 lists 39. `fs.transaction.rollback_to_checkpoint` is the 40th, added for
     // the §11.2 self-correction loop; `workspace.trust.{list,set,remove}` are the
     // 41st–43rd so the CLI manages trust through the runtime (P0-01);
-    // `session.{list,set_status,export,fork,delete}` are the 44th–48th (P0-05); and
+    // `session.{list,resolve,set_status,export,fork,delete}` are the 44th–49th (P0-05); and
     // `runtime.cancel`, `runtime.capability.issue`, `fs.fingerprint`, and
     // `workspace.mode.write` are additions to the original PRD list.
-    expect(REQUEST_METHODS.length).toBe(52);
+    expect(REQUEST_METHODS.length).toBe(53);
     expect(REQUEST_METHODS).toContain("fs.transaction.rollback_to_checkpoint");
     expect(REQUEST_METHODS).toContain("workspace.trust.set");
     expect(REQUEST_METHODS).toContain("session.fork");

@@ -89,7 +89,7 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
   ["agent.maxToolCalls", { status: "wired", consumer: "agent.ts (kernel tool-call cap)" }],
   ["agent.maxWallTimeMinutes", { status: "wired", consumer: "agent.ts (wall-time cap)" }],
   ["agent.toolGraph.", { status: "wired", consumer: "agent-kernel ToolExecutionGraph" }],
-  ["agent.visibleCommentary", { status: "experimental", note: "commentary rendering has no config switch yet" }],
+  ["agent.visibleCommentary", { status: "wired", consumer: "AgentSession event visibility + session reducer" }],
   ["agent.verification.", { status: "experimental", note: "the completion gate uses fixed policy today" }],
 
   // ---- subagents ----
@@ -109,6 +109,15 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
 
   // ---- sessions ----
   ["sessions.autoSnapshotEvents", { status: "wired", consumer: "agent.ts (snapshot cadence)" }],
+  ["perf.longSessionFastPath", { status: "wired", consumer: "AgentSession bounded resume path" }],
+  ["perf.contextPackProjection", { status: "wired", consumer: "AgentSession ContextPack → provider projection" }],
+  ["perf.subagentProfileResolutionV2", { status: "wired", consumer: "SubagentBridge child profile resolver" }],
+  ["perf.subagentContextReservations", { status: "wired", consumer: "SubagentScheduler p75 context admission" }],
+  ["perf.phaseRouting", { status: "wired", consumer: "AgentKernel phase-aware route epochs" }],
+  ["perf.budgetEnforcement", { status: "wired", consumer: "AgentKernel turn budget controller" }],
+  ["perf.retrievalControllerV2", { status: "wired", consumer: "ContextEngine retrieval rollout" }],
+  ["perf.verificationPlannerV2", { status: "wired", consumer: "AgentSession impact verification planner" }],
+  ["perf.commentaryPolicyV2", { status: "wired", consumer: "AgentKernel evidence-linked commentary policy" }],
   ["sessions.retain", { status: "experimental", note: "session retention has no purge path yet" }],
   ["sessions.artifactRetentionDays", { status: "experimental", note: "artifact GC is not scheduled yet" }],
 

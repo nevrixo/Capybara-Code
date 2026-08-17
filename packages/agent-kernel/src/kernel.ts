@@ -11,7 +11,7 @@
  * than a provider feature.
  */
 
-import type { CbcEventKind } from "@cbc/protocol";
+import type { CbcEventKind, EventVisibility } from "@cbc/protocol";
 import {
   estimateCostUsd,
   emptyUsage,
@@ -100,8 +100,8 @@ import {
 
 // P1-05: `AgentRole` is provider- and kernel-neutral; the definition lives in
 // `@cbc/inference-domain` and is re-exported here for existing call sites.
-import type { AgentRole } from "@cbc/inference-domain";
-export type { AgentRole };
+import type { AgentRole, WorkPhase, TurnBudgetController, BudgetEnforcementMode } from "@cbc/inference-domain";
+export type { AgentRole, WorkPhase };
 
 /**
  * Fire the wrap-up nudge when this many tool calls (fewer) remain.
@@ -423,7 +423,7 @@ export interface ReflectionInput {
 
 /** How the kernel reports progress. The host maps these onto §20.7 events. */
 export interface KernelEmitter {
-  emit<T>(kind: CbcEventKind, payload: T, options?: { turnId?: string; agentId?: string; callerId?: string; taskEpochId?: string; workspaceIdentityDigest?: string }): void;
+  emit<T>(kind: CbcEventKind, payload: T, options?: { turnId?: string; agentId?: string; callerId?: string; taskEpochId?: string; workspaceIdentityDigest?: string; visibility?: EventVisibility }): void;
 }
 
 /** Everything the kernel needs to actually run a tool. */
@@ -488,6 +488,9 @@ export interface KernelOptions {
   readonly promptCompiler?: "v1" | "v2";
   /** Classify direct commands into conservative graph lanes. */
   readonly commandClassification?: boolean;
+  /** Optional turn budget guard; shadow/advisory/hard are rollout-safe. */
+  readonly budgetController?: TurnBudgetController;
+  readonly budgetEnforcement?: BudgetEnforcementMode;
 
   readonly permissionContext: () => PermissionContext;
   readonly promptInputs: () => PromptInputs;
@@ -705,6 +708,9 @@ export class AgentKernel {
    * the billing named.
    */
   #turnRoute: InferencePolicyDecision | undefined;
+  /** Monotonic phase route epoch; at most four route changes per turn. */
+  #phase: WorkPhase = "orient";
+  #routeEpoch = 0;
   /**
    * Actions the user allowed "for this turn" (§13.4). Keyed by the normalized
    * action hash, cleared when the turn ends: an `allow_turn` grant must apply to
@@ -765,7 +771,7 @@ export class AgentKernel {
       history: [],
     }, { version: this.#options.promptCompiler ?? "v2" });
     await this.#providerSession.prewarm({
-      requestId: `prewarm_${this.#options.agentId}_${this.#now().toString(36)}`,
+      requestId: "prewarm_" + this.#options.agentId + "_" + this.#now().toString(36),
       model: this.#options.model,
       requestDigest: compiled.requestDigest,
       input: compiled.input,
@@ -875,13 +881,18 @@ export class AgentKernel {
     }
   }
 
-  hydrateHistory(items: readonly ModelInputItem[]): void {
-    this.#history = [...items];
+  /** Adopt a freshly hydrated, caller-owned history without another full array copy. */
+  adoptHydratedHistory(items: ModelInputItem[]): void {
+    this.#history = items;
     // A hydrated journal has no persisted provider response to which its local
     // indices can safely refer. The next request establishes a fresh cursor.
     this.resetProviderContinuation();
   }
 
+  /** Copy external history inputs; resume hydration uses adoptHydratedHistory instead. */
+  hydrateHistory(items: readonly ModelInputItem[]): void {
+    this.adoptHydratedHistory([...items]);
+  }
   /** §11.10: merge a new instruction into the running turn. */
   redirect(text: string): void {
     this.#redirect = text;
@@ -900,6 +911,7 @@ export class AgentKernel {
     // the fact that a mutation happened at all — would otherwise leak into the
     // next report and make a fresh turn claim another turn's work.
     this.#usage = emptyUsage();
+    this.#options.budgetController?.reset();
     this.#observations = [];
     this.#changedFiles.clear();
     this.#verification = [];
@@ -919,6 +931,8 @@ export class AgentKernel {
     this.#wrapUpDelivered = false;
     this.#pendingCalls = [];
     this.#turnRoute = undefined;
+    this.#phase = "orient";
+    this.#routeEpoch = 0;
     this.#turnAllowedActions.clear();
     this.#budgetNudged = false;
     this.#previousResponseFallbackUsed = false;
@@ -940,6 +954,11 @@ export class AgentKernel {
       role: this.#options.role,
       interactionMode: this.#activeInteractionMode,
     });
+
+    const budgetController = this.#options.budgetController;
+    if (budgetController !== undefined) {
+      emit("budget.plan_created", { mode: budgetController.mode, ...budgetController.snapshot() });
+    }
 
     machine.apply("submit");
 
@@ -970,6 +989,7 @@ export class AgentKernel {
     // `turn.started`, each provider request, and the cost estimate — reads this
     // same decision.
     this.#turnRoute = this.#decideRoute(firstPrompt, userInput);
+    this.#routeEpoch = this.#turnRoute === undefined ? 0 : 1;
     if (this.#turnRoute !== undefined) {
       this.#emitRouteEvents(this.#turnRoute, emit);
       try {
@@ -1223,6 +1243,7 @@ export class AgentKernel {
             );
             emit("assistant.commentary", {
               text: `Stopping self-correction: ${analysis.toolId} failed the same way ${analysis.attempts} times. ${analysis.correctiveAction}`,
+              commentaryKind: "recovery",
             });
             machine.apply("budget_exhausted");
             break;
@@ -1274,6 +1295,7 @@ export class AgentKernel {
               pendingUserInput = renderTodoContinuationPrompt(unfinishedBeforeVerification);
               emit("assistant.commentary", {
                 text: `Continuing: ${describeUnfinishedTodos(continuableBeforeVerification)}. The final answer is withheld until this work is resolved.`,
+                commentaryKind: "verification",
               });
               machine.apply("todo_incomplete");
               break;
@@ -1637,29 +1659,63 @@ export class AgentKernel {
       historyItems: this.#history.length,
     });
 
-    const promptInputs = this.#options.promptInputs();
-    this.#resetContinuationForHistoryRewrite(
-      promptInputs.historyRewriteCallIds ?? [],
-    );
-    const history =
-      this.#options.continuationMode === "previous_response" &&
-      this.#providerSession.capabilities.previousResponse &&
-      this.#previousResponseId !== undefined
-        ? this.#history.slice(this.#continuationHistoryCursor)
-        : this.#history;
+    let history: readonly ModelInputItem[] = this.#history;
     const cacheBefore = promptMaterializationCacheStats();
     const compileStartedAt = this.#now();
     emit("prompt.compile_started", {
       historyItems: history.length,
       fullReplay: history === this.#history,
     });
-    const compiled = assemblePrompt({
-      ...promptInputs,
+    let promptInputs = this.#options.promptInputs();
+    this.#resetContinuationForHistoryRewrite(
+      promptInputs.historyRewriteCallIds ?? [],
+    );
+    const historyForPrompt = (): readonly ModelInputItem[] =>
+      this.#options.continuationMode === "previous_response" &&
+      this.#providerSession.capabilities.previousResponse &&
+      this.#previousResponseId !== undefined
+        ? this.#history.slice(this.#continuationHistoryCursor)
+        : this.#history;
+    history = historyForPrompt();
+    const assemble = (inputs: PromptInputs): CompiledModelRequest => assemblePrompt({
+      ...inputs,
       activeTools: this.#options.registry.activeToolsFor(this.#activeInteractionMode),
       interactionMode: this.#activeInteractionMode,
       history,
       ...(userInput !== undefined ? { userInput } : {}),
     }, { version: this.#options.promptCompiler ?? "v2" });
+    let compiled = assemble(promptInputs);
+    let projectionMismatches = contextProjectionMismatches(promptInputs, compiled);
+    if (projectionMismatches.length > 0) {
+      const reason = projectionMismatches.join("; ");
+      emit("context.evidence_rejected", {
+        evidenceId: `context-projection-${this.#turnCounter}`,
+        reason: `provider projection identity mismatch; retrying compilation: ${reason}`,
+      });
+      try {
+        await this.#options.beforeSample?.();
+      } catch {
+        // The retry still uses the last safe prompt inputs when maintenance fails.
+      }
+      promptInputs = this.#options.promptInputs();
+      this.#resetContinuationForHistoryRewrite(
+        promptInputs.historyRewriteCallIds ?? [],
+      );
+      history = historyForPrompt();
+      compiled = assemble(promptInputs);
+      projectionMismatches = contextProjectionMismatches(promptInputs, compiled);
+      if (projectionMismatches.length > 0) {
+        const finalReason = projectionMismatches.join("; ");
+        compiled = {
+          ...compiled,
+          contextProjectionMismatch: finalReason,
+        };
+        emit("context.evidence_rejected", {
+          evidenceId: `context-projection-${this.#turnCounter}`,
+          reason: `provider projection identity mismatch after retry: ${finalReason}`,
+        });
+      }
+    }
     const cacheAfter = promptMaterializationCacheStats();
     const taskEpochId = this.#options.taskEpochId?.();
     const result: CompiledModelRequest = taskEpochId === undefined
@@ -1682,9 +1738,69 @@ export class AgentKernel {
   }
 
   /** The turn's one routing decision; `undefined` when no policy is wired. */
-  #decideRoute(prompt: CompiledModelRequest, userInput = ""): InferencePolicyDecision | undefined {
+  #phaseForSample(): WorkPhase {
+    if (this.#lastFailureSummary !== undefined || this.#reflections.length > 0) return "repair";
+    if (this.#workspaceMutated) return "implement";
+    if (this.#observations.length > 0) return "investigate";
+    return "orient";
+  }
+
+  /** Reconcile a route only when the work phase changes; the first route remains authoritative. */
+  #maybeRouteForPhase(
+    prompt: CompiledModelRequest,
+    userInput: string | undefined,
+    emit: <T>(kind: CbcEventKind, payload: T) => void,
+  ): void {
+    if (this.#options.phasePolicy !== true) return;
+    const nextPhase = this.#phaseForSample();
+    if (nextPhase === this.#phase) return;
+    const previousPhase = this.#phase;
+    this.#phase = nextPhase;
+    emit("model.phase_changed", {
+      from: previousPhase,
+      to: nextPhase,
+      epoch: this.#routeEpoch,
+      reason: "runtime work state changed",
+    });
+    if (this.#routeEpoch >= 4) return;
+    const nextRoute = this.#decideRoute(prompt, userInput ?? "", nextPhase);
+    if (nextRoute === undefined) return;
+    const previousRoute = this.#turnRoute;
+    if (
+      previousRoute !== undefined &&
+      previousRoute.model === nextRoute.model &&
+      previousRoute.mode === nextRoute.mode &&
+      previousRoute.effort === nextRoute.effort &&
+      previousRoute.intent === nextRoute.intent
+    ) {
+      return;
+    }
+    this.#routeEpoch += 1;
+    this.#turnRoute = nextRoute;
+    emit("model.route_changed", {
+      epoch: this.#routeEpoch,
+      phase: nextPhase,
+      from: previousRoute === undefined
+        ? undefined
+        : { model: previousRoute.model, mode: previousRoute.mode, effort: previousRoute.effort, intent: previousRoute.intent },
+      to: { model: nextRoute.model, mode: nextRoute.mode, effort: nextRoute.effort, intent: nextRoute.intent },
+      reason: "phase-aware route reconciliation",
+    });
+    try {
+      this.#options.onRouteDecided?.(nextRoute, prompt);
+    } catch {
+      // Route-dependent host telemetry/cache planning is best-effort.
+    }
+  }
+
+  /** The first routing decision; later phases use route_changed epochs. */
+  #decideRoute(
+    prompt: CompiledModelRequest,
+    userInput = "",
+    phase: WorkPhase = this.#phase,
+  ): InferencePolicyDecision | undefined {
     return this.#options.inferencePolicy?.decide({
-      intent: this.#sampleIntent(userInput),
+      intent: this.#sampleIntent(userInput, phase),
       ...(this.#options.autoRoute === true ? {} : { explicitModel: this.#options.model }),
       explicitEffort: this.#currentEffort,
       ...(this.#options.reasoningMode !== undefined ? { explicitMode: this.#options.reasoningMode } : {}),
@@ -1697,8 +1813,13 @@ export class AgentKernel {
     });
   }
 
-  #sampleIntent(userInput: string): import("@cbc/provider-openai").SampleIntent {
+  #sampleIntent(userInput: string, phase: WorkPhase = this.#phase): import("@cbc/provider-openai").SampleIntent {
     if (this.#options.phasePolicy !== true) return "final";
+    if (phase === "investigate") return "tool_select";
+    if (phase === "implement" || phase === "repair") return "program";
+    if (phase === "verify") return "tool_select";
+    if (phase === "review") return "review";
+    if (phase === "finalize") return "final";
     const normalized = userInput.toLowerCase();
     if (
       /\b(?:review|audit|security|deep(?:\s+|-)analysis|root[ -]cause|diagnos(?:e|is)|remediation)\b|\uB9AC\uBDF0|\uAC80\uD1A0|\uAC10\uC0AC|\uC2EC\uCE35|\uC2EC\uB3C4|\uC5C4\uACA9|\uCCA0\uC800|\uADFC\uBCF8\s*\uC6D0\uC778|\uC6D0\uC778\s*\uBD84\uC11D|\uD574\uACB0\s*\uBC29\uC548|\uC815\uBC00\s*\uBD84\uC11D|\uCDE8\uC57D\uC810/u.test(normalized)
@@ -1731,6 +1852,8 @@ export class AgentKernel {
       maxAgents: route.maxAgents,
       maxParallelTools: route.maxParallelTools,
       maxCostUsd: route.maxCostUsd,
+      phase: this.#phase,
+      routeEpoch: this.#routeEpoch,
       rationaleCodes: route.rationaleCodes,
       reasonCode: route.reasonCode,
       warnings: route.warnings,
@@ -1789,6 +1912,21 @@ export class AgentKernel {
     | { kind: "cancelled" }
   > {
     const assembled = compiledPrompt ?? await this.#compilePrompt(userInput, emit);
+    if (assembled.contextProjectionMismatch !== undefined) {
+      const reason = `context projection identity could not be verified: ${assembled.contextProjectionMismatch}`;
+      this.#risks.push(reason);
+      emit("context.evidence_rejected", {
+        evidenceId: `context-projection-${this.#turnCounter}`,
+        reason,
+      });
+      return {
+        kind: "incomplete",
+        reason,
+        partialText: "",
+        items: [],
+      };
+    }
+    this.#maybeRouteForPhase(assembled, userInput, emit);
     // The turn's single routing decision (§10.5). Sampling steps never re-decide:
     // a second decision could disagree with the one the route events announced.
     const policyDecision = this.#turnRoute;
@@ -1822,13 +1960,59 @@ export class AgentKernel {
       taskEpochId ?? "no-epoch",
       this.#activeInteractionMode,
       fingerprint(assembled.serializedTools),
+      this.#phase,
+      String(this.#routeEpoch),
     ].join(":");
     if (this.#previousResponseId !== undefined && this.#continuationSignature !== undefined && this.#continuationSignature !== continuationSignature) {
       this.resetProviderContinuation("model, task epoch, toolset, or policy changed");
     }
     this.#continuationSignature = continuationSignature;
+    const requestId = turnId + "_step_" + (this.#observations.length + 1);
+    const budgetController = this.#options.budgetController;
+    if (budgetController !== undefined) {
+      const predictedCostUsd = estimateCostUsd(requestModelId, {
+        ...emptyUsage(),
+        inputTokens: assembled.inputTokens,
+        outputTokens: providerGenerationBudget,
+        totalTokens: assembled.inputTokens + providerGenerationBudget,
+      });
+      const authorization = budgetController.authorize({
+        sampleId: requestId,
+        predictedInputTokens: assembled.inputTokens,
+        predictedOutputTokens: providerGenerationBudget,
+        predictedCostUsd,
+        phase: this.#phase,
+        mandatoryVerification: this.#workspaceMutated,
+        mandatoryReview: this.#externalSideEffectApplied,
+      });
+      emit("budget.guard_triggered", {
+        requestId,
+        action: authorization.action,
+        allowed: authorization.allowed,
+        mode: authorization.mode,
+        projectedUsd: authorization.projectedUsd,
+        remainingUsd: authorization.remainingUsd,
+        reason: authorization.reason,
+        ...(authorization.degraded === undefined ? {} : { degraded: authorization.degraded }),
+      });
+      if (!authorization.allowed || !budgetController.reserve(requestId, predictedCostUsd)) {
+        emit("budget.exhausted", {
+          requestId,
+          phase: this.#phase,
+          reason: authorization.reason,
+          projectedUsd: authorization.projectedUsd,
+          remainingUsd: authorization.remainingUsd,
+        });
+        return {
+          kind: "incomplete",
+          reason: "turn budget exhausted before provider request",
+          partialText: "",
+          items: [],
+        };
+      }
+    }
     const request: ModelRequest = {
-      requestId: `${turnId}_step_${this.#observations.length + 1}`,
+      requestId,
       model: requestModelId,
       requestDigest: assembled.requestDigest,
       input: assembled.input,
@@ -1882,7 +2066,7 @@ export class AgentKernel {
     };
     try {
       this.#options.onPromptCompiled?.(assembled, {
-        requestId: request.requestId,
+        requestId,
         turnId,
         modelId: requestModelId,
         interactionMode: this.#activeInteractionMode,
@@ -1898,11 +2082,11 @@ export class AgentKernel {
       this.#options.continuationMode === "previous_response" ? "http_previous" : "http_full"
     );
     emit("provider.connection_started", {
-      requestId: request.requestId,
+      requestId,
       transport,
     });
     emit("provider.request_sent", {
-      requestId: request.requestId,
+      requestId,
       transport,
       previousResponse: request.previousResponseId !== undefined,
       payloadBytes: assembled.serializedInput.length + assembled.serializedTools.length,
@@ -1962,7 +2146,7 @@ export class AgentKernel {
         ) {
           firstDeltaObserved = true;
           emit("provider.first_delta", {
-            requestId: request.requestId,
+            requestId,
             eventType: event.type,
             durationMs: Math.max(0, this.#now() - providerStartedAt),
           });
@@ -1973,7 +2157,7 @@ export class AgentKernel {
           if (!connectionReady) {
             connectionReady = true;
             emit("provider.connection_ready", {
-              requestId: request.requestId,
+              requestId,
               transport,
               durationMs: Math.max(0, this.#now() - providerStartedAt),
               connectionReused: event.connectionReused === true,
@@ -1982,14 +2166,14 @@ export class AgentKernel {
           break;
         case "response.created":
           emit("provider.response_created", {
-            requestId: request.requestId,
+            requestId,
             responseId: event.responseId,
             durationMs: Math.max(0, this.#now() - providerStartedAt),
           });
           break;
         case "transport.fallback":
           emit("provider.fallback", {
-            requestId: request.requestId,
+            requestId,
             from: event.from,
             to: event.to,
             reason: event.reason,
@@ -2122,7 +2306,7 @@ export class AgentKernel {
     }
 
     emit("provider.response_completed", {
-      requestId: request.requestId,
+      requestId,
       responseId,
       status: failure !== undefined ? "failed" : incomplete !== undefined ? "incomplete" : "completed",
       durationMs: Math.max(0, this.#now() - providerStartedAt),
@@ -2130,10 +2314,14 @@ export class AgentKernel {
     });
 
     if (failure) {
+      this.#options.budgetController?.release(request.requestId);
       if (failure.kind === "cancelled") return { kind: "cancelled" };
       return { kind: "error", error: failure };
     }
-    if (signal.aborted) return { kind: "cancelled" };
+    if (signal.aborted) {
+      this.#options.budgetController?.release(request.requestId);
+      return { kind: "cancelled" };
+    }
 
     const orderedAuthoritativeMessages = [...authoritativeMessages.values()].sort(
       (left, right) => (left.sequence ?? Number.MAX_SAFE_INTEGER) - (right.sequence ?? Number.MAX_SAFE_INTEGER),
@@ -2836,6 +3024,12 @@ export class AgentKernel {
       reasoningTokens: this.#usage.reasoningTokens + usage.reasoningTokens,
       totalTokens: this.#usage.totalTokens + usage.totalTokens,
     };
+    this.#options.budgetController?.record(requestId, {
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      costUsd: estimateCostUsd(this.#routedModel(), usage),
+    });
+
     if (usage.cacheWriteTokens > 0) emit("cache.write_observed", { tokens: usage.cacheWriteTokens });
     if (usage.cachedInputTokens > 0) emit("cache.read_observed", { tokens: usage.cachedInputTokens });
     emit("usage.updated", {
@@ -2953,6 +3147,7 @@ export class AgentKernel {
     // silently changes approach mid-flight is the thing users cannot follow.
     emit("assistant.commentary", {
       text: `Reflecting on ${analysis.toolId} (${analysis.errorCategory}): ${analysis.rootCause} → ${analysis.correctiveAction}`,
+      commentaryKind: "recovery",
     });
     return analysis;
   }
@@ -3056,6 +3251,7 @@ export class AgentKernel {
         );
         emit("assistant.commentary", {
           text: `Keeping existing workspace changes: ${toolId} was blocked by ${category}, so the source was not rolled back.`,
+          commentaryKind: "risk",
         });
       }
       return;
@@ -3292,6 +3488,7 @@ export class AgentKernel {
         if (blocking.length > 0 && budget.repairCycles < this.#limits.maxRepairCycles) {
           emit("assistant.commentary", {
             text: `Independent review found ${blocking.length} blocking issue(s); attempting one repair.`,
+            commentaryKind: "risk",
           });
           this.#reviewFindings = blocking;
           emit("verification.completed", {
@@ -3714,6 +3911,29 @@ function parseCommandTokens(raw: string): string[] {
   if (quote !== undefined) return [];
   if (token.length > 0) tokens.push(token);
   return tokens;
+}
+
+
+function contextProjectionMismatches(
+  inputs: PromptInputs,
+  compiled: CompiledModelRequest,
+): string[] {
+  const projection = inputs.contextProjection;
+  if (projection === undefined) return [];
+  const mismatches: string[] = [];
+  const expectedManifest = projection.manifestDigest;
+  const inputManifest = inputs.contextManifest?.compilerManifestDigest;
+  const compiledManifest = compiled.contextManifest?.compilerManifestDigest;
+  if (inputManifest !== expectedManifest) {
+    mismatches.push("contextManifest.compilerManifestDigest does not match projection.manifestDigest");
+  }
+  if (compiledManifest !== expectedManifest) {
+    mismatches.push("compiled.contextManifest.compilerManifestDigest does not match projection.manifestDigest");
+  }
+  if (compiled.providerContextDigest !== projection.renderedDigest) {
+    mismatches.push("compiled.providerContextDigest does not match projection.renderedDigest");
+  }
+  return mismatches;
 }
 
 function countUnifiedDiff(diff: string): { additions: number; deletions: number } {

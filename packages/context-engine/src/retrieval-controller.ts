@@ -8,6 +8,14 @@
  */
 
 export type RetrievalPhase = "search" | "preview" | "exact" | "stop";
+export type RetrievalCoverageKey = string;
+
+export interface RetrievalQuerySignals {
+  readonly goal: string;
+  readonly mentionedSymbols?: readonly string[];
+  readonly changedPaths?: readonly string[];
+  readonly recentFailureRefs?: readonly string[];
+}
 
 export interface RetrievalBudget {
   readonly maxSearchCalls: number;
@@ -23,6 +31,7 @@ export interface RetrievalCandidate {
   readonly maxLines?: number;
   readonly score?: number;
   readonly symbol?: string;
+  readonly coverage?: readonly RetrievalCoverageKey[];
 }
 
 export interface RetrievalReadRequest extends RetrievalCandidate {
@@ -71,6 +80,11 @@ export interface RetrievalControllerOptions {
     candidate: RetrievalCandidate,
   ) => boolean;
   readonly signal?: AbortSignal;
+  /** Opt into V2 global rerank/coverage behavior; legacy remains the default. */
+  readonly version?: "legacy" | "v2";
+  readonly requiredCoverage?: readonly RetrievalCoverageKey[];
+  readonly isMutation?: boolean;
+  readonly maxParallelPreviews?: number;
 }
 
 export interface RetrievalControllerStats {
@@ -95,12 +109,16 @@ export interface RetrievalControllerResult {
     | "candidate_exhausted"
     | "aborted"
     | "adapter_error"
-    | "non_authoritative_exact";
+    | "non_authoritative_exact"
+    | "coverage_satisfied"
+    | "query_expanded";
   readonly candidates: readonly RetrievalCandidate[];
   readonly previews: readonly RetrievalObservation[];
   readonly exact: readonly RetrievalObservation[];
   readonly errors: readonly { phase: "search" | "preview" | "exact"; path?: string; message: string }[];
   readonly stats: RetrievalControllerStats;
+  readonly requiredCoverage?: readonly RetrievalCoverageKey[];
+  readonly coverage?: readonly RetrievalCoverageKey[];
 }
 
 const DEFAULT_MAX_CANDIDATES = 64;
@@ -124,6 +142,9 @@ export class RetrievalController {
   }
 
   async run(query: string): Promise<RetrievalControllerResult> {
+    if (this.#options.version === "v2" || (this.#options.requiredCoverage?.length ?? 0) > 0) {
+      return await this.#runV2(query);
+    }
     const budget = this.#options.budget;
     const errors: Array<{ phase: "search" | "preview" | "exact"; path?: string; message: string }> = [];
     const previews: RetrievalObservation[] = [];
@@ -221,7 +242,114 @@ export class RetrievalController {
     return this.#result("candidate_exhausted", candidates, previews, exact, errors, 1, previewCalls, exactCalls, bytesScanned, evidenceTokens, readsAvoided);
   }
 
-  #normalizeCandidates(candidates: readonly RetrievalCandidate[]): RetrievalCandidate[] {
+  async #runV2(query: string): Promise<RetrievalControllerResult> {
+    const budget = this.#options.budget;
+    const errors: Array<{ phase: "search" | "preview" | "exact"; path?: string; message: string }> = [];
+    const previews: RetrievalObservation[] = [];
+    const exact: RetrievalObservation[] = [];
+    const requiredCoverage = [...(this.#options.requiredCoverage ?? [])];
+    const coverage = new Set<RetrievalCoverageKey>();
+    let bytesScanned = 0;
+    let evidenceTokens = 0;
+    let previewCalls = 0;
+    let exactCalls = 0;
+    let readsAvoided = 0;
+    if (this.#aborted()) return this.#result("aborted", [], previews, exact, errors, 0, 0, 0, 0, 0, 0, requiredCoverage, coverage);
+    if (budget.maxSearchCalls < 1) return this.#result("search_budget", [], previews, exact, errors, 0, 0, 0, 0, 0, 0, requiredCoverage, coverage);
+    let candidates: RetrievalCandidate[] = [];
+    try {
+      candidates = this.#normalizeCandidates(await this.#adapter.search(query, this.#options.signal));
+    } catch (error) {
+      errors.push({ phase: "search", message: messageOf(error) });
+      return this.#result("adapter_error", candidates, previews, exact, errors, 1, 0, 0, 0, 0, 0, requiredCoverage, coverage);
+    }
+    if (candidates.length === 0) return this.#result("candidate_exhausted", candidates, previews, exact, errors, 1, 0, 0, 0, 0, 0, requiredCoverage, coverage);
+    const previewLimit = Math.min(
+      budget.maxPreviewCalls,
+      candidates.length,
+      Math.max(1, this.#options.maxParallelPreviews ?? 4),
+    );
+    const previewBatch = candidates.slice(0, previewLimit);
+    const previewResults = await Promise.all(previewBatch.map(async (candidate) => {
+      if (this.#aborted()) return { candidate, observation: undefined, error: "aborted" };
+      try {
+        const observation = await this.#adapter.preview({ ...candidate, mode: "preview" }, this.#options.signal);
+        assertPreview(observation, candidate.path);
+        return { candidate, observation };
+      } catch (error) {
+        return { candidate, observation: undefined, error: messageOf(error) };
+      }
+    }));
+    previewCalls = previewBatch.length;
+    for (const result of previewResults) {
+      if (result.error !== undefined) {
+        errors.push({ phase: "preview", path: result.candidate.path, message: result.error });
+        continue;
+      }
+      if (result.observation === undefined) continue;
+      previews.push(result.observation);
+      bytesScanned += nonNegative(result.observation.bytesScanned);
+      for (const key of result.candidate.coverage ?? (result.candidate.symbol === undefined ? [result.candidate.path] : [result.candidate.symbol])) coverage.add(key);
+    }
+    if (bytesScanned > budget.maxBytesScanned) return this.#result("byte_budget", candidates, previews, exact, errors, 1, previewCalls, exactCalls, bytesScanned, evidenceTokens, readsAvoided, requiredCoverage, coverage);
+    const sufficientPreview = previews.some((observation) => observation.sufficient === true);
+    if (sufficientPreview && requiredCoverage.length === 0 && this.#options.isMutation !== true) {
+      readsAvoided += Math.max(0, candidates.length - previews.length);
+      return this.#result("sufficient_preview", candidates, previews, exact, errors, 1, previewCalls, exactCalls, bytesScanned, evidenceTokens, readsAvoided, requiredCoverage, coverage);
+    }
+    const ranked = [...candidates].sort((left, right) =>
+      (right.score ?? 0) - (left.score ?? 0) ||
+      left.path.localeCompare(right.path) ||
+      (left.startLine ?? 1) - (right.startLine ?? 1),
+    );
+    for (const candidate of ranked.slice(0, budget.maxExactCalls)) {
+      if (this.#aborted()) return this.#result("aborted", candidates, previews, exact, errors, 1, previewCalls, exactCalls, bytesScanned, evidenceTokens, readsAvoided, requiredCoverage, coverage);
+      if (exactCalls >= budget.maxExactCalls) break;
+      exactCalls += 1;
+      try {
+        const observation = await this.#adapter.exact({ ...candidate, mode: "exact" }, this.#options.signal);
+        assertExact(observation, candidate.path);
+        const tokens = estimateObservationTokens(observation);
+        if (evidenceTokens + tokens > budget.maxEvidenceTokens && budget.maxEvidenceTokens > 0) {
+          return this.#result("evidence_budget", candidates, previews, exact, errors, 1, previewCalls, exactCalls, bytesScanned, evidenceTokens, readsAvoided, requiredCoverage, coverage);
+        }
+        exact.push(observation);
+        evidenceTokens += tokens;
+        bytesScanned += nonNegative(observation.bytesScanned);
+        for (const key of candidate.coverage ?? (candidate.symbol === undefined ? [candidate.path] : [candidate.symbol])) coverage.add(key);
+        if (requiredCoverage.length > 0 && requiredCoverage.every((key) => coverage.has(key))) {
+          return this.#result("coverage_satisfied", candidates, previews, exact, errors, 1, previewCalls, exactCalls, bytesScanned, evidenceTokens, readsAvoided, requiredCoverage, coverage);
+        }
+      } catch (error) {
+        const message = messageOf(error);
+        errors.push({ phase: "exact", path: candidate.path, message });
+        if (/authoritative|checksum|revision/i.test(message) && this.#options.isMutation === true) {
+          return this.#result("non_authoritative_exact", candidates, previews, exact, errors, 1, previewCalls, exactCalls, bytesScanned, evidenceTokens, readsAvoided, requiredCoverage, coverage);
+        }
+      }
+      if (bytesScanned > budget.maxBytesScanned) {
+        return this.#result("byte_budget", candidates, previews, exact, errors, 1, previewCalls, exactCalls, bytesScanned, evidenceTokens, readsAvoided, requiredCoverage, coverage);
+      }
+    }
+    if (requiredCoverage.length > 0 && requiredCoverage.every((key) => coverage.has(key))) {
+      return this.#result("coverage_satisfied", candidates, previews, exact, errors, 1, previewCalls, exactCalls, bytesScanned, evidenceTokens, readsAvoided, requiredCoverage, coverage);
+    }
+    return this.#result(
+      exact.length > 0 ? "candidate_exhausted" : "exact_budget",
+      candidates,
+      previews,
+      exact,
+      errors,
+      1,
+      previewCalls,
+      exactCalls,
+      bytesScanned,
+      evidenceTokens,
+      readsAvoided,
+      requiredCoverage,
+      coverage,
+    );
+  }  #normalizeCandidates(candidates: readonly RetrievalCandidate[]): RetrievalCandidate[] {
     const seen = new Set<string>();
     return [...candidates]
       .filter((candidate) => typeof candidate.path === "string" && candidate.path.length > 0)
@@ -256,6 +384,8 @@ export class RetrievalController {
     bytesScanned: number,
     evidenceTokens: number,
     readsAvoided = 0,
+    requiredCoverage: readonly RetrievalCoverageKey[] = [],
+    coverage: ReadonlySet<RetrievalCoverageKey> = new Set(),
   ): RetrievalControllerResult {
     const phase: RetrievalPhase = stopReason === "sufficient_preview"
       ? "preview"
@@ -270,6 +400,8 @@ export class RetrievalController {
       exact: Object.freeze([...exact]),
       errors: Object.freeze([...errors]),
       stats: Object.freeze({ searchCalls, previewCalls, exactCalls, bytesScanned, evidenceTokens, readsAvoided }),
+      ...(requiredCoverage.length === 0 ? {} : { requiredCoverage: Object.freeze([...requiredCoverage]) }),
+      ...(coverage.size === 0 ? {} : { coverage: Object.freeze([...coverage].sort()) }),
     });
   }
 }

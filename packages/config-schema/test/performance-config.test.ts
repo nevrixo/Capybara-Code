@@ -23,7 +23,18 @@ describe("performance configuration", () => {
       providerParallelTools: true,
     });
     expect(config.agent.verification.reviewPolicy).toBe("risk");
-    expect(config.perf).toEqual({ telemetry: true, sampleRate: 1 });
+    expect(config.perf).toMatchObject({
+      telemetry: true,
+      sampleRate: 1,
+      contextPackProjection: true,
+      subagentProfileResolutionV2: true,
+      subagentContextReservations: true,
+      phaseRouting: true,
+      budgetEnforcement: "advisory",
+      retrievalControllerV2: true,
+      verificationPlannerV2: true,
+      commentaryPolicyV2: true,
+    });
   });
 
   test("accepts supported transport, phase, review, and sampling overrides", () => {

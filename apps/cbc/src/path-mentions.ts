@@ -128,6 +128,24 @@ export class WorkspacePathMentionIndex {
     );
   }
 
+  /** Apply known transaction paths without waiting for a full repository walk. */
+  applyDelta(
+    upserts: readonly (MentionableWorkspaceFile | string)[],
+    removedPaths: readonly string[] = [],
+  ): void {
+    const files = new Map<string, MentionableWorkspaceFile>();
+    for (const entry of this.#entries) {
+      if (entry.kind === "file") files.set(entry.path, { path: entry.path });
+    }
+    for (const entry of upserts) {
+      const path = typeof entry === "string" ? entry : entry.path;
+      if (path.length > 0) files.set(path, { path });
+    }
+    // A transaction may list a changed path and also mark its operation as
+    // delete; deletion wins so stale completions cannot resurrect it.
+    for (const path of removedPaths) files.delete(path);
+    this.replaceFiles([...files.values()]);
+  }
   /**
    * Complete a query without touching disk.
    *
@@ -278,7 +296,29 @@ export function extractPathMentions(text: string): string[] {
   return mentions;
 }
 
-/** Render a semantic mention token, quoting the uncommon whitespace-containing path. */
+
+/**
+ * Extract bounded symbol references from a task description.
+ *
+ * Qualified names and explicitly backticked identifiers are useful retrieval
+ * signals; ordinary prose words are intentionally ignored.
+ */
+export function extractSymbolMentions(text: string): string[] {
+  const mentions: string[] = [];
+  const seen = new Set<string>();
+  const add = (value: string): void => {
+    const normalized = value.trim().replace(/\s*\.\s*/gu, ".");
+    if (!/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+$/u.test(normalized) &&
+      !/^[A-Z][A-Za-z0-9_$]{2,}$/u.test(normalized)) return;
+    if (seen.has(normalized)) return;
+    seen.add(normalized);
+    mentions.push(normalized);
+  };
+  for (const match of text.matchAll(/`([^`]+)`/gu)) add(match[1] ?? "");
+  for (const match of text.matchAll(/\b[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)+\b/gu)) add(match[0] ?? "");
+  for (const match of text.matchAll(/\b[A-Z][A-Za-z0-9_$]{2,}\b/gu)) add(match[0] ?? "");
+  return mentions.slice(0, 32);
+}/** Render a semantic mention token, quoting the uncommon whitespace-containing path. */
 export function pathMentionToken(path: string): string {
   if (!/[\s,;!?\)\]\}]/u.test(path)) return `@${path}`;
   return `@"${path.replace(/"/g, '\\"')}"`;

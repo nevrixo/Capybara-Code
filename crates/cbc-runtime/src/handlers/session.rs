@@ -503,6 +503,49 @@ pub fn list(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
     Ok(json!({ "sessions": sessions }))
 }
 
+/// Resolve one resume selector without transferring the entire session index.
+pub fn resolve(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
+    let ws = state.require_workspace()?;
+    let selector = required_str(&params, "selector")?;
+    let (session, candidates) = with_store(state, |store| {
+        if selector == "last" {
+            let sessions = store
+                .list_visible_sessions_for_workspace(&ws.fingerprint(), 1)
+                .map_err(store_error)?;
+            return Ok((sessions.first().cloned(), sessions));
+        }
+
+        if selector.starts_with("ses_") {
+            if let Ok(manifest) = store.load_manifest(&selector) {
+                if manifest.workspace_fingerprint == ws.fingerprint()
+                    && manifest.state != SessionStatus::Archived
+                {
+                    return Ok((Some(manifest.clone()), vec![manifest]));
+                }
+            }
+            // A short ses_ selector falls through to the bounded unique-prefix
+            // lookup; an unknown id never leaks another workspace's manifest.
+        }
+
+        let sessions = store
+            .list_visible_sessions_for_workspace(&ws.fingerprint(), 256)
+            .map_err(store_error)?;
+        if let Some(manifest) = sessions.iter().find(|entry| entry.title == selector) {
+            return Ok((Some(manifest.clone()), vec![manifest.clone()]));
+        }
+
+        let matches: Vec<_> = sessions
+            .into_iter()
+            .filter(|entry| entry.id.starts_with(&selector) || entry.title.starts_with(&selector))
+            .collect();
+        let selected = if matches.len() == 1 { matches.first().cloned() } else { None };
+        Ok((selected, matches.into_iter().take(8).collect()))
+    })?;
+    Ok(json!({
+        "session": session,
+        "candidates": candidates,
+    }))
+}
 /// Export the durable journal as JSONL in the §20.10 event envelope, so a
 /// consumer can replay it with the same parser it uses for live events.
 pub fn export(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {

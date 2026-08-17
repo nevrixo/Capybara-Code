@@ -20,6 +20,9 @@ bun run perf/cli.ts --pretty
 # Fast local smoke configuration (1k/10k histories).
 bun run perf/cli.ts --quick --pretty
 
+# Controlled long-session runner enables wall-clock and memory release gates
+CBC_PERF_FIXED_RUNNER=1 bun run perf/cli.ts --scenario long-session-resume-741x231mb --pretty
+
 # One or more scenarios.
 bun run perf/cli.ts --scenario projected-timeline,giant-markdown --pretty
 
@@ -58,6 +61,7 @@ wall-clock values.
 | `session-recorder-batching` | `SessionRecorder` 32-event and byte-limit splits with an ordered fake transport and exact durable acknowledgements. |
 | `idle-frame-surrogate` | Public `renderSessionFrame` semantic surrogate: idle `liveFrame` changes produce no changed frame. |
 | `resident-window-and-paging` | Frozen multi-page tail replay, earlier-page cursors, `ResidentJournalWindow` pins/eviction ranges, `boundResidentViewModel`, and the exact 32-child reducer detail cap. |
+| `long-session-resume-741x231mb` | Deterministic 741-turn / 231MiB target with 48-item/768KiB resume tail, 64-item/1MiB paging, three historical pages, prompt/RPC/memory counters, and fixed-runner release gates. |
 | `read-cache-coalescing` | Revision-scoped read reuse, concurrent in-flight coalescing, 400-line default alignment, and path-only invalidation. |
 | `repository-scan-truncation` | Bounded repository walk truncation propagation and dirty-path preservation. |
 | `selection-shortlist-50k` | Deterministic 50k-file shortlist cap, explicit mention retention, and bounded scoring work. |

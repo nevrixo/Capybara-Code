@@ -16,6 +16,7 @@ import {
   type PromptInputs,
 } from "@cbc/agent-kernel";
 import type { CbcConfig, ModelProfileConfig } from "@cbc/config-schema";
+import { projectTaskContextCapsule } from "@cbc/context-engine";
 import type {
   ScopedExactExcerpt,
   TaskContextCapsule,
@@ -26,7 +27,7 @@ import {
   type PermissionContext,
   type ProposedAction,
 } from "@cbc/permissions";
-import type { CbcEventKind } from "@cbc/protocol";
+import type { CbcEventKind, EventVisibility } from "@cbc/protocol";
 import type {
   InferencePolicyDecision,
   InferencePolicyPort,
@@ -72,7 +73,8 @@ export interface SubagentBridgeOptions {
   readonly runtime: Runtime;
   readonly config: CbcConfig;
   /** The concrete model selected for the current root session. */
-  readonly selectedModel: string;
+  /** Resolves to the root route model at child-start time. */
+  readonly selectedModel: () => string;
   readonly provider: ModelProvider;
   readonly inferencePolicy?: InferencePolicyPort;
   readonly approvals: ApprovalBroker;
@@ -87,7 +89,7 @@ export interface SubagentBridgeOptions {
   readonly emit: <T>(
     kind: CbcEventKind,
     payload: T,
-    options?: { turnId?: string; agentId?: string },
+    options?: { turnId?: string; agentId?: string; visibility?: EventVisibility },
   ) => void;
   readonly bridges?: ToolBridges;
   readonly mcpHint?: McpHintResolver;
@@ -147,7 +149,7 @@ export class SubagentBridge {
         emit: <T>(
           kind: CbcEventKind,
           payload: T,
-          eventOptions?: { turnId?: string; agentId?: string; callerId?: string; taskEpochId?: string; workspaceIdentityDigest?: string },
+          eventOptions?: { turnId?: string; agentId?: string; callerId?: string; taskEpochId?: string; workspaceIdentityDigest?: string; visibility?: EventVisibility },
         ) => options.emit(kind, payload, eventOptions),
       },
       runner: (context) => this.#runChild(context),
@@ -156,6 +158,7 @@ export class SubagentBridge {
       parentAgentId: "root",
       maxChildrenPerTurn: options.config.subagents.maxPerTurn,
       maxConcurrent: options.config.subagents.maxConcurrent,
+      enableContextReservations: options.config.perf.subagentContextReservations !== false,
       ...(options.now !== undefined ? { now: options.now } : {}),
     });
   }
@@ -484,11 +487,12 @@ export class SubagentBridge {
       emit: <T>(
         kind: CbcEventKind,
         payload: T,
-        eventOptions?: { turnId?: string; agentId?: string; callerId?: string; taskEpochId?: string; workspaceIdentityDigest?: string },
+        eventOptions?: { turnId?: string; agentId?: string; callerId?: string; taskEpochId?: string; workspaceIdentityDigest?: string; visibility?: EventVisibility },
       ) => {
         if (eventOptions?.turnId !== undefined) childTurnId = eventOptions.turnId;
         this.#options.emit(kind, payload, {
           ...(eventOptions?.turnId !== undefined ? { turnId: eventOptions.turnId } : {}),
+          ...(eventOptions?.visibility !== undefined ? { visibility: eventOptions.visibility } : {}),
           agentId: instance.id,
         });
       },
@@ -599,6 +603,29 @@ export class SubagentBridge {
       };
     };
 
+    // Resolve the requested child profile against the root route selected for
+    // this turn. A profile may change mode/effort, but it cannot escalate the
+    // model beyond the root route.
+    const resolvedProfile = this.#options.config.perf.subagentProfileResolutionV2 === false
+      ? { model: this.#options.config.model.default, reasoningMode: this.#options.config.model.reasoningMode, reasoningEffort: this.#options.config.model.reasoningEffort }
+      : resolveChildProfile(
+          this.#options.config,
+          instance.modelProfile,
+          this.#options.selectedModel(),
+        );
+    this.#options.emit(
+      "task.profile_resolved",
+      {
+        taskId: instance.id,
+        requestedProfile: instance.modelProfile,
+        resolvedModel: resolvedProfile.model,
+        resolvedReasoningMode: resolvedProfile.reasoningMode,
+        resolvedReasoningEffort: resolvedProfile.reasoningEffort,
+        inheritance: "root-route-model",
+      },
+      { agentId: instance.id },
+    );
+
     // §15.3: the ceilings the child actually runs under. Computed once so the
     // kernel limits and the budget brief handed to the model cannot disagree.
     const effectiveLimits = {
@@ -630,9 +657,10 @@ export class SubagentBridge {
       }),
       emitter: childEmitter,
       limits: effectiveLimits,
-      model: this.#options.config.model.default,
-      reasoningMode: this.#options.config.model.reasoningMode,
-      reasoningEffort: this.#options.config.model.reasoningEffort,
+      model: resolvedProfile.model,
+      reasoningMode: resolvedProfile.reasoningMode,
+      reasoningEffort: resolvedProfile.reasoningEffort,
+      reasoningEffortLocked: true,
       reasoningSummary: this.#options.config.model.reasoning.summary,
       ...(this.#options.inferencePolicy !== undefined ? { inferencePolicy: this.#options.inferencePolicy } : {}),
       maxOutputTokens: this.#options.config.model.maxOutputTokens,
@@ -641,7 +669,7 @@ export class SubagentBridge {
       nativeCompaction: this.#options.config.model.context.providerCompaction,
       compactionThresholdTokens: this.#options.config.model.context.compactionThresholdTokens,
       serviceTier: this.#options.config.provider.openai.serviceTier,
-      phasePolicy: this.#options.config.model.router.phasePolicy,
+      phasePolicy: this.#options.config.model.router.phasePolicy && this.#options.config.perf.phaseRouting !== false,
       commandClassification: this.#options.config.agent.toolGraph.commandClassification,
       promptCompiler: this.#options.config.agent.promptCompiler,
       autoReview: false,
@@ -683,37 +711,63 @@ export class SubagentBridge {
           projectInstructions: parent.projectInstructions,
           skillCatalog: parent.skillCatalog,
           loadedSkills: parent.loadedSkills,
-          repositoryContext: capsule === undefined
-            ? parent.repositoryContext
-            : [
-                renderTaskContextCapsule(capsule),
-                ...scopedExactExcerpts.map(renderScopedExactExcerpt),
-              ],
-          // Parent manifests and exact-excerpt descriptors name its full active
-          // view. Passing either beside a capsule would silently defeat the path
-          // boundary, so legacy metadata is copied only on the legacy path.
+          // A capsule is projected authoritatively into L6. The legacy parent
+          // context remains available only for embedders that have not adopted
+          // scoped capsules yet.
+          ...(capsule === undefined
+            ? parent.repositoryContext !== undefined
+              ? { repositoryContext: parent.repositoryContext }
+              : {}
+            : {
+                contextProjection: projectTaskContextCapsule(capsule, {
+                  recentDialogue: childKernel.history,
+                  virtualizedExcerpts: scopedExactExcerpts.map((excerpt) => ({
+                    id: excerpt.excerptId,
+                    path: excerpt.path,
+                    text: excerpt.body,
+                    checksum: excerpt.checksum,
+                    startLine: excerpt.startLine,
+                    endLine: excerpt.endLine,
+                    evidenceId: excerpt.evidenceId,
+                    identityDigest: excerpt.identityDigest,
+                    bodyDigest: excerpt.bodyDigest,
+                    scope: "child" as const,
+                  })),
+                }),
+              }),
           ...(capsule === undefined && parent.contextManifest !== undefined
             ? { contextManifest: parent.contextManifest }
-            : {}),
+            : capsule === undefined
+              ? {}
+              : {
+                  contextManifest: {
+                    evidenceIds: capsule.evidenceRefs.map((reference) => reference.id as `evidence-${string}`),
+                    excerptIds: scopedExactExcerpts.map((excerpt) => excerpt.excerptId),
+                    rejected: [],
+                    estimatedTokens: capsule.budget.inputTokens,
+                    omitted: 0,
+                    compilerPackId: capsule.capsuleId,
+                    compilerManifestDigest: capsule.digest,
+                  },
+                }),
           ...(capsule === undefined && parent.virtualizedExcerpts !== undefined
             ? { virtualizedExcerpts: parent.virtualizedExcerpts }
-            : {}),
-          ...(capsule !== undefined && scopedExactExcerpts.length > 0
-            ? {
-                virtualizedExcerpts: scopedExactExcerpts.map((excerpt) => ({
-                  id: excerpt.excerptId,
-                  path: excerpt.path,
-                  text: excerpt.body,
-                  checksum: excerpt.checksum,
-                  startLine: excerpt.startLine,
-                  endLine: excerpt.endLine,
-                  evidenceId: excerpt.evidenceId,
-                  identityDigest: excerpt.identityDigest,
-                  bodyDigest: excerpt.bodyDigest,
-                  scope: "child" as const,
-                })),
-              }
-            : {}),
+            : capsule !== undefined && scopedExactExcerpts.length > 0
+              ? {
+                  virtualizedExcerpts: scopedExactExcerpts.map((excerpt) => ({
+                    id: excerpt.excerptId,
+                    path: excerpt.path,
+                    text: excerpt.body,
+                    checksum: excerpt.checksum,
+                    startLine: excerpt.startLine,
+                    endLine: excerpt.endLine,
+                    evidenceId: excerpt.evidenceId,
+                    identityDigest: excerpt.identityDigest,
+                    bodyDigest: excerpt.bodyDigest,
+                    scope: "child" as const,
+                  })),
+                }
+              : {}),
           ...(capsule === undefined && parent.staleReadCallIds !== undefined
             ? { staleReadCallIds: parent.staleReadCallIds }
             : {}),

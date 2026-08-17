@@ -282,14 +282,39 @@ export function roleDefinition(role: SubagentRole): RoleDefinition {
 }
 
 /**
- * §15.7 aggregate limits — raised to effectively remove the cap (§15.7 previously 3/3/1).
+ * §15.7 aggregate limits — one shared hard contract for every scheduler embedder.
  */
 export const SUBAGENT_LIMITS = {
-  maxChildrenPerTurn: 32,
-  maxConcurrent: 32,
-  maxDepth: 4,
+  maxChildrenPerTurn: 3,
+  maxConcurrent: 8,
+  maxDepth: 1,
   /** §15.7 / P6: exactly one writer. */
   maxWriterAgents: 1,
   /** §15.7: children together may use half the parent's context budget. */
   aggregateContextFraction: 0.5,
 } as const;
+
+/** Descriptive alias used by rollout and admission code. */
+export const SUBAGENT_HARD_LIMITS = SUBAGENT_LIMITS;
+
+/**
+ * Conservative p75-style admission estimates. These are reservations, not
+ * per-child ceilings: actual provider usage reconciles them on completion.
+ */
+export const SUBAGENT_CONTEXT_RESERVATIONS: Readonly<Record<SubagentRole, number>> = {
+  explore: 8_000,
+  planner: 12_000,
+  architect: 20_000,
+  executor: 20_000,
+  refactorer: 20_000,
+  reviewer: 20_000,
+  test: 12_000,
+} as const;
+
+export function contextReservationForRole(
+  role: SubagentRole,
+  parentContextTokens: number,
+): number {
+  const aggregate = Math.floor(Math.max(0, parentContextTokens) * SUBAGENT_HARD_LIMITS.aggregateContextFraction);
+  return Math.max(1, Math.min(roleDefinition(role).softContextTokens, SUBAGENT_CONTEXT_RESERVATIONS[role], aggregate));
+}

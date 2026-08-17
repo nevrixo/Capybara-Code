@@ -755,6 +755,9 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
     case "assistant.reasoning_summary": {
       const payload = payloadOf(event);
       if (typeof payload.reasoningEffort === "string") next.reasoningEffort = payload.reasoningEffort;
+      // Hidden commentary remains journaled for replay/diagnostics but must not
+      // become a resident timeline item when visibleCommentary is disabled.
+      if (event.visibility === "hidden") break;
       if (event.agentId !== undefined && event.agentId !== "root" && event.agentId.length > 0) {
         clearTaskLive(next, event.agentId);
         break;

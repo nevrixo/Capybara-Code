@@ -50,6 +50,7 @@ pub const REQUEST_METHODS: &[&str] = &[
     "session.snapshot",
     "session.load",
     "session.list",
+    "session.resolve",
     "session.set_status",
     "session.export",
     "session.fork",
@@ -122,7 +123,7 @@ mod tests {
         // make the SQLite store the single session authority, and `runtime.cancel`
         // (P0-04) lets a client cancel an in-flight request. `fs.fingerprint`
         // validates a preview revision without promoting it to write authority.
-        assert_eq!(REQUEST_METHODS.len(), 52);
+        assert_eq!(REQUEST_METHODS.len(), 53);
         for m in [
             "runtime.initialize",
             "workspace.mode.write",

@@ -8,6 +8,7 @@ import {
 } from "@cbc/session-domain";
 import {
   MarkdownRenderCache,
+  PagedTimelineStore,
   ProjectedTimeline,
   TimelineRenderCache,
   blockContext,
@@ -360,6 +361,44 @@ describe("incremental timeline projection", () => {
     expect(text(projection.renderAll(context(), fullOptions))).toEqual(
       text(renderTimeline(items, context(), fullOptions)),
     );
+  });
+});
+
+describe("bounded historical page residency", () => {
+  test("keeps only the newest three pages and deduplicates overlaps", () => {
+    const store = new PagedTimelineStore<{ id: string; sequence: number }>({ maxResidentPages: 3 });
+    const evicted: string[] = [];
+    for (let page = 0; page < 4; page += 1) {
+      evicted.push(...store.prependPage({
+        id: `page-${page}`,
+        firstSequence: page * 64 + 1,
+        lastSequence: page * 64 + 64,
+        items: Array.from({ length: 64 }, (_, index) => ({
+          id: `item-${page * 64 + index + 1}`,
+          sequence: page * 64 + index + 1,
+        })),
+      }));
+    }
+    expect(evicted).toEqual(["page-0"]);
+    expect(store.pageCount).toBe(3);
+    expect(store.historicalItems).toHaveLength(192);
+    expect(store.historicalItems[0]?.sequence).toBe(65);
+    store.prependPage({
+      id: "overlap",
+      firstSequence: 64,
+      lastSequence: 65,
+      items: [{ id: "item-64", sequence: 64 }, { id: "item-65", sequence: 65 }],
+    });
+    expect(store.historicalItems.filter((item) => item.id === "item-65")).toHaveLength(1);
+  });
+
+  test("prepends and drops a projected historical page", () => {
+    const projection = new ProjectedTimeline();
+    projection.sync([notice(100)], {});
+    expect(projection.prependPage("history-1", [notice(0), notice(1)])).toBe(2);
+    expect(projection.projectedItems().map((item) => item.id)).toEqual(["notice-0", "notice-1", "notice-100"]);
+    expect(projection.dropPage("history-1")).toBe(true);
+    expect(projection.projectedItems().map((item) => item.id)).toEqual(["notice-100"]);
   });
 });
 
