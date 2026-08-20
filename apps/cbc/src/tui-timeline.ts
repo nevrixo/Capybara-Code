@@ -164,12 +164,24 @@ export function streamingTimelineItems(
     });
   }
   if (reasoning.length > 0) {
+    const preview = reasoning
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .find((line) => line.length > 0)
+      ?.slice(0, 160);
     items.push({
-      type: "commentary",
-      id: "streaming-reasoning",
+      type: "thinking",
+      id: "thinking:streaming:root:streaming:0",
       sequence: ++sequence,
-      variant: "reasoning_summary",
-      text: reasoning,
+      turnId: "turn:streaming",
+      agentId: "root",
+      requestId: "streaming",
+      segmentIndex: 0,
+      providerItemIds: [],
+      state: "streaming",
+      sources: ["provider_reasoning"],
+      ...(preview !== undefined ? { summaryText: preview, summaryOrigin: "derived_from_visible_detail" as const } : {}),
+      detailText: reasoning,
     });
   }
   if (provisionalText.length > 0) {

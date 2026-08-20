@@ -109,6 +109,29 @@ import type { LineWriter, RenderDecision } from "./output.ts";
 import { TerminalFrameWriter } from "./terminal-writer.ts";
 import { TuiPerfRecorder, tuiPerfEnabled } from "./tui-perf.ts";
 
+function thinkingTextCandidates(detail: unknown, summary: unknown, title?: unknown): readonly string[] {
+  const detailText = typeof detail === "string" ? detail : "";
+  const summaryText = typeof summary === "string" ? summary : "";
+  const titleText = typeof title === "string" ? title.trim() : "";
+  const values = [
+    detailText,
+    summaryText,
+    detailText + summaryText,
+    summaryText + detailText,
+    ...(titleText.length > 0 && summaryText.length > 0
+      ? [`**${titleText}**\n\n${summaryText}`, `${titleText}: ${summaryText}`]
+      : []),
+    titleText,
+  ];
+  const candidates = new Set<string>();
+  for (const value of values) {
+    if (value.length === 0) continue;
+    candidates.add(value);
+    const trimmed = value.trim();
+    if (trimmed.length > 0) candidates.add(trimmed);
+  }
+  return [...candidates];
+}
 export interface InteractiveUiOptions {
   readonly host: Host;
   readonly decision: RenderDecision;
@@ -284,6 +307,7 @@ export class InteractiveUi {
         readonly text: string;
         readonly phase: AssistantStreamPhase;
         readonly turnId?: string;
+        readonly itemId?: string;
       }
     | undefined;
   #streamingOpen = false;
@@ -1579,6 +1603,8 @@ export class InteractiveUi {
       readonly agentId?: string;
       readonly turnId?: string;
       readonly itemId?: string;
+      readonly thinkingId?: string;
+      readonly channel?: "detail" | "summary";
       readonly correlationId?: string;
     } = {},
   ): void {
@@ -1589,8 +1615,8 @@ export class InteractiveUi {
     // fullscreen projection.
     if (
       !this.#fullScreen &&
-      (phase === "reasoning" || phase === "reasoning_summary") &&
-      this.#thinkingVisibility !== "full"
+      (phase === "thinking" || phase === "reasoning" || phase === "reasoning_summary") &&
+      this.#thinkingMode !== "expanded"
     ) {
       return;
     }
@@ -1604,6 +1630,8 @@ export class InteractiveUi {
       agentId,
       ...(options.turnId !== undefined ? { turnId: options.turnId } : {}),
       ...(options.itemId !== undefined ? { itemId: options.itemId } : {}),
+      ...(options.thinkingId !== undefined ? { thinkingId: options.thinkingId } : {}),
+      ...(options.channel !== undefined ? { channel: options.channel } : {}),
       ...(options.correlationId !== undefined ? { correlationId: options.correlationId } : {}),
       ...(options.provisional !== undefined ? { provisional: options.provisional } : {}),
       nowMs: this.#options.host.now(),
@@ -1627,7 +1655,8 @@ export class InteractiveUi {
       // Keep commentary, reasoning, and the final answer as separate assistant
       // blocks in append-only mode, just like the full-screen timeline.
       // A phase change gets a line break, not another standalone chat header.
-      this.#options.host.io.stdout("\r\n");
+      const sameThinking = (this.#streamingPlainPhase === "thinking" || this.#streamingPlainPhase === "reasoning" || this.#streamingPlainPhase === "reasoning_summary") && (streamPhase === "thinking" || streamPhase === "reasoning" || streamPhase === "reasoning_summary");
+      if (!sameThinking) this.#options.host.io.stdout("\r\n");
       this.#streamingPlainPhase = streamPhase;
       this.#writePlainStreamHeader(streamPhase);
     }
@@ -1647,10 +1676,10 @@ export class InteractiveUi {
       return;
     }
     const label =
-      phase === "reasoning"
+      phase === "thinking" || phase === "reasoning"
         ? "Thinking..."
         : phase === "reasoning_summary"
-          ? "Reasoning summary..." : "Working...";
+          ? "Thinking..." : "Working...";
     if (this.#lastLiveLabel === label) return;
     this.#lastLiveLabel = label;
     this.#options.host.io.stdout(`  ${label}\r\n`);
@@ -1781,6 +1810,7 @@ export class InteractiveUi {
     if (event.agentId !== undefined && event.agentId !== "root") return;
     if (
       event.kind !== "assistant.commentary" &&
+      event.kind !== "assistant.thinking" &&
       event.kind !== "assistant.reasoning" &&
       event.kind !== "assistant.reasoning_summary" &&
       event.kind !== "assistant.final"
@@ -1793,15 +1823,22 @@ export class InteractiveUi {
         ? (event.payload as Record<string, unknown>)
         : {};
     const phase: AssistantStreamPhase =
-      event.kind === "assistant.final"
+      event.kind === "assistant.thinking"
+        ? "thinking"
+        : event.kind === "assistant.final"
         ? "final"
         : event.kind === "assistant.reasoning"
           ? "reasoning"
           : event.kind === "assistant.reasoning_summary"
             ? "reasoning_summary"
             : "progress";
+    const thinkingCandidates = event.kind === "assistant.thinking"
+      ? thinkingTextCandidates(payload.detailText, payload.summaryText, payload.title)
+      : [];
     const text =
-      event.kind === "assistant.final" && typeof payload.answer === "string" && payload.answer.length > 0
+      event.kind === "assistant.thinking"
+        ? (thinkingCandidates[0] ?? "")
+        : event.kind === "assistant.final" && typeof payload.answer === "string" && payload.answer.length > 0
         ? payload.answer
         : typeof payload.text === "string"
           ? payload.text
@@ -1815,16 +1852,24 @@ export class InteractiveUi {
         ...(event.turnId !== undefined ? { turnId: event.turnId } : {}),
         agentId: event.agentId ?? "root",
         ...(typeof payload.itemId === "string" ? { itemId: payload.itemId } : {}),
+        ...(typeof payload.thinkingId === "string" ? { thinkingId: payload.thinkingId } : {}),
+        ...(payload.channel === "detail" || payload.channel === "summary" ? { channel: payload.channel } : {}),
         ...(event.correlationId !== undefined ? { correlationId: event.correlationId } : {}),
       },
       this.#options.host.now(),
     );
     // Identity tells us which live item this durable event settles. Its text
     // must also match before plain scrollback elides the durable block: a
-    // completed output item may recover deltas that were lost in transit.
-    if (!this.#fullScreen && reconciled !== undefined && reconciled.text === text) {
+    // completed output item may recover deltas that were lost in transit. A
+    // single live Thinking span can contain both provider channels, in either
+    // arrival order, so compare all truthful channel combinations.
+    const reconciledTextMatches = event.kind === "assistant.thinking"
+      ? reconciled !== undefined && thinkingCandidates.includes(reconciled.text)
+      : reconciled !== undefined && reconciled.text === text;
+    if (!this.#fullScreen && reconciled !== undefined && reconciledTextMatches) {
       this.#plainReconciledDurable = {
         eventId: event.id,
+        ...(typeof payload.thinkingId === "string" ? { itemId: payload.thinkingId } : {}),
         text,
         phase,
         ...(event.turnId !== undefined ? { turnId: event.turnId } : {}),
@@ -1961,7 +2006,7 @@ export class InteractiveUi {
     // The reducer keeps the durable event id as the timeline item id. Using it
     // avoids suppressing a later repeated sentence merely because its text and
     // phase happen to match a previously streamed item.
-    if (item.id !== pending.eventId) return false;
+    if (item.id !== (pending.itemId ?? pending.eventId)) return false;
     this.#plainReconciledDurable = undefined;
     return true;
   }
@@ -1970,7 +2015,9 @@ export class InteractiveUi {
     const durableText =
       item.type === "commentary"
         ? item.text
-        : item.type === "final"
+        : item.type === "thinking"
+          ? item.detailText ?? item.summaryText
+          : item.type === "final"
           ? item.answer ?? item.text
           : undefined;
     const reconciled =
@@ -1986,7 +2033,19 @@ export class InteractiveUi {
             },
             this.#options.host.now(),
           )
-        : item.type === "final"
+        : item.type === "thinking"
+          ? this.#liveSpans.reconcile(
+              {
+                text: item.detailText ?? item.summaryText ?? "",
+                phase: "reasoning",
+                ...(item.turnId !== undefined ? { turnId: item.turnId } : {}),
+                ...(item.agentId !== undefined ? { agentId: item.agentId } : {}),
+                ...(item.providerItemIds[0] !== undefined ? { itemId: item.providerItemIds[0] } : {}),
+                thinkingId: item.id,
+              },
+              this.#options.host.now(),
+            )
+          : item.type === "final"
           ? this.#liveSpans.reconcile(
               {
                 text: item.answer ?? item.text,
@@ -1999,11 +2058,15 @@ export class InteractiveUi {
               this.#options.host.now(),
             )
           : undefined;
+    const reconciledThinking =
+      item.type === "thinking" &&
+      reconciled !== undefined &&
+      thinkingTextCandidates(item.detailText, item.summaryText, item.title).includes(reconciled.text);
     if (
       !this.#fullScreen &&
       reconciled !== undefined &&
       durableText !== undefined &&
-      reconciled.text === durableText
+      (item.type === "thinking" ? reconciledThinking : reconciled.text === durableText)
     ) {
       return;
     }
@@ -2092,13 +2155,9 @@ export class InteractiveUi {
     this.#markFrameDirty("live", "status");
     const live = visibleLiveState(model);
     const rawLabel = live.kind === "idle" ? "" : liveStateLabel(live);
-    // Hidden means the provider's reasoning summary itself is not disclosed;
-    // retain a neutral progress indicator so a long request never looks stuck.
-    const label =
-      this.#thinkingVisibility === "hidden" &&
-      (rawLabel === "Thinking..." || rawLabel === "Reasoning summary...")
-        ? "Working..."
-        : rawLabel;
+    // `off` hides completed Thinking bodies but keeps the active global status;
+    // users should still see that a request is making progress.
+    const label = rawLabel;
     if ((label.length > 0) !== (this.#lastLiveLabel.length > 0)) {
       this.#invalidateTimelineScrollRange();
     }
@@ -2608,46 +2667,58 @@ export class InteractiveUi {
     let sequence = baseSequence;
     for (const view of views) {
       const displayPhase = view.key.phase;
-      const priorCount = phaseCounts.get(displayPhase) ?? 0;
-      phaseCounts.set(displayPhase, priorCount + 1);
+      const thinkingPhase = displayPhase === "thinking" || displayPhase === "reasoning" || displayPhase === "reasoning_summary";
+      const identityPhase = thinkingPhase ? "thinking" : displayPhase;
+      const priorCount = phaseCounts.get(identityPhase) ?? 0;
+      phaseCounts.set(identityPhase, priorCount + 1);
       const baseId =
-        displayPhase === "progress"
+        identityPhase === "progress"
           ? "streaming-progress"
-          : displayPhase === "reasoning"
+          : identityPhase === "thinking"
             ? "streaming-thinking"
-            : displayPhase === "reasoning_summary"
-              ? "streaming-reasoning"
-            : displayPhase === "candidate_final"
+            : identityPhase === "candidate_final"
               ? "streaming-candidate-final"
               : view.key.itemId === "final" || view.key.itemId === ""
                 ? "streaming-answer"
                 : view.key.itemId;
-      const id = priorCount === 0 ? baseId : `${baseId}-${view.key.itemId}`;
+      const id = priorCount === 0 ? baseId : baseId + "-" + view.key.itemId;
       const nextSequence = ++sequence;
       const cached = this.#streamingItems.get(id);
+      const body = view.fullText();
+      const thinkingId = view.key.thinkingId ?? "thinking:" + view.key.turnId + ":" + view.key.agentId + ":" + view.key.itemId + ":0";
       const item =
         cached?.revision === view.revision && cached.item.sequence === nextSequence
           ? cached.item
-          : (displayPhase === "final"
+          : displayPhase === "final"
+            ? {
+                type: "final" as const,
+                id,
+                sequence: nextSequence,
+                text: body,
+              }
+            : thinkingPhase
               ? {
-                  type: "final" as const,
-                  id,
+                  type: "thinking" as const,
+                  id: thinkingId,
                   sequence: nextSequence,
-                  text: view.fullText(),
+                  turnId: view.key.turnId,
+                  agentId: view.key.agentId,
+                  requestId: thinkingId,
+                  segmentIndex: 0,
+                  providerItemIds: [view.key.itemId],
+                  state: "streaming" as const,
+                  sources: [view.key.channel === "summary" || displayPhase === "reasoning_summary" ? "provider_summary" as const : "provider_reasoning" as const],
+                  ...(view.key.channel === "summary" || displayPhase === "reasoning_summary" ? { summaryText: body } : { detailText: body }),
                 }
               : {
                   type: "commentary" as const,
                   id,
                   sequence: nextSequence,
-                  variant: displayPhase === "reasoning"
-                    ? "reasoning" as const
-                    : displayPhase === "reasoning_summary"
-                      ? "reasoning_summary" as const
-                    : displayPhase === "candidate_final"
-                      ? "candidate_final" as const
-                      : "progress" as const,
-                  text: view.fullText(),
-                });
+                  variant: displayPhase === "candidate_final"
+                    ? "candidate_final" as const
+                    : "progress" as const,
+                  text: body,
+                };
       this.#streamingItems.set(id, { revision: view.revision, item });
       items.push(item);
       projectionViews.push({
@@ -3030,12 +3101,15 @@ export function uiEventSink(
       const payload = event.payload as {
         text?: unknown;
         itemId?: unknown;
+        thinkingId?: unknown;
+        channel?: unknown;
         phase?: unknown;
       };
       const phase =
         payload.phase === "commentary"
           ? "progress"
           : payload.phase === "progress" ||
+              payload.phase === "thinking" ||
               payload.phase === "reasoning" ||
               payload.phase === "reasoning_summary" ||
               payload.phase === "candidate_final" ||
@@ -3047,6 +3121,8 @@ export function uiEventSink(
           agentId: event.agentId ?? "root",
           ...(event.turnId !== undefined ? { turnId: event.turnId } : {}),
           ...(typeof payload.itemId === "string" ? { itemId: payload.itemId } : {}),
+          ...(typeof payload.thinkingId === "string" ? { thinkingId: payload.thinkingId } : {}),
+          ...(payload.channel === "detail" || payload.channel === "summary" ? { channel: payload.channel } : {}),
           ...(event.correlationId !== undefined ? { correlationId: event.correlationId } : {}),
         });
       }

@@ -1413,16 +1413,16 @@ describe("interactive UI (§6.2, §6.21)", () => {
     expect(output()).not.toContain("capybara\r\n");
   });
 
-  test("labels a streamed reasoning summary in plain mode", () => {
-    const { instance, output } = ui(80);
+  test("labels every streamed Thinking channel consistently in expanded plain mode", () => {
+    const { instance, output } = ui(80, { NO_COLOR: "1" }, "expanded");
     instance.stream("Checking the workspace.", "reasoning_summary");
     instance.finishStream();
 
-    expect(output()).toContain("Reasoning summary...\r\nChecking the workspace.");
+    expect(output()).toContain("Thinking...\r\nChecking the workspace.");
   });
 
   test("labels a streamed provider-visible Thinking block in plain mode", () => {
-    const { instance, output } = ui(80);
+    const { instance, output } = ui(80, { NO_COLOR: "1" }, "expanded");
     instance.stream("Checking the workspace.", "reasoning");
     instance.finishStream();
     expect(output()).toContain("Thinking...\r\nChecking the workspace.");
@@ -1484,7 +1484,7 @@ describe("interactive UI (§6.2, §6.21)", () => {
       }],
       lastSequence: 1,
     });
-    expect(hiddenHost.out.join("")).toContain("Working...");
+    expect(hiddenHost.out.join("")).toContain("Thinking...");
     expect(hiddenHost.out.join("")).not.toContain("Reasoning summary...");
     expect(hiddenHost.out.join("")).not.toContain("line one");
   });

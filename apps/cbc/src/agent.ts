@@ -3148,6 +3148,7 @@ function historyFromEvents(
         }
         break;
       }
+      case "assistant.thinking":
       case "assistant.reasoning":
       case "assistant.reasoning_summary": {
         // A provider disclosure is presentation-only. Replaying it as assistant

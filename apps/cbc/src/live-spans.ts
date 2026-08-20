@@ -2,7 +2,7 @@
 
 import { AppendableMarkdownSourceIndex } from "@cbc/tui-components";
 
-export type LiveSpanPhase = "progress" | "reasoning" | "reasoning_summary" | "candidate_final" | "final" | "commentary";
+export type LiveSpanPhase = "progress" | "thinking" | "reasoning" | "reasoning_summary" | "candidate_final" | "final" | "commentary";
 export type LiveSpanOutcome = "landed" | "cancelled" | "failed" | "replaced";
 
 export interface LiveSpanKey {
@@ -10,6 +10,9 @@ export interface LiveSpanKey {
   readonly agentId: string;
   readonly phase: LiveSpanPhase;
   readonly itemId: string;
+  /** Canonical semantic identity for Thinking; provider item ids remain aliases. */
+  readonly thinkingId?: string;
+  readonly channel?: "detail" | "summary";
 }
 
 export interface LiveSpan {
@@ -43,6 +46,8 @@ export interface AppendLiveSpanInput {
   readonly agentId?: string;
   readonly itemId?: string;
   readonly correlationId?: string;
+  readonly thinkingId?: string;
+  readonly channel?: "detail" | "summary";
   readonly provisional?: boolean;
   readonly nowMs?: number;
 }
@@ -54,6 +59,8 @@ export interface DurableAssistantSpan {
   readonly agentId?: string;
   readonly itemId?: string;
   readonly correlationId?: string;
+  readonly thinkingId?: string;
+  readonly channel?: "detail" | "summary";
 }
 
 const UNKNOWN_TURN = "turn:unknown";
@@ -61,7 +68,10 @@ const ROOT_AGENT = "root";
 
 
 function keyText(key: LiveSpanKey): string {
-  return `${key.turnId}\u0000${key.agentId}\u0000${key.phase}\u0000${key.itemId}`;
+  const thinking = key.phase === "thinking" || key.phase === "reasoning" || key.phase === "reasoning_summary";
+  const family = thinking ? "thinking" : key.phase;
+  const identity = key.thinkingId ?? key.itemId;
+  return `${key.turnId}\u0000${key.agentId}\u0000${family}\u0000${identity}`;
 }
 
 
@@ -122,10 +132,12 @@ export class LiveSpanRegistry {
       turnId: input.turnId ?? UNKNOWN_TURN,
       agentId: input.agentId ?? ROOT_AGENT,
       phase: input.phase,
+      ...(input.thinkingId !== undefined ? { thinkingId: input.thinkingId } : {}),
+      ...(input.channel !== undefined ? { channel: input.channel } : {}),
       // A phase is presentation metadata, never an identity. Real provider
       // events carry an item/correlation id; legacy callers without one get a
       // unique span rather than having unrelated text silently joined.
-      itemId: input.itemId ?? input.correlationId ?? `unidentified:${++this.#unidentifiedItemSequence}`,
+      itemId: input.itemId ?? input.correlationId ?? input.thinkingId ?? `unidentified:${++this.#unidentifiedItemSequence}`,
     };
     const id = keyText(key);
     const existing = this.#spans.get(id);
@@ -148,19 +160,23 @@ export class LiveSpanRegistry {
   reconcile(input: DurableAssistantSpan, nowMs = Date.now()): LiveSpan | undefined {
     const turnId = input.turnId ?? UNKNOWN_TURN;
     const agentId = input.agentId ?? ROOT_AGENT;
-    const exactItemId = input.itemId ?? input.correlationId;
+    const identities = new Set(
+      [input.itemId, input.correlationId, input.thinkingId]
+        .filter((value): value is string => value !== undefined && value.length > 0),
+    );
     // Text equality is not an identity proof: repeated prose can occur in two
-    // adjacent assistant items. A durable event may only replace a live span when
-    // the provider item/correlation identity is present and exactly matches.
-    if (exactItemId === undefined) return undefined;
+    // adjacent assistant items. A durable event may replace a live span when any
+    // known provider alias or canonical Thinking id matches its corresponding key.
+    if (identities.size === 0) return undefined;
 
     const candidates = [...this.#spans.values()]
       .filter((span) => {
         if (span.status !== "open") return false;
         if (span.key.turnId !== turnId || span.key.agentId !== agentId) return false;
-        if (span.key.itemId !== exactItemId) return false;
+        if (!identities.has(span.key.itemId) && (span.key.thinkingId === undefined || !identities.has(span.key.thinkingId))) return false;
         return (
           span.key.phase === input.phase ||
+          ((span.key.phase === "thinking" || span.key.phase === "reasoning" || span.key.phase === "reasoning_summary") && (input.phase === "thinking" || input.phase === "reasoning" || input.phase === "reasoning_summary")) ||
           (span.key.phase === "candidate_final" &&
             (input.phase === "final" || input.phase === "progress"))
         );
@@ -197,7 +213,7 @@ export class LiveSpanRegistry {
         (span) =>
           span.status === "open" &&
           span.key.agentId === ROOT_AGENT &&
-          span.key.phase === phase &&
+          (span.key.phase === phase || ((span.key.phase === "thinking" || span.key.phase === "reasoning" || span.key.phase === "reasoning_summary") && (phase === "thinking" || phase === "reasoning" || phase === "reasoning_summary"))) &&
           (provisional === undefined || span.provisional === provisional) &&
           (turnId === undefined || span.key.turnId === turnId),
       )
