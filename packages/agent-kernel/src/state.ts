@@ -271,9 +271,12 @@ export interface LoopLimits {
 export const MAX_CONSECUTIVE_SAME_FAILURE = 3;
 
 export const ROOT_LIMITS: LoopLimits = {
-  maxModelSteps: 32,
-  maxToolCalls: 64,
-  maxWallTimeMs: 30 * 60 * 1000,
+  // Root turns have no step, tool-call, or wall-time ceiling. The loop still
+  // stops on completion, explicit cancellation, repeated failure, or a hard
+  // provider/runtime error.
+  maxModelSteps: Number.POSITIVE_INFINITY,
+  maxToolCalls: Number.POSITIVE_INFINITY,
+  maxWallTimeMs: Number.POSITIVE_INFINITY,
   maxConcurrentBackgroundJobs: 4,
   maxChildDepth: 1,
   maxRepairCycles: 2,

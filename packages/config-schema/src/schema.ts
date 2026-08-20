@@ -154,9 +154,6 @@ export interface AgentConfig {
   /** Independent work intent; permissionMode remains for old config readers. */
   interactionMode?: InteractionMode;
   reviewMode?: ReviewMode;
-  maxSteps: number;
-  maxToolCalls: number;
-  maxWallTimeMinutes: number;
   visibleCommentary: boolean;
   tokenSaving: SavingLevel;
   promptCompiler: "v1" | "v2";
@@ -361,9 +358,6 @@ export function defaultConfig(): CbcConfig {
       permissionMode: "ask",
       interactionMode: "build",
       reviewMode: "auto",
-      maxSteps: 32,
-      maxToolCalls: 64,
-      maxWallTimeMinutes: 30,
       visibleCommentary: true,
       tokenSaving: "off",
       promptCompiler: "v2",
@@ -623,6 +617,12 @@ export function configEnumValues(key: string): readonly string[] | undefined {
 }
 
 /** Deprecated keys and their replacements (§21.7 migration message). */
+const REMOVED = new Set([
+  "agent.maxSteps",
+  "agent.maxToolCalls",
+  "agent.maxWallTimeMinutes",
+]);
+
 const DEPRECATED: Record<string, string> = {
   "agent.mode": "agent.permissionMode",
   "model.reasoning": "model.reasoningEffort",
@@ -687,6 +687,16 @@ export function mergeConfig(
           path,
           source: layer.source,
           message: `project config may not set '${path}'; credentials come from the user keychain`,
+        });
+        continue;
+      }
+
+      if (REMOVED.has(path)) {
+        issues.push({
+          severity: "warning",
+          path,
+          source: layer.source,
+          message: `'${path}' was removed; root turns now run until completion or cancellation`,
         });
         continue;
       }
@@ -1032,9 +1042,6 @@ const INTEGER_CONSTRAINTS: Readonly<Record<string, IntegerConstraint>> = {
   "model.context.compactionThresholdTokens": { minimum: 1_024 },
   "model.cache.maxWritesPerTurn": { minimum: 0 },
   "model.cache.ttlMinutes": { minimum: 1 },
-  "agent.maxSteps": { minimum: 1 },
-  "agent.maxToolCalls": { minimum: 1 },
-  "agent.maxWallTimeMinutes": { minimum: 1 },
   "agent.toolGraph.maxParallelReads": { minimum: 1 },
   "agent.toolGraph.maxParallelTests": { minimum: 1 },
   "subagents.maxConcurrent": { minimum: 1, maximum: 8 },
@@ -1203,14 +1210,6 @@ function validateSemantics(
       path: "tools.activationLimit",
       source: sourceOf("tools.activationLimit"),
       message: "tool activation limit must be at least 1",
-    });
-  }
-  if (config.agent.maxSteps < 1 || config.agent.maxToolCalls < 1) {
-    issues.push({
-      severity: "error",
-      path: "agent.maxSteps",
-      source: sourceOf("agent.maxSteps"),
-      message: "agent step and tool-call limits must be positive",
     });
   }
   if (!(config.model.profile in config.model.profiles)) {

@@ -79,9 +79,6 @@ record_decisions = true
 permission_mode = "ask"
 interaction_mode = "build"
 review_mode = "auto"
-max_steps = 32
-max_tool_calls = 64
-max_wall_time_minutes = 30
 visible_commentary = true
 token_saving = "off"
 

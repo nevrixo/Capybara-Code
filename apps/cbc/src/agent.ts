@@ -770,9 +770,6 @@ export class AgentSession {
       emitter,
       limits: {
         ...ROOT_LIMITS,
-        maxModelSteps: options.config.agent.maxSteps,
-        maxToolCalls: options.config.agent.maxToolCalls,
-        maxWallTimeMs: options.config.agent.maxWallTimeMinutes * 60_000,
         maxChildDepth: options.config.subagents.maxDepth,
       },
       model: options.config.model.default,

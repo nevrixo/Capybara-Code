@@ -1484,7 +1484,7 @@ export class AgentKernel {
       const reason =
         exhaustion !== undefined
           ? describeExhaustion(exhaustion, this.#limits)
-          : (this.#stopReason ?? describeExhaustion("model_steps", this.#limits));
+          : (this.#stopReason ?? "the turn stopped before completion");
       report = partialReport(reason, {
         // `exactOptionalPropertyTypes` forbids an explicit `undefined` here, so
         // the key is omitted entirely when there is no text to carry over.

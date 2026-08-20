@@ -403,9 +403,6 @@
         "permissionMode",
         "interactionMode",
         "reviewMode",
-        "maxSteps",
-        "maxToolCalls",
-        "maxWallTimeMinutes",
         "visibleCommentary",
         "tokenSaving",
         "promptCompiler",
@@ -425,21 +422,6 @@
         "reviewMode": {
           "$ref": "#/$defs/reviewMode",
           "default": "auto"
-        },
-        "maxSteps": {
-          "type": "integer",
-          "minimum": 1,
-          "default": 32
-        },
-        "maxToolCalls": {
-          "type": "integer",
-          "minimum": 1,
-          "default": 64
-        },
-        "maxWallTimeMinutes": {
-          "type": "integer",
-          "minimum": 1,
-          "default": 30
         },
         "visibleCommentary": {
           "description": "P4: commentary, not hidden chain-of-thought.",

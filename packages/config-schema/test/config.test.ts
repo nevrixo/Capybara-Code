@@ -39,9 +39,7 @@ max_output_tokens = 12000
 
 [agent]
 permission_mode = "auto-review"
-max_steps = 32
-max_tool_calls = 64
-max_wall_time_minutes = 30
+
 visible_commentary = true
 
 [subagents]
@@ -177,8 +175,7 @@ describe("defaults (§21.4)", () => {
     // Security review interim default: execution asks rather than assumes until
     // per-process capability leases exist; auto/auto-review stay opt-in.
     expect(config.agent.permissionMode).toBe("ask");
-    expect(config.agent.maxSteps).toBe(32);
-    expect(config.agent.maxToolCalls).toBe(64);
+
     expect(config.subagents.maxConcurrent).toBe(3);
     expect(config.subagents.maxDepth).toBe(1);
     // §15.7: three children per turn (P1-04 resolved the old 5-vs-3 mismatch).
@@ -264,7 +261,7 @@ describe("precedence (§21.2)", () => {
 
   test("merge is deterministic (§25.4)", () => {
     const layers = [
-      { source: "user" as const, values: { "ui.theme": "a", "agent.maxSteps": 10 } },
+      { source: "user" as const, values: { "ui.theme": "a", "agent.toolGraph.maxParallelReads": 10 } },
       { source: "project" as const, values: { "ui.theme": "b" } },
     ];
     const first = mergeConfig(layers);
@@ -450,10 +447,31 @@ describe("validation (§21.7)", () => {
   });
 
   test("type mismatches are errors and leave the default", () => {
-    const merged = mergeConfig([{ source: "user", values: { "agent.maxSteps": "many" } }]);
-    const issue = merged.issues.find((i) => i.path === "agent.maxSteps");
+    const merged = mergeConfig([{
+      source: "user",
+      values: { "agent.toolGraph.maxParallelReads": "many" },
+    }]);
+    const issue = merged.issues.find((i) => i.path === "agent.toolGraph.maxParallelReads");
     expect(issue?.severity).toBe("error");
-    expect(merged.config.agent.maxSteps).toBe(32);
+    expect(merged.config.agent.toolGraph.maxParallelReads).toBe(8);
+  });
+
+  test("removed root turn limits warn and are ignored", () => {
+    const merged = mergeConfig([{
+      source: "user",
+      values: {
+        "agent.maxSteps": 4,
+        "agent.maxToolCalls": 8,
+        "agent.maxWallTimeMinutes": 1,
+      },
+    }]);
+    expect(merged.issues).toHaveLength(3);
+    expect(merged.issues.every((issue) =>
+      issue.severity === "warning" && issue.message.includes("was removed")
+    )).toBe(true);
+    expect("maxSteps" in merged.config.agent).toBe(false);
+    expect("maxToolCalls" in merged.config.agent).toBe(false);
+    expect("maxWallTimeMinutes" in merged.config.agent).toBe(false);
   });
 
   test("deprecated keys migrate with a message", () => {

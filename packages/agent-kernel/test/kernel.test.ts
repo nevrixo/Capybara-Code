@@ -356,10 +356,10 @@ describe("turn state machine (§11.2)", () => {
 });
 
 describe("loop limits (§11.3)", () => {
-  test("root and subagent limits match the PRD table", () => {
-    expect(ROOT_LIMITS.maxModelSteps).toBe(32);
-    expect(ROOT_LIMITS.maxToolCalls).toBe(64);
-    expect(ROOT_LIMITS.maxWallTimeMs).toBe(30 * 60 * 1000);
+  test("root turns are unbounded while subagent limits remain finite", () => {
+    expect(ROOT_LIMITS.maxModelSteps).toBe(Number.POSITIVE_INFINITY);
+    expect(ROOT_LIMITS.maxToolCalls).toBe(Number.POSITIVE_INFINITY);
+    expect(ROOT_LIMITS.maxWallTimeMs).toBe(Number.POSITIVE_INFINITY);
     expect(ROOT_LIMITS.maxChildDepth).toBe(1);
     expect(ROOT_LIMITS.maxRepairCycles).toBe(2);
     expect(ROOT_LIMITS.maxReviewCycles).toBe(2);
@@ -370,20 +370,20 @@ describe("loop limits (§11.3)", () => {
     expect(SUBAGENT_LIMITS.maxReviewCycles).toBe(0);
   });
 
-  test("each budget is detected independently", () => {
+  test("finite budgets are still available for bounded child work", () => {
     const base = newBudget(1_000);
-    expect(budgetExhausted(base, ROOT_LIMITS, 1_000)).toBeUndefined();
-    expect(
-      budgetExhausted({ ...base, modelSteps: 32 }, ROOT_LIMITS, 1_000),
-    ).toBe("model_steps");
-    expect(budgetExhausted({ ...base, toolCalls: 64 }, ROOT_LIMITS, 1_000)).toBe("tool_calls");
-    expect(budgetExhausted(base, ROOT_LIMITS, 1_000 + ROOT_LIMITS.maxWallTimeMs)).toBe("wall_time");
-    expect(budgetExhausted({ ...base, repairCycles: 3 }, ROOT_LIMITS, 1_000)).toBe("repair_cycles");
-  });
-
-  test("exhaustion is described in user-facing language", () => {
-    expect(describeExhaustion("model_steps", ROOT_LIMITS)).toContain("32-step");
-    expect(describeExhaustion("wall_time", ROOT_LIMITS)).toContain("30-minute");
+    const bounded = {
+      ...ROOT_LIMITS,
+      maxModelSteps: 32,
+      maxToolCalls: 64,
+      maxWallTimeMs: 30 * 60 * 1000,
+    };
+    expect(budgetExhausted({ ...base, modelSteps: 32 }, bounded, 1_000)).toBe("model_steps");
+    expect(budgetExhausted({ ...base, toolCalls: 64 }, bounded, 1_000)).toBe("tool_calls");
+    expect(budgetExhausted(base, bounded, 1_000 + bounded.maxWallTimeMs)).toBe("wall_time");
+    expect(budgetExhausted({ ...base, repairCycles: 3 }, bounded, 1_000)).toBe("repair_cycles");
+    expect(describeExhaustion("model_steps", bounded)).toContain("32-step");
+    expect(describeExhaustion("wall_time", bounded)).toContain("30-minute");
   });
 });
 

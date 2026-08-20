@@ -81,15 +81,14 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
   // ---- agent ----
   ["agent.permissionMode", { status: "wired", consumer: "agent.ts / approval flow" }],
   ["agent.tokenSaving", { status: "wired", consumer: "AgentSession saving controller → context, prompt, compaction, reporting" }],
-  ["agent.maxSteps", { status: "wired", consumer: "agent.ts (kernel step cap)" }],
+
   ["agent.promptCompiler", { status: "wired", consumer: "agent-kernel compiled prompt hot path" }],
   ["agent.compoundTools", { status: "wired", consumer: "agent.ts native compound tool activation" }],
   ["agent.verification.reviewPolicy", { status: "wired", consumer: "agent-kernel risk-based completion review" }],
   ["agent.verification.independentReviewRiskThreshold", { status: "wired", consumer: "agent-kernel change-risk review threshold" }],
   ["agent.verification.completionRequiresFreshEvidence", { status: "experimental", note: "completion currently enforces fresh evidence unconditionally" }],
   ["agent.verification.falseCompletePolicy", { status: "experimental", note: "truthfulness currently uses the blocking policy unconditionally" }],
-  ["agent.maxToolCalls", { status: "wired", consumer: "agent.ts (kernel tool-call cap)" }],
-  ["agent.maxWallTimeMinutes", { status: "wired", consumer: "agent.ts (wall-time cap)" }],
+
   ["agent.toolGraph.", { status: "wired", consumer: "agent-kernel ToolExecutionGraph" }],
   ["agent.visibleCommentary", { status: "wired", consumer: "AgentSession event visibility + session reducer" }],
   ["agent.verification.", { status: "experimental", note: "the completion gate uses fixed policy today" }],
