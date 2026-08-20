@@ -1594,17 +1594,9 @@ async function handleSlash(
         context.warn(`'${preset}' is not a permission preset (read|edit|auto|yolo)`);
         return "continue";
       }
-      let save = intent.save === true;
-      if (preset === "yolo") {
-        const selected = await selectOutsideTui(
-          "YOLO skips soft approval prompts; trust, deny rules, credentials, Plan scope, sandbox, and OS permissions remain enforced.",
-          ["Cancel", "Enable for this session", "Enable and save"],
-        );
-        if (selected < 1) return "continue";
-        save = selected === 2;
-      }
-      // Confirmation happens before session mutation. A failed persistence keeps
-      // the session change visible but reports that it was not saved.
+      const save = intent.save === true;
+      // A failed persistence keeps the session change visible but reports that it
+      // was not saved.
       // Keep the AgentSession receiver: extracting this method loses the private
       // field brand and crashes immediately after a completion is selected.
       session.setPermissionPreset(preset);

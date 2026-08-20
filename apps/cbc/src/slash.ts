@@ -90,9 +90,11 @@ export function parseSlash(raw: string): SlashIntent {
         ...(value !== undefined ? { value } : {}),
       };
     }
-  case "/permissions": {
-      const save = rest.includes("--save");
+    case "/permissions": {
       const preset = rest.filter((t) => t !== "--save")[0];
+      // YOLO is an explicit global preference: selecting it applies and saves in
+      // one step. Other presets remain session-scoped unless `--save` is present.
+      const save = preset === "yolo" || rest.includes("--save");
       return { kind: "set_permission", ...(preset !== undefined ? { preset } : {}), ...(save ? { save: true } : {}) };
     }
     case "/mode": {

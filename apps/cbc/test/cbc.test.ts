@@ -4291,6 +4291,23 @@ describe("slash router", () => {
     });
   });
 
+  test("/permissions yolo applies as a saved preference without changing other preset defaults", () => {
+    expect(parseSlash("/permissions yolo")).toEqual({
+      kind: "set_permission",
+      preset: "yolo",
+      save: true,
+    });
+    expect(parseSlash("/permissions auto")).toEqual({
+      kind: "set_permission",
+      preset: "auto",
+    });
+    expect(parseSlash("/permissions auto --save")).toEqual({
+      kind: "set_permission",
+      preset: "auto",
+      save: true,
+    });
+  });
+
   test("every §8.10 command routes to something other than unknown", () => {
     for (const { value } of slashCompletions("")) {
       expect(parseSlash(value).kind).not.toBe("unknown");
