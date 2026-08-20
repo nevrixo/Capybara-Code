@@ -1948,7 +1948,6 @@ describe("interactive UI (§6.2, §6.21)", () => {
       "mcp",
       "sessions",
       "status",
-      "approvals",
       "settings",
       "details",
     ] as const) {

@@ -27,7 +27,6 @@ export type OverlayKind =
   | "mcp"
   | "sessions"
   | "status"
-  | "approvals"
   | "settings"
   | "details"
   | "help";
@@ -46,7 +45,6 @@ export const OVERLAY_KINDS: readonly OverlayKind[] = [
   "mcp",
   "sessions",
   "status",
-  "approvals",
   "settings",
   "details",
   "help",
@@ -66,7 +64,6 @@ export const OVERLAY_TITLES: Readonly<Record<OverlayKind, string>> = {
   mcp: "MCP servers",
   sessions: "Sessions",
   status: "Status",
-  approvals: "Saved approvals",
   settings: "Settings",
   details: "Transcript details",
   help: "Help",
