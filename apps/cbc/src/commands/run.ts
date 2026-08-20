@@ -4,12 +4,19 @@ import { renderReport } from "@cbc/agent-kernel";
 
 import { bootstrapSession, warmContext } from "../bootstrap.ts";
 import { CliError, EXIT, exitForStatus, type ExitCode } from "../exit.ts";
-import type { FinalStatusPayload } from "../output.ts";
 import { ok, type CommandContext, type CommandResult } from "./context.ts";
-import { ensureTrust } from "./trust.ts";
+import { ensureTrust } from "../workspace-trust.ts";
 
 export interface RunArgs {
   readonly prompt?: string;
+}
+
+interface FinalStatusPayload {
+  readonly status: "completed" | "partial" | "failed" | "cancelled";
+  readonly exitCode: number;
+  readonly changedFiles: string[];
+  readonly tests?: { passed: number; failed: number; notRun: number };
+  readonly risks?: string[];
 }
 
 export async function run(context: CommandContext, args: RunArgs): Promise<CommandResult> {

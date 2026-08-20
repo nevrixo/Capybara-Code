@@ -54,7 +54,7 @@ import {
   type SettingsMenuItem,
 } from "../tui.ts";
 import { ok, type CommandContext, type CommandResult } from "./context.ts";
-import { ensureTrust, trustLabel } from "./trust.ts";
+import { ensureTrust, trustLabel } from "../workspace-trust.ts";
 
 export interface InteractiveArgs {
   readonly prompt?: string;

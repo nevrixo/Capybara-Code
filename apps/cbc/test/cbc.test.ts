@@ -9,6 +9,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { parseArgs, HELP_TEXT } from "../src/args.ts";
+import { commandNames } from "../src/command-spec.ts";
 import { selectClearSequence, TerminalInputDecoder } from "../src/bun-host.ts";
 import { EXIT, CliError, exitForStatus } from "../src/exit.ts";
 import {
@@ -22,7 +23,7 @@ import {
   type HostFs,
   type HostIo,
 } from "../src/host.ts";
-import { decideRenderMode, JsonlWriter, LineWriter } from "../src/output.ts";
+import { decideRenderMode, LineWriter } from "../src/output.ts";
 import { InteractiveUi, resolveComposerCursor, uiEventSink } from "../src/tui.ts";
 import { HostActionNormalizer, normalizePath, pathsFromDiff } from "../src/normalizer.ts";
 import {
@@ -128,11 +129,7 @@ import {
   withoutTrust,
   writeTrustStore,
 } from "../src/state.ts";
-import { splitCommand } from "../src/commands/mcp.ts";
-import { COMMAND_TREE, COMMANDS } from "../src/commands/completion.ts";
 import { collapseDotSegments, resolveWorkspace } from "../src/commands/context.ts";
-import { redactConfig, redactDiagnosticText, shareablePathLabel } from "../src/commands/doctor.ts";
-import { isNewer, checkDue } from "../src/commands/update.ts";
 import { testCommandFor } from "../src/agent.ts";
 import { resolveChildProfile } from "../src/subagent-bridge.ts";
 import { ReadCache, renderProcessOutcome, RuntimeToolExecutor, toolErrorFrom } from "../src/tools.ts";
@@ -382,7 +379,7 @@ describe("parseArgs", () => {
   });
 
   test("the registry and help expose only the minimal public surface", () => {
-    expect(COMMANDS).toEqual(["run", "auth", "model", "config", "version", "help"]);
+    expect(commandNames()).toEqual(["run", "auth", "model", "config", "version", "help"]);
     for (const text of [
       "auth login",
       "auth api",
@@ -537,11 +534,6 @@ describe("paths", () => {
 // ---------------------------------------------------------------------------
 
 describe("render mode", () => {
-  test("--jsonl wins over --plain", () => {
-    const host = createFakeHost({ isTty: true });
-    expect(decideRenderMode({ host, jsonl: true, plain: true }).mode).toBe("jsonl");
-  });
-
   test("a non-TTY falls back to plain", () => {
     const host = createFakeHost({ isTty: false });
     const decision = decideRenderMode({ host, rendererAvailable: true });
@@ -558,11 +550,6 @@ describe("render mode", () => {
   test("a TTY with a renderer uses the full-screen mode", () => {
     const host = createFakeHost({ isTty: true });
     expect(decideRenderMode({ host, rendererAvailable: true }).mode).toBe("opentui");
-  });
-
-  test("jsonl mode reports no colour, so events stay byte-clean", () => {
-    const host = createFakeHost({ isTty: true });
-    expect(decideRenderMode({ host, jsonl: true }).theme.depth).toBe("none");
   });
 
   test("the OpenTUI charcoal palette is the default a session paints with (§6.5)", () => {
@@ -2651,40 +2638,6 @@ describe("interactive UI (§6.2, §6.21)", () => {
     expect(title).toContain("…");
   });
 
-  test("AC-37: in jsonl mode stdout carries only event lines", () => {
-    const host = createFakeHost();
-    const decision = decideRenderMode({ host, jsonl: true });
-    const writer = new LineWriter(host, decision);
-    const jsonl = new JsonlWriter({ host, sessionId: "ses_1" });
-
-    jsonl.emit("turn.started", { model: "gpt-5.6" });
-    writer.text("this is human-facing prose");
-    writer.diagnostic("and this is a diagnostic");
-    jsonl.emit("turn.completed", { status: "completed" });
-
-    for (const chunk of host.out) {
-      const parsed = JSON.parse(chunk.trim()) as { kind: string; sequence: number };
-      expect(typeof parsed.kind).toBe("string");
-    }
-    expect(host.out).toHaveLength(2);
-    expect(host.err.join("")).toContain("human-facing prose");
-    expect(host.err.join("")).toContain("diagnostic");
-  });
-
-  test("§20.10: sequence is strictly monotonic", () => {
-    const host = createFakeHost();
-    const jsonl = new JsonlWriter({ host, sessionId: "ses_1" });
-    const first = jsonl.emit("user.message", { text: "a" });
-    const second = jsonl.emit("assistant.final", { text: "b" });
-    expect(second.sequence).toBe(first.sequence + 1);
-    expect(jsonl.count).toBe(2);
-  });
-
-  test("startAfter continues a resumed sequence", () => {
-    const host = createFakeHost();
-    const jsonl = new JsonlWriter({ host, sessionId: "ses_1", startAfter: 41 });
-    expect(jsonl.emit("user.message", { text: "x" }).sequence).toBe(42);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -5134,34 +5087,6 @@ describe("session identity", () => {
 // §8.8 MCP command parsing
 // ---------------------------------------------------------------------------
 
-describe("stdio command splitting", () => {
-  test("§8.8: command and args are separated once, at add time", () => {
-    expect(splitCommand("npx -y @example/server")).toEqual({
-      command: "npx",
-      args: ["-y", "@example/server"],
-    });
-  });
-
-  test("quoted segments survive", () => {
-    expect(splitCommand('node "my server.js" --flag')).toEqual({
-      command: "node",
-      args: ["my server.js", "--flag"],
-    });
-  });
-
-  test("extra whitespace collapses", () => {
-    expect(splitCommand("  uvx    thing  ")).toEqual({ command: "uvx", args: ["thing"] });
-  });
-
-  test("an empty string yields an empty command the caller can reject", () => {
-    expect(splitCommand("").command).toBe("");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// §12.10 tool errors, §11.6 observations
-// ---------------------------------------------------------------------------
-
 describe("tool execution helpers", () => {
   test("bridge tools do not require a runtime capability", async () => {
     const host = createFakeHost();
@@ -5382,84 +5307,17 @@ describe("tool execution helpers", () => {
 // ---------------------------------------------------------------------------
 
 describe("supporting policy", () => {
-  test("§11.8: a test command is only claimed when the language is known", () => {
+  test("a test command is only claimed when the language is known", () => {
     expect(testCommandFor(["src/a.ts"])?.command).toBe("bun test");
     expect(testCommandFor(["crates/x/src/lib.rs"])?.command).toBe("cargo test --workspace");
     expect(testCommandFor(["README.md"])).toBeUndefined();
     expect(testCommandFor([])).toBeUndefined();
-  });
-
-  test("§23.4: credential-shaped keys are blanked at any depth", () => {
-    const redacted = redactConfig({
-      model: { default: "gpt-5.6" },
-      auth: { apiKey: "sk-real-value", nested: { token: "t" } },
-      list: [{ password: "p" }],
-    }) as Record<string, Record<string, unknown>>;
-    expect(JSON.stringify(redacted)).not.toContain("sk-real-value");
-    expect(redacted.model?.default).toBe("gpt-5.6");
-    expect(JSON.stringify(redacted)).toContain("***REDACTED***");
-  });
-
-  test("§23.4: support bundle path labels never expose local paths", () => {
-    expect(shareablePathLabel("config")).toBe("<user-config>");
-    expect(shareablePathLabel("logs")).toBe("<user-logs>");
-    expect(redactDiagnosticText("could not open C:\\Users\\developer\\AppData\\Local\\capybara\\config.toml")).toBe(
-      "<local path omitted>",
-    );
-    expect(redactDiagnosticText("provider unavailable")).toBe("provider unavailable");
-  });
-
-  test("version comparison orders releases and pre-releases", () => {
-    expect(isNewer("0.2.0", "0.1.0")).toBe(true);
-    expect(isNewer("0.1.0", "0.1.0")).toBe(false);
-    expect(isNewer("0.1.0", "0.2.0")).toBe(false);
-    expect(isNewer("1.0.0", "1.0.0-beta.1")).toBe(true);
-    expect(isNewer("1.0.0-beta.1", "1.0.0")).toBe(false);
-    expect(isNewer("v1.2.3", "1.2.2")).toBe(true);
-  });
-
-  test("AC-41: a check is due only after the configured interval", () => {
-    expect(checkDue(undefined, 1_000, 24)).toBe(true);
-    expect(checkDue({ checkedAtMs: 0, channel: "stable" }, 3_600_000, 24)).toBe(false);
-    expect(checkDue({ checkedAtMs: 0, channel: "stable" }, 25 * 3_600_000, 24)).toBe(true);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// §8.1 completion scripts
-// ---------------------------------------------------------------------------
-
-describe("completion scripts", () => {
-  test("every shell script names every top-level command", async () => {
-    const host = createFakeHost();
-    const { CommandContext } = await import("../src/commands/context.ts");
-    const { completion } = await import("../src/commands/completion.ts");
-
-    for (const shell of ["bash", "zsh", "fish", "powershell"]) {
-      host.out.length = 0;
-      const context = new CommandContext({ host, version: "0.1.0" });
-      const result = await completion(context, { shell });
-      expect(result.code).toBe(EXIT.ok);
-      const script = host.out.join("");
-      for (const command of COMMANDS) {
-        expect(script).toContain(command);
-      }
-    }
-  });
-
-  test("an unsupported shell is a usage error", async () => {
-    const host = createFakeHost();
-    const { CommandContext } = await import("../src/commands/context.ts");
-    const { completion } = await import("../src/commands/completion.ts");
-    const context = new CommandContext({ host, version: "0.1.0" });
-    await expect(completion(context, { shell: "csh" })).rejects.toThrow(/no completion script/);
   });
 });
 
 // ---------------------------------------------------------------------------
 // Routing end-to-end, with no runtime
 // ---------------------------------------------------------------------------
-
 describe("router", () => {
   test("capy version prints and exits 0 without starting a runtime", async () => {
     const host = createFakeHost();
@@ -6188,7 +6046,7 @@ describe("shared read cache", () => {
 
 describe("untrusted skill discovery (P0-15)", () => {
   test("an untrusted project Skill body is never held in memory", async () => {
-    const { discoverSkillFiles } = await import("../src/commands/skills.ts");
+    const { discoverSkillFiles } = await import("../src/skill-discovery.ts");
     const host = createFakeHost({ cwd: "/work/project" });
     await host.fs.write(
       "/work/project/.capybara/skills/deploy/SKILL.md",
@@ -6206,7 +6064,7 @@ describe("untrusted skill discovery (P0-15)", () => {
   });
 
   test("a trusted project Skill defers its body until skill.load", async () => {
-    const { discoverSkillFiles } = await import("../src/commands/skills.ts");
+    const { discoverSkillFiles } = await import("../src/skill-discovery.ts");
     const host = createFakeHost({ cwd: "/work/project" });
     await host.fs.write(
       "/work/project/.capybara/skills/deploy/SKILL.md",
@@ -6223,7 +6081,7 @@ describe("untrusted skill discovery (P0-15)", () => {
   });
 
   test("user-level Skills also defer bodies until skill.load", async () => {
-    const { discoverSkillFiles } = await import("../src/commands/skills.ts");
+    const { discoverSkillFiles } = await import("../src/skill-discovery.ts");
     const host = createFakeHost({ cwd: "/work/project" });
     await host.fs.write(
       "/home/dev/.config/capybara-code/skills/mine/SKILL.md",

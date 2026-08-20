@@ -58,7 +58,7 @@ import {
   type InteractiveBrokerOptions,
 } from "./approvals.ts";
 import type { CommandContext } from "./commands/context.ts";
-import { discoverSkillFiles, skillRoots } from "./commands/skills.ts";
+import { discoverSkillFiles, skillRoots } from "./skill-discovery.ts";
 import { resolveAccountSession, resolveCredential } from "./credentials.ts";
 import { workspaceIdentityFor } from "./host.ts";
 import { buildProvider, installationId, safetyIdentifierFor } from "./provider.ts";
@@ -84,19 +84,8 @@ import type { ToolBridges } from "./tools.ts";
 
 export interface BootstrapOptions {
   readonly context: CommandContext;
-  /** Session overrides from CLI flags, applied over the config (§21.2). */
-  readonly overrides?: {
-    readonly model?: string;
-    readonly reasoningEffort?: string;
-    readonly reasoningMode?: string;
-    readonly permissionMode?: string;
-    readonly interactionMode?: "build" | "plan";
-    readonly permissionPreset?: "read" | "edit" | "auto" | "yolo";
-    readonly reviewMode?: "off" | "auto";
-  };
-  readonly readOnly?: boolean;
   readonly headlessPolicy?: "deny-on-ask" | "allow-listed" | "fail-on-ask";
-  /** `--resume <id|last>`. */
+  /** Resume an existing session from the TUI. */
   readonly resume?: string;
   readonly onEvent?: (event: CbcEvent, model: SessionViewModel) => void;
   /** Receives live configured LSP states for an interactive sidebar. */
@@ -228,13 +217,11 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
   // ---- §21.2: session overrides sit above config ----
   // Work on a session-local clone: the effective budget is model-dependent and
   // must not mutate the cached global configuration object.
-  const effective = structuredCloneConfig(applyOverrides(config, options.overrides));
-  const directModelOverride =
-    options.overrides?.model !== undefined && !options.overrides.model.startsWith("profile:");
+  const effective = structuredCloneConfig(withActiveProfile(config));
   // `model.default` is the visible fallback for the auto profile. Once a user
   // changes it to another model, that choice is explicit and must not be
   // replaced by the router on the first submitted turn.
-  const autoRoute = shouldAutoRoute(effective.model, directModelOverride);
+  const autoRoute = shouldAutoRoute(effective.model, false);
   const modelBudget = inputContextBudget(
     findModel(effective.model.default),
     effective.model.maxOutputTokens,
@@ -328,7 +315,7 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
     ...(credential !== undefined
       ? { credential: credential.lease, credentialSource: credential.source }
       : {}),
-    ...(options.readOnly === true || effective.agent.permissionMode === "plan"
+    ...(effective.agent.permissionMode === "plan"
       ? { readOnly: true }
       : {}),
     safetyIdentifier: safetyIdentifierFor(install),
@@ -396,7 +383,6 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
   });
 
   const reasoningEffortLocked =
-    options.overrides?.reasoningEffort !== undefined ||
     effective.model.profile !== "auto" ||
     loadedConfig.provenance["model.reasoningEffort"] !== undefined;
 
@@ -523,7 +509,6 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
       await lspHost.quiesce();
       await mcpHost?.quiesce?.();
     },
-    ...(options.readOnly === true ? { readOnly: true } : {}),
     ...(options.headlessPolicy !== undefined ? { headlessPolicy: options.headlessPolicy } : {}),
     configRules: [...configRules, ...persistedRules],
     globalInstructionReader: {
@@ -1199,67 +1184,6 @@ async function refreshRepositoryMap(input: {
       warning: `repository scan failed: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
-}
-
-/**
- * Apply CLI and session overrides on top of the loaded config.
- *
- * A `profile:` selection resolves through `model.profiles` so `--model profile:deep`
- * and `/model deep` land on the same values as `capy model use profile:deep`.
- */
-function applyOverrides(
-  config: Awaited<ReturnType<CommandContext["requireConfig"]>>,
-  overrides: BootstrapOptions["overrides"],
-): Awaited<ReturnType<CommandContext["requireConfig"]>> {
-  if (overrides === undefined) return withActiveProfile(config);
-
-  const next = structuredCloneConfig(config);
-
-  if (overrides.model !== undefined) {
-    const profileName = overrides.model.startsWith("profile:")
-      ? overrides.model.slice("profile:".length)
-      : undefined;
-    if (profileName !== undefined) {
-      next.model.profile = profileName;
-    } else {
-      next.model.default = overrides.model;
-      // An explicit model outranks a profile, so the profile is cleared rather than
-      // silently reapplied below.
-      next.model.profile = "auto";
-    }
-  }
-  // Resolve a named profile before applying explicit effort/mode values. This keeps
-  // the profile's model while preventing it from restoring its own reasoning choice.
-  const effective = withActiveProfile(next);
-  if (overrides.reasoningEffort !== undefined) {
-    effective.model.reasoningEffort = overrides.reasoningEffort as typeof effective.model.reasoningEffort;
-  }
-  if (overrides.reasoningMode !== undefined) {
-    effective.model.reasoningMode = overrides.reasoningMode as typeof effective.model.reasoningMode;
-  }
-  if (overrides.reasoningEffort !== undefined || overrides.reasoningMode !== undefined) {
-    effective.model.profile = "auto";
-  }
-  if (overrides.permissionMode !== undefined) {
-    const raw = overrides.permissionMode as string;
-    if (raw === "build" || raw === "plan") {
-      effective.agent.interactionMode = raw;
-      if (raw === "plan" && effective.permissions.preset === undefined) effective.permissions.preset = "read";
-    } else if (raw === "read" || raw === "edit" || raw === "auto" || raw === "yolo") {
-      // Legacy preset spellings map onto the canonical preset axis only.
-      effective.permissions.preset = raw as never;
-    } else {
-      // ASK/AUTO-REVIEW remain readable legacy modes during migration; they
-      // do not create a conflicting preset in the in-memory config.
-      effective.agent.permissionMode = overrides.permissionMode as typeof effective.agent.permissionMode;
-      if (raw === "auto-review") effective.agent.reviewMode = "auto";
-    }
-  }
-  if (overrides.interactionMode !== undefined) effective.agent.interactionMode = overrides.interactionMode;
-  if (overrides.permissionPreset !== undefined) effective.permissions.preset = overrides.permissionPreset;
-  if (overrides.reviewMode !== undefined) effective.agent.reviewMode = overrides.reviewMode;
-
-  return effective;
 }
 
 /** Fold the selected profile into the concrete model fields (§10.3, §21.5). */

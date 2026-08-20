@@ -29,14 +29,8 @@ import {
 export interface CommandContextOptions {
   readonly host: Host;
   readonly version: string;
-  /** `--workspace`, if given. */
-  readonly workspace?: string;
-  readonly plain?: boolean;
-  readonly noColor?: boolean;
-  readonly jsonl?: boolean;
-  /** Set by `capy run`: never prompt (§8.3). */
+  /** Set by capy run: never prompt. */
   readonly nonInteractive?: boolean;
-  readonly cliOverrides?: Record<string, unknown>;
 }
 
 export class CommandContext {
@@ -47,8 +41,6 @@ export class CommandContext {
   readonly decision: RenderDecision;
   readonly writer: LineWriter;
   readonly nonInteractive: boolean;
-
-  readonly #options: CommandContextOptions;
   #runtime: Runtime | undefined;
   #config: LoadedConfig | undefined;
   #trust: TrustState | undefined;
@@ -57,21 +49,14 @@ export class CommandContext {
   #diagnosticSink: ((text: string) => void) | undefined;
 
   constructor(options: CommandContextOptions) {
-    this.#options = options;
     this.host = options.host;
     this.version = options.version;
     this.paths = resolvePaths(options.host);
-    // Normalized even when no `--workspace` was given: `host.cwd` can still arrive with
-    // a trailing separator, and the trust key must not depend on that.
-    this.workspacePath = resolveWorkspace(options.host, options.workspace ?? options.host.cwd);
+    // Normalize host.cwd because a trailing separator must not change the trust key.
+    this.workspacePath = resolveWorkspace(options.host, options.host.cwd);
     this.nonInteractive = options.nonInteractive ?? !options.host.io.isTty;
     this.decision = decideRenderMode({
       host: options.host,
-      ...(options.jsonl !== undefined ? { jsonl: options.jsonl } : {}),
-      ...(options.plain !== undefined ? { plain: options.plain } : {}),
-      ...(options.noColor !== undefined ? { noColor: options.noColor } : {}),
-      // ?19.3: TTYs use the bundled fullscreen renderer; --plain and --jsonl
-      // still take precedence through decideRenderMode.
       rendererAvailable: options.host.io.isTty,
     });
     this.writer = new LineWriter(options.host, this.decision);
@@ -139,11 +124,7 @@ export class CommandContext {
 
   async config(): Promise<LoadedConfig> {
     if (this.#config !== undefined) return this.#config;
-    this.#config = await loadEffectiveConfig(this.host, {
-      ...(this.#options.cliOverrides !== undefined
-        ? { cliOverrides: this.#options.cliOverrides }
-        : {}),
-    });
+    this.#config = await loadEffectiveConfig(this.host);
     return this.#config;
   }
 
@@ -183,7 +164,7 @@ export class CommandContext {
       workspace: this.workspacePath,
       dataDir: this.paths.data,
       clientVersion: this.version,
-      pty: this.decision.mode !== "jsonl",
+      pty: true,
       sandboxLevel: config.sandbox.level,
       networkForShell: config.sandbox.networkForShell,
       interactionMode: config.agent.interactionMode ?? (config.agent.permissionMode === "plan" ? "plan" : "build"),
@@ -197,9 +178,7 @@ export class CommandContext {
         }
       },
       onStderr: (line) => {
-        // §19.7: runtime stderr is redacted diagnostics and never enters the
-        // timeline. It goes to our stderr only when the user asked for detail.
-        if (this.#options.cliOverrides?.verbose === true) this.warn(`runtime: ${line}`);
+        if (this.host.env.CBC_DEBUG === "1") this.warn("runtime: " + line);
       },
       onHealthChange: (health, detail) => {
         if (health === "degraded" || health === "fatal") {
