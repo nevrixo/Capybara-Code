@@ -1585,22 +1585,28 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
     case "task.failed":
     case "task.cancelled": {
       const p = payloadOf(event);
+      const reportedState = asTaskState(p.state) ?? asTaskState(p.status);
+      const state: TaskState =
+        event.kind === "task.cancelled"
+          ? "cancelled"
+          : reportedState === "blocked"
+            ? "blocked"
+            : "failed";
       const task = findTask(next.timeline, str(p.taskId), indexes);
       clearTaskLive(next, str(p.taskId));
       if (next.awaitingTaskId === str(p.taskId)) delete next.awaitingTaskId;
       if (task) {
-        task.state = event.kind === "task.failed" ? "failed" : "cancelled";
+        task.state = state;
         task.summary = str(p.summary, str(p.reason));
+        if (typeof p.durationMs === "number") task.durationMs = num(p.durationMs);
         delete task.pendingInputTokens;
       }
       next.timeline.push(
         notice(
           event,
-          event.kind === "task.failed" ? "error" : "warning",
-          `Task ${task?.title ?? str(p.taskId)} ${
-            event.kind === "task.failed" ? "failed" : "cancelled"
-          }: ${str(p.reason, str(p.summary))}`,
-          event.kind === "task.failed" ? "×" : "!",
+          state === "failed" ? "error" : "warning",
+          `Task ${task?.title ?? str(p.taskId)} ${state}: ${str(p.reason, str(p.summary))}`,
+          state === "failed" ? "×" : "!",
         ),
       );
       break;

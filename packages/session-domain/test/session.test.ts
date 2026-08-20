@@ -881,6 +881,41 @@ describe("task semantics (§6.11, AC-21, AC-25)", () => {
     expect(model.activeTasks).toHaveLength(0);
   });
 
+  test("a scheduler-blocked child is not presented as failed", () => {
+    const model = replay(
+      "ses_1",
+      build([
+        ["task.created", { taskId: "t1", role: "executor", title: "PythonDemo" }],
+        ["task.started", { taskId: "t1" }],
+        [
+          "task.failed",
+          {
+            taskId: "t1",
+            state: "blocked",
+            status: "partial",
+            summary: "verification unavailable",
+            durationMs: 19_700,
+          },
+        ],
+      ]),
+    );
+
+    expect(taskAt(model)).toMatchObject({
+      state: "blocked",
+      summary: "verification unavailable",
+      durationMs: 19_700,
+    });
+    expect(model.activeTasks).toHaveLength(0);
+
+    const notice = model.timeline.find(
+      (item) => item.type === "notice" && item.text.startsWith("Task PythonDemo"),
+    );
+    if (notice?.type !== "notice") throw new Error("expected a terminal task notice");
+    expect(notice.level).toBe("warning");
+    expect(notice.text).toContain("Task PythonDemo blocked");
+    expect(notice.text).not.toContain("failed");
+  });
+
   test("late await cleanup progress cannot reactivate a completed subagent", () => {
     const model = replay(
       "ses_1",
