@@ -764,6 +764,16 @@ function responseTerminalKind(
 }
 
 
+/** Keep provider ordering metadata available to the kernel without changing the enumerable legacy event shape. */
+function withSequence<T extends object>(event: T, sequence: number | undefined): T & { readonly sequence?: number } {
+  if (sequence === undefined) return event;
+  Object.defineProperty(event, "sequence", {
+    value: sequence,
+    enumerable: false,
+    configurable: true,
+  });
+  return event as T & { readonly sequence?: number };
+}
 function* translate(
   frame: Record<string, unknown>,
   calls: Map<string, { callId: string; name: string; argumentsText: string; emitted: boolean; callerId?: string; programId?: string; agentId?: string }>,
@@ -818,21 +828,21 @@ function* translate(
     case "response.reasoning_text.delta": {
       const delta = typeof frame.delta === "string" ? frame.delta : "";
       if (delta.length > 0) {
-        yield { type: "reasoning.text.delta", text: delta, itemId, ...(outputIndex !== undefined ? { outputIndex } : {}) };
+        yield withSequence({ type: "reasoning.text.delta", text: delta, itemId, ...(outputIndex !== undefined ? { outputIndex } : {}) }, sequence);
       }
       return;
     }
     case "response.reasoning_text.done": {
       const text = typeof frame.text === "string" ? frame.text : "";
       if (text.length > 0) {
-        yield { type: "reasoning.text.done", text, itemId, ...(outputIndex !== undefined ? { outputIndex } : {}) };
+        yield withSequence({ type: "reasoning.text.done", text, itemId, ...(outputIndex !== undefined ? { outputIndex } : {}) }, sequence);
       }
       return;
     }
     case "response.reasoning_summary_text.delta": {
       const delta = typeof frame.delta === "string" ? frame.delta : "";
       if (delta.length > 0) {
-        yield { type: "reasoning.summary.delta", text: delta, itemId, ...(outputIndex !== undefined ? { outputIndex } : {}) };
+        yield withSequence({ type: "reasoning.summary.delta", text: delta, itemId, ...(outputIndex !== undefined ? { outputIndex } : {}) }, sequence);
       }
       return;
     }

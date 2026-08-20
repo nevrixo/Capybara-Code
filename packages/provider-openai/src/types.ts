@@ -40,6 +40,27 @@ export type {
 };
 
 export type AssistantPhase = "commentary" | "final_answer";
+/** Provider-neutral visible Thinking fragment; wire channel names stay adapter-local. */
+export type ThinkingChannel = "detail" | "summary";
+export type ThinkingBoundary = "tool" | "final" | "response_end" | "interrupted" | "failed";
+export type ProviderThinkingFragment =
+  | {
+      readonly kind: "delta" | "replace";
+      readonly channel: ThinkingChannel;
+      readonly text: string;
+      readonly requestId: string;
+      readonly responseId?: string;
+      readonly providerItemId?: string;
+      readonly outputIndex?: number;
+      readonly sequence?: number;
+      readonly deltaId?: string;
+      readonly authoritative?: boolean;
+    }
+  | {
+      readonly kind: "boundary";
+      readonly boundary: ThinkingBoundary;
+      readonly requestId: string;
+    };
 
 export type ProviderTransport = "http_full" | "http_previous" | "websocket";
 
@@ -59,9 +80,9 @@ export type ModelEvent =
   /** `authoritative` marks a completed output item suitable for delta recovery. */
   | { type: "response.item"; item: ModelResponseItem; authoritative?: true }
   | { type: "commentary.delta"; text: string; itemId?: string; outputIndex?: number }
-  | { type: "reasoning.text.delta"; text: string; itemId?: string; outputIndex?: number }
-  | { type: "reasoning.text.done"; text: string; itemId?: string; outputIndex?: number }
-  | { type: "reasoning.summary.delta"; text: string; itemId?: string; outputIndex?: number }
+  | { type: "reasoning.text.delta"; text: string; itemId?: string; outputIndex?: number; sequence?: number; deltaId?: string }
+  | { type: "reasoning.text.done"; text: string; itemId?: string; outputIndex?: number; sequence?: number; deltaId?: string }
+  | { type: "reasoning.summary.delta"; text: string; itemId?: string; outputIndex?: number; sequence?: number; deltaId?: string }
   | { type: "text.delta"; text: string; itemId?: string; outputIndex?: number }
   | { type: "tool.call.started"; callId: string; name: string; callerId?: string; programId?: string; agentId?: string }
   | { type: "tool.call.arguments.delta"; callId: string; delta: string }
