@@ -158,6 +158,7 @@ function createFakeHost(options: {
   columns?: number;
   stdin?: string;
   copyToClipboard?: (text: string) => Promise<boolean> | boolean;
+  now?: () => number;
 } = {}): FakeHost {
   const out: string[] = [];
   const err: string[] = [];
@@ -240,7 +241,7 @@ function createFakeHost(options: {
     platform: options.platform ?? "linux",
     version: "0.1.0-test",
     executableDir: "/opt/capybara/bin",
-    now: () => 1_800_000_000_000,
+    now: options.now ?? (() => 1_800_000_000_000),
     exit: (code) => {
       throw new Error(`exit ${code}`);
     },
@@ -1689,6 +1690,71 @@ describe("interactive UI (§6.2, §6.21)", () => {
     expect(output()).not.toContain("Final answer");
   });
 
+  test("refreshes a running subagent clock with animations off", async () => {
+    const priorIsTty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+    Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+    let nowMs = 2_000;
+    const host = createFakeHost({
+      isTty: true,
+      columns: 180,
+      env: { NO_COLOR: "1" },
+      now: () => nowMs,
+    });
+    const decision = decideRenderMode({ host, rendererAvailable: true });
+    const instance = new InteractiveUi({
+      host,
+      decision,
+      writer: new LineWriter(host, decision),
+      workspacePath: "/work/project",
+      version: "0.1.0-test",
+      uiAnimations: false,
+      sidebarVisibility: "show",
+    });
+    const task: TimelineTask = {
+      type: "task",
+      id: "task_agent_1",
+      sequence: 1,
+      taskId: "agent_1",
+      role: "executor",
+      title: "Live task",
+      goal: "Verify live elapsed time",
+      constraints: [],
+      contract: [],
+      state: "running",
+      childCount: 1,
+      awaitInterrupted: false,
+      startTimeMs: 1_000,
+      subagentEvents: [],
+      subagentEventCount: 0,
+      subagentEventsOmitted: 0,
+    };
+    const model: SessionViewModel = {
+      ...emptyViewModel("ses_live_task_clock"),
+      timeline: [task],
+      activeTasks: [task],
+      lastSequence: 1,
+      turnCount: 1,
+    };
+
+    try {
+      instance.flush(model);
+      await Bun.sleep(80);
+      const initialFrames = host.out.length;
+      expect(initialFrames).toBeGreaterThan(0);
+
+      nowMs = 3_200;
+      await Bun.sleep(160);
+      expect(host.out.length).toBeGreaterThan(initialFrames);
+      const liveFrame = host.out.at(-1) ?? "";
+      expect(liveFrame).toContain("2.2s");
+      expect(liveFrame.match(/2\.2s/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+      expect(instance.capabilities.reducedMotion).toBe(true);
+    } finally {
+      instance.restore();
+      if (priorIsTty === undefined) delete (process.stdout as { isTTY?: boolean }).isTTY;
+      else Object.defineProperty(process.stdout, "isTTY", priorIsTty);
+    }
+  });
 
   test("prints authoritative completed text when it extends a candidate stream", () => {
     const { instance, output } = ui(80);

@@ -55,6 +55,7 @@ export interface ScreenInput {
   /** Effective permission axes for the status bar (write/shell/network/…). */
   readonly permissionDetail?: string;
   readonly liveOptions?: LiveLineOptions;
+  readonly nowMs?: number;
   readonly timelineOptions?: TimelineRenderOptions;
   /** §6.16: shown once when the terminal is very narrow. */
   readonly showCompactWarning?: boolean;
@@ -250,6 +251,7 @@ export function prepareScreen(
             ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
             ...(input.credentialSource !== undefined ? { credentialSource: input.credentialSource } : {}),
             ...(input.helpHint !== undefined ? { helpHint: input.helpHint } : {}),
+            ...(input.nowMs !== undefined ? { nowMs: input.nowMs } : {}),
             showCost: plan.showCost,
           }),
         blockContext(input.capabilities, plan.sidebarWidth),

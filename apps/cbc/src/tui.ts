@@ -2583,18 +2583,21 @@ export class InteractiveUi {
     this.#clearScreenOnNextFrame = false;
   }
 
-  /** Keep a live turn visibly moving without redrawing idle frames. */
+  /** Keep live animation and running task clocks moving without redrawing idle frames. */
   #syncLiveAnimation(model: SessionViewModel): void {
     const live = visibleLiveState(model);
     const spinning =
       live.kind === "working" ||
       live.kind === "waiting_for_task" ||
       live.kind === "running_tests";
+    const animateSpinner = spinning && !this.capabilities.reducedMotion;
+    const refreshTaskClock = model.activeTasks.some(
+      (task) => task.state === "running" && task.startTimeMs !== undefined,
+    );
     if (
       !this.#fullScreen ||
-      !spinning ||
-      process.stdout.isTTY !== true ||
-      this.capabilities.reducedMotion
+      (!animateSpinner && !refreshTaskClock) ||
+      process.stdout.isTTY !== true
     ) {
       this.#stopLiveAnimation();
       return;
@@ -2603,20 +2606,33 @@ export class InteractiveUi {
 
     this.#liveFrame = 0;
     this.#liveAnimationTimer = setInterval(() => {
-      const live =
-        this.#latestModel === undefined ? undefined : visibleLiveState(this.#latestModel);
+      const latest = this.#latestModel;
+      const live = latest === undefined ? undefined : visibleLiveState(latest);
       const stillSpinning =
         live?.kind === "working" ||
         live?.kind === "waiting_for_task" ||
         live?.kind === "running_tests";
-      if (!this.#fullScreen || !stillSpinning) {
+      const animateSpinner =
+        stillSpinning && !this.capabilities.reducedMotion;
+      const refreshTaskClock = latest?.activeTasks.some(
+        (task) => task.state === "running" && task.startTimeMs !== undefined,
+      ) === true;
+      if (
+        !this.#fullScreen ||
+        process.stdout.isTTY !== true ||
+        (!animateSpinner && !refreshTaskClock)
+      ) {
         this.#stopLiveAnimation();
         return;
       }
-      this.#liveFrame += 1;
+      if (animateSpinner) {
+        this.#liveFrame += 1;
+        this.#markFrameDirty("live");
+      }
+      if (refreshTaskClock) this.#markFrameDirty("timeline", "sidebar");
       this.#scheduleFrame();
     }, FULL_SCREEN_SPINNER_INTERVAL_MS);
-    // The animation is presentation-only and must never keep a headless test or
+    // The presentation refresh must never keep a headless test or
     // shutdown path alive if the caller forgets to restore immediately.
     (this.#liveAnimationTimer as unknown as { unref?: () => void }).unref?.();
   }

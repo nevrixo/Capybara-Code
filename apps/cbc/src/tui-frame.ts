@@ -690,6 +690,7 @@ export function renderSessionFrame(input: SessionFrameOptions): SessionFrameRend
       busy: input.model.turnStatus !== "idle",
     },
     capabilities: input.capabilities,
+    ...(input.nowMs !== undefined ? { nowMs: input.nowMs } : {}),
     liveOptions: { frame: input.liveFrame ?? 0 },
     ...(input.overlay !== undefined
       ? { overlay: input.overlay, overlayScrollOffset: input.overlayScrollOffset ?? 0 }
