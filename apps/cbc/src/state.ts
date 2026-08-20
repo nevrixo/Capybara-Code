@@ -246,41 +246,80 @@ export function configValue(config: CbcConfig, path: string): unknown {
  * carrying credentials and §17.5 forbids it from weakening policy, so `capy config
  * set` writing there would be a way to smuggle either into a repository.
  */
+export interface UserConfigTransaction {
+  readonly set?: Readonly<Record<string, unknown>>;
+  readonly unset?: readonly string[];
+}
+
+export interface UserConfigTransactionResult {
+  readonly written: boolean;
+  readonly path: string;
+  readonly issues: ConfigIssue[];
+  readonly content?: string;
+}
+
+/**
+ * Validate and persist a group of user config edits as one atomic transaction.
+ * Every resulting semantic error blocks the write, including cross-field errors
+ * whose path is different from the key being edited.
+ */
+export async function updateUserConfigTransaction(
+  host: Host,
+  transaction: UserConfigTransaction,
+): Promise<UserConfigTransactionResult> {
+  const paths = resolvePaths(host);
+  const existing = await host.fs.read(paths.configFile);
+  const before = (existing ?? "").replace(/\r\n/g, "\n");
+  let lines = before.length === 0 ? [] : before.split("\n");
+  for (const rawPath of transaction.unset ?? []) {
+    lines = unsetTomlValue(lines, normalizeConfigPath(rawPath));
+  }
+  for (const [rawPath, value] of Object.entries(transaction.set ?? {})) {
+    const canonicalPath = normalizeConfigPath(rawPath);
+    // Exercise the same path safety guard used by the schema before editing text.
+    writePath(defaultConfig(), canonicalPath, value);
+    lines = upsertTomlValue(lines, canonicalPath, value);
+  }
+  const candidate = lines.length === 0 ? "" : `${lines.join("\n").replace(/\n+$/u, "")}\n`;
+  const baseline = loadConfig({
+    ...(before.length > 0 ? { userToml: before } : {}),
+    projectTrusted: false,
+    env: {},
+  });
+  const baselineErrors = new Set(baseline.issues.filter((issue) => issue.severity === "error").map((issue) => issue.path + "|" + issue.source + "|" + issue.message));
+  const merged = loadConfig({
+    ...(candidate.length > 0 ? { userToml: candidate } : {}),
+    projectTrusted: false,
+    env: {},
+  });
+  const newErrors = merged.issues.filter((issue) => issue.severity === "error" && !baselineErrors.has(issue.path + "|" + issue.source + "|" + issue.message));
+  if (newErrors.length > 0) return { written: false, path: paths.configFile, issues: merged.issues };
+  if (candidate === before) return { written: false, path: paths.configFile, issues: merged.issues, content: candidate };
+  try {
+    await host.fs.mkdirp(paths.config);
+    await host.fs.atomicWrite(paths.configFile, candidate);
+  } catch (error) {
+    const issue: ConfigIssue = {
+      severity: "error",
+      path: "config",
+      source: "user",
+      message: `could not atomically write ${paths.configFile}: ${error instanceof Error ? error.message : String(error)}`,
+    };
+    return { written: false, path: paths.configFile, issues: [...merged.issues, issue], content: candidate };
+  }
+  return { written: true, path: paths.configFile, issues: merged.issues, content: candidate };
+}
+
 export async function setUserConfigValue(
   host: Host,
   path: string,
   value: string,
 ): Promise<{ issues: ConfigIssue[]; written: string }> {
-  const paths = resolvePaths(host);
-  const existing = await host.fs.read(paths.configFile);
-  const canonicalPath = normalizeConfigPath(path);
-
-  // Round-trip through the schema so an invalid key or type is rejected before it
-  // reaches disk.
-  const probe = defaultConfig();
-  const parsed = coerceConfigValue(value);
-  writePath(probe, canonicalPath, parsed);
-
-  const merged = loadConfig({
-    ...(existing !== undefined ? { userToml: existing } : {}),
-    projectTrusted: false,
-    env: {},
-    cliOverrides: { [canonicalPath]: parsed },
+  const result = await updateUserConfigTransaction(host, {
+    set: { [normalizeConfigPath(path)]: coerceConfigValue(value) },
   });
-
-  const blocking = merged.issues.filter(
-    (issue) => issue.severity === "error" && issue.path === canonicalPath,
-  );
-  if (blocking.length > 0) return { issues: blocking, written: paths.configFile };
-
-  const lines = existing === undefined ? [] : existing.split("\n");
-  const updated = upsertTomlValue(lines, canonicalPath, parsed);
-
-  await host.fs.mkdirp(paths.config);
-  await host.fs.write(paths.configFile, `${updated.join("\n").replace(/\n+$/, "")}\n`);
-  return { issues: merged.issues.filter((i) => i.path === canonicalPath), written: paths.configFile };
+  return { issues: result.issues, written: result.path };
 }
-
 /** Interpret a CLI string as a boolean, number, or string. */
 export function coerceConfigValue(raw: string): unknown {
   if (raw === "true") return true;
@@ -350,6 +389,36 @@ export function upsertTomlValue(
   return out;
 }
 
+/** Remove one dotted key while preserving comments and surrounding sections. */
+export function unsetTomlValue(lines: readonly string[], dottedPath: string): string[] {
+  const segments = dottedPath.split(".");
+  const key = segments.pop() as string;
+  const section = segments.join(".");
+  const snakeKey = toSnakeCase(key);
+  const out = [...lines];
+  let sectionStart = -1;
+  let sectionEnd = out.length;
+  if (section.length === 0) {
+    sectionEnd = out.findIndex((line) => /^\s*\[/.test(line));
+    if (sectionEnd === -1) sectionEnd = out.length;
+  } else {
+    const header = `[${section}]`;
+    sectionStart = out.findIndex((line) => line.trim() === header);
+    if (sectionStart === -1) return out;
+    for (let i = sectionStart + 1; i < out.length; i += 1) {
+      if (/^\s*\[/.test(out[i] as string)) {
+        sectionEnd = i;
+        break;
+      }
+    }
+  }
+  const from = sectionStart === -1 ? 0 : sectionStart + 1;
+  const pattern = new RegExp(`^\\s*${escapeRegex(snakeKey)}\\s*=`);
+  for (let i = sectionEnd - 1; i >= from; i -= 1) {
+    if (pattern.test(out[i] as string)) out.splice(i, 1);
+  }
+  return out;
+}
 function renderTomlValue(value: unknown): string {
   if (typeof value === "boolean" || typeof value === "number") return String(value);
   if (Array.isArray(value)) return `[${value.map(renderTomlValue).join(", ")}]`;
