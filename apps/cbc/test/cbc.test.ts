@@ -4275,6 +4275,11 @@ describe("slash router", () => {
       setting: "thinking",
       value: "hidden",
     });
+    expect(parseSlash("/setting todo clear")).toEqual({
+      kind: "setting",
+      setting: "todo",
+      value: "clear",
+    });
   });
 
   test("every §8.10 command routes to something other than unknown", () => {

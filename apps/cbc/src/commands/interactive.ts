@@ -1286,6 +1286,48 @@ function settingDescriptors(ui: InteractiveUi, session: ActiveSession): SettingD
         };
       },
     },
+    {
+      key: "todo",
+      label: "TODO",
+      value: "show",
+      values: [
+        { value: "show", label: "Open" },
+        { value: "clear", label: "Clear" },
+        { value: "approve", label: "Approval help" },
+        { value: "hide", label: "Close settings" },
+      ],
+      apply: (active, value) => {
+        if (value === "show") {
+          ui.openOverlay("todo", renderTodoList(active.viewModel.todo, ui.blockContext));
+          return { value: "show" };
+        }
+        if (value === "clear") {
+          const state = active.viewModel.todo;
+          const result = active.writeTodo({
+            expectedRevision: state.revision,
+            items: [],
+            reason: "cleared by user",
+            source: "user",
+            clearDocument: true,
+          });
+          return {
+            value: "show",
+            message: result.ok ? "TODO cleared." : result.message,
+          };
+        }
+        if (value === "approve") {
+          return {
+            value: "show",
+            message: "TODO approval is digest-bound; use /plan approve --keep or /plan approve --compact.",
+          };
+        }
+        if (value === "hide") {
+          ui.closeOverlay();
+          return { value: "show" };
+        }
+        return { message: "Use Open, Clear, Approval help, or Close settings for TODO." };
+      },
+    },
   ];
 }
 
