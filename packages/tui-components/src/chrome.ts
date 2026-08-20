@@ -329,17 +329,25 @@ function buildStatusFields(
     ? input.permissionMode
     : input.interactionMode === "plan" ? "Plan" : "Build";
   const configuredPermission = input.permissionPreset ?? input.permissionMode;
+  // CBC supplies the live effective policy as a compact detail label. When it
+  // is canonical, let it drive the mode badge so session overrides or
+  // restricted presets cannot leave the bar showing stale config.
+  const detailLabel = input.permissionDetail?.trim();
+  const hasCanonicalDetailLabel = detailLabel !== undefined &&
+    /^(?:RO · )?(?:READ|EDIT|AUTO|YOLO|CUSTOM)$/i.test(detailLabel);
+  const effectivePermission = hasCanonicalDetailLabel ? detailLabel : configuredPermission;
   // Plan is a hard read-only ceiling regardless of the configured preset. Show
   // the effective authority rather than implying that legacy `ask` or `auto`
   // can enable writes while Plan is active.
-  const permission = input.interactionMode === "plan" ? "READ" : configuredPermission;
+  const permission = input.interactionMode === "plan" ? "READ" : effectivePermission;
   const modeLabel = `${mode} · ${permission}`;
   fields.mode = [
     segment(modeLabel, { fg: "accent.cyan" }),
     ...(input.pendingInteractionMode !== undefined
       ? [segment(` -> ${input.pendingInteractionMode === "plan" ? "Plan" : "Build"} next`, { fg: "accent.amber" })]
       : []),
-    ...(input.permissionDetail !== undefined && input.permissionDetail.length > 0 && input.interactionMode !== "plan"
+    ...(input.permissionDetail !== undefined && input.permissionDetail.length > 0 &&
+      !hasCanonicalDetailLabel && input.interactionMode !== "plan"
       ? renderPermissionDetail(input.permissionDetail)
       : []),
   ];

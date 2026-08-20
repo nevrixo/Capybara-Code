@@ -209,6 +209,7 @@ const FULL_SCREEN_SPINNER_INTERVAL_MS = 100;
  */
 export class InteractiveUi {
   readonly #options: InteractiveUiOptions;
+  #permissionsSummary: string | undefined;
   #context: BlockContext;
   #plan: LayoutPlan;
   #renderedItems = 0;
@@ -326,6 +327,7 @@ export class InteractiveUi {
 
   constructor(options: InteractiveUiOptions) {
     this.#options = options;
+    this.#permissionsSummary = options.permissionsSummary;
     this.#perf = new TuiPerfRecorder(tuiPerfEnabled(options.host.env));
     this.#plan = planLayout(options.decision.capabilities.columns, {
       rows: options.decision.capabilities.rows,
@@ -349,6 +351,11 @@ export class InteractiveUi {
     this.#timelineProjection = this.#fullScreen ? new ProjectedTimeline() : undefined;
     this.#renderedSnapshots = this.#fullScreen ? undefined : new Map<string, TimelineItem>();
     this.#renderedSources = this.#fullScreen ? undefined : new Map<string, TimelineItem>();
+  }
+
+  setPermissionSummary(summary: string | undefined): void {
+    this.#permissionsSummary = summary;
+    this.#markFrameDirty("status");
   }
 
   get capabilities(): TerminalCapabilities {
@@ -2098,8 +2105,8 @@ export class InteractiveUi {
        ...(this.#options.git !== undefined ? { git: this.#options.git } : {}),
        workspacePath: this.#options.workspacePath,
        showCost: plan.showCost,
-       ...(this.#options.permissionsSummary !== undefined
-          ? { permissionDetail: this.#options.permissionsSummary }
+       ...(this.#permissionsSummary !== undefined
+          ? { permissionDetail: this.#permissionsSummary }
           : {}),
      }),
       blockContext(this.#options.decision.capabilities, plan.columns),
@@ -2792,8 +2799,8 @@ export class InteractiveUi {
              : {}),
           liveFrame: this.#liveFrame,
           notices: this.#notices,
-          ...(this.#options.permissionsSummary !== undefined
-            ? { permissionDetail: this.#options.permissionsSummary }
+          ...(this.#permissionsSummary !== undefined
+            ? { permissionDetail: this.#permissionsSummary }
             : {}),
           ...(this.#options.provider !== undefined ? { provider: this.#options.provider } : {}),
           workspacePath: this.#options.workspacePath,
@@ -3023,7 +3030,7 @@ export function uiEventSink(
     ui.finishStream();
     if (event.kind === "user.message") ui.resetStream();
     ui.flush(model);
-    if (event.kind === "mode.changed") ui.status(model);
+    if (event.kind === "mode.changed" || (event.kind as string) === "permission.changed") ui.status(model);
     if (event.kind === "turn.cancelled") {
       ui.closeStreams("cancelled", event.turnId);
     } else if (

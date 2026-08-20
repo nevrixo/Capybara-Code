@@ -49,7 +49,7 @@ import {
   type TaskContextCapsule,
   type ToolObservationIngestResult,
 } from "@cbc/context-engine";
-import { canonicalDigest, classifyCommand, mcpActionArgumentsHash, normalizeApprovedPlanScope, type ApprovedPlanScope, type PlanCommandScope, type PermissionContext, type ProposedAction, type StoredRule, type TrustState } from "@cbc/permissions";
+import { canonicalDigest, classifyCommand, mcpActionArgumentsHash, normalizeApprovedPlanScope, resolvePermissionPolicy, type PermissionPreset, type ApprovedPlanScope, type PlanCommandScope, type PermissionContext, type ProposedAction, type StoredRule, type TrustState } from "@cbc/permissions";
 import type { CbcEvent, CbcEventKind, EventVisibility } from "@cbc/protocol";
 import {
   CachePlanner,
@@ -2187,17 +2187,34 @@ export class AgentSession {
    * the very next call in the same batch, and `--read-only` has to keep applying
    * even if the model asks again.
    */
-  #permissionPreset: string | undefined;
+  #permissionPreset: PermissionPreset | undefined;
 
-  get permissionPreset(): string | undefined {
+  get permissionPreset(): PermissionPreset | undefined {
     return this.#permissionPreset;
   }
 
-  setPermissionPreset(preset: string): void {
+  setPermissionPreset(preset: PermissionPreset): void {
     const from = this.#permissionPreset ?? this.#options.config.permissions.preset;
     this.#permissionPreset = preset;
-    this.#options.config.permissions.preset = preset as never;
-    this.#emit("permission.changed" as never, { from, to: preset, scope: "session", source: "slash" } as never, this.#currentScope() as never);
+    this.#options.config.permissions.preset = preset;
+    const effective = resolvePermissionPolicy(preset, {
+      projectWrite: this.#options.config.permissions.projectWrite,
+      shell: this.#options.config.permissions.shell,
+      network: this.#options.config.permissions.network,
+      destructive: this.#options.config.permissions.destructive,
+      credentials: this.#options.config.permissions.credentials,
+      externalSideEffect: this.#options.config.permissions.externalSideEffect,
+    }, this.#options.config.agent.permissionMode);
+    this.#emit("permission.changed" as never, {
+      from,
+      to: preset,
+      selectedPreset: effective.selectedPreset,
+      effectiveKind: effective.effectiveKind,
+      restrictions: effective.restrictions,
+      policyDigest: effective.digest,
+      scope: "session",
+      source: "slash",
+    } as never, this.#currentScope() as never);
   }
 
   permissionContext(): PermissionContext {
@@ -2215,7 +2232,13 @@ export class AgentSession {
       planExecutionActive: this.#planExecution !== undefined,
       workspaceRoot: this.#options.workspacePath,
       ...(approvedPlan === undefined ? {} : { approvedPlan }),
-      ...(this.#permissionPreset !== undefined ? { preset: this.#permissionPreset as never } : {}),
+      ...(this.#permissionPreset !== undefined ? { preset: this.#permissionPreset } : {}),
+      effectivePolicy: resolvePermissionPolicy(this.#permissionPreset ?? config.permissions.preset, { projectWrite: config.permissions.projectWrite, shell: config.permissions.shell, network: config.permissions.network, destructive: config.permissions.destructive, credentials: config.permissions.credentials, externalSideEffect: config.permissions.externalSideEffect }, config.agent.permissionMode),
+      // AUTO direct executables require proof from the live runtime. A config
+      // default alone is not evidence that a sandbox was actually installed.
+      sandboxEnforceable: this.#options.runtime.capabilities?.sandboxLevel !== undefined
+        ? this.#options.runtime.capabilities.sandboxLevel !== "none"
+        : false,
       trust: this.#options.trust,
       rules: [...(this.#options.configRules ?? []), ...this.#options.granted.all],
       catalog: this.registry.all(),

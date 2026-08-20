@@ -876,6 +876,24 @@ describe("composer session (§6.14, §6.15, AC-05, AC-20)", () => {
     expect(composer.completionOpen).toBe(false);
   });
 
+  test("permission choices submit the selected preset and close the popup", () => {
+    const { composer } = session();
+    type(composer, "/permissions ");
+
+    expect(composer.completion.kind).toBe("argument");
+    expect(composer.completion.candidates.map((candidate) => candidate.value)).toEqual([
+      "read",
+      "edit",
+      "auto",
+      "yolo",
+    ]);
+    expect(composer.handle({ key: "enter" }, idle)).toEqual({
+      kind: "submit",
+      text: "/permissions read",
+    });
+    expect(composer.completionOpen).toBe(false);
+  });
+
   test("/setting does not show a setting-name completion picker", () => {
     const { composer } = session();
     type(composer, "/setting ");

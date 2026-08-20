@@ -16,6 +16,7 @@ import type { ReasoningEffort } from "@cbc/config-schema";
 import type { CbcEvent } from "@cbc/protocol";
 import type { SessionViewModel } from "@cbc/session-domain";
 import { findModel, MODEL_REGISTRY } from "@cbc/provider-openai";
+import { describeEffectivePermissionPolicy, isPermissionPreset, resolvePermissionPolicy } from "@cbc/permissions";
 import { renderSkillList } from "@cbc/skills";
 import { SUBAGENT_ROLES, roleDefinition } from "@cbc/subagents";
 import {
@@ -89,7 +90,13 @@ export async function interactive(
   for (const issue of remapped.issues) context.warn(`keymap: ${issue}`);
 
   const perms = loaded.config.permissions;
-  const presetLabel = (perms.preset ?? "auto").toUpperCase();
+  const startupPreset = args.permissionPreset ??
+    (args.mode === "plan" || args.interactionMode === "plan" ? "read" :
+      args.mode === "read" || args.mode === "edit" || args.mode === "auto" || args.mode === "yolo"
+        ? args.mode
+        : undefined);
+  const policy = resolvePermissionPolicy(startupPreset, { projectWrite: perms.projectWrite, shell: perms.shell, network: perms.network, destructive: perms.destructive, credentials: perms.credentials, externalSideEffect: perms.externalSideEffect }, args.mode ?? loaded.config.agent.permissionMode);
+  const presetLabel = policy.effectiveKind.toUpperCase();
   const permissionsSummary = args.readOnly === true ? `RO · ${presetLabel}` : presetLabel;
   let settingWriteTail: Promise<void> = Promise.resolve();
   const persistSetting = (
@@ -213,6 +220,12 @@ export async function interactive(
           if (!dirtyBeforeEvent) pathIndexDirty = false;
           schedulePathCompletionRefresh();
         }
+      }
+      if ((event.kind as string) === "permission.changed") {
+        const selected = typeof eventPayload?.selectedPreset === "string" ? eventPayload.selectedPreset.toUpperCase() : undefined;
+        const effective = typeof eventPayload?.effectiveKind === "string" ? eventPayload.effectiveKind.toUpperCase() : undefined;
+        const label = selected === "YOLO" && effective === "YOLO" ? "YOLO" : effective ?? selected ?? "CUSTOM";
+        ui.setPermissionSummary(args.readOnly === true ? `RO · ${label}` : label);
       }
       sink(event, model);
     };
@@ -1359,6 +1372,8 @@ async function handleSlash(
       const model = session.viewModel;
       const loaded = await context.config();
       const permissions = loaded.config.permissions;
+      const configuredPolicy = resolvePermissionPolicy(permissions.preset, { projectWrite: permissions.projectWrite, shell: permissions.shell, network: permissions.network, destructive: permissions.destructive, credentials: permissions.credentials, externalSideEffect: permissions.externalSideEffect }, loaded.config.agent.permissionMode);
+      const policy = session.permissionContext().effectivePolicy ?? configuredPolicy;
       const saving = session.tokenSaving;
       const savingPlan = saving.plan;
       const savingLines = savingPlan === undefined
@@ -1377,7 +1392,10 @@ async function handleSlash(
         `Model      ${model.modelId} · ${model.reasoningEffort}`,
         `Mode       ${model.modeState.selected.toUpperCase()}`,
         ...savingLines,
-        `Permission ${(model.permissionPreset ?? permissions.preset ?? model.permissionMode).toUpperCase()}`,
+        ...describeEffectivePermissionPolicy(policy),
+        `Trust      ${await context.trust()}`,
+        `Sandbox    ${loaded.config.sandbox.level}`,
+        `Source    ${session.permissionPreset !== undefined && session.permissionPreset !== permissions.preset ? "session" : (loaded.provenance["permissions.preset"] ?? loaded.provenance["agent.permissionMode"] ?? "default")}`,
         ...(model.modeState.pending === undefined ? [] : [`Pending    ${model.modeState.pending.toUpperCase()} next turn`]),
         `Turns      ${model.turnCount} (${model.cancelledTurns} cancelled)`,
         `Context    ${model.contextUsedTokens} / ${model.contextBudgetTokens} tokens`,
@@ -1387,12 +1405,6 @@ async function handleSlash(
         `Cost       $${model.usage.estimatedCostUsd.toFixed(4)} (estimated)`,
         `Credential ${boot.credentialSource}`,
         "",
-        `Write       ${{ auto: "auto", ask: "ask", plan: "off" }[permissions.projectWrite] ?? permissions.projectWrite}`,
-        `Shell       ${{ "safe-auto": "safe", ask: "ask", deny: "off" }[permissions.shell] ?? permissions.shell}`,
-        `Network     ${{ allow: "on", ask: "ask", deny: "off" }[permissions.network] ?? permissions.network}`,
-        `Destructive ${{ allow: "on", ask: "ask", deny: "off" }[permissions.destructive] ?? permissions.destructive}`,
-        `Credentials ${{ allow: "on", ask: "ask", deny: "off" }[permissions.credentials] ?? permissions.credentials}`,
-        `External    ${{ allow: "on", ask: "ask", deny: "off" }[permissions.externalSideEffect] ?? permissions.externalSideEffect}`,
       ];
       ui.openOverlay("status", lines);
       return "continue";
@@ -1577,25 +1589,44 @@ async function handleSlash(
     case "set_permission": {
       const preset = intent.preset;
       if (preset === undefined) {
-        ui.text(`Permission: ${(session as unknown as { permissionPreset?: string }).permissionPreset ?? session.viewModel.permissionMode}`);
+        const loaded = await context.config();
+        const configuredPolicy = resolvePermissionPolicy(loaded.config.permissions.preset, { projectWrite: loaded.config.permissions.projectWrite, shell: loaded.config.permissions.shell, network: loaded.config.permissions.network, destructive: loaded.config.permissions.destructive, credentials: loaded.config.permissions.credentials, externalSideEffect: loaded.config.permissions.externalSideEffect }, loaded.config.agent.permissionMode);
+        const policy = session.permissionContext().effectivePolicy ?? configuredPolicy;
+        ui.text(`Permission: ${policy.effectiveKind.toUpperCase()} (${policy.digest.slice(0, 12)}) · source ${session.permissionPreset !== undefined && session.permissionPreset !== loaded.config.permissions.preset ? "session" : (loaded.provenance["permissions.preset"] ?? loaded.provenance["agent.permissionMode"] ?? "default")}`);
         return "continue";
       }
-      const { isPermissionPreset } = await import("@cbc/permissions");
       if (!isPermissionPreset(preset)) {
         context.warn(`'${preset}' is not a permission preset (read|edit|auto|yolo)`);
         return "continue";
       }
-      (session as unknown as { setPermissionPreset?: (p: string) => void }).setPermissionPreset?.(preset);
-      if (intent.save) {
-        const { setUserConfigValue } = await import("../state.ts");
-        await setUserConfigValue(context.host, "permissions.preset", preset);
-        ui.text(`Permission set to ${preset.toUpperCase()} and saved.`);
+      let save = intent.save === true;
+      if (preset === "yolo") {
+        const selected = await selectOutsideTui(
+          "YOLO skips soft approval prompts; trust, deny rules, credentials, Plan scope, sandbox, and OS permissions remain enforced.",
+          ["Cancel", "Enable for this session", "Enable and save"],
+        );
+        if (selected < 1) return "continue";
+        save = selected === 2;
+      }
+      // Confirmation happens before session mutation. A failed persistence keeps
+      // the session change visible but reports that it was not saved.
+      // Keep the AgentSession receiver: extracting this method loses the private
+      // field brand and crashes immediately after a completion is selected.
+      session.setPermissionPreset(preset);
+      if (save) {
+        const { updateUserConfigTransaction } = await import("../state.ts");
+        const result = await updateUserConfigTransaction(context.host, { set: { "permissions.preset": preset }, unset: ["agent.permissionMode"] });
+        const error = result.issues.find((issue) => issue.severity === "error");
+        if (error !== undefined) {
+          ui.text(`Permission set to ${preset.toUpperCase()} for this session, but was not saved${error === undefined ? "." : `: ${error.message}`}`);
+        } else {
+          ui.text(`Permission set to ${preset.toUpperCase()} and saved.`);
+        }
       } else {
         ui.text(`Permission set to ${preset.toUpperCase()} for this session.`);
       }
       return "continue";
     }
-
     case "plan": {
       const strategy = intent.contextStrategy ?? "keep";
       if (intent.action === "enter") {
