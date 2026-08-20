@@ -924,6 +924,7 @@ export type TaskCardView = Pick<
   | "state"
   | "childCount"
   | "summary"
+  | "blocker"
   | "awaitInterrupted"
   | "durationMs"
 > &
@@ -1028,6 +1029,10 @@ export function renderTaskCard(
     item.tokens !== undefined || item.pendingInputTokens !== undefined
       ? `${pendingTokens > 0 ? "~" : ""}${formatTokens(totalTokens)} tokens`
       : undefined;
+  const blockerText =
+    item.state === "blocked" && item.blocker !== undefined && item.blocker.trim().length > 0
+      ? item.blocker.trim()
+      : undefined;
 
   if (options.compact === true) {
     const finished = item.state !== "running";
@@ -1051,7 +1056,9 @@ export function renderTaskCard(
     ) {
       metrics.push(formatDuration(Math.max(0, options.nowMs - item.startTimeMs)));
     }
-    const summary = item.summary ?? (finished ? item.progress : undefined);
+    const summary = blockerText !== undefined
+      ? `reason: ${blockerText}`
+      : item.summary ?? (finished ? item.progress : undefined);
     const compactState = item.state === "completed" ? "Done" : stateLabel;
     const statusText = item.childCount > 1
       ? `${compactState} with ${item.childCount} parallel agents`
@@ -1102,7 +1109,9 @@ export function renderTaskCard(
   const header = fitLine("task", headSegments, context);
 
   if (options.collapsed === true) {
-    const summary = item.summary ?? item.title;
+    const summary = blockerText !== undefined
+      ? `reason: ${blockerText}`
+      : item.summary ?? item.title;
     return [
       fitLine(
         "task",
@@ -1179,9 +1188,17 @@ export function renderTaskCard(
     metrics.push(tokenMetric);
   }
 
-  if (item.summary !== undefined && item.summary.length > 0) {
+  if (blockerText !== undefined) {
+    metrics.push(`reason: ${sanitizeInline(blockerText, 120)}`);
+  }
+
+  if (
+    item.summary !== undefined &&
+    item.summary.length > 0 &&
+    item.summary.trim() !== blockerText
+  ) {
     metrics.push(sanitizeInline(item.summary, 120));
-  } else if (item.progress !== undefined && item.progress.length > 0) {
+  } else if (blockerText === undefined && item.progress !== undefined && item.progress.length > 0) {
     metrics.push(sanitizeInline(item.progress, 120));
   }
 

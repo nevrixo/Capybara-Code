@@ -487,6 +487,7 @@ export interface CompletionReport {
     purpose: string;
   }>;
   verification: Array<{
+    kind?: "command" | "check";
     command?: string;
     status: "passed" | "failed" | "not_run";
     evidence: string;

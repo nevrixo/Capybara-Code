@@ -1438,11 +1438,22 @@ export class AgentKernel {
           pendingFinalItems = [];
           if (pendingFinalCameFromWrapUp) this.#wrapUpDelivered = true;
           pendingFinalCameFromWrapUp = false;
-          const exhausted = budgetExhausted(budget, this.#limits, this.#now());
-          if (exhausted !== undefined && !this.#wrapUpDelivered) {
+          const nonModelExhaustion = budgetExhausted(
+            budget,
+            { ...this.#limits, maxModelSteps: Number.POSITIVE_INFINITY },
+            this.#now(),
+          );
+          if (nonModelExhaustion !== undefined && !this.#wrapUpDelivered) {
             machine.apply("budget_exhausted");
             break;
           }
+          // The model-step ceiling limits whether another sample may start; it
+          // must not invalidate a final answer returned by the last permitted
+          // sample. Other exhausted budgets retain their previous partial result.
+          // The TODO and verification gates above have already decided
+          // that no more work is required. Reclassifying that accepted answer as
+          // partial is how a child that finished on step N was shown as BLOCKED
+          // when its budget was exactly N steps.
           machine.apply("accepted");
           break;
         }
@@ -3730,22 +3741,43 @@ export class AgentKernel {
       autoReview: this.#options.autoReview === true,
     });
 
-    // §11.8 / P0-12: planned test commands run through the same policy and
-    // executor path as the model's own tool calls. A step is recorded `not_run`
-    // only when it genuinely cannot run — and the record says why.
+    // §11.8 / P0-12: every deterministic planned check runs through the same
+    // policy and executor path as the model's own tool calls. Previously only
+    // `closest_tests` was handled here, so HTML/CSS and other files with no
+    // inferred test command produced zero verification records and were
+    // incorrectly downgraded from completed to partial/blocked.
     for (const step of steps) {
-      if (step.kind !== "closest_tests") continue;
-      if (this.#verification.some((v) => v.command === step.command)) continue;
-      if (signal.aborted) {
-        this.#recordVerification({
-          command: step.command,
-          status: "not_run",
-          evidence: "the turn was cancelled before verification could run",
-        });
-        continue;
+      switch (step.kind) {
+        case "parse_sanity": {
+          const record = await this.#runFileSanity(step.paths, signal, emit);
+          this.#recordVerification({ ...record, kind: "check" });
+          break;
+        }
+        case "closest_tests": {
+          if (this.#verification.some((v) => v.command === step.command)) break;
+          if (signal.aborted) {
+            this.#recordVerification({
+              command: step.command,
+              status: "not_run",
+              evidence: "the turn was cancelled before verification could run",
+            });
+            break;
+          }
+          const record = await this.#runVerificationCommand(step.command, signal, emit);
+          this.#recordVerification(record);
+          break;
+        }
+        case "git_diff": {
+          const record = await this.#runGitDiffSanity(changedPaths, signal, emit);
+          this.#recordVerification({ ...record, kind: "check" });
+          break;
+        }
+        case "broader_tests":
+        case "independent_review":
+          // Broader suites require an explicit command before execution, while
+          // the independent review is started above and joined below.
+          break;
       }
-      const record = await this.#runVerificationCommand(step.command, signal, emit);
-      this.#recordVerification(record);
     }
 
     if (reviewPromise !== undefined) {
@@ -3879,14 +3911,44 @@ export class AgentKernel {
     }
     const args = parts.slice(1);
     const workspaceRoot = this.#options.permissionContext().approvedPlan?.workspaceRoot ?? ".";
-    const action: ProposedAction = {
-      callId: `verification_${(this.#verificationCallCounter += 1)}`,
-      toolId: "process.run",
-      arguments: { program, args, cwd: workspaceRoot, timeoutMs: 300_000, maxOutputBytes: 65_536 },
-      command: { program, args, cwd: workspaceRoot },
-      display: command,
-    };
+    const action = this.#verificationAction(
+      "process.run",
+      { program, args, cwd: workspaceRoot, timeoutMs: 300_000, maxOutputBytes: 65_536 },
+      command,
+    );
 
+    return await this.#authorizeVerificationAction(command, action, signal, emit);
+  }
+
+  #verificationAction(
+    toolId: string,
+    arguments_: Record<string, unknown>,
+    display: string,
+  ): ProposedAction {
+    const action = this.#options.normalizer.normalize(
+      `verification_${(this.#verificationCallCounter += 1)}`,
+      toolId,
+      arguments_,
+    );
+    return { ...action, display };
+  }
+
+  async #authorizeVerificationAction(
+    command: string,
+    action: ProposedAction,
+    signal: AbortSignal,
+    emit: <T>(kind: CbcEventKind, payload: T) => void,
+  ): Promise<
+    | { readonly kind: "authorized"; readonly command: string; readonly action: ProposedAction }
+    | {
+        readonly kind: "rejected";
+        readonly record: {
+          readonly command: string;
+          readonly status: "not_run";
+          readonly evidence: string;
+        };
+      }
+  > {
     const hash = actionHash(action);
     const decision = this.#evaluateAction(action, hash);
     if (decision.kind === "deny") {
@@ -3915,11 +3977,160 @@ export class AgentKernel {
           },
         };
       }
-      if (resolution.kind === "allow_turn") {
-        this.#turnAllowedActions.add(hash);
-      }
+      if (resolution.kind === "allow_turn") this.#turnAllowedActions.add(hash);
     }
     return { kind: "authorized", command, action };
+  }
+
+  /**
+   * Confirm that every changed path is still readable and capture the runtime's
+   * post-write checksum. This is the deterministic minimum sanity check for
+   * formats that do not have an inferred test command (for example HTML/CSS).
+   */
+  async #runFileSanity(
+    paths: readonly string[],
+    signal: AbortSignal,
+    emit: <T>(kind: CbcEventKind, payload: T) => void,
+  ): Promise<CompletionReport["verification"][number]> {
+    const command = `file checksum sanity (${paths.length} path${paths.length === 1 ? "" : "s"})`;
+    if (paths.length === 0 || paths.some((path) => path === "<unresolved>")) {
+      return {
+        command,
+        status: "not_run",
+        evidence: "changed paths were unresolved, so post-write checksums could not be read",
+      };
+    }
+    if (signal.aborted) {
+      return { command, status: "not_run", evidence: "the turn was cancelled before file sanity could run" };
+    }
+
+    const evidence: string[] = [];
+    for (let offset = 0; offset < paths.length; offset += 20) {
+      const batch = paths.slice(offset, offset + 20);
+      const action = this.#verificationAction(
+        "fs.read_many",
+        {
+          paths: batch,
+          maxLines: 1,
+          maxTotalLines: Math.max(1, batch.length),
+          maxTotalBytes: Math.max(1_024, batch.length * 1_024),
+          concurrency: Math.min(4, batch.length),
+        },
+        command,
+      );
+      const authorization = await this.#authorizeVerificationAction(command, action, signal, emit);
+      if (authorization.kind === "rejected") return authorization.record;
+
+      try {
+        const execution = await this.#options.executor.execute(authorization.action, signal);
+        if (!execution.result.ok) {
+          return {
+            command,
+            status: "failed",
+            evidence: execution.result.error?.message ?? execution.result.summary,
+          };
+        }
+
+        const data = execution.result.data as {
+          files?: Array<{ path?: string; checksum?: string; revisionToken?: string }>;
+          errors?: Array<{ path?: string; message?: string }>;
+        } | undefined;
+        if (Array.isArray(data?.errors) && data.errors.length > 0) {
+          return {
+            command,
+            status: "failed",
+            evidence: data.errors
+              .map((error) => `${error.path ?? "unknown path"}: ${error.message ?? "read failed"}`)
+              .join("; ")
+              .slice(0, 2_000),
+          };
+        }
+
+        if (Array.isArray(data?.files)) {
+          if (data.files.length < batch.length) {
+            return {
+              command,
+              status: "failed",
+              evidence: `runtime returned ${data.files.length} post-write read(s) for ${batch.length} changed path(s)`,
+            };
+          }
+          for (const file of data.files) {
+            const path = file.path ?? "unknown path";
+            const checksum = file.checksum ?? file.revisionToken;
+            evidence.push(checksum === undefined ? path : `${path} sha256:${checksum.slice(0, 12)}`);
+          }
+        } else {
+          evidence.push(execution.result.summary);
+        }
+      } catch (error) {
+        return {
+          command,
+          status: "failed",
+          evidence: `file sanity could not run: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+    }
+
+    return {
+      command,
+      status: "passed",
+      evidence: evidence.length > 0 ? evidence.join(", ").slice(0, 2_000) : "all changed files were readable",
+    };
+  }
+
+  /** Run the planned scoped diff inspection even when no focused test exists. */
+  async #runGitDiffSanity(
+    paths: readonly string[],
+    signal: AbortSignal,
+    emit: <T>(kind: CbcEventKind, payload: T) => void,
+  ): Promise<CompletionReport["verification"][number]> {
+    const command = "git diff (changed paths)";
+    if (paths.length === 0) {
+      return { command, status: "not_run", evidence: "changed paths were unresolved" };
+    }
+    if (signal.aborted) {
+      return { command, status: "not_run", evidence: "the turn was cancelled before diff inspection" };
+    }
+
+    let inspectedFiles = 0;
+    let additions = 0;
+    let deletions = 0;
+    for (let offset = 0; offset < paths.length; offset += 64) {
+      const batch = paths.slice(offset, offset + 64);
+      const action = this.#verificationAction("git.diff", { paths: batch }, command);
+      const authorization = await this.#authorizeVerificationAction(command, action, signal, emit);
+      if (authorization.kind === "rejected") return authorization.record;
+      try {
+        const execution = await this.#options.executor.execute(authorization.action, signal);
+        if (!execution.result.ok) {
+          return {
+            command,
+            status: "failed",
+            evidence: execution.result.error?.message ?? execution.result.summary,
+          };
+        }
+        const data = execution.result.data as {
+          files?: unknown[];
+          totalAdditions?: number;
+          totalDeletions?: number;
+        } | undefined;
+        inspectedFiles += Array.isArray(data?.files) ? data.files.length : 0;
+        additions += typeof data?.totalAdditions === "number" ? data.totalAdditions : 0;
+        deletions += typeof data?.totalDeletions === "number" ? data.totalDeletions : 0;
+      } catch (error) {
+        return {
+          command,
+          status: "failed",
+          evidence: `git diff could not run: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+    }
+
+    return {
+      command,
+      status: "passed",
+      evidence: `scoped diff inspected (${inspectedFiles} tracked file(s), +${additions} -${deletions}); post-write checksums cover untracked files`,
+    };
   }
 
   async #executeAuthorizedVerificationCommand(

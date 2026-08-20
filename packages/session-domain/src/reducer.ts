@@ -209,6 +209,8 @@ export interface TimelineTask {
   readonly modelId?: string;
   state: TaskState;
   summary?: string;
+  /** Terminal reason shown before an optimistic child summary for blocked work. */
+  blocker?: string;
   childCount: number;
   awaitInterrupted: boolean;
   durationMs?: number;
@@ -308,7 +310,12 @@ export interface CompletionReportView {
   status: "completed" | "partial" | "failed" | "cancelled";
   summary: string;
   changedFiles: Array<{ path: string; additions?: number; deletions?: number; purpose: string }>;
-  verification: Array<{ command?: string; status: "passed" | "failed" | "not_run"; evidence: string }>;
+  verification: Array<{
+    kind?: "command" | "check";
+    command?: string;
+    status: "passed" | "failed" | "not_run";
+    evidence: string;
+  }>;
   delegatedTasks: Array<{ id: string; role: string; status: string; summary: string }>;
   risks: string[];
   nextStep?: string;
@@ -1592,12 +1599,18 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
           : reportedState === "blocked"
             ? "blocked"
             : "failed";
+      const summary = str(p.summary, str(p.reason));
+      const openRisks = strArray(p.openRisks);
+      const blocker = state === "blocked"
+        ? str(p.reason, openRisks[0] ?? summary)
+        : undefined;
       const task = findTask(next.timeline, str(p.taskId), indexes);
       clearTaskLive(next, str(p.taskId));
       if (next.awaitingTaskId === str(p.taskId)) delete next.awaitingTaskId;
       if (task) {
         task.state = state;
-        task.summary = str(p.summary, str(p.reason));
+        task.summary = summary;
+        if (blocker !== undefined && blocker.length > 0) task.blocker = blocker;
         if (typeof p.durationMs === "number") task.durationMs = num(p.durationMs);
         delete task.pendingInputTokens;
       }
@@ -1605,7 +1618,7 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
         notice(
           event,
           state === "failed" ? "error" : "warning",
-          `Task ${task?.title ?? str(p.taskId)} ${state}: ${str(p.reason, str(p.summary))}`,
+          `Task ${task?.title ?? str(p.taskId)} ${state}: ${blocker ?? summary}`,
           state === "failed" ? "×" : "!",
         ),
       );

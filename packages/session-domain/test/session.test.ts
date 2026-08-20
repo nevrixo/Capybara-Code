@@ -893,7 +893,8 @@ describe("task semantics (§6.11, AC-21, AC-25)", () => {
             taskId: "t1",
             state: "blocked",
             status: "partial",
-            summary: "verification unavailable",
+            summary: "landing page implemented",
+            openRisks: ["verification coverage is partial: no verification was run"],
             durationMs: 19_700,
           },
         ],
@@ -902,7 +903,8 @@ describe("task semantics (§6.11, AC-21, AC-25)", () => {
 
     expect(taskAt(model)).toMatchObject({
       state: "blocked",
-      summary: "verification unavailable",
+      summary: "landing page implemented",
+      blocker: "verification coverage is partial: no verification was run",
       durationMs: 19_700,
     });
     expect(model.activeTasks).toHaveLength(0);
@@ -913,6 +915,8 @@ describe("task semantics (§6.11, AC-21, AC-25)", () => {
     if (notice?.type !== "notice") throw new Error("expected a terminal task notice");
     expect(notice.level).toBe("warning");
     expect(notice.text).toContain("Task PythonDemo blocked");
+    expect(notice.text).toContain("verification coverage is partial");
+    expect(notice.text).not.toContain("landing page implemented");
     expect(notice.text).not.toContain("failed");
   });
 

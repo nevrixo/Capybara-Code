@@ -751,7 +751,9 @@ describe("verification execution (P0-12)", () => {
     });
     const result = await kernel.runTurn("fix the parser", new AbortController().signal);
 
-    const verifyCalls = executed.filter((action) => action.callId.startsWith("verification_"));
+    const verifyCalls = executed.filter(
+      (action) => action.callId.startsWith("verification_") && action.toolId === "process.run",
+    );
     expect(verifyCalls.length).toBe(1);
     expect(verifyCalls[0]?.toolId).toBe("process.run");
     expect(verifyCalls[0]?.command?.program).toBe("bun");
@@ -760,6 +762,58 @@ describe("verification execution (P0-12)", () => {
     const record = result.report.verification.find((v) => v.command === "bun test parser");
     expect(record?.status).toBe("passed");
     expect(record?.evidence).toContain("12 passed");
+  });
+
+  test("file-only changes run checksum and diff sanity without an inferred test command", async () => {
+    const checksum = "a".repeat(64);
+    const { kernel, executed } = harness({
+      steps: [
+        {
+          commentary: "Updating the landing page.",
+          toolCalls: [
+            {
+              callId: "c1",
+              name: "fs.write",
+              arguments: {
+                path: "index.html",
+                content: "<!doctype html><title>Orange Vault</title>",
+                intent: "create",
+              },
+            },
+          ],
+        },
+        { text: "Updated the landing page." },
+      ],
+      toolResults: {
+        "fs.write": { result: okResult("wrote index.html") },
+        "fs.read_many": {
+          result: okResult("read 1 file", {
+            files: [{ path: "index.html", checksum }],
+            errors: [],
+          }),
+          text: `index.html sha256:${checksum}`,
+        },
+        "git.diff": {
+          result: okResult("1 file, +1 -0", {
+            files: [{ path: "index.html" }],
+            totalAdditions: 1,
+            totalDeletions: 0,
+          }),
+          text: "+<title>Orange Vault</title>",
+        },
+      },
+      limits: { ...ROOT_LIMITS, maxModelSteps: 2 },
+    });
+
+    const result = await kernel.runTurn("replace the landing page", new AbortController().signal);
+
+    expect(result.report.status).toBe("completed");
+    expect(result.report.verification).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "check", command: "file checksum sanity (1 path)", status: "passed" }),
+      expect.objectContaining({ kind: "check", command: "git diff (changed paths)", status: "passed" }),
+    ]));
+    expect(executed.map((action) => action.toolId)).toContain("fs.read_many");
+    expect(executed.map((action) => action.toolId)).toContain("git.diff");
   });
 
   test("a failing verification run is recorded as failed, not not_run", async () => {
@@ -2154,6 +2208,27 @@ describe("budget exhaustion (§11.3)", () => {
     expect(result.report.summary).toContain("3-step");
     expect(result.report.nextStep).toBeDefined();
     expect(result.budget.modelSteps).toBeLessThanOrEqual(4);
+  });
+
+  test("a final answer on the last permitted model step is accepted", async () => {
+    const { kernel } = harness({
+      steps: [
+        { toolCalls: [{ callId: "c1", name: "fs.read", arguments: { path: "a.ts" } }] },
+        { toolCalls: [{ callId: "c2", name: "fs.read", arguments: { path: "b.ts" } }] },
+        { text: "Finished from the gathered evidence." },
+      ],
+      toolResults: { "fs.read": { result: okResult("ok") } },
+      limits: { ...ROOT_LIMITS, maxModelSteps: 3 },
+    });
+
+    const result = await kernel.runTurn(
+      "read both files and report the result",
+      new AbortController().signal,
+    );
+
+    expect(result.budget.modelSteps).toBe(3);
+    expect(result.report.status).toBe("completed");
+    expect(result.report.summary).toBe("Finished from the gathered evidence.");
   });
 
   test("a tool-call limit also yields a partial report", async () => {

@@ -98,4 +98,36 @@ describe("subagent TaskCard metrics and tool tree", () => {
     expect(output).toContain("~1.3k tokens");
     expect(output).not.toContain("0 tokens");
   });
+
+  test("puts the blocker ahead of an optimistic summary", () => {
+    const task = {
+      role: "executor",
+      title: "Implement",
+      goal: "Build the landing page",
+      constraints: [],
+      contract: [],
+      state: "blocked" as const,
+      childCount: 1,
+      awaitInterrupted: false,
+      summary: "landing page implemented",
+      blocker: "verification coverage is partial",
+      subagentEvents: [],
+    };
+
+    const compact = renderTaskCard(task, context, { compact: true })
+      .map(lineText)
+      .join("\n");
+    expect(compact).toContain("Blocked");
+    expect(compact).toContain("reason: verification coverage is partial");
+    expect(compact).not.toContain("landing page implemented");
+
+    const expanded = renderTaskCard(task, context)
+      .map(lineText)
+      .join("\n");
+    expect(expanded).toContain("reason: verification coverage is partial");
+    expect(expanded).toContain("landing page implemented");
+    expect(expanded.indexOf("reason: verification coverage is partial")).toBeLessThan(
+      expanded.indexOf("landing page implemented"),
+    );
+  });
 });

@@ -974,6 +974,7 @@ function childResultFromTurn(turn: {
       purpose: string;
     }>;
     verification: Array<{
+      kind?: "command" | "check";
       command?: string;
       status: "passed" | "failed" | "not_run";
       evidence: string;
@@ -988,7 +989,7 @@ function childResultFromTurn(turn: {
     summary: file.purpose,
   }));
   const commandsRun = report.verification
-    .filter((step) => step.command !== undefined)
+    .filter((step) => step.kind !== "check" && step.command !== undefined)
     .map((step) => ({
       display: step.command as string,
       ...(step.status === "passed" ? { exitCode: 0 } : {}),
