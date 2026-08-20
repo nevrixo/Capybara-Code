@@ -125,6 +125,24 @@ describe("TOML reader (§21.4)", () => {
     expect(normalized["mcpServers.github.url"]).toBe("https://mcp.example.com/mcp");
   });
 
+  test("maps lsp.servers.* onto configurable language-server definitions", () => {
+    const normalized = normalizeConfigKeys(
+      parseToml(`
+        [lsp.servers.rust]
+        command = "rust-analyzer"
+        args = []
+        extensions = [".rs"]
+        language_id = "rust"
+        enabled = true
+        timeout_ms = 9000
+      `).values,
+    );
+    expect(normalized["lspServers.rust.command"]).toBe("rust-analyzer");
+    expect(normalized["lspServers.rust.extensions"]).toEqual([".rs"]);
+    expect(normalized["lspServers.rust.languageId"]).toBe("rust");
+    expect(normalized["lspServers.rust.timeoutMs"]).toBe(9000);
+  });
+
   test("does not treat a '#' inside a string as a comment", () => {
     const parsed = parseToml(`[ui]\ntheme = "dark#not-a-comment"`);
     expect(parsed.values["ui.theme"]).toBe("dark#not-a-comment");
@@ -185,14 +203,9 @@ describe("defaults (§21.4)", () => {
     expect(config.privacy.telemetry).toBe(false);
     // §10.6: store:false keeps session ownership local.
     expect(config.privacy.providerStore).toBe(false);
-    expect(config.mcpServers.context7).toEqual({
-      transport: "streamable_http",
-      url: "https://mcp.context7.com/mcp",
-      auth: "none",
-      enabled: true,
-      connectOnStartup: false,
-      timeoutMs: 10_000,
-    });
+    // Service catalogs come from the auto-generated global TOML, not hidden defaults.
+    expect(config.mcpServers).toEqual({});
+    expect(config.lspServers).toEqual({});
   });
 
   test("include every §10.3 model profile", () => {
@@ -537,13 +550,34 @@ describe("validation (§21.7)", () => {
           "model.context.bands": ["large"],
           "mcpServers.local.args": "--unsafe",
           "mcpServers.local.unknown": true,
+          "lspServers.rust.args": "--unsafe",
+          "lspServers.rust.unknown": true,
           "model.profiles.fast.reasoningEffort": 42,
           "keymap.submit": 7,
         },
       },
     ]);
-    expect(merged.issues.filter((issue) => issue.severity === "error")).toHaveLength(5);
+    expect(merged.issues.filter((issue) => issue.severity === "error")).toHaveLength(7);
     expect(merged.config.mcpServers.local).toBeUndefined();
+    expect(merged.config.lspServers.rust).toBeUndefined();
+  });
+
+  test("requires complete LSP definitions", () => {
+    const merged = mergeConfig([
+      { source: "user", values: { "lspServers.rust.command": "rust-analyzer" } },
+    ]);
+    expect(merged.issues).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        path: "lspServers.rust.languageId",
+      }),
+    );
+    expect(merged.issues).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        path: "lspServers.rust.extensions",
+      }),
+    );
   });
 
   test("does not let a default preset override an explicit ask mode", () => {

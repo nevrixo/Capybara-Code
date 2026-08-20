@@ -38,6 +38,26 @@ auth = "none"
 enabled = true
 connect_on_startup = false
 timeout_ms = 10000
+
+# Language servers are started only for trusted Build workspaces.
+# Capybara never downloads these commands automatically.
+[lsp.servers.typescript]
+command = "typescript-language-server"
+args = ["--stdio"]
+extensions = [".ts", ".tsx", ".mts", ".cts"]
+language_id = "typescript"
+enabled = true
+install_hint = "npm install -g typescript-language-server typescript"
+timeout_ms = 15000
+
+[lsp.servers.python]
+command = "pyright-langserver"
+args = ["--stdio"]
+extensions = [".py", ".pyi"]
+language_id = "python"
+enabled = true
+install_hint = "npm install -g pyright"
+timeout_ms = 15000
 `;
 
 export const GLOBAL_CONFIG_FULL_TEMPLATE = `# Capybara Code global config — full defaults
@@ -116,4 +136,24 @@ auth = "none"
 enabled = true
 connect_on_startup = false
 timeout_ms = 10000
+
+# Language servers are started only for trusted Build workspaces.
+# Capybara never downloads these commands automatically.
+[lsp.servers.typescript]
+command = "typescript-language-server"
+args = ["--stdio"]
+extensions = [".ts", ".tsx", ".mts", ".cts"]
+language_id = "typescript"
+enabled = true
+install_hint = "npm install -g typescript-language-server typescript"
+timeout_ms = 15000
+
+[lsp.servers.python]
+command = "pyright-langserver"
+args = ["--stdio"]
+extensions = [".py", ".pyi"]
+language_id = "python"
+enabled = true
+install_hint = "npm install -g pyright"
+timeout_ms = 15000
 `;

@@ -1,5 +1,5 @@
 /**
- * Managed Python and TypeScript LSP indexing.
+ * Managed, globally configured LSP indexing.
  *
  * The host deliberately limits language servers to a trusted Build workspace,
  * read-only document-symbol requests, and bounded protocol frames. LSP output
@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import type { LspServerConfig } from "@cbc/config-schema";
 import type {
   RepoFile,
   RepositoryIntelligence,
@@ -29,36 +30,35 @@ type LspRuntime = Pick<
   "issueCapability" | "startJob" | "sendInput" | "stopJob" | "subscribeNotifications"
 >;
 
-export type LspServerName = "typescript" | "python";
-
 export interface LspServerDescriptor {
-  readonly name: LspServerName;
+  readonly name: string;
   readonly command: string;
   readonly args: readonly string[];
   readonly extensions: readonly string[];
   readonly languageId: string;
+  readonly enabled: boolean;
   readonly installHint: string;
+  readonly timeoutMs: number;
 }
 
-/** Built-in, opt-in-at-runtime language services. No dependency is downloaded. */
-export const DEFAULT_LSP_SERVERS: readonly LspServerDescriptor[] = [
-  {
-    name: "typescript",
-    command: "typescript-language-server",
-    args: ["--stdio"],
-    extensions: [".ts", ".tsx", ".mts", ".cts"],
-    languageId: "typescript",
-    installHint: "npm install -g typescript-language-server typescript",
-  },
-  {
-    name: "python",
-    command: "pyright-langserver",
-    args: ["--stdio"],
-    extensions: [".py", ".pyi"],
-    languageId: "python",
-    installHint: "npm install -g pyright",
-  },
-];
+/** Convert global config into deterministic runtime descriptors without adding defaults. */
+export function configuredLspServers(
+  servers: Readonly<Record<string, LspServerConfig>>,
+): readonly LspServerDescriptor[] {
+  return Object.entries(servers)
+    .map(([name, server]) => ({
+      name,
+      command: server.command,
+      args: [...(server.args ?? [])],
+      extensions: [...server.extensions],
+      languageId: server.languageId,
+      enabled: server.enabled !== false,
+      installHint:
+        server.installHint ?? `install '${server.command}' and make it available on PATH`,
+      timeoutMs: server.timeoutMs ?? 15_000,
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
 
 const MAX_LSP_DOCUMENTS_PER_LANGUAGE = 64;
 const MAX_LSP_DOCUMENT_BYTES = 1_000_000;
@@ -67,8 +67,7 @@ const MAX_LSP_PARALLEL_REQUESTS = 4;
 const MAX_LSP_HEADER_BYTES = 16 * 1024;
 const MAX_LSP_FRAME_BYTES = 1_024 * 1_024;
 const MAX_LSP_TOTAL_OUTPUT_BYTES = 32 * 1_024 * 1_024;
-const LSP_INITIALIZE_TIMEOUT_MS = 15_000;
-const LSP_REQUEST_TIMEOUT_MS = 7_500;
+
 const CRLF_HEADER_END = Buffer.from("\r\n\r\n", "ascii");
 const LF_HEADER_END = Buffer.from("\n\n", "ascii");
 
@@ -103,6 +102,8 @@ interface IndexedDocument {
 
 export interface LspHostOptions {
   readonly runtime: LspRuntime;
+  /** The complete server catalog from the one global configuration file. */
+  readonly servers: Readonly<Record<string, LspServerConfig>>;
   readonly sessionId: string;
   readonly workspaceRoot: string;
   /** Starting an external language server is never allowed for untrusted code. */
@@ -132,8 +133,9 @@ export function resolveLspExecutable(command: string): string | undefined {
  */
 export class LspHost {
   readonly #options: LspHostOptions;
-  readonly #services = new Map<LspServerName, ServiceState>();
-  readonly #processes = new Map<LspServerName, LspProcess>();
+  readonly #servers: readonly LspServerDescriptor[];
+  readonly #services = new Map<string, ServiceState>();
+  readonly #processes = new Map<string, LspProcess>();
   #lastFiles: readonly RepoFile[] = [];
   #lastIntelligence: RepositoryIntelligence | undefined;
   #queue: Promise<void> = Promise.resolve();
@@ -143,20 +145,27 @@ export class LspHost {
 
   constructor(options: LspHostOptions) {
     this.#options = options;
-    for (const descriptor of DEFAULT_LSP_SERVERS) {
+    this.#servers = configuredLspServers(options.servers);
+    for (const descriptor of this.#servers) {
       this.#services.set(descriptor.name, {
         descriptor,
-        status: options.workspaceTrusted
+        status: !descriptor.enabled
           ? {
               name: descriptor.name,
-              state: "starting",
-              detail: "waiting for repository scan",
-            }
-          : {
-              name: descriptor.name,
               state: "disabled",
-              detail: "workspace is not trusted",
-            },
+              detail: "disabled by global config",
+            }
+          : options.workspaceTrusted
+            ? {
+                name: descriptor.name,
+                state: "starting",
+                detail: "waiting for repository scan",
+              }
+            : {
+                name: descriptor.name,
+                state: "disabled",
+                detail: "workspace is not trusted",
+              },
       });
     }
     this.#emitStatuses();
@@ -183,7 +192,7 @@ export class LspHost {
       .then(async () => {
         const generation = this.#generation;
         await Promise.all(
-          DEFAULT_LSP_SERVERS.map((descriptor) =>
+          this.#servers.map((descriptor) =>
             this.#indexLanguage(descriptor, this.#lastFiles, intelligence, generation)),
         );
       });
@@ -229,6 +238,10 @@ export class LspHost {
     intelligence: RepositoryIntelligence,
     generation: number,
   ): Promise<void> {
+    if (!descriptor.enabled) {
+      this.#setStatus(descriptor.name, "disabled", "disabled by global config");
+      return;
+    }
     if (!this.#options.workspaceTrusted) {
       this.#setStatus(descriptor.name, "disabled", "workspace is not trusted");
       return;
@@ -427,7 +440,7 @@ export class LspHost {
             },
           },
         },
-      }, LSP_INITIALIZE_TIMEOUT_MS);
+      }, descriptor.timeoutMs);
       await this.#notify(process, "initialized", {});
       return process;
     } catch (error) {
@@ -465,7 +478,7 @@ export class LspHost {
     try {
       return await this.#request(process, "textDocument/documentSymbol", {
         textDocument: { uri },
-      }, LSP_REQUEST_TIMEOUT_MS);
+      }, descriptor.timeoutMs);
     } finally {
       if (opened) {
         await this.#notify(process, "textDocument/didClose", {
@@ -643,7 +656,7 @@ export class LspHost {
   }
 
   #setStatus(
-    name: LspServerName,
+    name: string,
     state: SidebarService["state"],
     detail: string | undefined,
   ): void {

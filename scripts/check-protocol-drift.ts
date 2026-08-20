@@ -453,9 +453,9 @@ async function main(): Promise<number> {
   );
 
   for (const [section, value] of Object.entries(config)) {
-    // `mcpServers` and `keymap` are open maps, so their keys are data rather than
-    // schema. Comparing them would compare a user's servers against a fixed list.
-    if (section === "mcpServers" || section === "keymap") continue;
+    // Service catalogs and keymap are open maps, so their keys are user data
+    // rather than fixed schema properties.
+    if (section === "mcpServers" || section === "lspServers" || section === "keymap") continue;
     if (typeof value !== "object" || value === null) continue;
 
     const schemaSection = configProperties[section] as

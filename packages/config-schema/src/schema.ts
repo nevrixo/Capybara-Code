@@ -260,6 +260,16 @@ export interface McpServerConfig {
   timeoutMs?: number;
 }
 
+export interface LspServerConfig {
+  command: string;
+  args?: string[];
+  extensions: string[];
+  languageId: string;
+  enabled?: boolean;
+  installHint?: string;
+  timeoutMs?: number;
+}
+
 export interface CbcConfig {
   ui: UiConfig;
   model: ModelConfig;
@@ -274,6 +284,7 @@ export interface CbcConfig {
   provider: ProviderConfig;
   perf: PerformanceConfig;
   mcpServers: Record<string, McpServerConfig>;
+  lspServers: Record<string, LspServerConfig>;
   keymap: Record<string, string>;
 }
 
@@ -445,20 +456,11 @@ export function defaultConfig(): CbcConfig {
       verificationPlannerV2: true,
       commentaryPolicyV2: true,
     },
-    // Context7 is available in every installation without requiring a local
-    // package or an API key. Keep it enabled, but defer the remote handshake
-    // until an MCP discovery/call actually needs it so opening a session never
-    // creates an unsolicited network request.
-    mcpServers: {
-      context7: {
-        transport: "streamable_http",
-        url: "https://mcp.context7.com/mcp",
-        auth: "none",
-        enabled: true,
-        connectOnStartup: false,
-        timeoutMs: 10_000,
-      },
-    },
+
+    // Executable integrations live in the generated global TOML. Keeping these
+    // maps empty makes that file the only source of service definitions.
+    mcpServers: {},
+    lspServers: {},
     keymap: {},
   };
   Object.defineProperty(config.perf, "longSessionFastPath", {
@@ -826,6 +828,7 @@ export function mergeConfig(
         existing === undefined &&
         target !== "permissions.preset" &&
         !target.startsWith("mcpServers.") &&
+        !target.startsWith("lspServers.") &&
         !target.startsWith("keymap.") &&
         !target.startsWith("model.profiles.")
       ) {
@@ -996,6 +999,26 @@ function validateDynamicValue(path: string, value: unknown): string | undefined 
     }
     return "unknown MCP server field '" + field + "'";
   }
+  if (segments[0] === "lspServers") {
+    if (segments.length !== 3) return "LSP server settings must name one supported field";
+    const field = segments[2] as string;
+    if (field === "command" || field === "languageId") {
+      return typeof value === "string" && value.trim().length > 0
+        ? undefined
+        : "expected a non-empty string";
+    }
+    if (field === "installHint") return typeof value === "string" ? undefined : "expected string";
+    if (field === "args" || field === "extensions") {
+      return isStringArray(value) ? undefined : "expected an array of strings";
+    }
+    if (field === "enabled") return typeof value === "boolean" ? undefined : "expected boolean";
+    if (field === "timeoutMs") {
+      return typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value >= 100
+        ? undefined
+        : "expected a finite integer of at least 100 milliseconds";
+    }
+    return "unknown LSP server field '" + field + "'";
+  }
   if (segments[0] === "model" && segments[1] === "profiles") {
     if (segments.length !== 4) return "model profile settings must name one supported field";
     const field = segments[3] as string;
@@ -1068,6 +1091,34 @@ function validateSemantics(
   // Attribute each finding to the layer that actually set the offending value,
   // so `capy config validate` points at the file to fix rather than at defaults.
   const sourceOf = (path: string): ConfigSource => provenance[path] ?? "default";
+
+  for (const [name, configured] of Object.entries(config.lspServers)) {
+    const server = configured as Partial<LspServerConfig>;
+    for (const field of ["command", "languageId"] as const) {
+      if (typeof server[field] !== "string" || server[field]?.trim().length === 0) {
+        const path = `lspServers.${name}.${field}`;
+        issues.push({
+          severity: "error",
+          path,
+          source: sourceOf(path),
+          message: `LSP server '${name}' requires a non-empty ${field}`,
+        });
+      }
+    }
+    const extensionsPath = `lspServers.${name}.extensions`;
+    if (
+      !Array.isArray(server.extensions) ||
+      server.extensions.length === 0 ||
+      server.extensions.some((extension) => extension.length < 2 || !extension.startsWith("."))
+    ) {
+      issues.push({
+        severity: "error",
+        path: extensionsPath,
+        source: sourceOf(extensionsPath),
+        message: `LSP server '${name}' requires one or more dot-prefixed extensions`,
+      });
+    }
+  }
 
   for (const [path, constraint] of Object.entries(INTEGER_CONSTRAINTS)) {
     const value = readPath(config, path);

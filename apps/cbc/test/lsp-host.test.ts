@@ -4,6 +4,7 @@ import { RepositoryIntelligence } from "@cbc/context-engine";
 
 import {
   LspHost,
+  configuredLspServers,
   normalizeLspDocumentSymbols,
 } from "../src/lsp-host.ts";
 
@@ -59,6 +60,33 @@ describe("normalizeLspDocumentSymbols", () => {
       containerName: "Widget",
       range: { startLine: 3, endLine: 7, startColumn: 2, endColumn: 3 },
     });
+  });
+});
+
+describe("configuredLspServers", () => {
+  test("uses only global definitions and preserves custom languages", () => {
+    expect(configuredLspServers({})).toEqual([]);
+    expect(
+      configuredLspServers({
+        rust: {
+          command: "rust-analyzer",
+          extensions: [".rs"],
+          languageId: "rust",
+          timeoutMs: 9_000,
+        },
+      }),
+    ).toEqual([
+      {
+        name: "rust",
+        command: "rust-analyzer",
+        args: [],
+        extensions: [".rs"],
+        languageId: "rust",
+        enabled: true,
+        installHint: "install 'rust-analyzer' and make it available on PATH",
+        timeoutMs: 9_000,
+      },
+    ]);
   });
 });
 
@@ -132,6 +160,15 @@ describe("LspHost", () => {
     const statuses: Array<readonly { name: string; state: string; detail?: string }[]> = [];
     const host = new LspHost({
       runtime: runtime as never,
+      servers: {
+        typescript: {
+          command: "typescript-language-server",
+          args: ["--stdio"],
+          extensions: [".ts", ".tsx"],
+          languageId: "typescript",
+          timeoutMs: 1_000,
+        },
+      },
       sessionId: "session-1",
       workspaceRoot: "/work",
       workspaceTrusted: true,
@@ -170,6 +207,14 @@ describe("LspHost", () => {
   test("never starts a language server for an untrusted workspace", async () => {
     let starts = 0;
     const host = new LspHost({
+      servers: {
+        python: {
+          command: "pyright-langserver",
+          args: ["--stdio"],
+          extensions: [".py", ".pyi"],
+          languageId: "python",
+        },
+      },
       runtime: {
         issueCapability: async () => ({ id: "cap", sessionId: "session-1", actionHash: "hash" }),
         startJob: async () => {

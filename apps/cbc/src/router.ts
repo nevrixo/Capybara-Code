@@ -28,6 +28,7 @@ import {
   mcpRemove,
   mcpSetEnabled,
 } from "./commands/mcp.ts";
+import { lspDoctor, lspList, lspSetEnabled } from "./commands/lsp.ts";
 import { modelList, modelProfiles, modelRefresh, modelUse } from "./commands/model.ts";
 import { run } from "./commands/run.ts";
 import {
@@ -173,6 +174,20 @@ async function dispatch(context: CommandContext, command: Command): Promise<Comm
           return await mcpLogout(context, { name: command.name });
         case "doctor":
           return await mcpDoctor(context, {
+            ...(command.name !== undefined ? { name: command.name } : {}),
+          });
+      }
+
+    case "lsp":
+      switch (command.sub) {
+        case "list":
+          return await lspList(context);
+        case "enable":
+          return await lspSetEnabled(context, { name: command.name }, true);
+        case "disable":
+          return await lspSetEnabled(context, { name: command.name }, false);
+        case "doctor":
+          return await lspDoctor(context, {
             ...(command.name !== undefined ? { name: command.name } : {}),
           });
       }

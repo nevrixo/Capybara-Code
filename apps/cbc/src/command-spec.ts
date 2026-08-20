@@ -245,6 +245,21 @@ export const COMMAND_REGISTRY: readonly CommandSpec[] = [
     ],
   },
   {
+    name: "lsp",
+    summary: "manage global language servers",
+    defaultSubcommand: "list",
+    subcommands: [
+      { name: "list", summary: "list configured language servers" },
+      { name: "enable", summary: "enable a language server", positionals: NAME_OPERAND },
+      { name: "disable", summary: "disable a language server", positionals: NAME_OPERAND },
+      {
+        name: "doctor",
+        summary: "check configured language-server executables",
+        positionals: [{ label: "[name]", required: false }],
+      },
+    ],
+  },
+  {
     name: "init",
     summary: "create AGENTS.md in this workspace",
     flags: [{ name: "--force", kind: "boolean", summary: "overwrite an existing file" }],

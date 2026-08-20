@@ -100,6 +100,10 @@ export type Command =
   | { readonly kind: "mcp"; readonly sub: "login"; readonly name: string }
   | { readonly kind: "mcp"; readonly sub: "logout"; readonly name: string }
   | { readonly kind: "mcp"; readonly sub: "doctor"; readonly name?: string }
+  | { readonly kind: "lsp"; readonly sub: "list" }
+  | { readonly kind: "lsp"; readonly sub: "enable"; readonly name: string }
+  | { readonly kind: "lsp"; readonly sub: "disable"; readonly name: string }
+  | { readonly kind: "lsp"; readonly sub: "doctor"; readonly name?: string }
   | { readonly kind: "config"; readonly sub: "get"; readonly path?: string }
   | { readonly kind: "config"; readonly sub: "set"; readonly path: string; readonly value: string }
   | { readonly kind: "config"; readonly sub: "path" }
@@ -511,6 +515,8 @@ function buildSubcommand(
       return buildSkills(subName, operands);
     case "mcp":
       return buildMcp(subName, operands, flags);
+    case "lsp":
+      return buildLsp(subName, operands);
     case "config":
       return buildConfig(subName, operands, flags);
     case "trust":
@@ -750,6 +756,33 @@ function buildMcp(sub: string, operands: readonly string[], flags: Map<string, F
     default:
       throw usageError("capy mcp needs a subcommand", [
         "Available: list, add, remove, enable, disable, login, logout, doctor",
+      ]);
+  }
+}
+
+function buildLsp(sub: string, operands: readonly string[]): Command {
+  const requireName = (subName: string): string => {
+    const name = operands[0];
+    if (name === undefined) throw usageError(`capy lsp ${subName} needs a server name`);
+    return name;
+  };
+
+  switch (sub) {
+    case "list":
+      return { kind: "lsp", sub: "list" };
+    case "enable":
+      return { kind: "lsp", sub: "enable", name: requireName("enable") };
+    case "disable":
+      return { kind: "lsp", sub: "disable", name: requireName("disable") };
+    case "doctor":
+      return {
+        kind: "lsp",
+        sub: "doctor",
+        ...(operands[0] !== undefined ? { name: operands[0] } : {}),
+      };
+    default:
+      throw usageError("capy lsp needs a subcommand", [
+        "Available: list, enable, disable, doctor",
       ]);
   }
 }

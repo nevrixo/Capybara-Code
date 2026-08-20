@@ -99,7 +99,7 @@ export interface BootstrapOptions {
   /** `--resume <id|last>`. */
   readonly resume?: string;
   readonly onEvent?: (event: CbcEvent, model: SessionViewModel) => void;
-  /** Receives live Python and TypeScript LSP states for an interactive sidebar. */
+  /** Receives live configured LSP states for an interactive sidebar. */
   readonly onLspStatus?: (servers: readonly LspServiceStatus[]) => void;
   /** Present only for interactive runs; its absence selects the headless broker. */
   readonly interactiveApprovals?: Omit<InteractiveBrokerOptions, "granted">;
@@ -411,6 +411,7 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
   let sessionForLsp: AgentSession | undefined;
   const lspHost = new LspHost({
     runtime,
+    servers: effective.lspServers,
     sessionId,
     workspaceRoot: context.workspacePath,
     workspaceTrusted: trust === "trusted-always" || trust === "trusted-once",

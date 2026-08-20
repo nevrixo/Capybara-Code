@@ -115,6 +115,9 @@ Canonical Thinking text is bounded at 4 KiB for provider summaries and 64 KiB fo
 - No property anywhere in this schema holds a secret value, per §21.3.
 - `permissions.preset` is optional and has no implicit `auto` default, so it cannot
   override an explicit permission mode.
+- Added the open `lspServers` map, written as `[lsp.servers.<name>]` in the single
+  global TOML. Server commands, extensions, language IDs, activation, install hints,
+  and request timeouts are explicit configuration rather than built-in definitions.
 
 **Tool contract 1.0**
 

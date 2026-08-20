@@ -47,8 +47,8 @@ Two limitations are worth knowing:
 - The Rust side is read as **source text**, not compiled. This verifies the declared
   lists, not the dispatcher that consumes them; `cargo test -p cbc-protocol` covers
   that.
-- `mcpServers` and `keymap` are open maps, so their keys are user data rather than
-  schema and are not compared.
+- `mcpServers`, `lspServers`, and `keymap` are open maps, so their keys are user data
+  rather than schema and are not compared.
 
 ## Dialect
 

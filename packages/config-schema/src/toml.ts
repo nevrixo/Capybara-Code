@@ -278,13 +278,29 @@ function splitTopLevel(body: string): string[] {
  * `[mcp.servers.<name>]` in §17.3 becomes `mcpServers.<name>`.
  */
 export function extractMcpServers(values: Record<string, unknown>): Record<string, unknown> {
+  return extractServerTable(values, "mcp", "mcpServers");
+}
+
+/** `[lsp.servers.<name>]` becomes the runtime's `lspServers.<name>` map. */
+export function extractLspServers(values: Record<string, unknown>): Record<string, unknown> {
+  return extractServerTable(values, "lsp", "lspServers");
+}
+
+function extractServerTable(
+  values: Record<string, unknown>,
+  table: "mcp" | "lsp",
+  target: "mcpServers" | "lspServers",
+): Record<string, unknown> {
   const out: Record<string, unknown> = {};
+  const prefix = `${table}.servers.`;
   for (const [path, value] of Object.entries(values)) {
-    const match = /^mcp\.servers\.([^.]+)\.(.+)$/.exec(path);
-    if (match) {
-      const [, server, field] = match;
-      out[`mcpServers.${server}.${camelize(field as string)}`] = value;
-    }
+    if (!path.startsWith(prefix)) continue;
+    const remainder = path.slice(prefix.length);
+    const separator = remainder.indexOf(".");
+    if (separator <= 0 || separator === remainder.length - 1) continue;
+    const server = remainder.slice(0, separator);
+    const field = remainder.slice(separator + 1);
+    out[`${target}.${server}.${camelize(field)}`] = value;
   }
   return out;
 }
@@ -326,6 +342,7 @@ export function normalizeConfigKeys(values: Record<string, unknown>): Record<str
   const out: Record<string, unknown> = {};
   for (const [path, value] of Object.entries(values)) {
     if (path.startsWith("mcp.servers.")) continue; // handled separately
+    if (path.startsWith("lsp.servers.")) continue; // handled separately
     if (path.startsWith("permissions.rules.")) continue; // aggregated below (P0-13)
     const normalized = path
       .split(".")
@@ -333,5 +350,10 @@ export function normalizeConfigKeys(values: Record<string, unknown>): Record<str
       .join(".");
     out[normalized] = value;
   }
-  return { ...out, ...extractMcpServers(values), ...extractPermissionRules(values) };
+  return {
+    ...out,
+    ...extractMcpServers(values),
+    ...extractLspServers(values),
+    ...extractPermissionRules(values),
+  };
 }

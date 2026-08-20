@@ -139,6 +139,7 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
 
   // ---- maps ----
   ["mcpServers.", { status: "wired", consumer: "mcp commands / extension host" }],
+  ["lspServers.", { status: "wired", consumer: "lsp commands / trusted workspace LSP host" }],
   ["keymap.", { status: "experimental", note: "key bindings are fixed in tui-components today" }],
 ];
 

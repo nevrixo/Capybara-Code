@@ -382,6 +382,16 @@ describe("parseArgs", () => {
     ).toThrow(/not both/);
   });
 
+  test("lsp commands use the global language-server surface", () => {
+    expect(parseArgs(["lsp"]).command).toEqual({ kind: "lsp", sub: "list" });
+    expect(parseArgs(["lsp", "doctor", "rust"]).command).toEqual({
+      kind: "lsp",
+      sub: "doctor",
+      name: "rust",
+    });
+    expect(() => parseArgs(["lsp", "enable"])).toThrow(/needs a server name/);
+  });
+
   test("both `skills` and `skill` reach the same command", () => {
     expect(parseArgs(["skill", "validate", "p"]).command).toEqual(
       parseArgs(["skills", "validate", "p"]).command,
@@ -5063,6 +5073,10 @@ describe("TOML upsert", () => {
 
     expect(globalToml).toContain("# Capybara Code global config");
     expect(globalToml).toContain("[mcp.servers.context7]");
+    expect(globalToml).toContain("[lsp.servers.typescript]");
+    expect(globalToml).toContain("[lsp.servers.python]");
+    expect(loaded.config.mcpServers.context7?.url).toBe("https://mcp.context7.com/mcp");
+    expect(loaded.config.lspServers.typescript?.command).toBe("typescript-language-server");
     expect(loaded.config.model.default).toBe("gpt-5.6-sol");
     expect(loaded.provenance["model.default"]).toBe("user");
   });
@@ -5495,6 +5509,32 @@ describe("router", () => {
     });
     expect(code).toBe(EXIT.ok);
     expect(host.out.join("")).toContain("config.toml");
+  });
+
+  test("lsp list and disable use only the global config file", async () => {
+    const host = createFakeHost();
+    const configFile = resolvePaths(host).configFile;
+    host.files.set(
+      configFile,
+      '[lsp.servers.rust]\ncommand = "rust-analyzer"\nargs = []\nextensions = [".rs"]\nlanguage_id = "rust"\nenabled = true\n',
+    );
+    const { route } = await import("../src/router.ts");
+
+    const listCode = await route({
+      host,
+      version: "0.1.0",
+      command: { kind: "lsp", sub: "list" },
+    });
+    expect(listCode).toBe(EXIT.ok);
+    expect(host.out.join("")).toContain("rust-analyzer");
+
+    const disableCode = await route({
+      host,
+      version: "0.1.0",
+      command: { kind: "lsp", sub: "disable", name: "rust" },
+    });
+    expect(disableCode).toBe(EXIT.ok);
+    expect(host.files.get(configFile)).toContain("enabled = false");
   });
 
   test("parser warnings are surfaced on stderr", async () => {
