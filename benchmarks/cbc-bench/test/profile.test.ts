@@ -43,7 +43,7 @@ describe("benchmark execution profile", () => {
 
     expect(resolved.applied).toEqual(profile("standard-medium"));
     expect(resolved.performanceVariant).toBe("optimized");
-    expect(resolved.cli).toEqual({ review: "auto" });
+    expect(resolved.mechanisms.autoReview).toBe("user-config:agent.review-mode");
     expect(resolved.config.modelCacheMode).toBe("roi");
     expect(resolved.config.performance).toMatchObject({
       promptCompiler: "v2",
@@ -63,6 +63,9 @@ describe("benchmark execution profile", () => {
   test("writes the complete optimized feature set into isolated user config", () => {
     const { loaded } = loadGeneratedConfig("no-cache", "optimized");
 
+    expect(loaded.config.model.default).toBe(profile("no-cache").model);
+    expect(loaded.config.model.reasoningMode).toBe(profile("no-cache").reasoningMode);
+    expect(loaded.config.model.reasoningEffort).toBe(profile("no-cache").reasoningEffort);
     expect(loaded.config.model.cache.mode).toBe("off");
     expect(loaded.config.agent.promptCompiler).toBe("v2");
     expect(loaded.config.agent.compoundTools).toBe(true);
@@ -93,9 +96,29 @@ describe("benchmark execution profile", () => {
     expect(loaded.config.provider.openai.transport).toBe("http_full");
   });
 
-  test("uses an explicit review flag instead of relying on deprecated mode aliases", () => {
-    expect(resolveExecutionProfile(profile("no-auto-review")).cli.review).toBe("off");
-    expect(resolveExecutionProfile(profile("standard-medium")).cli.review).toBe("auto");
+  test("writes review selection into isolated product config", () => {
+    expect(loadGeneratedConfig("no-auto-review").loaded.config.agent.reviewMode).toBe("off");
+    expect(loadGeneratedConfig("standard-medium").loaded.config.agent.reviewMode).toBe("auto");
+  });
+
+  test("writes each task mode into isolated product config", () => {
+    const resolved = resolveExecutionProfile(profile("standard-medium"));
+    const load = (permissionMode: "plan" | "auto") =>
+      loadConfig({
+        userToml: benchmarkConfigToml(resolved, { permissionMode }),
+        projectTrusted: false,
+        env: {},
+      });
+
+    const plan = load("plan");
+    expect(plan.issues.filter((issue) => issue.severity === "error")).toEqual([]);
+    expect(plan.config.agent.interactionMode).toBe("plan");
+    expect(plan.config.permissions.preset).toBe("read");
+
+    const auto = load("auto");
+    expect(auto.issues.filter((issue) => issue.severity === "error")).toEqual([]);
+    expect(auto.config.agent.interactionMode).toBe("build");
+    expect(auto.config.permissions.preset).toBe("auto");
   });
 
   test("fails closed when the product has no switch for a requested axis", () => {

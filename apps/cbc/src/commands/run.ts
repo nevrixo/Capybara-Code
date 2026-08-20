@@ -1,6 +1,7 @@
 /** Headless capy run entry point. */
 
 import { renderReport } from "@cbc/agent-kernel";
+import type { CbcEvent } from "@cbc/protocol";
 
 import { bootstrapSession, warmContext } from "../bootstrap.ts";
 import { CliError, EXIT, exitForStatus, type ExitCode } from "../exit.ts";
@@ -9,6 +10,10 @@ import { ensureTrust } from "../workspace-trust.ts";
 
 export interface RunArgs {
   readonly prompt?: string;
+  /** Internal event tap used by repository-owned integrations such as cbc-bench. */
+  readonly onEvent?: (event: CbcEvent) => void;
+  /** Internal cancellation signal; the public CLI installs process signal handlers. */
+  readonly signal?: AbortSignal;
 }
 
 interface FinalStatusPayload {
@@ -29,6 +34,7 @@ export async function run(context: CommandContext, args: RunArgs): Promise<Comma
   const boot = await bootstrapSession({
     context,
     headlessPolicy: "deny-on-ask",
+    ...(args.onEvent !== undefined ? { onEvent: (event) => args.onEvent?.(event) } : {}),
   });
 
   for (const warning of boot.warnings) context.warn(warning);
@@ -37,17 +43,20 @@ export async function run(context: CommandContext, args: RunArgs): Promise<Comma
   const scan = await warmContext(context, boot.session, { lspHost: boot.lspHost });
   if (scan.warning !== undefined) context.warn(scan.warning);
 
-  const controller = new AbortController();
-  const onSignal = (): void => controller.abort();
-  process.once("SIGINT", onSignal);
-  process.once("SIGTERM", onSignal);
+  const controller = args.signal === undefined ? new AbortController() : undefined;
+  const signal = args.signal ?? controller?.signal ?? AbortSignal.abort();
+  const onSignal = (): void => controller?.abort();
+  if (controller !== undefined) {
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
+  }
 
   let code: ExitCode;
   let finalText = "";
   let payload: FinalStatusPayload;
 
   try {
-    const result = await boot.session.submit(prompt, controller.signal);
+    const result = await boot.session.submit(prompt, signal);
     const report = result.report;
     finalText = renderReport(report, result.answer);
     code = exitForStatus(report.status);
@@ -64,8 +73,10 @@ export async function run(context: CommandContext, args: RunArgs): Promise<Comma
       ...(report.risks.length > 0 ? { risks: [...report.risks] } : {}),
     };
   } catch (error) {
-    process.off("SIGINT", onSignal);
-    process.off("SIGTERM", onSignal);
+    if (controller !== undefined) {
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+    }
 
     const cliError = error instanceof CliError ? error : undefined;
     code = cliError?.code ?? EXIT.failure;
@@ -80,8 +91,10 @@ export async function run(context: CommandContext, args: RunArgs): Promise<Comma
     return { code };
   }
 
-  process.off("SIGINT", onSignal);
-  process.off("SIGTERM", onSignal);
+  if (controller !== undefined) {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+  }
 
   await emitFinal(boot, payload);
   await boot.dispose?.();

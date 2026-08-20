@@ -169,7 +169,6 @@ describe("neutral external benchmark adapter", () => {
         "capability-digest",
       );
       const runner = createExternalBenchmarkRunner({
-        repositoryRoot: root,
         benchmarkRoot: root,
         executionProfile: resolveExecutionProfile(applied),
         environment,

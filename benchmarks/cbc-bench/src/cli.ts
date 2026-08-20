@@ -385,7 +385,6 @@ async function runCommand(flags: Flags): Promise<number> {
       tasks,
       resolved.execution.applied,
       createBenchmarkRunner({
-        repositoryRoot: ROOT,
         benchmarkRoot: BENCH,
         executionProfile: resolved.execution,
         environment,
@@ -556,8 +555,7 @@ async function pairedCommand(flags: Flags): Promise<number> {
               ? baselineEnvironment
               : candidateEnvironment;
             const runnerInput = {
-              repositoryRoot: ROOT,
-              benchmarkRoot: BENCH,
+                    benchmarkRoot: BENCH,
               executionProfile: selected.execution,
               environment,
               concurrency: flags.concurrency,
