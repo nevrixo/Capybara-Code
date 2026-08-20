@@ -24,9 +24,6 @@ import {
   StreamableHttpTransport,
   buildAuthorizationRequest,
   buildDescriptors,
-  checkAuth,
-  checkConfig,
-  checkTrust,
   classifyMcpCapability,
   createPkcePair,
   decideMcpCapability,
@@ -43,12 +40,10 @@ import {
   parseSseEvents,
   refreshBody,
   refusalFor,
-  renderDoctorReport,
   renderMcpDiscovery,
   renderScopeConsent,
   resolveMcpRisk,
   restartDelayMs,
-  runDoctor,
   sanitizeExternalText,
   sanitizeHeaders,
   schemaHash,
@@ -1350,129 +1345,3 @@ describe("client manager (§17.1, §22.6)", () => {
     expect(manager.nextRestart("s").allowed).toBe(true);
   });
 });
-
-// ---------------------------------------------------------------------------
-// §17.11 doctor — AC-31
-// ---------------------------------------------------------------------------
-
-describe("mcp doctor (§17.11, AC-31)", () => {
-  test("a stdio config needs a command", () => {
-    expect(checkConfig("s", { transport: "stdio" }).status).toBe("fail");
-    expect(checkConfig("s", { transport: "stdio", command: "npx" }).status).toBe("pass");
-  });
-
-  test("shell metacharacters in a command are refused (§8.8)", () => {
-    const check = checkConfig("s", { transport: "stdio", command: "npx foo && rm -rf /" });
-    expect(check.status).toBe("fail");
-    expect(check.detail).toContain("shell metacharacters");
-  });
-
-  test("an HTTP config needs a valid HTTPS url", () => {
-    expect(checkConfig("s", { transport: "streamable_http" }).status).toBe("fail");
-    expect(
-      checkConfig("s", { transport: "streamable_http", url: "http://evil.example" }).status,
-    ).toBe("fail");
-    expect(
-      checkConfig("s", { transport: "streamable_http", url: "https://ok.example/mcp" }).status,
-    ).toBe("pass");
-  });
-
-  test("an untrusted project stdio server fails the trust check (PERM-001)", () => {
-    const check = checkTrust({
-      fromProjectConfig: true,
-      workspaceTrusted: false,
-      transport: "stdio",
-    });
-    expect(check.status).toBe("fail");
-    expect(check.detail).toContain("will not be launched");
-  });
-
-  test("a user-level server needs no workspace trust", () => {
-    expect(
-      checkTrust({ fromProjectConfig: false, workspaceTrusted: false, transport: "stdio" }).status,
-    ).toBe("pass");
-  });
-
-  test("a full run reports the actual negotiated protocol (§17.11)", async () => {
-    const { client } = stdioClient({ tools: [READ_TOOL], protocolVersion: MCP_REVISION_LEGACY });
-    const report = await runDoctor({
-      server: "fake",
-      config: { transport: "stdio", command: "npx" },
-      workspaceTrusted: true,
-      fromProjectConfig: false,
-      client,
-      commandExists: async () => true,
-    });
-
-    expect(report.healthy).toBe(true);
-    expect(report.protocol).toBe(MCP_REVISION_LEGACY);
-    const names = report.checks.map((c) => c.name);
-    expect(names).toContain("config");
-    expect(names).toContain("trust");
-    expect(names).toContain("connection");
-    expect(names).toContain("protocol");
-    expect(names).toContain("capabilities");
-    expect(names).toContain("probe");
-    expect(report.checks.find((c) => c.name === "protocol")?.detail).toContain("legacy era");
-  });
-
-  test("a missing executable stops before the connection is attempted", async () => {
-    const report = await runDoctor({
-      server: "fake",
-      config: { transport: "stdio", command: "nope" },
-      workspaceTrusted: true,
-      fromProjectConfig: false,
-      commandExists: async () => false,
-    });
-    expect(report.healthy).toBe(false);
-    expect(report.checks.map((c) => c.name)).not.toContain("connection");
-  });
-
-  test("a failed negotiation is reported as a connection failure", async () => {
-    const { client } = stdioClient({ protocolVersion: "2099-01-01" });
-    const report = await runDoctor({
-      server: "fake",
-      config: { transport: "stdio", command: "npx" },
-      workspaceTrusted: true,
-      fromProjectConfig: false,
-      client,
-      commandExists: async () => true,
-    });
-    expect(report.healthy).toBe(false);
-    expect(report.checks.find((c) => c.name === "connection")?.status).toBe("fail");
-  });
-
-  test("auth is skipped for stdio and required for configured HTTP auth", () => {
-    const skipped = runDoctorAuth({ transport: "stdio", command: "x" }, undefined);
-    expect(skipped).toBe("skip");
-    expect(runDoctorAuth({ transport: "streamable_http", url: "https://a", auth: "none" }, undefined)).toBe(
-      "pass",
-    );
-    expect(
-      runDoctorAuth({ transport: "streamable_http", url: "https://a", auth: "oauth" }, undefined),
-    ).toBe("fail");
-  });
-
-  test("the rendered report marks pass, warn, fail, and skip", async () => {
-    const { client } = stdioClient({ tools: [READ_TOOL] });
-    const report = await runDoctor({
-      server: "fake",
-      config: { transport: "stdio", command: "npx" },
-      workspaceTrusted: true,
-      fromProjectConfig: false,
-      client,
-      commandExists: async () => true,
-    });
-    const rendered = renderDoctorReport(report).join("\n");
-    expect(rendered).toContain("✓ fake is healthy");
-    expect(rendered).toContain("protocol");
-  });
-});
-
-/** Small helper so the auth-check assertions stay readable. */
-function runDoctorAuth(
-  config: Parameters<typeof checkConfig>[1],
-  credential: McpCredentialRecord | undefined,
-): string {
-  return checkAuth(config, credential, Date.now()).status;
-}

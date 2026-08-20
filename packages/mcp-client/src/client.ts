@@ -330,21 +330,6 @@ export class McpClient {
     );
   }
 
-  /** A cheap liveness probe for `mcp doctor` (§17.11). */
-  async ping(options: { timeoutMs?: number } = {}): Promise<boolean> {
-    try {
-      await this.#transport.request("ping", {}, this.#requestOptions({ timeoutMs: options.timeoutMs ?? 5_000 }));
-      return true;
-    } catch (error) {
-      // Not every server implements ping; a method-not-found still proves the
-      // connection works.
-      if (error instanceof McpProtocolError && error.code === MCP_ERROR_CODES.methodNotFound) {
-        return true;
-      }
-      return false;
-    }
-  }
-
   async close(): Promise<void> {
     this.#state = "stopped";
     this.#catalog.remove(this.serverName);

@@ -1,6 +1,6 @@
 /**
  * `@cbc/skills` — Agent Skills: `SKILL.md` parsing, discovery, progressive
- * disclosure, trust, validation, and the bundled Skills (PRD §16).
+ * disclosure, trust, and the bundled Skills (PRD §16).
  *
  * §16.1 draws the boundary: a Skill is reusable instructions, references, and
  * templates — not an executable plugin. Nothing in this package runs anything, and
@@ -11,5 +11,4 @@
 export * from "./frontmatter.ts";
 export * from "./skill.ts";
 export * from "./registry.ts";
-export * from "./validate.ts";
 export * from "./builtin.ts";
