@@ -165,6 +165,17 @@ describe("catalog completeness (§12.2)", () => {
 describe("argument validation (§12.4, AC-10)", () => {
   const schema = findTool("fs.read")!.parameters;
 
+  test("artifact.read accepts digests and displayed handles but rejects mixed junk", () => {
+    const artifactSchema = findTool("artifact.read")!.parameters;
+    const digest = "a".repeat(64);
+    for (const locator of [digest, "sha256:" + digest, "art_" + digest.slice(0, 24), "art_" + digest]) {
+      expect(parseAndValidate(JSON.stringify({ digest: locator }), artifactSchema).ok).toBe(true);
+    }
+    for (const locator of ["art_missing", "../" + digest, "a".repeat(63)]) {
+      expect(parseAndValidate(JSON.stringify({ digest: locator }), artifactSchema).ok).toBe(false);
+    }
+  });
+
   test("accepts a valid call and applies defaults", () => {
     const result = parseAndValidate('{"path":"src/a.ts"}', schema);
     expect(result.ok).toBe(true);

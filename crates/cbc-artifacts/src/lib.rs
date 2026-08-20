@@ -189,27 +189,103 @@ impl ArtifactStore {
     }
 
     pub fn read_by_digest(&self, digest: &str) -> Result<Vec<u8>, ArtifactError> {
-        let path = self.path_for(digest);
-        let bytes = std::fs::read(&path).map_err(|_| ArtifactError::NotFound {
+        let digest = canonical_sha256(digest).ok_or_else(|| ArtifactError::NotFound {
             id: digest.to_string(),
         })?;
+        let path = self.path_for(&digest);
+        let bytes =
+            std::fs::read(&path).map_err(|_| ArtifactError::NotFound { id: digest.clone() })?;
         let actual = hex_digest(&bytes);
         if actual != digest {
             return Err(ArtifactError::DigestMismatch {
-                id: digest.to_string(),
-                expected: digest.to_string(),
+                id: digest.clone(),
+                expected: digest,
                 actual,
             });
         }
         Ok(bytes)
     }
 
+    /// Resolve either a SHA-256 digest or one of the opaque handles shown to the
+    /// model, then read and verify the addressed bytes.
+    ///
+    /// `art_<digest>` is accepted for compatibility with older/model-generated
+    /// calls that combined the displayed `art_` prefix with the adjacent digest.
+    /// Native handles use the first 24 digest characters, so those are resolved
+    /// within their content-addressed shard without exposing a filesystem path.
+    pub fn read_by_locator(&self, locator: &str) -> Result<(String, Vec<u8>), ArtifactError> {
+        let digest = self.resolve_digest(locator)?;
+        let bytes = self.read_by_digest(&digest)?;
+        Ok((digest, bytes))
+    }
+
+    pub fn resolve_digest(&self, locator: &str) -> Result<String, ArtifactError> {
+        let direct = locator.strip_prefix("sha256:").unwrap_or(locator);
+        if let Some(digest) = canonical_sha256(direct) {
+            return Ok(digest);
+        }
+
+        let Some(handle) = locator.strip_prefix("art_") else {
+            return Err(ArtifactError::NotFound {
+                id: locator.to_string(),
+            });
+        };
+        if let Some(digest) = canonical_sha256(handle) {
+            return Ok(digest);
+        }
+        if handle.len() != 24 || !handle.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(ArtifactError::NotFound {
+                id: locator.to_string(),
+            });
+        }
+
+        let prefix = handle.to_ascii_lowercase();
+        let shard = self.root.join("sha256").join(&prefix[..2]);
+        let entries = match std::fs::read_dir(shard) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(ArtifactError::NotFound {
+                    id: locator.to_string(),
+                })
+            }
+            Err(error) => return Err(io(error)),
+        };
+        let mut resolved: Option<String> = None;
+        for entry in entries {
+            let entry = entry.map_err(io)?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            let Some(digest) = canonical_sha256(name) else {
+                continue;
+            };
+            if !digest.starts_with(&prefix) {
+                continue;
+            }
+            // A prefix collision is fantastically unlikely, but choosing one
+            // would make an opaque handle non-deterministic. Fail closed.
+            if resolved.is_some() {
+                return Err(ArtifactError::NotFound {
+                    id: locator.to_string(),
+                });
+            }
+            resolved = Some(digest);
+        }
+        resolved.ok_or_else(|| ArtifactError::NotFound {
+            id: locator.to_string(),
+        })
+    }
+
     pub fn exists(&self, digest: &str) -> bool {
-        self.path_for(digest).exists()
+        canonical_sha256(digest)
+            .map(|digest| self.path_for(&digest).exists())
+            .unwrap_or(false)
     }
 
     pub fn delete(&self, digest: &str) -> Result<bool, ArtifactError> {
-        let path = self.path_for(digest);
+        let digest = canonical_sha256(digest).ok_or_else(|| ArtifactError::NotFound {
+            id: digest.to_string(),
+        })?;
+        let path = self.path_for(&digest);
         if !path.exists() {
             return Ok(false);
         }
@@ -246,6 +322,14 @@ impl ArtifactStore {
 fn io(e: std::io::Error) -> ArtifactError {
     ArtifactError::Io {
         message: e.to_string(),
+    }
+}
+
+fn canonical_sha256(value: &str) -> Option<String> {
+    if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Some(value.to_ascii_lowercase())
+    } else {
+        None
     }
 }
 
@@ -497,6 +581,46 @@ mod tests {
         assert_eq!(reference.bytes, 14);
         assert_eq!(reference.media_type, "text/plain");
         assert_eq!(store.read(&reference).unwrap(), b"hello artifact");
+    }
+
+    #[test]
+    fn reads_by_digest_and_artifact_handle() {
+        let (_d, store) = store();
+        let reference = store
+            .create(
+                b"locator payload",
+                "text/plain",
+                None,
+                RetentionClass::Session,
+                None,
+            )
+            .unwrap();
+
+        for locator in [
+            reference.digest.clone(),
+            format!("sha256:{}", reference.digest),
+            reference.id.clone(),
+            format!("art_{}", reference.digest),
+        ] {
+            let (digest, bytes) = store.read_by_locator(&locator).unwrap();
+            assert_eq!(digest, reference.digest);
+            assert_eq!(bytes, b"locator payload");
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_digest_locators_without_leaving_the_store() {
+        let (_d, store) = store();
+        let too_short = "f".repeat(63);
+        for locator in ["../outside", "art_not-a-digest", too_short.as_str()] {
+            let err = store.read_by_locator(locator).unwrap_err();
+            assert!(matches!(err, ArtifactError::NotFound { .. }));
+        }
+        assert!(!store.exists("../outside"));
+        assert!(matches!(
+            store.delete("../outside"),
+            Err(ArtifactError::NotFound { .. })
+        ));
     }
 
     #[test]

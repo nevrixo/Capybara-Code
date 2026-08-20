@@ -9,13 +9,17 @@ use crate::server::{
 };
 
 fn artifact_error(e: cbc_artifacts::ArtifactError) -> RpcError {
-    let code = match e {
-        cbc_artifacts::ArtifactError::NotFound { .. } => error_codes::NOT_FOUND,
-        cbc_artifacts::ArtifactError::DigestMismatch { .. } => error_codes::HASH_MISMATCH,
-        cbc_artifacts::ArtifactError::TooLarge { .. } => error_codes::OUTPUT_LIMIT,
-        cbc_artifacts::ArtifactError::Io { .. } => error_codes::INTERNAL_ERROR,
+    let (code, taxonomy) = match &e {
+        cbc_artifacts::ArtifactError::NotFound { .. } => (error_codes::NOT_FOUND, "NOT_FOUND"),
+        cbc_artifacts::ArtifactError::DigestMismatch { .. } => {
+            (error_codes::HASH_MISMATCH, "HASH_MISMATCH")
+        }
+        cbc_artifacts::ArtifactError::TooLarge { .. } => {
+            (error_codes::OUTPUT_LIMIT, "OUTPUT_LIMIT")
+        }
+        cbc_artifacts::ArtifactError::Io { .. } => (error_codes::INTERNAL_ERROR, "INTERNAL"),
     };
-    RpcError::taxonomy(code, "INTERNAL", e.to_string())
+    RpcError::taxonomy(code, taxonomy, e.to_string())
 }
 
 fn with_artifacts<T>(
@@ -132,12 +136,12 @@ pub fn create(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
 }
 
 pub fn read(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
-    let digest = required_str(&params, "digest")?;
+    let locator = required_str(&params, "digest")?;
     // `raw` is only honoured for a local user action (`cbc artifact show`), never
     // for model-bound reads (§18.17).
     let user_initiated = optional_bool(&params, "userInitiated", false);
-    let bytes = with_artifacts(state, |store| {
-        store.read_by_digest(&digest).map_err(artifact_error)
+    let (digest, bytes) = with_artifacts(state, |store| {
+        store.read_by_locator(&locator).map_err(artifact_error)
     })?;
     let text = String::from_utf8_lossy(&bytes).to_string();
 
@@ -193,4 +197,38 @@ pub fn spill_output(
             )
             .map_err(artifact_error)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn artifact_errors_keep_their_stable_taxonomy() {
+        let missing = artifact_error(cbc_artifacts::ArtifactError::NotFound {
+            id: "art_missing".to_string(),
+        });
+        assert_eq!(missing.code, error_codes::NOT_FOUND);
+        assert_eq!(
+            missing
+                .data
+                .as_ref()
+                .and_then(|data| data["taxonomy"].as_str()),
+            Some("NOT_FOUND")
+        );
+
+        let mismatch = artifact_error(cbc_artifacts::ArtifactError::DigestMismatch {
+            id: "art_bad".to_string(),
+            expected: "a".repeat(64),
+            actual: "b".repeat(64),
+        });
+        assert_eq!(mismatch.code, error_codes::HASH_MISMATCH);
+        assert_eq!(
+            mismatch
+                .data
+                .as_ref()
+                .and_then(|data| data["taxonomy"].as_str()),
+            Some("HASH_MISMATCH")
+        );
+    }
 }

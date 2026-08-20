@@ -199,6 +199,20 @@ function checkString(
       message: `must be at most ${maxLength} character(s), got ${value.length}`,
     });
   }
+  const pattern = schema.pattern;
+  if (pattern !== undefined) {
+    if (typeof pattern !== "string") {
+      errors.push({ path: path || ".", message: "schema pattern must be a string" });
+    } else {
+      try {
+        if (!new RegExp(pattern, "u").test(value)) {
+          errors.push({ path: path || ".", message: "must match the required format" });
+        }
+      } catch {
+        errors.push({ path: path || ".", message: "schema pattern is invalid" });
+      }
+    }
+  }
   return value;
 }
 

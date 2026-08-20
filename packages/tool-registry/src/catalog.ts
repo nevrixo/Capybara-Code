@@ -457,7 +457,7 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
   {
     id: "artifact.read",
     title: "ArtifactRead",
-    description: "Read a bounded head/tail excerpt of a previously spilled artifact by its SHA-256 digest.",
+    description: "Read a bounded head/tail excerpt of a previously spilled artifact by its SHA-256 digest or displayed artifact handle.",
     source: "native",
     defaultRisk: "R0",
     maxRisk: "R0",
@@ -467,7 +467,13 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
     keywords: ["artifact", "spill", "output", "log", "digest", "recover"],
     parameters: objectSchema(
       {
-        digest: { type: "string", minLength: 64, maxLength: 64 },
+        digest: {
+          type: "string",
+          description: "A 64-character SHA-256 digest or an art_ artifact handle from tool output.",
+          minLength: 28,
+          maxLength: 71,
+          pattern: "^(?:[0-9a-fA-F]{64}|sha256:[0-9a-fA-F]{64}|art_(?:[0-9a-fA-F]{24}|[0-9a-fA-F]{64}))$",
+        },
         excerptHeadLines: { type: "integer", minimum: 0, maximum: 2_000, default: 200 },
         excerptTailLines: { type: "integer", minimum: 0, maximum: 2_000, default: 200 },
         excerptMaxBytes: { type: "integer", minimum: 1_024, maximum: 65_536, default: 65_536 },

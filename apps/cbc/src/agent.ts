@@ -1738,7 +1738,7 @@ export class AgentSession {
       if (artifact === undefined) continue;
       replacements.set(
         item.callId,
-        `Output externalized before sampling: [artifact ${artifact.id} sha256:${artifact.digest} ${artifact.bytes} bytes; use artifact.read with this digest]`,
+        `Output externalized before sampling: [artifact id:${artifact.id} sha256:${artifact.digest} ${artifact.bytes} bytes; use artifact.read with {"digest":"${artifact.digest}"}]`,
       );
       this.context.recordArtifactHandle(artifact, `tool output ${item.callId}`);
     }

@@ -830,7 +830,7 @@ export class RuntimeToolExecutor implements ToolExecutor {
       text: [
         head,
         ...(tail.length > 0 ? ["\n… full output spilled …\n", tail] : []),
-        `\n[artifact ${artifact.id} sha256:${artifact.digest} ${artifact.bytes} bytes; use artifact.read with this digest]`,
+        `\n[artifact id:${artifact.id} sha256:${artifact.digest} ${artifact.bytes} bytes; use artifact.read with {"digest":"${artifact.digest}"}]`,
       ].join(""),
       result: {
         ...execution.result,

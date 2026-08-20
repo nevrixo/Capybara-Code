@@ -410,7 +410,7 @@ export async function normalizeObservation(
 
   const artifactNote =
     artifacts.length > 0
-      ? `\nartifacts: ${artifacts.map((a) => `${a.id} (${a.bytes} bytes)`).join(", ")}`
+      ? `\nartifacts: ${artifacts.map((a) => `${a.id} sha256:${a.digest} (${a.bytes} bytes)`).join(", ")}`
       : "";
 
   return {
