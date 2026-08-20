@@ -32,6 +32,7 @@
         "animations",
         "showCost",
         "statusDensity",
+        "thinkingMode",
         "thinkingVisibility",
         "toolDetail",
         "subagentDetail",
@@ -80,7 +81,17 @@
             "summary",
             "hidden"
           ],
-          "default": "full"
+          "default": "summary"
+        },
+        "thinkingMode": {
+          "description": "Canonical presentation mode; legacy thinkingVisibility is retained for migration.",
+          "type": "string",
+          "enum": [
+            "expanded",
+            "collapsed",
+            "off"
+          ],
+          "default": "collapsed"
         },
         "toolDetail": {
           "type": "string",
@@ -212,6 +223,7 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
+            "providerSummary",
             "summary",
             "continuity",
             "proPolicy",
@@ -226,6 +238,15 @@
               "enum": [
                 "auto",
                 "none"
+              ],
+              "default": "auto"
+            },
+            "providerSummary": {
+              "description": "Provider reasoning-summary generation; independent from UI thinking mode.",
+              "type": "string",
+              "enum": [
+                "auto",
+                "off"
               ],
               "default": "auto"
             },

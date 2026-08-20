@@ -24,6 +24,7 @@ export type ReasoningMode = "standard" | "pro";
 export type ColorMode = "auto" | "always" | "never";
 export type StatusDensity = "auto" | "compact" | "full";
 export type ThinkingVisibility = "full" | "summary" | "hidden";
+export type ThinkingMode = "expanded" | "collapsed" | "off";
 export type ToolDetail = "compact" | "full";
 export type SubagentDetail = "drawer" | "inline";
 export type SidebarVisibility = "auto" | "show" | "hide";
@@ -35,6 +36,8 @@ export interface UiConfig {
   animations: boolean;
   showCost: boolean;
   statusDensity: StatusDensity;
+  thinkingMode: ThinkingMode;
+  /** Legacy alias; populated from thinkingMode during config migration. */
   thinkingVisibility: ThinkingVisibility;
   toolDetail: ToolDetail;
   subagentDetail: SubagentDetail;
@@ -58,6 +61,8 @@ export interface ModelRouterConfig {
 
 export interface ModelReasoningConfig {
   /** Provider request policy; intentionally independent from UI disclosure. */
+  providerSummary: "auto" | "off";
+  /** Legacy provider-summary alias. */
   summary: "auto" | "none";
   continuity: "task-epoch";
   proPolicy: "eval-gated";
@@ -287,7 +292,8 @@ export function defaultConfig(): CbcConfig {
       animations: true,
       showCost: true,
       statusDensity: "auto",
-      thinkingVisibility: "full",
+      thinkingMode: "collapsed",
+      thinkingVisibility: "summary",
       toolDetail: "compact",
       subagentDetail: "drawer",
       sidebar: "auto",
@@ -312,6 +318,7 @@ export function defaultConfig(): CbcConfig {
       },
       reasoning: {
         // Request summaries independently of whether the current TUI renders them.
+        providerSummary: "auto",
         summary: "auto",
         continuity: "task-epoch",
         proPolicy: "eval-gated",
@@ -563,6 +570,7 @@ const MONOTONIC_PROJECT_BOOLEAN_STRICT_VALUE: Readonly<Record<string, boolean>> 
 
 const ENUMS: Record<string, readonly string[]> = {
   "ui.thinkingVisibility": ["full", "summary", "hidden"],
+  "ui.thinkingMode": ["expanded", "collapsed", "off"],
   "ui.toolDetail": ["compact", "full"],
   "ui.subagentDetail": ["drawer", "inline"],
   "ui.sidebar": ["auto", "show", "hide"],
@@ -585,6 +593,7 @@ const ENUMS: Record<string, readonly string[]> = {
   "model.reasoningMode": ["standard", "pro"],
   "model.reasoningEffort": ["none", "low", "medium", "high", "xhigh", "max"],
   "model.reasoning.summary": ["auto", "none"],
+  "model.reasoning.providerSummary": ["auto", "off"],
   "agent.permissionMode": ["plan", "ask", "auto", "auto-review"],
   "agent.interactionMode": ["build", "plan"],
   "agent.reviewMode": ["off", "auto"],
@@ -619,6 +628,8 @@ const DEPRECATED: Record<string, string> = {
   "model.reasoning": "model.reasoningEffort",
   "ui.colors": "ui.color",
   "sandbox.enabled": "sandbox.level",
+  "ui.thinkingVisibility": "ui.thinkingMode",
+  "model.reasoning.summary": "model.reasoning.providerSummary",
 };
 
 /** A partial config layer, keyed by dotted path. */
@@ -635,7 +646,11 @@ export function mergeConfig(
 ): EffectiveConfig {
   const config = defaultConfig();
   const provenance: Record<string, ConfigSource> = {};
-  const issues: ConfigIssue[] = [];
+  const issues: ConfigIssue[] = [];  const explicitThinkingKeys = new Set<string>();
+  for (const layer of layers) {
+    if (Object.prototype.hasOwnProperty.call(layer.values, "ui.thinkingMode")) explicitThinkingKeys.add("ui.thinkingMode");
+    if (Object.prototype.hasOwnProperty.call(layer.values, "model.reasoning.providerSummary")) explicitThinkingKeys.add("model.reasoning.providerSummary");
+  }
 
   // Servers the user defined themselves. A project may add servers, but it may
   // not rewrite a user-defined one — an overridden command/env would run the
@@ -687,6 +702,19 @@ export function mergeConfig(
       }
 
       const target = replacement ?? path;
+      if (replacement !== undefined && explicitThinkingKeys.has(replacement)) {
+        issues.push({
+          severity: "warning",
+          path,
+          source: layer.source,
+          message: `'${path}' is ignored because '${replacement}' is set`,
+        });
+        continue;
+      }
+      if (path === "ui.thinkingVisibility") {
+        value = value === "full" ? "expanded" : value === "summary" ? "collapsed" : value === "hidden" ? "off" : value;
+      }
+      if (path === "model.reasoning.summary") value = value === "none" ? "off" : value;
 
       if (hasUnsafePathSegment(target)) {
         issues.push({
@@ -804,7 +832,7 @@ export function mergeConfig(
       if (enumValues && typeof value === "string" && !enumValues.includes(value)) {
         issues.push({
           severity: "error",
-          path: target,
+          path: replacement !== undefined ? path : target,
           source: layer.source,
           message: `'${value}' is not one of ${enumValues.join(", ")}`,
         });
@@ -854,6 +882,9 @@ export function mergeConfig(
     }
   }
 
+  // Thinking keys are dual-read for one compatibility window. New keys win;
+  // aliases are materialized so older consumers see the same effective value.
+  syncThinkingAliases(config, provenance);
   // Legacy config values are migrated at load time without widening authority.
   // Explicit new fields always win.
   if (provenance["agent.interactionMode"] === undefined && config.agent.permissionMode === "plan") {
@@ -866,6 +897,31 @@ export function mergeConfig(
   return { config, provenance, issues };
 }
 
+function syncThinkingAliases(config: CbcConfig, provenance: Record<string, ConfigSource>): void {
+  const uiSource = provenance["ui.thinkingMode"] ?? provenance["ui.thinkingVisibility"];
+  if (provenance["ui.thinkingMode"] !== undefined) {
+    const mode = config.ui.thinkingMode;
+    config.ui.thinkingVisibility = mode === "expanded" ? "full" : mode === "collapsed" ? "summary" : "hidden";
+  } else {
+    const legacy = config.ui.thinkingVisibility;
+    config.ui.thinkingMode = legacy === "full" ? "expanded" : legacy === "summary" ? "collapsed" : "off";
+  }
+  if (uiSource !== undefined) {
+    provenance["ui.thinkingMode"] = uiSource;
+    provenance["ui.thinkingVisibility"] = uiSource;
+  }
+
+  const providerSource = provenance["model.reasoning.providerSummary"] ?? provenance["model.reasoning.summary"];
+  if (provenance["model.reasoning.providerSummary"] !== undefined) {
+    config.model.reasoning.summary = config.model.reasoning.providerSummary === "off" ? "none" : "auto";
+  } else {
+    config.model.reasoning.providerSummary = config.model.reasoning.summary === "none" ? "off" : "auto";
+  }
+  if (providerSource !== undefined) {
+    provenance["model.reasoning.providerSummary"] = providerSource;
+    provenance["model.reasoning.summary"] = providerSource;
+  }
+}
 function isForbiddenProjectPath(path: string): boolean {
   const segments = path.split(".").map((segment) => segment.toLowerCase());
   const forbidden = new Set(FORBIDDEN_PROJECT_PATHS.map((entry) => entry.toLowerCase()));
