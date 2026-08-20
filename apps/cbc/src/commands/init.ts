@@ -30,10 +30,15 @@ default = "gpt-5.6-sol"
 reasoning_effort = "medium"
 
 [model.reasoning]
-summary = "auto"
+provider_summary = "auto"
 
 [agent]
-permission_mode = "ask"
+interaction_mode = "build"
+review_mode = "auto"
+
+[permissions]
+preset = "auto"
+
 
 # [mcp.servers.example]
 # transport = "stdio"
@@ -52,7 +57,7 @@ mouse = true
 animations = true
 show_cost = true
 status_density = "auto"
-thinking_visibility = "full"
+thinking_mode = "collapsed"
 tool_detail = "compact"
 subagent_detail = "drawer"
 sidebar = "auto"
@@ -67,7 +72,7 @@ max_output_tokens = 32000
 
 [model.reasoning]
 # Provider summary generation is independent from UI preview/visibility.
-summary = "auto"
+provider_summary = "auto"
 
 [model.router]
 strategy = "utility"
@@ -79,7 +84,8 @@ target_latency_ms = 90000
 record_decisions = true
 
 [agent]
-permission_mode = "ask"
+interaction_mode = "build"
+review_mode = "auto"
 max_steps = 32
 max_tool_calls = 64
 max_wall_time_minutes = 30
@@ -87,6 +93,7 @@ visible_commentary = true
 token_saving = "off"
 
 [permissions]
+preset = "auto"
 project_write = "auto"
 shell = "safe-auto"
 network = "ask"
@@ -121,7 +128,9 @@ const PROJECT_CONFIG_TEMPLATE = `# Team-shared project config — .capybara/conf
 # default = "gpt-5.6-sol"
 
 [agent]
-# permission_mode = "ask"
+# interaction_mode = "build"
+# review_mode = "auto"
+# permissions.preset = "auto"
 
 # [mcp.servers.local]
 # transport = "stdio"
