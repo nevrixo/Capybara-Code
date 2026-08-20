@@ -252,7 +252,9 @@ function validateFlags(
     }
 
     if (typeof raw.value === "string") {
-      checkEnum(spec, raw.value);
+      const legacyHeadlessPermission = spec.name === "--permission" && contextLabel === "capy run" && ["deny-on-ask", "allow-listed", "fail-on-ask", "deny", "fail"].includes(raw.value);
+      const legacyPermissionMode = spec.name === "--mode" && (contextLabel === "capy" || contextLabel === "capy run") && ["read", "edit", "auto", "yolo", "ask", "auto-review"].includes(raw.value);
+      if (!legacyHeadlessPermission && !legacyPermissionMode) checkEnum(spec, raw.value);
       flags.set(spec.name, { name: spec.name, spec, value: raw.value });
       continue;
     }
@@ -326,32 +328,38 @@ function commonFlags(flags: Map<string, FlagToken>, warnings: string[]): CommonF
   const permissionRaw = flagString(flags, "--permission");
   const reviewRaw = flagString(flags, "--review");
   let mode: PermissionModeArg | undefined;
+  let review: "off" | "auto" | undefined =
+    reviewRaw === "off" || reviewRaw === "auto" ? reviewRaw : undefined;
   let permission: PermissionPresetArg | undefined =
     permissionRaw === "read" || permissionRaw === "edit" || permissionRaw === "auto" || permissionRaw === "yolo"
       ? permissionRaw
       : undefined;
   if (modeRaw !== undefined) {
-    mode = modeRaw as PermissionModeArg;
-    if (["read", "edit", "auto", "yolo"].includes(mode)) {
-      permission = mode as PermissionPresetArg;
-      warnings.push(`--mode ${mode} is deprecated; use --permission ${mode}`);
-    } else if (mode === "ask" || mode === "auto-review") {
-      warnings.push(`--mode ${mode} is deprecated; use --mode build --review ${mode === "auto-review" ? "auto" : "off"}`);
+    if (["read", "edit", "auto", "yolo"].includes(modeRaw)) {
+      // Compatibility only: permission presets used to be accepted by --mode.
+      permission = modeRaw as PermissionPresetArg;
+      warnings.push(`--mode ${modeRaw} is deprecated; use --permission ${modeRaw}`);
+    } else if (modeRaw === "auto-review") {
+      if (permission === undefined) permission = "auto";
+      if (review === undefined) review = "auto";
+      warnings.push("--mode auto-review is deprecated; use --permission auto --review auto");
+    } else {
+      mode = modeRaw as PermissionModeArg;
+      if (mode === "ask") warnings.push("--mode ask is deprecated; use the default CUSTOM/ASK policy");
     }
   }
-
   const plan = flagBool(flags, "--plan");
   const yolo = flagBool(flags, "--yolo");
-  if (yolo && mode !== undefined && mode !== "yolo") {
-    warnings.push(`--yolo and --mode ${mode} conflict; --yolo wins`);
+  if (yolo && modeRaw !== undefined && modeRaw !== "build" && modeRaw !== "plan") {
+    warnings.push(`--yolo and --mode ${modeRaw} conflict; --yolo wins`);
   }
   if (yolo) {
-    mode = "yolo" as PermissionModeArg;
+    // --yolo is a permission alias, never a permissionMode value.
     permission = "yolo";
   }
-  if (plan && mode !== undefined && mode !== "plan") {
+  if (plan && ((mode !== undefined && mode !== "plan") || (modeRaw !== undefined && modeRaw !== "plan"))) {
     // Rather than silently picking one, say which won.
-    warnings.push(`--plan and --mode ${mode} conflict; --plan wins`);
+    warnings.push(`--plan and --mode ${modeRaw ?? mode} conflict; --plan wins`);
   }
 
   return {
@@ -365,7 +373,7 @@ function commonFlags(flags: Map<string, FlagToken>, warnings: string[]): CommonF
     ...(plan ? { plan: true, mode: "plan" as const } : mode !== undefined ? { mode } : {}),
     ...(interactionRaw !== undefined ? { interactionMode: interactionRaw as "build" | "plan" } : {}),
     ...(permission !== undefined ? { permission } : {}),
-    ...(reviewRaw !== undefined ? { review: reviewRaw as "off" | "auto" } : {}),
+    ...(review !== undefined ? { review } : {}),
     ...(flagBool(flags, "--plain") ? { plain: true } : {}),
     ...(flagBool(flags, "--no-color") ? { noColor: true } : {}),
     ...(flagString(flags, "--resume") !== undefined
@@ -540,13 +548,17 @@ function buildLeafCommand(
     case "run": {
       const prompt = operands.join(" ").trim();
       const onApproval = flagString(flags, "--on-approval");
-      const legacyPermission = flagString(flags, "--permission");
+      const rawPermission = flagString(flags, "--permission");
       let permission: HeadlessPolicyArg | undefined;
-      if (onApproval !== undefined) permission = onApproval as HeadlessPolicyArg;
-      else if (legacyPermission !== undefined) {
-        warnings.push("--permission is deprecated; use --on-approval");
+      if (onApproval !== undefined) {
+        permission = onApproval as HeadlessPolicyArg;
+      } else if (rawPermission !== undefined && !["read", "edit", "auto", "yolo"].includes(rawPermission)) {
+        // One-release compatibility for the old overloaded spelling. Canonical
+        // presets never enter the headless approval field.
+        warnings.push("--permission approval spellings are deprecated; use --on-approval");
         const map: Record<string, HeadlessPolicyArg> = { "deny-on-ask": "deny", "fail-on-ask": "fail", "allow-listed": "allow-listed" };
-        permission = map[legacyPermission] ?? (legacyPermission as HeadlessPolicyArg);
+        permission = map[rawPermission];
+        if (permission === undefined) throw usageError(`unsupported legacy --permission value '${rawPermission}'`);
       }
       return {
         kind: "run",

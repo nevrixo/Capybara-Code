@@ -72,10 +72,10 @@ export const COMMON_FLAGS: readonly FlagSpec[] = [
     name: "--mode",
     kind: "value",
     summary: "build or plan (legacy permission values are deprecated)",
-    values: ["build", "plan", "read", "edit", "auto", "yolo", "ask", "auto-review"],
+    values: ["build", "plan"],
   },
   { name: "--interaction-mode", kind: "value", summary: "build or plan", values: ["build", "plan"] },
-  { name: "--permission", kind: "value", summary: "read, edit, auto, or yolo", values: ["read", "edit", "auto", "yolo", "deny-on-ask", "allow-listed", "fail-on-ask", "deny", "fail"] },
+  { name: "--permission", kind: "value", summary: "permission preset: read, edit, auto, or yolo", values: ["read", "edit", "auto", "yolo"] },
   { name: "--review", kind: "value", summary: "off or auto", values: ["off", "auto"] },
   {
     name: "--plan",
@@ -83,7 +83,7 @@ export const COMMON_FLAGS: readonly FlagSpec[] = [
     summary: "shorthand for --mode plan",
     short: "-p",
   },
-  { name: "--yolo", kind: "boolean", summary: "shorthand for --mode yolo" },
+  { name: "--yolo", kind: "boolean", summary: "shorthand for --permission yolo" },
   { name: "--plain", kind: "boolean", summary: "line-oriented output, no full-screen TUI" },
   { name: "--no-color", kind: "boolean", summary: "disable colour" },
   {

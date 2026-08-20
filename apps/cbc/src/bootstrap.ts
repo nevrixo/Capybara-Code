@@ -1252,11 +1252,14 @@ function applyOverrides(
     if (raw === "build" || raw === "plan") {
       effective.agent.interactionMode = raw;
       if (raw === "plan" && effective.permissions.preset === undefined) effective.permissions.preset = "read";
+    } else if (raw === "read" || raw === "edit" || raw === "auto" || raw === "yolo") {
+      // Legacy preset spellings map onto the canonical preset axis only.
+      effective.permissions.preset = raw as never;
     } else {
-    const legacyMap: Record<string, string> = { plan: "read", ask: "custom" };
-    const preset = (raw === "read" || raw === "edit" || raw === "auto" || raw === "yolo") ? raw : legacyMap[raw] ?? "auto";
-    if (preset !== "custom") effective.permissions.preset = preset as never;
-    effective.agent.permissionMode = overrides.permissionMode as typeof effective.agent.permissionMode;
+      // ASK/AUTO-REVIEW remain readable legacy modes during migration; they
+      // do not create a conflicting preset in the in-memory config.
+      effective.agent.permissionMode = overrides.permissionMode as typeof effective.agent.permissionMode;
+      if (raw === "auto-review") effective.agent.reviewMode = "auto";
     }
   }
   if (overrides.interactionMode !== undefined) effective.agent.interactionMode = overrides.interactionMode;

@@ -19,13 +19,14 @@ import { CliError, EXIT, exitForStatus, type ExitCode } from "../exit.ts";
 import { JsonlWriter, type FinalStatusPayload } from "../output.ts";
 import { ok, type CommandContext, type CommandResult } from "./context.ts";
 import { ensureTrust } from "./trust.ts";
+import type { HeadlessPolicyArg } from "../args.ts";
 
 export interface RunArgs {
   readonly prompt?: string;
   readonly stdin: boolean;
   readonly jsonl: boolean;
   readonly output?: string;
-  readonly permission?: "deny-on-ask" | "allow-listed" | "fail-on-ask" | "deny" | "allow-listed" | "fail";
+  readonly permission?: HeadlessPolicyArg;
   readonly readOnly?: boolean;
   readonly model?: string;
   readonly reasoning?: string;
@@ -64,7 +65,7 @@ export async function run(context: CommandContext, args: RunArgs): Promise<Comma
     // §13.8: `deny-on-ask` is the default because it lets the model observe the
     // denial and adapt, which produces a useful partial result more often than
     // aborting the run does.
-    headlessPolicy: ((args.permission === "deny" ? "deny-on-ask" : args.permission === "fail" ? "fail-on-ask" : args.permission) ?? "deny-on-ask") as "deny-on-ask" | "allow-listed" | "fail-on-ask",
+    headlessPolicy: args.permission === "deny" || args.permission === "deny-on-ask" ? "deny-on-ask" : args.permission === "fail" || args.permission === "fail-on-ask" ? "fail-on-ask" : args.permission === "allow-listed" ? "allow-listed" : "deny-on-ask",
     ...(args.resume !== undefined ? { resume: args.resume } : {}),
     onEvent: (event) => {
       if (jsonl === undefined) return;
