@@ -441,7 +441,7 @@ export class InputReader {
             return;
           }
           case "cycle_thinking":
-            this.#ui.notice(this.#ui.cycleThinkingVisibility());
+            this.#ui.notice(this.#ui.cycleThinkingMode());
             this.#draw();
             return;
           case "redraw_screen":
@@ -619,7 +619,7 @@ export class InputReader {
           return;
         }
         case "cycle_thinking":
-          this.#ui.notice(this.#ui.cycleThinkingVisibility());
+          this.#ui.notice(this.#ui.cycleThinkingMode());
           this.#draw();
           return;
         case "redraw_screen":

@@ -1260,7 +1260,7 @@ describe("interactive UI (§6.2, §6.21)", () => {
     // the three-cluster caret lands at column 11 on the first composer row.
     expect(position).toEqual({ column: 11, row: 0 });
   });
-  function ui(columns: number, env: Record<string, string | undefined> = { NO_COLOR: "1" }) {
+  function ui(columns: number, env: Record<string, string | undefined> = { NO_COLOR: "1" }, thinkingMode: "expanded" | "collapsed" | "off" = "collapsed") {
     const host = createFakeHost({ isTty: true, columns, env });
     const decision = decideRenderMode({ host, rendererAvailable: false });
     const instance = new InteractiveUi({
@@ -1269,6 +1269,7 @@ describe("interactive UI (§6.2, §6.21)", () => {
       writer: new LineWriter(host, decision),
       workspacePath: "/work/project",
       version: "0.1.0-test",
+      uiThinkingMode: thinkingMode,
       mcpServers: [{ name: "github", state: "ready" }],
     });
     return { host, instance, output: () => host.out.join("") };
@@ -5049,7 +5050,7 @@ describe("TOML upsert", () => {
 
   test("TUI presentation settings persist through the user config", async () => {
     const host = createFakeHost();
-    const thinking = await setUserConfigValue(host, "ui.thinkingVisibility", "hidden");
+    const thinking = await setUserConfigValue(host, "ui.thinkingMode", "off");
     const details = await setUserConfigValue(host, "ui.toolDetail", "full");
     const subagents = await setUserConfigValue(host, "ui.subagentDetail", "inline");
     const sidebar = await setUserConfigValue(host, "ui.sidebar", "hide");
@@ -5058,7 +5059,7 @@ describe("TOML upsert", () => {
     expect(subagents.issues).toHaveLength(0);
     expect(sidebar.issues).toHaveLength(0);
     const toml = host.files.get(resolvePaths(host).configFile) ?? "";
-    expect(toml).toContain('thinking_visibility = "hidden"');
+    expect(toml).toContain('thinking_mode = "off"');
     expect(toml).toContain('tool_detail = "full"');
     expect(toml).toContain('subagent_detail = "inline"');
     expect(toml).toContain('sidebar = "hide"');
@@ -5066,7 +5067,7 @@ describe("TOML upsert", () => {
       workspacePath: "/work/project",
       trust: "trusted-always",
     });
-    expect(loaded.config.ui.thinkingVisibility).toBe("hidden");
+    expect(loaded.config.ui.thinkingMode).toBe("off");
     expect(loaded.config.ui.toolDetail).toBe("full");
     expect(loaded.config.ui.subagentDetail).toBe("inline");
     expect(loaded.config.ui.sidebar).toBe("hide");

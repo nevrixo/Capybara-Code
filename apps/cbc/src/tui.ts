@@ -48,6 +48,8 @@ import {
   renderIntervalMs,
   renderStatusBar,
   renderTimelineItem,
+  thinkingModeFromVisibility,
+  thinkingVisibilityFromMode,
   isCapturingOverlay,
   projectTimeline,
   restoreSequence,
@@ -80,6 +82,7 @@ import {
   type SubagentDetail,
   type TerminalCapabilities,
   type ThinkingVisibility,
+  type ThinkingMode,
   type TimelineRenderOptions,
   type ToastState,
   type ToolDetail,
@@ -129,11 +132,12 @@ export interface InteractiveUiOptions {
   readonly uiShowCost?: boolean;
   readonly uiStatusDensity?: "auto" | "compact" | "full";
   readonly uiThinkingVisibility?: ThinkingVisibility;
+  readonly uiThinkingMode?: ThinkingMode;
   readonly uiToolDetail?: ToolDetail;
   readonly uiSubagentDetail?: SubagentDetail;
   readonly sidebarVisibility?: SidebarVisibility;
   readonly onSettingChange?: (
-    key: "thinkingVisibility" | "toolDetail" | "subagentDetail" | "sidebar",
+    key: "thinkingVisibility" | "thinkingMode" | "toolDetail" | "subagentDetail" | "sidebar",
     value: string,
   ) => void;
   /**
@@ -264,6 +268,7 @@ export class InteractiveUi {
   #completion: CompletionState | undefined;
   #notices: string[] = [];
   #thinkingVisibility: ThinkingVisibility = "full";
+  #thinkingMode: ThinkingMode = "expanded";
   #toolDetail: ToolDetail = "compact";
   #subagentDetail: SubagentDetail = "drawer";
   #lastNoticeText: string | undefined;
@@ -339,7 +344,8 @@ export class InteractiveUi {
     // full-screen frame; treating plain as full-screen makes every keystroke erase
     // and repaint the entire terminal, and can starve a running turn on slow TTYs.
     this.#fullScreen = options.decision.mode === "opentui";
-    this.#thinkingVisibility = options.uiThinkingVisibility ?? "full";
+    this.#thinkingMode = options.uiThinkingMode ?? (options.uiThinkingVisibility !== undefined ? thinkingModeFromVisibility(options.uiThinkingVisibility) : "collapsed");
+    this.#thinkingVisibility = thinkingVisibilityFromMode(this.#thinkingMode);
     this.#toolDetail = options.uiToolDetail ?? "compact";
     this.#subagentDetail = options.uiSubagentDetail ?? "drawer";
     this.#credentialSource = options.credentialSource;
@@ -583,11 +589,13 @@ export class InteractiveUi {
 
   get presentationPolicy(): {
     readonly thinkingVisibility: ThinkingVisibility;
+    readonly thinkingMode: ThinkingMode;
     readonly toolDetail: ToolDetail;
     readonly subagentDetail: SubagentDetail;
   } {
     return {
       thinkingVisibility: this.#thinkingVisibility,
+      thinkingMode: this.#thinkingMode,
       toolDetail: this.#toolDetail,
       subagentDetail: this.#subagentDetail,
     };
@@ -599,6 +607,7 @@ export class InteractiveUi {
 
   setThinkingVisibility(value: ThinkingVisibility): string {
     this.#thinkingVisibility = value;
+    this.#thinkingMode = thinkingModeFromVisibility(value);
     this.#timelineScrollOffset = 0;
     this.#invalidateTimelineScrollRange();
     this.#markFrameDirty("timeline");
@@ -611,6 +620,23 @@ export class InteractiveUi {
     const values: readonly ThinkingVisibility[] = ["full", "summary", "hidden"];
     const current = values.indexOf(this.#thinkingVisibility);
     return this.setThinkingVisibility(values[(current + 1) % values.length] ?? "full");
+  }
+
+  setThinkingMode(value: ThinkingMode): string {
+    this.#thinkingMode = value;
+    this.#thinkingVisibility = thinkingVisibilityFromMode(value);
+    this.#timelineScrollOffset = 0;
+    this.#invalidateTimelineScrollRange();
+    this.#markFrameDirty("timeline");
+    if (this.#fullScreen) this.#scheduleFrame();
+    this.#options.onSettingChange?.("thinkingMode", value);
+    return `Thinking mode: ${value}`;
+  }
+
+  cycleThinkingMode(): string {
+    const values: readonly ThinkingMode[] = ["expanded", "collapsed", "off"];
+    const current = values.indexOf(this.#thinkingMode);
+    return this.setThinkingMode(values[(current + 1) % values.length] ?? "collapsed");
   }
 
   setToolDetail(value: ToolDetail): string {
@@ -635,8 +661,8 @@ export class InteractiveUi {
 
   #timelineOptions(model: SessionViewModel): TimelineRenderOptions {
     return {
-      modelId: model.modelId,
       thinkingVisibility: this.#thinkingVisibility,
+      thinkingMode: this.#thinkingMode,
       toolDetail: this.#toolDetail,
       subagentDetail: this.#subagentDetail,
       ...(this.#fullScreen ? {} : { compactTasks: false }),
@@ -2813,6 +2839,7 @@ export class InteractiveUi {
             : {}),
           accordionCollapsed: this.#accordionCollapsed,
           thinkingVisibility: this.#thinkingVisibility,
+          thinkingMode: this.#thinkingMode,
           toolDetail: this.#toolDetail,
           subagentDetail: this.#subagentDetail,
           // Elapsed labels share the live-line cadence; sub-millisecond clock

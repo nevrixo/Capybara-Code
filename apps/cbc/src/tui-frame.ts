@@ -47,6 +47,7 @@ import {
   type TerminalCapabilities,
   type Theme,
   type ThinkingVisibility,
+  type ThinkingMode,
   type ToastState,
   type ToolDetail,
 } from "@cbc/tui-components";
@@ -106,6 +107,7 @@ export interface SessionFrameOptions extends FrameLineOptions {
   readonly statusDensity?: "auto" | "compact" | "full";
   readonly accordionCollapsed?: boolean;
   readonly thinkingVisibility?: ThinkingVisibility;
+  readonly thinkingMode?: ThinkingMode;
   readonly toolDetail?: ToolDetail;
   readonly subagentDetail?: SubagentDetail;
   readonly nowMs?: number;
@@ -712,8 +714,8 @@ export function renderSessionFrame(input: SessionFrameOptions): SessionFrameRend
       : {}),
     ...(input.streamingViews !== undefined ? { streamingViews: input.streamingViews } : {}),
     timelineOptions: {
-      modelId: input.model.modelId,
       ...(input.thinkingVisibility !== undefined ? { thinkingVisibility: input.thinkingVisibility } : {}),
+      ...(input.thinkingMode !== undefined ? { thinkingMode: input.thinkingMode } : {}),
       ...(input.toolDetail !== undefined ? { toolDetail: input.toolDetail } : {}),
       ...(input.subagentDetail !== undefined ? { subagentDetail: input.subagentDetail } : {}),
       ...(input.nowMs !== undefined ? { nowMs: input.nowMs } : {}),

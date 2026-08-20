@@ -100,7 +100,7 @@ export async function interactive(
   const permissionsSummary = args.readOnly === true ? `RO · ${presetLabel}` : presetLabel;
   let settingWriteTail: Promise<void> = Promise.resolve();
   const persistSetting = (
-    key: "thinkingVisibility" | "toolDetail" | "subagentDetail" | "sidebar",
+    key: "thinkingVisibility" | "thinkingMode" | "toolDetail" | "subagentDetail" | "sidebar",
     value: string,
   ): void => {
     settingWriteTail = settingWriteTail
@@ -130,6 +130,7 @@ export async function interactive(
     uiShowCost: uiConfig.showCost,
     uiStatusDensity: uiConfig.statusDensity,
     uiThinkingVisibility: uiConfig.thinkingVisibility,
+    uiThinkingMode: uiConfig.thinkingMode,
     uiToolDetail: uiConfig.toolDetail,
     uiSubagentDetail: uiConfig.subagentDetail,
     sidebarVisibility: uiConfig.sidebar,
@@ -1221,16 +1222,16 @@ function settingDescriptors(ui: InteractiveUi, session: ActiveSession): SettingD
     {
       key: "thinking",
       label: "Thinking",
-      value: ui.presentationPolicy.thinkingVisibility,
-      configPath: "ui.thinkingVisibility",
+      value: ui.presentationPolicy.thinkingMode,
+      configPath: "ui.thinkingMode",
       values: [
-        { value: "full", label: "Full provider reasoning" },
-        { value: "summary", label: "Preview" },
-        { value: "hidden", label: "Hidden" },
+        { value: "expanded", label: "Expanded" },
+        { value: "collapsed", label: "Collapsed" },
+        { value: "off", label: "Off" },
       ],
       apply: (_active, value) => {
-        if (value === "full" || value === "summary" || value === "hidden") {
-          return { value, message: ui.setThinkingVisibility(value) };
+        if (value === "expanded" || value === "collapsed" || value === "off") {
+          return { value, message: ui.setThinkingMode(value) };
         }
         return { message: "Use the Thinking setting's popup values." };
       },
