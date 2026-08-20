@@ -650,6 +650,13 @@ export class SubagentBridge {
       provider: this.#options.provider,
       registry: childRegistry,
       executor: childExecutor,
+      onGeneratedImage: async (callId, image) => {
+        const stored = await childExecutor.saveGeneratedImage(callId, image);
+        return {
+          ...(stored.artifact !== undefined ? { artifactId: stored.artifact.id } : {}),
+          ...(stored.outputPath !== undefined ? { outputPath: stored.outputPath } : {}),
+        };
+      },
       approvals: this.#options.approvals,
       normalizer: new HostActionNormalizer({
         defaultCwd: ".",

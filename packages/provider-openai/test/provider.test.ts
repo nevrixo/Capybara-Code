@@ -107,7 +107,7 @@ describe("hosted capability profiles", () => {
     expect(snapshot.contextWindow).toBe(1_050_000);
     expect(snapshot.native.webSearch).toBe("supported");
     expect(snapshot.native.imageGeneration).toBe("supported");
-    expect(snapshot.supportedHostedTools).toContain("web_search_preview");
+    expect(snapshot.supportedHostedTools).toContain("web_search");
     expect(snapshot.supportedHostedTools).toContain("image_generation");
   });
 
@@ -123,13 +123,13 @@ describe("hosted capability profiles", () => {
       expect(inputContextBudget(snapshotDescriptor(snapshot))).toBe(272_000);
     }
 
-    expect(provider.capabilitySnapshot("gpt-5.6")!.native.webSearch).toBe("unknown");
-    const allowed = new OpenAiResponsesProvider({
+    expect(provider.capabilitySnapshot("gpt-5.6")!.native.webSearch).toBe("supported");
+    const disabled = new OpenAiResponsesProvider({
       credential: fakeLease(),
       chatGpt: { accountId: "acct" },
-      allowChatGptHostedTools: true,
+      allowChatGptHostedTools: false,
     });
-    expect(allowed.capabilitySnapshot("gpt-5.6")!.native.webSearch).toBe("supported");
+    expect(disabled.capabilitySnapshot("gpt-5.6")!.native.webSearch).toBe("unknown");
   });
 });
 describe("ChatGPT/Codex routing profile", () => {
@@ -694,6 +694,112 @@ describe("SSE normalization (§10.2, §25.6)", () => {
     });
   });
 
+  test("surfaces hosted web search progress and preserves clickable URL citations", async () => {
+    const events = await collect(
+      parseResponseStream(
+        sseStream([
+          {
+            type: "response.output_item.added",
+            item: { id: "ws_1", type: "web_search_call", status: "searching" },
+          },
+          {
+            type: "response.output_item.done",
+            item: { id: "ws_1", type: "web_search_call", status: "completed" },
+          },
+          {
+            type: "response.output_item.done",
+            item: {
+              id: "message_1",
+              type: "message",
+              phase: "final_answer",
+              content: [{
+                type: "output_text",
+                text: "OpenAI builds AI systems.",
+                annotations: [{
+                  type: "url_citation",
+                  start_index: 0,
+                  end_index: 6,
+                  title: "OpenAI",
+                  url: "https://openai.com/",
+                }],
+              }],
+            },
+          },
+          { type: "response.completed", response: { id: "r" } },
+        ]),
+      ),
+    );
+
+    expect(events.filter((event) => event.type === "hosted.tool.started")).toHaveLength(1);
+    expect(events).toContainEqual({
+      type: "hosted.tool.completed",
+      callId: "ws_1",
+      name: "web_search",
+      summary: "Web search completed",
+    });
+    expect(events).toContainEqual({
+      type: "response.item",
+      authoritative: true,
+      item: expect.objectContaining({
+        kind: "message",
+        text: "[OpenAI](https://openai.com/) builds AI systems.",
+      }),
+    });
+  });
+
+  test("recovers the final generated image from response.completed", async () => {
+    const base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB";
+    const events = await collect(
+      parseResponseStream(
+        sseStream([
+          {
+            type: "response.output_item.added",
+            item: { id: "img_1", type: "image_generation_call", status: "in_progress" },
+          },
+          {
+            type: "response.output_item.done",
+            item: { id: "img_1", type: "image_generation_call", status: "completed", error: null },
+          },
+          {
+            type: "response.completed",
+            response: {
+              id: "r",
+              output: [{
+                id: "img_1",
+                type: "image_generation_call",
+                status: "completed",
+                result: base64,
+                output_format: "png",
+                revised_prompt: "A capybara writing code",
+              }],
+            },
+          },
+        ]),
+      ),
+    );
+
+    expect(events).toContainEqual({
+      type: "hosted.tool.started",
+      callId: "img_1",
+      name: "image_generation",
+      display: "Generating an image",
+    });
+    expect(events).toContainEqual({
+      type: "hosted.tool.completed",
+      callId: "img_1",
+      name: "image_generation",
+      summary: "Image generated",
+      image: {
+        base64,
+        mediaType: "image/png",
+        outputFormat: "png",
+        revisedPrompt: "A capybara writing code",
+      },
+    });
+    expect(events.filter((event) => event.type === "hosted.tool.started")).toHaveLength(1);
+    expect(events.some((event) => event.type === "hosted.tool.failed")).toBe(false);
+  });
+
   test("assembles a tool call across argument deltas", async () => {
     const events = await collect(
       parseResponseStream(
@@ -1150,7 +1256,7 @@ describe("request body policy (§10.6, §10.14)", () => {
     expect(input[1]?.content[0]?.prompt_cache_breakpoint).toBeUndefined();
   });
 
-  test("sends CBC function schemas and no provider-hosted tools (§10.14)", async () => {
+  test("sends CBC function schemas alongside safe built-in hosted tools", async () => {
     const body = await captureBody(
       request({
         tools: [
@@ -1164,8 +1270,9 @@ describe("request body policy (§10.6, §10.14)", () => {
       }),
     );
     const tools = body.tools as Array<Record<string, unknown>>;
-    expect(tools).toHaveLength(1);
+    expect(tools).toHaveLength(3);
     expect(tools[0]?.type).toBe("function");
+    expect(tools.slice(1).map((tool) => tool.type)).toEqual(["web_search", "image_generation"]);
     expect(tools[0]?.strict).toBe(true);
     expect((tools[0]?.parameters as Record<string, unknown>).required).toEqual(["pattern", "limit"]);
     expect(String(tools[0]?.name)).toMatch(/^[A-Za-z0-9_-]+$/);
@@ -1202,32 +1309,36 @@ describe("request body policy (§10.6, §10.14)", () => {
     expect(enabledTool?.defer_loading).toBe(true);
   });
 
-  test("sends explicitly opted-in Responses hosted tools", async () => {
+  test("supports a per-request Responses hosted-tool override", async () => {
     const body = await captureBody(request({
       hostedTools: [
-        { type: "web_search_preview", searchContextSize: "high" },
+        { type: "web_search", searchContextSize: "high" },
         { type: "image_generation", quality: "high", outputFormat: "png" },
       ],
     }));
     const tools = body.tools as Array<Record<string, unknown>>;
-    expect(tools.map((tool) => tool.type)).toEqual(["web_search_preview", "image_generation"]);
+    expect(tools.map((tool) => tool.type)).toEqual(["web_search", "image_generation"]);
     expect(tools[0]?.search_context_size).toBe("high");
     expect(tools[1]?.quality).toBe("high");
     expect(tools[1]?.output_format).toBe("png");
   });
 
-  test("does not send hosted tools through ChatGPT unless explicitly allowed", async () => {
-    const hostedTools = [{ type: "web_search_preview" as const }, { type: "image_generation" as const }];
-    const blocked = await captureBody(request({ hostedTools }), { chatGpt: { accountId: "acct" } });
-    expect(blocked.tools).toBeUndefined();
-    const allowed = await captureBody(request({ hostedTools }), {
-      chatGpt: { accountId: "acct" },
-      allowChatGptHostedTools: true,
-    });
+  test("an empty per-request override disables built-in hosted tools", async () => {
+    const body = await captureBody(request({ hostedTools: [] }));
+    expect(body.tools).toBeUndefined();
+  });
+
+  test("sends hosted tools through ChatGPT by default and honors an explicit disable", async () => {
+    const allowed = await captureBody(request(), { chatGpt: { accountId: "acct" } });
     expect((allowed.tools as Array<Record<string, unknown>>).map((tool) => tool.type)).toEqual([
-      "web_search_preview",
+      "web_search",
       "image_generation",
     ]);
+    const blocked = await captureBody(request(), {
+      chatGpt: { accountId: "acct" },
+      allowChatGptHostedTools: false,
+    });
+    expect(blocked.tools).toBeUndefined();
   });
   test("round trips dotted tool IDs through provider-safe names", async () => {
     let captured: Record<string, unknown> = {};

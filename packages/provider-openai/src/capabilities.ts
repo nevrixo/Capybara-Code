@@ -253,7 +253,7 @@ export function createCapabilitySnapshot(
     supportsHostedMultiAgent: normalizedNative.hostedMultiAgent === "supported",
     supportedHostedTools: [
       ...(normalizedNative.hostedMultiAgent === "supported" ? ["fs.read", "fs.read_many", "fs.list", "fs.glob", "fs.search"] : []),
-      ...(normalizedNative.webSearch === "supported" ? ["web_search_preview"] : []),
+      ...(normalizedNative.webSearch === "supported" ? ["web_search"] : []),
       ...(normalizedNative.imageGeneration === "supported" ? ["image_generation"] : []),
     ],
     cache: { explicitBreakpoints: input.supportsPromptCacheBreakpoints === true, maxWritesPerRequest: 2, minimumTtl: "30m" },

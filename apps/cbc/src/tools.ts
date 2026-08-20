@@ -12,13 +12,15 @@
  */
 
 import { createHash } from "node:crypto";
+import { join } from "node:path";
 import type { ToolExecutor } from "@cbc/agent-kernel";
 import { isSensitivePath } from "@cbc/context-engine";
 import { actionHash, classifyCommand, type ProposedAction } from "@cbc/permissions";
+import type { GeneratedImageOutput } from "@cbc/provider-openai";
 import { RuntimeRpcError, type CapabilityReceipt, type ToolErrorCode } from "@cbc/protocol";
 import { errorResult, okResult, type ArtifactRef, type ToolResult } from "@cbc/tool-registry";
 
-import type { Host } from "./host.ts";
+import { resolvePaths, type Host } from "./host.ts";
 import type { ProcessOutcome, Runtime } from "./runtime.ts";
 import { normalizePath } from "./normalizer.ts";
 
@@ -44,6 +46,11 @@ export interface Execution {
   text?: string;
   exitCode?: number;
   durationMs?: number;
+}
+
+export interface StoredGeneratedImage {
+  readonly artifact?: ArtifactRef;
+  readonly outputPath?: string;
 }
 
 export interface ToolObservationEnvelope {
@@ -876,6 +883,65 @@ export class RuntimeToolExecutor implements ToolExecutor {
       // instead of pointing at a handle that does not resolve.
       return undefined;
     }
+  }
+
+  async saveGeneratedImage(
+    callId: string,
+    image: GeneratedImageOutput,
+  ): Promise<StoredGeneratedImage> {
+    const scope = this.#options.scope?.() ?? {};
+    const safeCallId = callId.replace(/[^A-Za-z0-9_-]/gu, "").slice(-24) || "result";
+    const extension = image.outputFormat === "jpeg" ? "jpg" : image.outputFormat;
+    const displayName = `generated-image-${safeCallId}.${extension}`;
+    let artifact: ArtifactRef | undefined;
+
+    try {
+      const response = (await this.#options.runtime.createArtifact({
+        mediaType: image.mediaType,
+        contentBase64: image.base64,
+        raw: true,
+        displayName,
+        retention: "session",
+        ...(this.#options.sessionId !== undefined ? { sessionId: this.#options.sessionId } : {}),
+        ...(scope.turnId !== undefined ? { turnId: scope.turnId } : {}),
+      })) as { artifact?: Partial<ArtifactRef> & Record<string, unknown> };
+      const stored = response.artifact;
+      if (stored !== undefined && typeof stored.id === "string" && typeof stored.digest === "string") {
+        artifact = {
+          id: stored.id,
+          digest: stored.digest,
+          mediaType: typeof stored.mediaType === "string" ? stored.mediaType : image.mediaType,
+          bytes: typeof stored.bytes === "number" ? stored.bytes : Buffer.from(image.base64, "base64").byteLength,
+          redaction: stored.redaction === "redacted" || stored.redaction === "derived" ? stored.redaction : "raw",
+          displayName,
+          retentionClass:
+            stored.retentionClass === "temporary" || stored.retentionClass === "pinned"
+              ? stored.retentionClass
+              : "session",
+        };
+        this.#spilled.push(artifact);
+      }
+    } catch {
+      // A user-facing file can still preserve the result when the artifact sidecar is unavailable.
+    }
+
+    let outputPath: string | undefined;
+    if (this.#options.host.fs.writeBytes !== undefined) {
+      try {
+        const bytes = Buffer.from(image.base64, "base64");
+        if (bytes.byteLength > 0) {
+          outputPath = join(resolvePaths(this.#options.host).data, "generated-images", displayName);
+          await this.#options.host.fs.writeBytes(outputPath, bytes);
+        }
+      } catch {
+        outputPath = undefined;
+      }
+    }
+
+    return {
+      ...(artifact !== undefined ? { artifact } : {}),
+      ...(outputPath !== undefined ? { outputPath } : {}),
+    };
   }
 
   // -------------------------------------------------------------------------

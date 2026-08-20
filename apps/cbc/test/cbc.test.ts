@@ -133,7 +133,7 @@ import { collapseDotSegments, resolveWorkspace } from "../src/commands/context.t
 import { testCommandFor } from "../src/agent.ts";
 import { resolveChildProfile } from "../src/subagent-bridge.ts";
 import { ReadCache, renderProcessOutcome, RuntimeToolExecutor, toolErrorFrom } from "../src/tools.ts";
-import { buildProvider, safetyIdentifierFor } from "../src/provider.ts";
+import { buildProvider, hostedToolsFromEnvironment, safetyIdentifierFor } from "../src/provider.ts";
 import { RuntimeRpcError } from "@cbc/protocol";
 
 // ---------------------------------------------------------------------------
@@ -144,6 +144,7 @@ interface FakeHost extends Host {
   readonly out: string[];
   readonly err: string[];
   readonly files: Map<string, string>;
+  readonly binaryFiles: Map<string, Uint8Array>;
   readonly prompts: string[];
   answers: string[];
   selections: number[];
@@ -163,6 +164,7 @@ function createFakeHost(options: {
   const out: string[] = [];
   const err: string[] = [];
   const files = new Map<string, string>();
+  const binaryFiles = new Map<string, Uint8Array>();
   const prompts: string[] = [];
   const answers: string[] = [];
   const selections: number[] = [];
@@ -202,6 +204,9 @@ function createFakeHost(options: {
     },
     write: async (path, content) => {
       files.set(normalize(path), content);
+    },
+    writeBytes: async (path, content) => {
+      binaryFiles.set(normalize(path), Uint8Array.from(content));
     },
     atomicWrite: async (path, content) => {
       files.set(normalize(path), content);
@@ -248,6 +253,7 @@ function createFakeHost(options: {
     out,
     err,
     files,
+    binaryFiles,
     prompts,
     answers,
     selections,
@@ -5185,6 +5191,57 @@ describe("tool execution helpers", () => {
     expect(result.result.summary).toContain("subagent");
   });
 
+  test("generated images are stored as raw artifacts and user-facing binary files", async () => {
+    const host = createFakeHost({ env: { CAPYBARA_DATA_DIR: "/capy-data" } });
+    const created: Record<string, unknown>[] = [];
+    const runtime = {
+      workspace: "/work/project",
+      async createArtifact(params: Record<string, unknown>) {
+        created.push(params);
+        const bytes = Buffer.from(String(params.contentBase64), "base64").byteLength;
+        return {
+          artifact: {
+            id: "art_image",
+            digest: "sha256:image",
+            mediaType: params.mediaType,
+            bytes,
+            redaction: "raw",
+            displayName: params.displayName,
+            retentionClass: "session",
+          },
+        };
+      },
+    };
+    const executor = new RuntimeToolExecutor({
+      runtime: runtime as never,
+      host,
+      sessionId: "session-1",
+      scope: () => ({ turnId: "turn-1", agentId: "root" }),
+    });
+    const base64 = Buffer.from("image-bytes").toString("base64");
+
+    const stored = await executor.saveGeneratedImage("img_1", {
+      base64,
+      mediaType: "image/png",
+      outputFormat: "png",
+    });
+
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({
+      contentBase64: base64,
+      mediaType: "image/png",
+      raw: true,
+      retention: "session",
+      sessionId: "session-1",
+      turnId: "turn-1",
+    });
+    expect(stored.artifact?.id).toBe("art_image");
+    expect(stored.outputPath).toContain("generated-images");
+    expect(stored.outputPath).toContain("generated-image-img_1.png");
+    const savedBytes = [...host.binaryFiles.values()][0];
+    expect(Buffer.from(savedBytes ?? []).toString("utf8")).toBe("image-bytes");
+  });
+
   test("runtime capability issuance preserves the runtime receiver", async () => {
     const host = createFakeHost();
     const runtime = {
@@ -5801,6 +5858,21 @@ describe("auth mode", () => {
     const paths = resolvePaths(host);
     await host.fs.write(authModePath(paths), JSON.stringify({ version: 1, mode: "quantum" }));
     expect(await readAuthMode(host, paths)).toBeUndefined();
+  });
+});
+
+describe("hosted tool environment", () => {
+  test("unset keeps the built-in defaults and off disables them", () => {
+    expect(hostedToolsFromEnvironment(undefined)).toBeUndefined();
+    expect(hostedToolsFromEnvironment("off")).toEqual([]);
+  });
+
+  test("uses current tool names while accepting the legacy web preview alias", () => {
+    expect(hostedToolsFromEnvironment("web,image")).toEqual([
+      { type: "web_search" },
+      { type: "image_generation" },
+    ]);
+    expect(hostedToolsFromEnvironment("web_search_preview")).toEqual([{ type: "web_search_preview" }]);
   });
 });
 

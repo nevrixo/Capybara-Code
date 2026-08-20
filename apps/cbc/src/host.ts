@@ -49,6 +49,8 @@ export interface HostFs {
   read(path: string): Promise<string | undefined>;
   /** Optional bounded read used for metadata-only startup discovery. */
   readPrefix?(path: string, maxBytes: number): Promise<HostReadPrefixResult | undefined>;
+  /** Optional binary write used for user-facing generated media. */
+  writeBytes?(path: string, content: Uint8Array): Promise<void>;
   write(path: string, content: string): Promise<void>;
   /** Create a new file without replacing an existing one. */
   writeNew?(path: string, content: string): Promise<boolean>;

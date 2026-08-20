@@ -25,6 +25,7 @@ import {
   clampEffortToModel,
   selectEffort,
   type ComplexityFeatures,
+  type GeneratedImageOutput,
   type InferencePolicyDecision,
   type InferencePolicyPort,
   type ModelEvent,
@@ -483,6 +484,11 @@ export interface ActionNormalizer {
   normalize(callId: string, toolId: string, args: Record<string, unknown>): ProposedAction;
 }
 
+export interface GeneratedImageHandle {
+  readonly artifactId?: string;
+  readonly outputPath?: string;
+}
+
 /** Who owns conversation continuation between provider requests (§10.6). */
 export type ContinuationMode = "client_managed" | "previous_response";
 
@@ -556,6 +562,11 @@ export interface KernelOptions {
       readonly interactionMode: "build" | "plan";
     },
   ) => void;
+  /** Persist provider-generated image bytes outside the journal. */
+  readonly onGeneratedImage?: (
+    callId: string,
+    image: GeneratedImageOutput,
+  ) => Promise<GeneratedImageHandle>;
   /** Let the utility controller choose a tier when the config profile is auto. */
   readonly autoRoute?: boolean;
   /** @deprecated Routing measures the exact compiled prompt instead. */
@@ -2188,6 +2199,8 @@ export class AgentKernel {
       signal,
     );
     const calls = new Map<string, PendingCall>();
+    const hostedStartedAt = new Map<string, number>();
+    const generatedImageNotes: string[] = [];
     let failure: ProviderError | undefined;
     let incomplete: string | undefined;
     // An output item may be announced and then completed. Preserve opaque
@@ -2214,7 +2227,8 @@ export class AgentKernel {
             event.type === "reasoning.text.done" ||
             event.type === "reasoning.summary.delta" ||
             event.type === "text.delta" ||
-            event.type === "tool.call.arguments.delta")
+            event.type === "tool.call.arguments.delta" ||
+            event.type === "hosted.tool.started")
         ) {
           firstDeltaObserved = true;
           emit("provider.first_delta", {
@@ -2382,6 +2396,80 @@ export class AgentKernel {
             ...(event.call.agentId !== undefined ? { agentId: event.call.agentId } : {}),
           });
           break;
+        case "hosted.tool.started":
+          if (thinkingAssembler.hasOpenSegment) {
+            thinkingLiveId = thinkingAssembler.boundary("tool", request.requestId).part.thinkingId;
+          }
+          hostedStartedAt.set(event.callId, this.#now());
+          emit("tool.started", {
+            callId: event.callId,
+            toolId: event.name,
+            arguments: { providerHosted: true },
+            display: event.display,
+          });
+          break;
+        case "hosted.tool.completed": {
+          const startedAt = hostedStartedAt.get(event.callId) ?? providerStartedAt;
+          const durationMs = Math.max(0, this.#now() - startedAt);
+          const artifactIds: string[] = [];
+          if (event.image !== undefined) {
+            if (this.#options.onGeneratedImage === undefined) {
+              const message = "the host has no generated-image persistence handler";
+              emit("tool.failed", {
+                callId: event.callId,
+                toolId: event.name,
+                code: "INTERNAL",
+                message,
+                durationMs,
+              });
+              generatedImageNotes.push(`Image generation finished, but ${message}.`);
+              break;
+            }
+            try {
+              const stored = await this.#options.onGeneratedImage(event.callId, event.image);
+              if (stored.artifactId === undefined && stored.outputPath === undefined) {
+                throw new Error("the generated image could not be stored");
+              }
+              if (stored.artifactId !== undefined) artifactIds.push(stored.artifactId);
+              generatedImageNotes.push(
+                stored.outputPath !== undefined
+                  ? `Generated image saved to \`${stored.outputPath}\`${stored.artifactId !== undefined ? ` (artifact \`${stored.artifactId}\`)` : ""}.`
+                  : `Generated image stored as artifact \`${stored.artifactId}\`.`,
+              );
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              emit("tool.failed", {
+                callId: event.callId,
+                toolId: event.name,
+                code: "INTERNAL",
+                message,
+                durationMs,
+              });
+              generatedImageNotes.push(`Image generation finished, but the result could not be saved: ${message}.`);
+              break;
+            }
+          }
+          emit("tool.completed", {
+            callId: event.callId,
+            toolId: event.name,
+            summary: event.summary,
+            durationMs,
+            artifacts: artifactIds,
+          });
+          break;
+        }
+        case "hosted.tool.failed":
+          if (event.name === "image_generation") {
+            generatedImageNotes.push(`Image generation failed: ${event.message}`);
+          }
+          emit("tool.failed", {
+            callId: event.callId,
+            toolId: event.name,
+            code: "PROVIDER_ERROR",
+            message: event.message,
+            durationMs: Math.max(0, this.#now() - (hostedStartedAt.get(event.callId) ?? providerStartedAt)),
+          });
+          break;
         case "response.item":
           if (event.authoritative === true && event.item.kind === "message" && event.item.text !== undefined) {
             authoritativeMessages.set(event.item.itemId, event.item);
@@ -2470,7 +2558,10 @@ export class AgentKernel {
         : fallbackReasoningText;
     // The done item contains the complete message; prefer it over a partial delta
     // sequence when both are present.
-    const text = fallbackText.trim().length > 0 ? fallbackText : textParts.join("");
+    const providerText = fallbackText.trim().length > 0 ? fallbackText : textParts.join("");
+    const text = generatedImageNotes.length > 0
+      ? [providerText.trim(), generatedImageNotes.join("\n")].filter((part) => part.length > 0).join("\n\n")
+      : providerText;
     const commentaryItemId = fallbackCommentaryItems.at(-1)?.itemId ?? lastCommentaryItemId;
     const reasoningItemId = orderedAuthoritativeReasoning.at(-1)?.itemId ?? lastReasoningProviderItemId;
     const reasoningTextItemId = orderedAuthoritativeReasoning

@@ -6,8 +6,8 @@
  * provider object (§10.1, §19.4).
  *
  * §10.14: provider-hosted shell, file mutation, multi-agent, and programmatic
- * tool calling remain disabled. Web search and image generation are available only
- * through explicit, capability-checked hosted-tool opt-in.
+ * tool calling remain disabled. Capability-checked web search and image generation
+ * are built in by default and can be disabled explicitly.
  */
 
 import { createHash } from "node:crypto";
@@ -29,6 +29,8 @@ import {
   supportsField,
   type CredentialLease,
   type CredentialValidation,
+  type GeneratedImageOutput,
+  type HostedToolCallName,
   type ModelAvailabilityReport,
   type ModelDescriptor,
   type ModelEvent,
@@ -84,9 +86,9 @@ const RESERVED_HEADERS: ReadonlySet<string> = new Set([
   "user-agent",
 ]);
 
-/** Built-in Responses tools that the application can opt into for a session. */
+/** Safe, read/generate-only Responses tools exposed in every capable session. */
 export const DEFAULT_HOSTED_TOOLS: readonly HostedTool[] = [
-  { type: "web_search_preview" },
+  { type: "web_search" },
   { type: "image_generation" },
 ];
 
@@ -115,9 +117,9 @@ export interface OpenAiProviderOptions {
    * `RESERVED_HEADERS` are ignored.
    */
   readonly headers?: Readonly<Record<string, string>>;
-  /** Optional built-in Responses tools to expose for each request. */
+  /** Optional built-in tool override. An empty array disables hosted tools. */
   readonly hostedTools?: readonly HostedTool[];
-  /** Explicit opt-in for hosted tools on the ChatGPT account backend. */
+  /** Set false to disable hosted tools on the ChatGPT account backend. */
   readonly allowChatGptHostedTools?: boolean;
   /** OpenCode-style ChatGPT transport. Capybara still owns the agent loop. */
   /** Turn transport; account-backed ChatGPT sessions always use full HTTP replay. */
@@ -146,7 +148,7 @@ export class OpenAiResponsesProvider implements ModelProvider {
     if (this.#options.chatGpt !== undefined) {
       const accountCapability = chatGptCodexCapability(modelId);
       if (accountCapability === undefined) return undefined;
-      const accountHostedState = this.#options.allowChatGptHostedTools === true ? "supported" : "unknown";
+      const accountHostedState = this.#options.allowChatGptHostedTools !== false ? "supported" : "unknown";
       return mergeCapabilitySnapshot(accountCapability, {
         native: {
           programmaticToolCalling: "unsupported",
@@ -384,16 +386,18 @@ export class OpenAiResponsesProvider implements ModelProvider {
     request: ModelRequest,
     model: ModelDescriptor | undefined,
   ): HostedTool[] {
-    const requested = request.hostedTools ?? this.#options.hostedTools ?? [];
+    const requested = request.hostedTools ?? this.#options.hostedTools ?? DEFAULT_HOSTED_TOOLS;
     if (requested.length === 0 || model === undefined) return [];
     const capability = this.capabilitySnapshot(model.id);
     if (capability === undefined) return [];
     return requested.filter((tool) => {
-      if (this.#options.chatGpt !== undefined && this.#options.allowChatGptHostedTools !== true) return false;
+      if (this.#options.chatGpt !== undefined && this.#options.allowChatGptHostedTools === false) return false;
       if (tool.type === "tool_search") {
         return this.#options.enableToolSearch === true && this.capabilities.toolSearch;
       }
-      const feature = tool.type === "web_search_preview" ? "webSearch" : "imageGeneration";
+      const feature = tool.type === "web_search" || tool.type === "web_search_preview"
+        ? "webSearch"
+        : "imageGeneration";
       return capabilitySupports(capability, feature);
     });
   }
@@ -516,7 +520,7 @@ export class OpenAiResponsesProvider implements ModelProvider {
 
 function serializeHostedTool(tool: HostedTool): Record<string, unknown> {
   if (tool.type === "tool_search") return { type: tool.type };
-  if (tool.type === "web_search_preview") {
+  if (tool.type !== "image_generation") {
     return {
       type: tool.type,
       ...(tool.searchContextSize !== undefined ? { search_context_size: tool.searchContextSize } : {}),
@@ -658,6 +662,7 @@ export async function* parseResponseStream(
 
   /** Tool call assembly state, keyed by the provider's item id. */
   const calls = new Map<string, { callId: string; name: string; argumentsText: string; emitted: boolean; callerId?: string; programId?: string; agentId?: string }>();
+  const hostedCalls = new Map<string, HostedCallEntry>();
   const seenDeltas = new Set<string>();
   let terminal: "completed" | "incomplete" | "failed" | undefined;
 
@@ -702,7 +707,7 @@ export async function* parseResponseStream(
         }
 
         if (terminal !== undefined) continue;
-        for (const event of translate(parsed, calls, seenDeltas, fromProviderToolName)) {
+        for (const event of translate(parsed, calls, hostedCalls, seenDeltas, fromProviderToolName)) {
           const nextTerminal = responseTerminalKind(event);
           if (nextTerminal !== undefined) {
             // A provider completion proves pending calls are final even if a
@@ -777,6 +782,7 @@ function withSequence<T extends object>(event: T, sequence: number | undefined):
 function* translate(
   frame: Record<string, unknown>,
   calls: Map<string, { callId: string; name: string; argumentsText: string; emitted: boolean; callerId?: string; programId?: string; agentId?: string }>,
+  hostedCalls: Map<string, HostedCallEntry>,
   seenDeltas: Set<string>,
   fromProviderToolName: (name: string) => string,
 ): Generator<ModelEvent> {
@@ -847,9 +853,29 @@ function* translate(
       return;
     }
 
+    case "response.web_search_call.in_progress":
+    case "response.web_search_call.searching":
+    case "response.image_generation_call.in_progress":
+    case "response.image_generation_call.generating":
+    case "response.image_generation_call.partial_image": {
+      const name: HostedToolCallName = type.includes("web_search") ? "web_search" : "image_generation";
+      const entry = hostedCalls.get(itemId) ?? { name, started: false, terminal: false };
+      hostedCalls.set(itemId, entry);
+      if (!entry.started) {
+        entry.started = true;
+        yield hostedStartedEvent(itemId, name);
+      }
+      return;
+    }
+
     case "response.output_item.added": {
       const item = frame.item as Record<string, unknown> | undefined;
       if (item === undefined) return;
+      const hostedEvents = hostedEventsFromItem(item, itemId, hostedCalls, false);
+      if (hostedEvents !== undefined) {
+        yield* hostedEvents;
+        return;
+      }
       if (item.type === "function_call") {
         const callId = typeof item.call_id === "string" ? item.call_id : itemId;
         const callerId = typeof item.caller_id === "string" ? item.caller_id : undefined;
@@ -891,6 +917,11 @@ function* translate(
     case "response.output_item.done": {
       const item = frame.item as Record<string, unknown> | undefined;
       if (item === undefined) return;
+      const hostedEvents = hostedEventsFromItem(item, itemId, hostedCalls, true);
+      if (hostedEvents !== undefined) {
+        yield* hostedEvents;
+        return;
+      }
       if (item.type !== "function_call") {
         const normalized = normalizeResponseItem(item, itemId, sequence);
         if (normalized !== undefined) yield { type: "response.item", item: normalized, authoritative: true };
@@ -909,6 +940,36 @@ function* translate(
 
     case "response.completed": {
       const response = frame.response as Record<string, unknown> | undefined;
+      const output = Array.isArray(response?.output) ? response.output : [];
+      for (const [index, rawItem] of output.entries()) {
+        if (!isRecord(rawItem)) continue;
+        const completedItemId = typeof rawItem.id === "string" && rawItem.id.length > 0
+          ? rawItem.id
+          : `completed:${index}`;
+        const hostedEvents = hostedEventsFromItem(rawItem, completedItemId, hostedCalls, true, true);
+        if (hostedEvents !== undefined) {
+          yield* hostedEvents;
+          continue;
+        }
+        if (rawItem.type === "function_call") {
+          const callId = typeof rawItem.call_id === "string" ? rawItem.call_id : completedItemId;
+          const existing = calls.get(completedItemId);
+          if (existing?.emitted === true) continue;
+          const entry = existing ?? {
+            callId,
+            name: fromProviderToolName(typeof rawItem.name === "string" ? rawItem.name : ""),
+            argumentsText: "",
+            emitted: false,
+          };
+          entry.argumentsText = typeof rawItem.arguments === "string" ? rawItem.arguments : entry.argumentsText;
+          entry.emitted = true;
+          calls.set(completedItemId, entry);
+          yield { type: "tool.call.completed", call: toolCallFromEntry(entry, entry.argumentsText) };
+          continue;
+        }
+        const normalized = normalizeResponseItem(rawItem, completedItemId, index);
+        if (normalized !== undefined) yield { type: "response.item", item: normalized, authoritative: true };
+      }
       const usage = extractUsage(response?.usage);
       if (usage) yield { type: "usage", usage };
       yield {
@@ -998,6 +1059,114 @@ function toolCallFromEntry(
     ...(entry.agentId !== undefined ? { agentId: entry.agentId } : {}),
   };
 }
+
+interface HostedCallEntry {
+  readonly name: HostedToolCallName;
+  started: boolean;
+  terminal: boolean;
+}
+
+function hostedStartedEvent(callId: string, name: HostedToolCallName): ModelEvent {
+  return {
+    type: "hosted.tool.started",
+    callId,
+    name,
+    display: name === "web_search" ? "Searching the web" : "Generating an image",
+  };
+}
+
+function hostedEventsFromItem(
+  item: Record<string, unknown>,
+  fallbackId: string,
+  calls: Map<string, HostedCallEntry>,
+  done: boolean,
+  finalResponse = false,
+): ModelEvent[] | undefined {
+  const rawType = typeof item.type === "string" ? item.type : "";
+  const name: HostedToolCallName | undefined = rawType === "web_search_call"
+    ? "web_search"
+    : rawType === "image_generation_call"
+      ? "image_generation"
+      : undefined;
+  if (name === undefined) return undefined;
+
+  const callId = typeof item.id === "string" && item.id.length > 0
+    ? item.id
+    : typeof item.call_id === "string" && item.call_id.length > 0
+      ? item.call_id
+      : fallbackId;
+  const entry = calls.get(callId) ?? { name, started: false, terminal: false };
+  calls.set(callId, entry);
+  const events: ModelEvent[] = [];
+  if (!entry.started) {
+    entry.started = true;
+    events.push(hostedStartedEvent(callId, name));
+  }
+  if (!done || entry.terminal) return events;
+
+  const status = typeof item.status === "string" ? item.status : "completed";
+  if (status === "failed" || status === "cancelled" || (item.error !== undefined && item.error !== null)) {
+    entry.terminal = true;
+    const error = isRecord(item.error) && typeof item.error.message === "string"
+      ? item.error.message
+      : `${name === "web_search" ? "Web search" : "Image generation"} ${status}`;
+    events.push({ type: "hosted.tool.failed", callId, name, message: error });
+    return events;
+  }
+  if (name === "web_search") {
+    entry.terminal = true;
+    events.push({ type: "hosted.tool.completed", callId, name, summary: "Web search completed" });
+    return events;
+  }
+
+  const image = generatedImageFromItem(item);
+  if (image === undefined) {
+    if (!finalResponse) return events;
+    entry.terminal = true;
+    events.push({
+      type: "hosted.tool.failed",
+      callId,
+      name,
+      message: "Image generation completed without image data",
+    });
+    return events;
+  }
+  entry.terminal = true;
+  events.push({
+    type: "hosted.tool.completed",
+    callId,
+    name,
+    summary: "Image generated",
+    image,
+  });
+  return events;
+}
+
+function generatedImageFromItem(item: Record<string, unknown>): GeneratedImageOutput | undefined {
+  const result = typeof item.result === "string"
+    ? item.result
+    : isRecord(item.result) && typeof item.result.b64_json === "string"
+      ? item.result.b64_json
+      : isRecord(item.result) && typeof item.result.data === "string"
+        ? item.result.data
+        : undefined;
+  if (result === undefined || result.length === 0) return undefined;
+  const declaredFormat = item.output_format;
+  const outputFormat: GeneratedImageOutput["outputFormat"] = declaredFormat === "jpeg" || declaredFormat === "webp" || declaredFormat === "png"
+    ? declaredFormat
+    : result.startsWith("/9j/")
+      ? "jpeg"
+      : result.startsWith("UklGR")
+        ? "webp"
+        : "png";
+  return {
+    base64: result,
+    outputFormat,
+    mediaType: outputFormat === "jpeg" ? "image/jpeg" : outputFormat === "webp" ? "image/webp" : "image/png",
+    ...(typeof item.revised_prompt === "string" ? { revisedPrompt: item.revised_prompt } : {}),
+  };
+}
+
 function normalizeResponseItem(item: Record<string, unknown>, itemId: string, sequence: number | undefined): ModelResponseItem | undefined {
   const rawType = typeof item.type === "string" ? item.type : "unknown";
   const callerId = typeof item.caller_id === "string" ? item.caller_id : undefined;
@@ -1006,11 +1175,7 @@ function normalizeResponseItem(item: Record<string, unknown>, itemId: string, se
   const base = { itemId, ...(sequence !== undefined ? { sequence } : {}), rawType, ...(callerId !== undefined ? { callerId } : {}), ...(programId !== undefined ? { programId } : {}), ...(agentId !== undefined ? { agentId } : {}) };
   if (rawType === "message") {
     const content = Array.isArray(item.content) ? item.content : [];
-    const text = content.map((part) => {
-      if (typeof part === "string") return part;
-      if (part !== null && typeof part === "object" && typeof (part as Record<string, unknown>).text === "string") return (part as Record<string, unknown>).text as string;
-      return "";
-    }).join("");
+    const text = content.map(renderMessagePart).join("");
     return { ...base, kind: "message", ...(text.length > 0 ? { text } : {}), ...(item.phase === "commentary" || item.phase === "final_answer" ? { phase: item.phase } : {}) };
   }
   if (rawType === "function_call_output") {
@@ -1032,6 +1197,69 @@ function normalizeResponseItem(item: Record<string, unknown>, itemId: string, se
   }
   return { ...base, kind: "unknown" };
 }
+
+function renderMessagePart(part: unknown): string {
+  if (typeof part === "string") return part;
+  if (!isRecord(part) || typeof part.text !== "string") return "";
+  const citations = Array.isArray(part.annotations)
+    ? part.annotations.filter((annotation): annotation is Record<string, unknown> =>
+        isRecord(annotation) &&
+        annotation.type === "url_citation" &&
+        typeof annotation.url === "string" &&
+        /^https?:\/\/[^\s]+$/iu.test(annotation.url),
+      )
+    : [];
+  if (citations.length === 0) return part.text;
+
+  let text = part.text;
+  let lastStart = text.length;
+  const unplaced: Record<string, unknown>[] = [];
+  const descending = [...citations].sort((left, right) =>
+    (typeof right.start_index === "number" ? right.start_index : -1) -
+    (typeof left.start_index === "number" ? left.start_index : -1),
+  );
+  for (const citation of descending) {
+    const start = citation.start_index;
+    const end = citation.end_index;
+    if (
+      typeof start !== "number" ||
+      typeof end !== "number" ||
+      start < 0 ||
+      end <= start ||
+      end > text.length ||
+      end > lastStart
+    ) {
+      unplaced.push(citation);
+      continue;
+    }
+    const label = text.slice(start, end);
+    const url = citation.url as string;
+    text = `${text.slice(0, start)}[${escapeMarkdownLabel(label)}](${escapeMarkdownUrl(url)})${text.slice(end)}`;
+    lastStart = start;
+  }
+  if (unplaced.length === 0) return text;
+
+  const seen = new Set<string>();
+  const links = unplaced.flatMap((citation) => {
+    const url = citation.url as string;
+    if (seen.has(url)) return [];
+    seen.add(url);
+    const title = typeof citation.title === "string" && citation.title.length > 0
+      ? citation.title
+      : url;
+    return [`- [${escapeMarkdownLabel(title)}](${escapeMarkdownUrl(url)})`];
+  });
+  return links.length > 0 ? `${text}\n\nSources:\n${links.join("\n")}` : text;
+}
+
+function escapeMarkdownLabel(value: string): string {
+  return value.replace(/([\\\[\]])/gu, "\\$1");
+}
+
+function escapeMarkdownUrl(value: string): string {
+  return value.replace(/\)/gu, "%29").replace(/\(/gu, "%28");
+}
+
 function boundedOpaque(value: unknown): string | undefined {
   const text = typeof value === "string" ? value : JSON.stringify(value);
   return text === undefined ? undefined : text.slice(0, 65_536);

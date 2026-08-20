@@ -762,6 +762,16 @@ export class AgentSession {
       provider: options.provider,
       registry: this.registry,
       executor: this.executor,
+      onGeneratedImage: async (callId, image) => {
+        const stored = await this.executor.saveGeneratedImage(callId, image);
+        if (stored.artifact !== undefined) {
+          this.context.recordArtifactHandle(stored.artifact, `image_generation ${callId}`);
+        }
+        return {
+          ...(stored.artifact !== undefined ? { artifactId: stored.artifact.id } : {}),
+          ...(stored.outputPath !== undefined ? { outputPath: stored.outputPath } : {}),
+        };
+      },
       approvals: options.approvals,
       normalizer: new HostActionNormalizer({
         defaultCwd: ".",

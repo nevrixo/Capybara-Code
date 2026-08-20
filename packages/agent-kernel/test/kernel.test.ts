@@ -97,6 +97,7 @@ interface HarnessOptions {
   readonly autoRoute?: boolean;
   readonly onRouteDecided?: KernelOptions["onRouteDecided"];
   readonly onPromptCompiled?: KernelOptions["onPromptCompiled"];
+  readonly onGeneratedImage?: KernelOptions["onGeneratedImage"];
   readonly inferenceContextTokens?: KernelOptions["inferenceContextTokens"];
   readonly continuationMode?: KernelOptions["continuationMode"];
   readonly promptInputs?: KernelOptions["promptInputs"];
@@ -241,6 +242,7 @@ function harness(options: HarnessOptions) {
     ...(options.autoRoute !== undefined ? { autoRoute: options.autoRoute } : {}),
     ...(options.onRouteDecided !== undefined ? { onRouteDecided: options.onRouteDecided } : {}),
     ...(options.onPromptCompiled !== undefined ? { onPromptCompiled: options.onPromptCompiled } : {}),
+    ...(options.onGeneratedImage !== undefined ? { onGeneratedImage: options.onGeneratedImage } : {}),
     ...(options.inferenceContextTokens !== undefined
       ? { inferenceContextTokens: options.inferenceContextTokens }
       : {}),
@@ -1419,6 +1421,66 @@ describe("multi-step loop (AC-08, AC-47)", () => {
       }),
     );
   });
+
+  test("persists a hosted generated image and exposes its path in the final answer", async () => {
+    const base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB";
+    const saved: Array<{ callId: string; base64: string }> = [];
+    const provider = new InlineProvider(async function* () {
+      yield { type: "response.started", requestId: "image-request" };
+      yield {
+        type: "hosted.tool.started",
+        callId: "img_1",
+        name: "image_generation",
+        display: "Generating an image",
+      };
+      yield {
+        type: "hosted.tool.completed",
+        callId: "img_1",
+        name: "image_generation",
+        summary: "Image generated",
+        image: {
+          base64,
+          mediaType: "image/png",
+          outputFormat: "png",
+        },
+      };
+      yield { type: "response.completed", responseId: "image-response" };
+    });
+    const { kernel, events } = harness({
+      steps: [],
+      provider,
+      onGeneratedImage: async (callId, image) => {
+        saved.push({ callId, base64: image.base64 });
+        return {
+          artifactId: "art_image",
+          outputPath: "C:\\capybara\\generated-images\\capybara.png",
+        };
+      },
+    });
+
+    const result = await kernel.runTurn("generate a capybara image", new AbortController().signal);
+
+    expect(saved).toEqual([{ callId: "img_1", base64 }]);
+    expect(result.state).toBe("completed");
+    expect(result.answer).toContain("C:\\capybara\\generated-images\\capybara.png");
+    expect(result.answer).toContain("art_image");
+    expect(payloadsOf(events, "tool.started")).toContainEqual({
+      callId: "img_1",
+      toolId: "image_generation",
+      arguments: { providerHosted: true },
+      display: "Generating an image",
+    });
+    expect(payloadsOf(events, "tool.completed")).toContainEqual(expect.objectContaining({
+      callId: "img_1",
+      toolId: "image_generation",
+      summary: "Image generated",
+      artifacts: ["art_image"],
+    }));
+    expect(payloadsOf(events, "assistant.final")).toContainEqual(expect.objectContaining({
+      answer: expect.stringContaining("generated-images"),
+    }));
+  });
+
   test("coalesces a synchronous provider burst by bounded text size", async () => {
     const text = "x".repeat(20_000);
     const { kernel, events } = harness({

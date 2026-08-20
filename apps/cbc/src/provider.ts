@@ -60,9 +60,9 @@ export interface BuildProviderOptions {
   readonly enableToolSearch?: boolean;
   /** Non-secret account selector extracted from the ChatGPT token. */
   readonly chatGptAccountId?: string;
-  /** Explicit Responses hosted tools; omitted keeps network-backed tools disabled. */
+  /** Optional hosted-tool override; an empty list disables built-in tools. */
   readonly hostedTools?: readonly HostedTool[];
-  /** Required to use hosted tools through the ChatGPT account backend. */
+  /** Set false to disable hosted tools through the ChatGPT account backend. */
   readonly allowChatGptHostedTools?: boolean;
 }
 
@@ -112,10 +112,9 @@ export async function buildProvider(
   const baseUrl =
     options.baseUrl !== undefined && options.baseUrl.length > 0 ? options.baseUrl : envBaseUrl;
   const hostedTools = options.hostedTools ?? hostedToolsFromEnvironment(options.host.env.CBC_HOSTED_TOOLS);
-  const allowChatGptHostedTools =
-    options.allowChatGptHostedTools !== undefined
-      ? options.allowChatGptHostedTools
-      : truthyEnvironment(options.host.env.CBC_ALLOW_CHATGPT_HOSTED_TOOLS);
+  const allowChatGptHostedTools = options.allowChatGptHostedTools
+    ?? booleanEnvironment(options.host.env.CBC_ALLOW_CHATGPT_HOSTED_TOOLS)
+    ?? true;
   return {
     provider: new OpenAiResponsesProvider({
       credential: options.credential,
@@ -144,7 +143,7 @@ export async function buildProvider(
       ...(options.nativeCompaction !== undefined ? { nativeCompaction: options.nativeCompaction } : {}),
       ...(options.compactionThresholdTokens !== undefined ? { compactionThresholdTokens: options.compactionThresholdTokens } : {}),
       ...(options.enableToolSearch !== undefined ? { enableToolSearch: options.enableToolSearch } : {}),
-      ...(isChatGpt && allowChatGptHostedTools ? { allowChatGptHostedTools: true } : {}),
+      ...(isChatGpt ? { allowChatGptHostedTools } : {}),
     }),
     credentialSource: options.credentialSource ?? options.credential.source,
     mocked: false,
@@ -152,11 +151,9 @@ export async function buildProvider(
 }
 
 /**
- * Parse the explicit hosted-tool opt-in used by the CLI.
+ * Parse the hosted-tool override used by the CLI.
  *
- * An unset variable is deliberately different from `off`: the former leaves the
- * provider default untouched, while the latter lets a shell profile disable a
- * previously supplied value without changing the code path.
+ * An unset variable leaves the built-in defaults enabled; `off` disables them.
  */
 export function hostedToolsFromEnvironment(raw: string | undefined): readonly HostedTool[] | undefined {
   const value = raw?.trim();
@@ -168,13 +165,15 @@ export function hostedToolsFromEnvironment(raw: string | undefined): readonly Ho
   for (const token of value.split(/[\s,]+/u).filter((part) => part.length > 0)) {
     const normalized = token.toLowerCase();
     const type = normalized === "web" || normalized === "web_search"
-      ? "web_search_preview"
-      : normalized === "image" || normalized === "image_generation"
+      ? "web_search"
+      : normalized === "web_search_preview"
+        ? "web_search_preview"
+        : normalized === "image" || normalized === "image_generation"
         ? "image_generation"
         : undefined;
     if (type === undefined) {
       throw new CliError(EXIT.config, `CBC_HOSTED_TOOLS contains an unsupported tool '${token}'`, [
-        "Use web_search_preview and/or image_generation, separated by commas.",
+        "Use web_search and/or image_generation, separated by commas.",
       ]);
     }
     if (seen.has(type)) continue;
@@ -184,8 +183,14 @@ export function hostedToolsFromEnvironment(raw: string | undefined): readonly Ho
   return tools;
 }
 
-function truthyEnvironment(raw: string | undefined): boolean {
-  return raw !== undefined && /^(?:1|true|yes|on)$/iu.test(raw.trim());
+function booleanEnvironment(raw: string | undefined): boolean | undefined {
+  const value = raw?.trim();
+  if (value === undefined || value.length === 0) return undefined;
+  if (/^(?:1|true|yes|on)$/iu.test(value)) return true;
+  if (/^(?:0|false|no|off)$/iu.test(value)) return false;
+  throw new CliError(EXIT.config, "CBC_ALLOW_CHATGPT_HOSTED_TOOLS must be a boolean", [
+    "Use true/false, yes/no, on/off, or 1/0.",
+  ]);
 }
 
 /**

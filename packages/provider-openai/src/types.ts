@@ -73,6 +73,16 @@ export interface ProviderCapabilities {
   readonly toolSearch: boolean;
 }
 
+/** Provider-hosted calls surfaced to the kernel for progress and durable outputs. */
+export type HostedToolCallName = "web_search" | "image_generation";
+
+export interface GeneratedImageOutput {
+  readonly base64: string;
+  readonly mediaType: "image/png" | "image/jpeg" | "image/webp";
+  readonly outputFormat: "png" | "jpeg" | "webp";
+  readonly revisedPrompt?: string;
+}
+
 /** §10.2 normalized model events. */
 export type ModelEvent =
   | { type: "response.started"; requestId: string; connectionReused?: boolean }
@@ -87,6 +97,9 @@ export type ModelEvent =
   | { type: "tool.call.started"; callId: string; name: string; callerId?: string; programId?: string; agentId?: string }
   | { type: "tool.call.arguments.delta"; callId: string; delta: string }
   | { type: "tool.call.completed"; call: ModelToolCall }
+  | { type: "hosted.tool.started"; callId: string; name: HostedToolCallName; display: string }
+  | { type: "hosted.tool.completed"; callId: string; name: HostedToolCallName; summary: string; image?: GeneratedImageOutput }
+  | { type: "hosted.tool.failed"; callId: string; name: HostedToolCallName; message: string }
   | { type: "usage"; usage: ModelUsage }
   | { type: "response.completed"; responseId: string }
   | { type: "response.incomplete"; reason: string; responseId?: string }
@@ -164,7 +177,8 @@ export type ModelContentPart =
 /** Provider-hosted tools available on the Responses API surface. */
 export type HostedTool =
   | {
-      readonly type: "web_search_preview";
+      /** `web_search_preview` remains accepted for older compatible endpoints. */
+      readonly type: "web_search" | "web_search_preview";
       readonly searchContextSize?: "low" | "medium" | "high";
       readonly userLocation?: {
         readonly type: "approximate";
@@ -202,7 +216,7 @@ export interface ModelRequest {
   readonly model: string;
   readonly input: ModelInputItem[];
   readonly tools: ModelToolSchema[];
-  /** Optional built-in tools; omitted by default to preserve provider-neutral requests. */
+  /** Optional per-request hosted-tool override. Omitted uses the provider defaults. */
   readonly hostedTools?: readonly HostedTool[];
   readonly reasoning: {
     readonly mode: ReasoningMode;
