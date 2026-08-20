@@ -661,7 +661,7 @@ export class SubagentBridge {
       reasoningMode: resolvedProfile.reasoningMode,
       reasoningEffort: resolvedProfile.reasoningEffort,
       reasoningEffortLocked: true,
-      reasoningSummary: this.#options.config.model.reasoning.summary,
+      reasoningSummary: this.#options.config.model.reasoning.providerSummary === "off" ? "none" : "auto",
       ...(this.#options.inferencePolicy !== undefined ? { inferencePolicy: this.#options.inferencePolicy } : {}),
       maxOutputTokens: this.#options.config.model.maxOutputTokens,
       reserveOutputTokens: this.#options.config.model.context.reserveOutputTokens,

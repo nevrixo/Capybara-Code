@@ -780,7 +780,7 @@ export class AgentSession {
       reasoningMode: options.config.model.reasoningMode,
       reasoningEffort: options.config.model.reasoningEffort,
       // Provider generation is independent from the current TUI disclosure mode.
-      reasoningSummary: options.config.model.reasoning.summary,
+      reasoningSummary: options.config.model.reasoning.providerSummary === "off" ? "none" : "auto",
       inferencePolicy: this.inferencePolicy,
       reserveOutputTokens: this.#options.config.model.context.reserveOutputTokens,
       onRouteDecided: (route) => {
