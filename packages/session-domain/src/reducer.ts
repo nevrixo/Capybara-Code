@@ -14,6 +14,9 @@ import type { ContextUsageSnapshot } from "./context-usage.ts";
 import { reconcileContextUsageSnapshot } from "./context-usage.ts";
 import { normalizePlanDocument, normalizeTodoItems, planDigest, sanitizeTodoText, todoTransitionAllowed, type PlanApproval, type PlanDocument, type PlanItem, type TodoListState } from "./todo.ts";
 
+const MAX_THINKING_SUMMARY_CHARS = 4 * 1024;
+const MAX_THINKING_DETAIL_CHARS = 64 * 1024;
+
 export type { PlanItem, TodoListState } from "./todo.ts";
 
 export type TurnStatus =
@@ -67,6 +70,35 @@ export interface TimelineCommentary {
   readonly turnId?: string;
   readonly agentId?: string;
   readonly correlationId?: string;
+}
+
+export type ThinkingState = "streaming" | "completed" | "interrupted" | "failed";
+export type ThinkingSource = "provider_summary" | "provider_reasoning" | "status_only";
+export type ThinkingSummaryOrigin = "provider" | "derived_from_visible_detail";
+
+/** One semantic reasoning segment; provider channels are merged into this item. */
+export interface TimelineThinking {
+  readonly type: "thinking";
+  readonly id: string;
+  readonly sequence: number;
+  readonly turnId: string;
+  readonly agentId: string;
+  readonly requestId: string;
+  readonly responseId?: string;
+  readonly modelId?: string;
+  readonly segmentIndex: number;
+  readonly providerItemIds: readonly string[];
+  readonly state: ThinkingState;
+  readonly sources: readonly ThinkingSource[];
+  readonly title?: string;
+  readonly summaryText?: string;
+  readonly summaryOrigin?: ThinkingSummaryOrigin;
+  readonly detailText?: string;
+  readonly startedAtMs?: number;
+  readonly endedAtMs?: number;
+  readonly durationMs?: number;
+  readonly truncated?: boolean;
+  readonly legacy?: boolean;
 }
 
 export interface TimelineFinal {
@@ -259,6 +291,7 @@ export const MAX_RESIDENT_NOTICES = 128;
 export type TimelineItem =
   | TimelineUserMessage
   | TimelineCommentary
+  | TimelineThinking
   | TimelineFinal
   | TimelineToolDiscovery
   | TimelineToolCall
@@ -308,7 +341,7 @@ export interface LiveState {
 export interface TaskLiveState {
   readonly taskId: string;
   readonly turnId?: string;
-  readonly phase: "progress" | "reasoning" | "reasoning_summary" | "candidate_final" | "final" | "commentary";
+  readonly phase: "progress" | "thinking" | "reasoning" | "reasoning_summary" | "candidate_final" | "final" | "commentary";
   readonly itemId: string;
   readonly text: string;
   readonly provisional: boolean;
@@ -489,6 +522,167 @@ function strArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 }
 
+function upsertThinking(
+  model: Mutable<SessionViewModel>,
+  event: CbcEvent,
+  kind: "legacy" | "canonical",
+): void {
+  const payload = payloadOf<Record<string, unknown>>(event);
+  const turnId = event.turnId ?? str(payload.turnId, "turn:unknown");
+  const agentId = event.agentId ?? str(payload.agentId, "root");
+  const itemId = typeof payload.itemId === "string" ? payload.itemId : undefined;
+  const requestId = str(payload.requestId, itemId ?? event.correlationId ?? `legacy:${event.id}`);
+  const segmentIndex = Number.isInteger(payload.segmentIndex) && Number(payload.segmentIndex) >= 0
+    ? Number(payload.segmentIndex)
+    : 0;
+  const thinkingId = str(payload.thinkingId, `thinking:${turnId}:${agentId}:${requestId}:${segmentIndex}`);
+  const detailCandidate = kind === "canonical"
+    ? str(payload.detailText)
+    : event.kind === "assistant.reasoning" ? str(payload.text) : "";
+  const summaryCandidate = kind === "canonical"
+    ? str(payload.summaryText)
+    : event.kind === "assistant.reasoning_summary" ? str(payload.text) : "";
+  const previousIndex = findThinkingIndex(model.timeline, {
+    thinkingId,
+    turnId,
+    agentId,
+    ...(itemId !== undefined ? { itemId } : {}),
+    event,
+    legacy: kind === "legacy",
+  });
+  const previous = previousIndex === undefined ? undefined : model.timeline[previousIndex];
+  const previousThinking = previous?.type === "thinking" ? previous : undefined;
+  // Canonical events are the presentation authority during the dual-write window.
+  if (kind === "legacy" && previousThinking !== undefined && previousThinking.legacy !== true) return;
+  const detailOverflow = detailCandidate.length > MAX_THINKING_DETAIL_CHARS ||
+    (previousThinking?.detailText?.length ?? 0) + detailCandidate.length > MAX_THINKING_DETAIL_CHARS;
+  const detailText = mergeThinkingText(previousThinking?.detailText, detailCandidate, kind === "canonical", MAX_THINKING_DETAIL_CHARS);
+  // A legacy reasoning event derives a preview into summaryText. When the
+  // provider summary arrives next, replace that derived preview instead of
+  // concatenating it with the authoritative summary channel.
+  const summaryRaw =
+    kind === "legacy" &&
+    event.kind === "assistant.reasoning_summary" &&
+    previousThinking?.summaryOrigin === "derived_from_visible_detail"
+      ? summaryCandidate
+      : mergeThinkingText(previousThinking?.summaryText, summaryCandidate, kind === "canonical", MAX_THINKING_SUMMARY_CHARS);
+  const parsedSummary = parseThinkingSummary(summaryRaw.slice(0, MAX_THINKING_SUMMARY_CHARS));
+  const title = str(payload.title, parsedSummary.title);
+  const visibleDetailRaw = detailText.trim();
+  const visibleDetail = visibleDetailRaw.slice(0, MAX_THINKING_DETAIL_CHARS);
+  const declaredSummaryOrigin = str(payload.summaryOrigin);
+  const summaryIsDerived = declaredSummaryOrigin === "derived_from_visible_detail";
+  const providerSummary = summaryIsDerived ? "" : parsedSummary.body.trim() || title.trim();
+  const derivedSummary = summaryIsDerived
+    ? parsedSummary.body.trim() || title.trim() || (visibleDetail.length > 0 ? deriveThinkingPreview(visibleDetail) : "")
+    : visibleDetail.length > 0 ? deriveThinkingPreview(visibleDetail) : "";
+  const summaryText = providerSummary || derivedSummary;
+  const summaryOrigin = providerSummary.length > 0
+    ? "provider"
+    : summaryText.length > 0 ? "derived_from_visible_detail" : undefined;
+  const sources: ThinkingSource[] = [];
+  if (providerSummary.length > 0) sources.push("provider_summary");
+  if (visibleDetail.length > 0) sources.push("provider_reasoning");
+  if (sources.length === 0) sources.push("status_only");
+  const requestedState = payload.state;
+  const state: ThinkingState = requestedState === "streaming" || requestedState === "interrupted" || requestedState === "failed"
+    ? requestedState
+    : requestedState === "completed" ? "completed" : "completed";
+  const providerItemIds = uniqueStrings([
+    ...(previousThinking?.providerItemIds ?? []),
+    ...(Array.isArray(payload.providerItemIds) ? payload.providerItemIds : []),
+    ...(itemId !== undefined ? [itemId] : []),
+  ]);
+  const startedAtMs = finiteNumber(payload.startedAtMs, previousThinking?.startedAtMs);
+  const endedAtMs = finiteNumber(payload.endedAtMs, previousThinking?.endedAtMs);
+  const durationMs = finiteNumber(payload.durationMs, endedAtMs !== undefined && startedAtMs !== undefined
+    ? Math.max(0, endedAtMs - startedAtMs)
+    : previousThinking?.durationMs);
+  const markLegacy = kind === "legacy" && (previousThinking === undefined || previousThinking.legacy === true);
+  const item: TimelineThinking = {
+    type: "thinking",
+    id: previousThinking?.id ?? thinkingId,
+    sequence: previousThinking?.sequence ?? event.sequence,
+    turnId: previousThinking?.turnId ?? turnId,
+    agentId: previousThinking?.agentId ?? agentId,
+    requestId: previousThinking?.requestId ?? requestId,
+    ...(str(payload.responseId, previousThinking?.responseId) ? { responseId: str(payload.responseId, previousThinking?.responseId) } : {}),
+    ...(str(payload.modelId, previousThinking?.modelId) ? { modelId: str(payload.modelId, previousThinking?.modelId) } : {}),
+    segmentIndex: previousThinking?.segmentIndex ?? segmentIndex,
+    providerItemIds,
+    state,
+    sources,
+    ...(title.length > 0 ? { title: title.slice(0, 80) } : {}),
+    ...(summaryText.length > 0 ? { summaryText: summaryText.slice(0, MAX_THINKING_SUMMARY_CHARS) } : {}),
+    ...(summaryOrigin !== undefined ? { summaryOrigin } : {}),
+    ...(visibleDetail.length > 0 ? { detailText: visibleDetail } : {}),
+    ...(startedAtMs !== undefined ? { startedAtMs } : {}),
+    ...(endedAtMs !== undefined ? { endedAtMs } : {}),
+    ...(durationMs !== undefined ? { durationMs } : {}),
+    ...((payload.truncated === true || previousThinking?.truncated === true || detailOverflow || summaryCandidate.length > MAX_THINKING_SUMMARY_CHARS) ? { truncated: true } : {}),
+    ...(markLegacy ? { legacy: true } : {}),
+  };
+  if (previousIndex === undefined) model.timeline.push(item);
+  else model.timeline[previousIndex] = item;
+}
+
+interface ThinkingLookup {
+  readonly thinkingId: string;
+  readonly turnId: string;
+  readonly agentId: string;
+  readonly itemId?: string;
+  readonly event: CbcEvent;
+  readonly legacy: boolean;
+}
+
+function findThinkingIndex(timeline: readonly TimelineItem[], lookup: ThinkingLookup): number | undefined {
+  for (let index = timeline.length - 1; index >= 0; index -= 1) {
+    const item = timeline[index];
+    if (item?.type !== "thinking") continue;
+    if (item.id === lookup.thinkingId) return index;
+    if (!lookup.legacy || item.turnId !== lookup.turnId || item.agentId !== lookup.agentId) continue;
+    if (lookup.itemId !== undefined && item.providerItemIds.includes(lookup.itemId)) return index;
+    const adjacent = index === timeline.length - 1;
+    const complementary = lookup.event.kind === "assistant.reasoning_summary"
+      ? item.sources.includes("provider_reasoning")
+      : lookup.event.kind === "assistant.reasoning"
+        ? item.sources.includes("provider_summary")
+        : false;
+    if (adjacent && item.legacy && complementary && lookup.event.sequence >= item.sequence && lookup.event.sequence - item.sequence <= 8) return index;
+  }
+  return undefined;
+}
+
+function mergeThinkingText(previous: string | undefined, next: string, authoritative: boolean, maxChars: number): string {
+  const boundedPrevious = (previous ?? "").slice(0, maxChars);
+  const boundedNext = next.slice(0, maxChars);
+  if (boundedNext.length === 0) return boundedPrevious;
+  if (boundedPrevious.length === 0) return boundedNext;
+  if (boundedNext === boundedPrevious) return boundedPrevious;
+  if (authoritative || boundedNext.startsWith(boundedPrevious)) return boundedNext;
+  if (boundedPrevious.startsWith(boundedNext)) return boundedPrevious;
+  return `${boundedPrevious}${boundedNext}`.slice(0, maxChars);
+}
+
+function parseThinkingSummary(value: string): { readonly title: string; readonly body: string } {
+  const trimmed = value.trim();
+  const match = /^\*\*([^*\n]{1,160})\*\*\s*(?:\n+\s*\n+|\n)?([\s\S]*)$/u.exec(trimmed);
+  return match === null
+    ? { title: "", body: trimmed }
+    : { title: match[1]?.trim() ?? "", body: match[2]?.trim() ?? "" };
+}
+
+function deriveThinkingPreview(value: string): string {
+  return (value.split("\n").map((line) => line.trim()).find((line) => line.length > 0) ?? "").slice(0, 160);
+}
+
+function uniqueStrings(values: readonly unknown[]): string[] {
+  return [...new Set(values.filter((value): value is string => typeof value === "string" && value.length > 0))];
+}
+
+function finiteNumber(value: unknown, fallback?: number): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
 function isInteractionModeValue(value: unknown): value is "build" | "plan" {
   return value === "build" || value === "plan";
 }
@@ -740,13 +934,18 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
       const label =
         phase === "candidate_final" || phase === "final"
           ? ""
-          : phase === "reasoning"
+          : phase === "reasoning" || phase === "reasoning_summary"
             ? "Thinking..."
-            : phase === "reasoning_summary"
-              ? "Reasoning summary..."
-              : "Working...";
+            : "Working...";
       next.turnStatus = "sampling";
       next.live = { kind: "working", label, interruptHint: "esc" };
+      break;
+    }
+
+    case "assistant.thinking": {
+      if (event.visibility === "hidden") break;
+      upsertThinking(next, event, "canonical");
+      next.turnStatus = "sampling";
       break;
     }
 
@@ -755,8 +954,11 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
     case "assistant.reasoning_summary": {
       const payload = payloadOf(event);
       if (typeof payload.reasoningEffort === "string") next.reasoningEffort = payload.reasoningEffort;
-      // Hidden commentary remains journaled for replay/diagnostics but must not
-      // become a resident timeline item when visibleCommentary is disabled.
+      if (event.kind === "assistant.reasoning" || event.kind === "assistant.reasoning_summary") {
+        if (event.visibility !== "hidden") upsertThinking(next, event, "legacy");
+        next.turnStatus = "sampling";
+        break;
+      }
       if (event.visibility === "hidden") break;
       if (event.agentId !== undefined && event.agentId !== "root" && event.agentId.length > 0) {
         clearTaskLive(next, event.agentId);
@@ -764,18 +966,12 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
       }
       const text = str(payload.text);
       const itemId = typeof payload.itemId === "string" ? payload.itemId : undefined;
-      // Repeated wording is legitimate. Only a repeated provider item can be
-      // coalesced, and only when it is adjacent in the durable journal.
-      const variant =
-        event.kind === "assistant.commentary"
-          ? "commentary"
-          : event.kind === "assistant.reasoning" ? "reasoning" : "reasoning_summary";
       const lastItem = next.timeline.at(-1);
       if (
         itemId !== undefined &&
         lastItem?.type === "commentary" &&
         lastItem.itemId === itemId &&
-        lastItem.variant === variant &&
+        lastItem.variant === "commentary" &&
         lastItem.turnId === event.turnId &&
         lastItem.agentId === event.agentId
       ) {
@@ -785,9 +981,7 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
         type: "commentary",
         id: event.id,
         sequence: event.sequence,
-        // Durable journals retain the legacy commentary name; the live stream uses
-        // `progress` while rendering gives both the same semantic presentation.
-        variant,
+        variant: "commentary",
         text,
         ...(itemId !== undefined ? { itemId } : {}),
         ...(event.turnId !== undefined ? { turnId: event.turnId } : {}),
@@ -797,7 +991,6 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
       next.turnStatus = "sampling";
       break;
     }
-
     case "assistant.final": {
       const finalAgentId = event.agentId;
       if (finalAgentId !== undefined && finalAgentId !== "root" && finalAgentId.length > 0) {

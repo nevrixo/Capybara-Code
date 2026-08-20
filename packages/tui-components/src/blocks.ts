@@ -25,6 +25,7 @@ import type {
   TimelinePlan,
   TimelineSubagentEvent,
   TimelineTask,
+  TimelineThinking,
   TimelineToolCall,
   TimelineToolDiscovery,
   TimelineUserMessage,
@@ -241,6 +242,73 @@ export function formatClock(timestamp: string): string | undefined {
 // §6.8 assistant commentary and reasoning summary
 // ---------------------------------------------------------------------------
 
+export interface ThinkingRenderOptions {
+  readonly mode?: ThinkingMode;
+  readonly nowMs?: number;
+  readonly accordionHint?: string;
+  /** Global accordion state; active parts remain visible while finished parts fold. */
+  readonly accordionCollapsed?: boolean;
+  /** Explicit per-item expansion wins over the global accordion state. */
+  readonly accordionExpanded?: boolean;
+}
+
+/** Render the canonical Thinking part shared by fullscreen, plain, and export. */
+export function renderThinking(
+  item: TimelineThinking,
+  context: BlockContext,
+  options: ThinkingRenderOptions = {},
+): StyledLine[] {
+  const mode = options.mode ?? "collapsed";
+  if (mode === "off" && item.state !== "streaming") return [];
+  const done = item.state !== "streaming";
+  const label = done ? "Thought" : "Thinking";
+  const title = item.title?.trim();
+  const duration = item.durationMs ?? (
+    item.startedAtMs !== undefined && (item.endedAtMs !== undefined || options.nowMs !== undefined)
+      ? Math.max(0, (item.endedAtMs ?? options.nowMs ?? item.startedAtMs) - item.startedAtMs)
+      : undefined
+  );
+  const suffix = item.state === "interrupted" ? " · interrupted" : item.state === "failed" ? " · failed" : "";
+  const header: Segment[] = [
+    segment(`${icon("thinking", context.capabilities)} `, { fg: "accent.coral" }),
+    segment(label, { fg: "fg.primary", bold: true }),
+    ...(title !== undefined && title.length > 0 ? [segment(`: ${sanitizeInline(title, 80)}`, { fg: "fg.primary" })] : []),
+    ...(suffix.length > 0 ? [segment(suffix, { fg: "fg.muted" })] : []),
+    ...(duration !== undefined && duration > 0 ? [segment(` ${icon("clock", context.capabilities)} ${formatDuration(duration)}`, { fg: "fg.muted" })] : []),
+  ];
+  const lines: StyledLine[] = [fitLine("header", header, context)];
+  // Off keeps the active global status visible but never exposes a body.
+  if (mode === "off") return lines;
+  const accordionFolded =
+    options.accordionCollapsed === true &&
+    options.accordionExpanded !== true &&
+    item.state !== "streaming";
+  if (accordionFolded) return lines;
+  // Ctrl+O can expand a collapsed presentation for one selected part without
+  // changing the user's persistent Thinking mode.
+  const bodyMode = options.accordionExpanded === true && mode === "collapsed" ? "expanded" : mode;
+  // Provider summaries are the truthful compact representation; expanded mode
+  // prefers visible detail and falls back to the summary when detail is absent.
+  const summaryText = item.summaryText?.trim() ?? "";
+  const providerTitleOnly =
+    item.summaryOrigin === "provider" &&
+    title !== undefined &&
+    summaryText === title;
+  const body = (
+    bodyMode === "collapsed"
+      ? providerTitleOnly ? "" : summaryText || item.detailText?.trim()
+      : item.detailText?.trim() || (providerTitleOnly ? "" : summaryText)
+  )?.trim() ?? "";
+  if (body.length === 0 || bodyMode === "collapsed") {
+    if (bodyMode === "collapsed" && body.length > 0) {
+      const preview = sanitizeInline(body.replace(/\s+/gu, " "), 160);
+      lines.push(fitLine("commentary", [segment("  ", { fg: "border.warm" }), segment(preview, { fg: "fg.muted", italic: true }), segment(options.accordionHint ?? "  · Ctrl+O to expand", { fg: "fg.muted" })], context));
+    }
+    return lines;
+  }
+  lines.push(...renderMarkdown(body, context, { kind: "commentary", prefix: "  ", style: { fg: "fg.muted", italic: true } }));
+  return lines;
+}
 export interface CommentaryOptions {
   readonly showHeader?: boolean;
   /** The model doing the thinking, named on the header line. */
@@ -359,9 +427,9 @@ export function commentaryHeader(
   // Candidate-final text has no provisional header. The caller normally omits
   // it before reaching here; returning no segments protects future call sites.
   if (variant === "candidate_final") return [];
-  const baseLabel = variant === "reasoning"
-    ? "Thinking" : variant === "reasoning_summary" ? "Reasoning summary" : "Working";
-  const label = options.done === true ? baseLabel : `${baseLabel}...`;
+  const isThinking = variant === "reasoning" || variant === "reasoning_summary";
+  const baseLabel = isThinking ? (options.done === true ? "Thought" : "Thinking") : "Working";
+  const label = isThinking || options.done === true ? baseLabel : `${baseLabel}...`;
   const headerIcon: import("./theme.ts").IconName = "thinking";
 
   const segments: Segment[] = [
@@ -369,7 +437,7 @@ export function commentaryHeader(
     segment(label, { fg: "fg.primary", bold: true }),
   ];
 
-  if (options.model !== undefined && options.model.length > 0) {
+  if (!isThinking && options.model !== undefined && options.model.length > 0) {
     segments.push(segment(` (${sanitizeInline(options.model, 32)})`, { fg: "fg.muted" }));
   }
   if (options.elapsedMs !== undefined && options.elapsedMs > 0) {
@@ -2045,17 +2113,28 @@ export function renderUpdateBanner(
 // ---------------------------------------------------------------------------
 
 export type ThinkingVisibility = "full" | "summary" | "hidden";
+export type ThinkingMode = "expanded" | "collapsed" | "off";
+
+export function thinkingModeFromVisibility(value: ThinkingVisibility): ThinkingMode {
+  return value === "full" ? "expanded" : value === "summary" ? "collapsed" : "off";
+}
+
+export function thinkingVisibilityFromMode(value: ThinkingMode): ThinkingVisibility {
+  return value === "expanded" ? "full" : value === "collapsed" ? "summary" : "hidden";
+}
 export type ToolDetail = "compact" | "full";
 export type SubagentDetail = "drawer" | "inline";
 
 export interface PresentationPolicy {
   readonly thinkingVisibility: ThinkingVisibility;
+  readonly thinkingMode?: ThinkingMode;
   readonly toolDetail: ToolDetail;
   readonly subagentDetail: SubagentDetail;
 }
 
 export const DEFAULT_PRESENTATION_POLICY: PresentationPolicy = {
-  thinkingVisibility: "full",
+  thinkingVisibility: "summary",
+  thinkingMode: "collapsed",
   toolDetail: "compact",
   subagentDetail: "drawer",
 };
@@ -2069,6 +2148,7 @@ export interface TimelineRenderOptions {
   readonly themeId?: string;
   /** Independent disclosure controls shared by fullscreen, plain, and exports. */
   readonly thinkingVisibility?: ThinkingVisibility;
+  readonly thinkingMode?: ThinkingMode;
   readonly toolDetail?: ToolDetail;
   readonly subagentDetail?: SubagentDetail;
   /** Deterministic render clock for elapsed task labels. */
@@ -2156,6 +2236,8 @@ export function resolvePresentationPolicy(
   return {
     thinkingVisibility:
       options.thinkingVisibility ?? DEFAULT_PRESENTATION_POLICY.thinkingVisibility,
+    thinkingMode:
+      options.thinkingMode ?? (options.thinkingVisibility !== undefined ? thinkingModeFromVisibility(options.thinkingVisibility) : (DEFAULT_PRESENTATION_POLICY.thinkingMode ?? "collapsed")),
     toolDetail: options.toolDetail ?? DEFAULT_PRESENTATION_POLICY.toolDetail,
     subagentDetail:
       options.subagentDetail ?? DEFAULT_PRESENTATION_POLICY.subagentDetail,
@@ -2180,6 +2262,14 @@ export function renderTimelineItem(
       return renderUserMessage(item, context, {
         ...(options.author !== undefined ? { author: options.author } : {}),
         ...(options.showTimestamps !== undefined ? { showTimestamp: options.showTimestamps } : {}),
+      });
+    case "thinking":
+      return renderThinking(item, context, {
+        mode: resolvePresentationPolicy(options).thinkingMode ?? "collapsed",
+        ...(options.nowMs !== undefined ? { nowMs: options.nowMs } : {}),
+        ...(options.accordionCollapsed === true ? { accordionCollapsed: true } : {}),
+        ...(options.accordionExpandedIds?.has(item.id) === true ? { accordionExpanded: true } : {}),
+        accordionHint: "  · Ctrl+O to expand",
       });
     case "commentary": {
       const isReasoning = item.variant === "reasoning" || item.variant === "reasoning_summary";
@@ -2270,6 +2360,21 @@ export function renderTimelineItemTail(
   markdownIndex: MarkdownSourceView,
 ): TimelineItemTailRender | undefined {
   const rows = Math.max(1, Math.floor(maxLines));
+  if (item.type === "thinking") {
+    const rendered = renderThinking(item, context, {
+      mode: resolvePresentationPolicy(options).thinkingMode ?? "collapsed",
+      ...(options.nowMs !== undefined ? { nowMs: options.nowMs } : {}),
+      ...(options.accordionCollapsed === true ? { accordionCollapsed: true } : {}),
+      ...(options.accordionExpandedIds?.has(item.id) === true ? { accordionExpanded: true } : {}),
+      accordionHint: "  · Ctrl+O to expand",
+    });
+    return {
+      lines: rendered.slice(Math.max(0, rendered.length - rows)),
+      totalLines: rendered.length,
+      sourceLinesRendered: rendered.length,
+      bounded: true,
+    };
+  }
   if (item.type === "commentary") {
     const isReasoning = item.variant === "reasoning" || item.variant === "reasoning_summary";
     const policy = resolvePresentationPolicy(options);
@@ -2520,7 +2625,7 @@ export function projectTimeline(
     (item) =>
       item.type !== "approval" &&
       !(
-        (item.type === "commentary" || item.type === "final") &&
+        (item.type === "commentary" || item.type === "thinking" || item.type === "final") &&
         item.agentId !== undefined &&
         item.agentId !== "root"
       ) &&

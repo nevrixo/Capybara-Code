@@ -54,20 +54,27 @@ function read(id: string, sequence: number, path: string): TimelineItem {
 
 function reasoning(id: string, sequence: number, text: string, agentId = "root"): TimelineItem {
   return {
-    type: "commentary",
+    type: "thinking",
     id,
     sequence,
-    variant: "reasoning_summary",
-    text,
     turnId: "turn-1",
     agentId,
+    requestId: `request:${id}`,
+    segmentIndex: 0,
+    providerItemIds: [id],
+    state: "completed",
+    sources: ["provider_reasoning"],
+    summaryText: text.split("\n", 1)[0] ?? text,
+    summaryOrigin: "derived_from_visible_detail",
+    detailText: text,
   };
 }
 
 describe("shared presentation projection", () => {
   test("uses the revision defaults", () => {
     expect(DEFAULT_PRESENTATION_POLICY).toEqual({
-      thinkingVisibility: "full",
+      thinkingVisibility: "summary",
+      thinkingMode: "collapsed",
       toolDetail: "compact",
       subagentDetail: "drawer",
     });
@@ -107,11 +114,11 @@ describe("shared presentation projection", () => {
 
     const projected = projectTimeline(items);
     expect(projected.map((item) => item.id)).toEqual(["think-1", "think-2", "group-read-read-1"]);
-    expect(projected[0]?.type).toBe("commentary");
-    expect(projected[1]?.type).toBe("commentary");
-    if (projected[0]?.type === "commentary" && projected[1]?.type === "commentary") {
-      expect(projected[0].text).toBe("first");
-      expect(projected[1].text).toBe("second");
+    expect(projected[0]?.type).toBe("thinking");
+    expect(projected[1]?.type).toBe("thinking");
+    if (projected[0]?.type === "thinking" && projected[1]?.type === "thinking") {
+      expect(projected[0].summaryText).toBe("first");
+      expect(projected[1].summaryText).toBe("second");
     }
     expect(projected.some((item) => item.id === "child-thinking")).toBe(false);
 
@@ -120,7 +127,7 @@ describe("shared presentation projection", () => {
     expect(inline.some((item) => item.id === "child-thinking")).toBe(false);
   });
 
-  test("applies expanded, preview, and hidden reasoning-summary disclosure consistently", () => {
+  test("applies expanded, collapsed, and off Thinking disclosure consistently", () => {
     const items: TimelineItem[] = [
       reasoning("think-1", 1, "line one\nline two\nline three"),
       {
@@ -134,24 +141,23 @@ describe("shared presentation projection", () => {
     ];
 
     const full = renderTimeline(items, context(80), {
-      thinkingVisibility: "full",
+      thinkingMode: "expanded",
       turnActive: false,
-      accordionCollapsed: true,
-      collapseFinishedReasoning: true,
     }).map(lineText).join("\n");
     expect(full).toContain("line three");
-    expect(full.match(/Reasoning summary/g)?.length).toBe(1);
+    expect(full).toContain("Thought");
+    expect(full).not.toContain("Reasoning summary");
 
     const summary = renderTimeline(items, context(80), {
-      thinkingVisibility: "summary",
+      thinkingMode: "collapsed",
       turnActive: false,
     }).map(lineText).join("\n");
     expect(summary).toContain("line one");
-    expect(summary).toContain("line two");
+    expect(summary).not.toContain("line two");
     expect(summary).not.toContain("line three");
 
     const current = renderTimeline(items, context(80), {
-      thinkingVisibility: "summary",
+      thinkingMode: "collapsed",
       currentTurnId: "turn-1",
       turnActive: true,
     }).map(lineText).join("\n");
@@ -159,7 +165,7 @@ describe("shared presentation projection", () => {
     expect(current).not.toContain("line three");
 
     const hidden = renderTimeline(items, context(80), {
-      thinkingVisibility: "hidden",
+      thinkingMode: "off",
       turnActive: false,
     }).map(lineText).join("\n");
     expect(hidden).not.toContain("Reasoning summary");

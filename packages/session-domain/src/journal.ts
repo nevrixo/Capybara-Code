@@ -884,6 +884,25 @@ export function resumeWarnings(checks: ResumeChecks): ResumeWarning[] {
   return warnings;
 }
 
+function sanitizeThinkingExportText(value: string): string {
+  // Keep provider-visible text, but remove terminal control sequences before it
+  // crosses into a Markdown/export surface. Opaque reasoning never reaches this
+  // function because it is intentionally absent from TimelineThinking.
+  return value
+    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/gu, "")
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/gu, "")
+    .replace(/\r/g, "")
+    .trim();
+}
+
+function escapeThinkingExportHtml(value: string): string {
+  return value.replace(/[&<>"]/gu, (character) =>
+    character === "&" ? "&amp;" :
+    character === "<" ? "&lt;" :
+    character === ">" ? "&gt;" : "&quot;",
+  );
+}
+
 /** Export a session as a markdown transcript (§8.6). */
 export function exportMarkdown(model: SessionViewModel, manifest: SessionManifest): string {
   const lines: string[] = [
@@ -921,6 +940,21 @@ export function exportMarkdown(model: SessionViewModel, manifest: SessionManifes
       case "commentary":
         lines.push(`_${item.text}_`, "");
         break;
+      case "thinking": {
+        const title = item.title?.trim();
+        const duration = item.durationMs !== undefined ? " · " + item.durationMs + "ms" : "";
+        const summary = escapeThinkingExportHtml("Thought" + (title ? ": " + title : "") + duration);
+        const body = escapeThinkingExportHtml(sanitizeThinkingExportText(item.detailText ?? item.summaryText ?? ""));
+        lines.push(
+          "<details>",
+          "<summary>" + summary + "</summary>",
+          ...(body.length > 0 ? ["", body] : []),
+          "",
+          "</details>",
+          "",
+        );
+        break;
+      }
       case "final":
         lines.push(`## Capybara`, "", item.text, "");
         if (item.report) {

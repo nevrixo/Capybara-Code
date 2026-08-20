@@ -90,7 +90,7 @@ describe("reducer basics (§20.8)", () => {
     expect(model.permissionMode).toBe("auto");
   });
 
-  test("commentary and reasoning summary stay distinct (§10.7)", () => {
+  test("commentary and provider reasoning channels project to one Thinking part (§10.7)", () => {
     const model = replay(
       "ses_1",
       build([
@@ -99,10 +99,14 @@ describe("reducer basics (§20.8)", () => {
         ["assistant.reasoning_summary", { text: "Considered two hypotheses." }],
       ]),
     );
-    const variants = model.timeline
-      .filter((i) => i.type === "commentary")
-      .map((i) => (i.type === "commentary" ? i.variant : ""));
-    expect(variants).toEqual(["commentary", "reasoning", "reasoning_summary"]);
+    expect(model.timeline.map((item) => item.type)).toEqual(["commentary", "thinking"]);
+    const thinking = model.timeline.at(-1);
+    expect(thinking?.type).toBe("thinking");
+    if (thinking?.type === "thinking") {
+      expect(thinking.detailText).toBe("Checking the provider-visible details.");
+      expect(thinking.summaryText).toBe("Considered two hypotheses.");
+      expect(thinking.sources).toEqual(["provider_summary", "provider_reasoning"]);
+    }
   });
 
   test("identical commentary from distinct provider items remains distinct", () => {
@@ -145,7 +149,7 @@ describe("reducer basics (§20.8)", () => {
         ["assistant.delta", { text: "Weighing", phase: "reasoning_summary" }],
       ]),
     );
-    expect(reasoning.live.label).toBe("Reasoning summary...");
+    expect(reasoning.live.label).toBe("Thinking...");
 
     const thinking = replay(
       "ses_1",

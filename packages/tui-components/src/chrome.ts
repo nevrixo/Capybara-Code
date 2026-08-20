@@ -81,6 +81,9 @@ export function visibleLiveState(
 /** A live state is active even when a provider intentionally omits its label. */
 export function liveStateLabel(live: LiveState): string {
   const label = live.label.trim();
+  // Legacy reducers and restored snapshots may still carry a provider-channel
+  // label. Channel names are provenance, not user-facing lifecycle states.
+  if (/^Reasoning(?: summary)?(?:\.\.\.|…)?$/u.test(label)) return "Thinking...";
   if (label.length > 0) return label;
   switch (live.kind) {
     case "working":

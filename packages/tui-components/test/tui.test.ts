@@ -509,21 +509,21 @@ describe("timeline blocks (§6.4, §6.7–§6.12, AC-06)", () => {
     expect(commentary.some((c) => c.kind === "commentary" && c.emphasis.includes("italic"))).toBe(
       true,
     );
-    const reasoning = renderCommentaryCells("Considering the failure", "reasoning_summary");
-    // §10.7: the two phases stay distinguishable after replay.
-    expect(reasoning.some((c) => c.kind === "reasoning")).toBe(true);
+    const thinking = renderCommentaryCells("Considering the failure", "reasoning_summary");
+    // Thinking keeps its own phase header while sharing the muted body treatment.
+    expect(thinking.some((c) => c.text.includes("Thinking"))).toBe(true);
   });
 
-  test("a live reasoning phase names the model and its elapsed time (§6.8)", () => {
+  test("a live Thinking phase shows its elapsed time without global model decoration (§6.8)", () => {
     const lines = renderCommentary(
       { text: "Exploring the registration flow.", variant: "reasoning" },
       context(120),
       { model: "gpt-5.6", elapsedMs: 3_200 },
     );
     const header = lineText(lines[0]!);
-    expect(header).toContain("Thinking...");
+    expect(header).toContain("Thinking");
     expect(header).not.toContain("Reasoning");
-    expect(header).toContain("(gpt-5.6)");
+    expect(header).not.toContain("gpt-5.6");
     expect(header).toContain("3.2s");
     expect(lineText(lines[1]!)).toContain("Exploring the registration flow.");
   });
@@ -602,7 +602,7 @@ describe("timeline blocks (§6.4, §6.7–§6.12, AC-06)", () => {
       { done: true, collapsed: true, summary: "Finished reasoning" },
     );
     expect(lines).toHaveLength(2);
-    expect(lineText(lines[0]!)).toContain("Reasoning summary");
+    expect(lineText(lines[0]!)).toContain("Thought");
     expect(lineText(lines[1]!)).toContain("Ctrl+O to expand");
     expect(lineText(lines[1]!)).not.toMatch(/[가-힣]/);
     expect(lineText(lines[1]!)).not.toContain("already concluded");
@@ -3193,7 +3193,7 @@ describe("commentary item rendering and variant separation", () => {
     ];
     const rendered = renderTimeline(items, blockContext(capabilities({ columns: 80 }), 80));
     const fullText = rendered.map(lineText).join("\n");
-    expect(fullText).toContain("Reasoning summary...");
+    expect(fullText).toContain("Thinking");
     expect(fullText).toContain("Regular response text");
   });
 

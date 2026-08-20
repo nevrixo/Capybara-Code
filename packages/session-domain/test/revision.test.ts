@@ -161,10 +161,10 @@ describe("revision reducer ownership", () => {
     ]));
 
     expect(model.taskLive.has("agent-2")).toBe(false);
-    const commentary = model.timeline.filter((item) => item.type === "commentary");
-    expect(commentary).toHaveLength(1);
-    expect(commentary[0]).toMatchObject({
-      text: "root text",
+    const thinking = model.timeline.filter((item) => item.type === "thinking");
+    expect(thinking).toHaveLength(1);
+    expect(thinking[0]).toMatchObject({
+      summaryText: "root text",
       turnId: "turn-1",
       agentId: "root",
     });

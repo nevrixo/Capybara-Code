@@ -738,7 +738,7 @@ export class ProjectedTimeline {
     }
 
     const item = this.#materializeGroup(group);
-    if (item.type !== "commentary" && item.type !== "final") return undefined;
+    if (item.type !== "commentary" && item.type !== "thinking" && item.type !== "final") return undefined;
     const markdownIndex = this.#markdownIndexForGroup(group, item);
     if (markdownIndex === undefined) return undefined;
     const result = renderTimelineItemTail(
@@ -1198,7 +1198,7 @@ export class ProjectedTimeline {
     const policy = resolvePresentationPolicy(this.#projectionOptions);
     if (item.type === "approval") return false;
     if (
-      (item.type === "commentary" || item.type === "final") &&
+      (item.type === "commentary" || item.type === "thinking" || item.type === "final") &&
       item.agentId !== undefined &&
       item.agentId !== "root"
     ) {
@@ -1907,6 +1907,7 @@ function canonicalValue(value: unknown, seen = new Set<object>()): string {
 
 function markdownSourceForItem(item: TimelineItem): string | undefined {
   if (item.type === "commentary") return item.text;
+  if (item.type === "thinking") return item.detailText ?? item.summaryText;
   if (item.type === "final") return finalAnswerText(item);
   return undefined;
 }
@@ -1917,6 +1918,8 @@ function isPotentiallyMutable(item: TimelineItem): boolean {
   // changes on every coalesced delta until the durable assistant event lands.
   if (item.id.startsWith("streaming-")) return true;
   switch (item.type) {
+    case "thinking":
+      return item.state === "streaming";
     case "tool":
       return item.status === "running";
     case "task":

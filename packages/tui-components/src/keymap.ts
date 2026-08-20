@@ -155,7 +155,7 @@ export const DEFAULT_KEYMAP: readonly KeyBinding[] = [
   { action: "tasks_drawer", key: "ctrl+t", description: "tasks and jobs", when: "always" },
   { action: "toggle_sidebar", key: "ctrl+b", description: "active-work background rail", when: "always" },
   { action: "model_picker", key: "alt+p", description: "model picker", when: "always" },
-  { action: "thinking_visibility", key: "alt+t", description: "cycle Thinking visibility", when: "always" },
+  { action: "thinking_visibility", key: "alt+t", description: "cycle Thinking mode", when: "always" },
   { action: "command_palette", key: "ctrl+p", description: "command palette", when: "always" },
   { action: "agents_drawer", key: "ctrl+x a", description: "agents drawer", when: "always" },
   { action: "tasks_drawer", key: "ctrl+x t", description: "tasks and jobs", when: "always" },
