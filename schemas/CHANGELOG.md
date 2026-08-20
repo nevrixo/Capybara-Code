@@ -94,6 +94,17 @@ Initial published contract, matching PRD v1.0.
 - Added strict schemas for the bounded compound tools `repo.investigate` and
   `verification.run_many`.
 
+**Thinking unification amendment**
+
+- Added the journaled assistant.thinking canonical event. Legacy
+  assistant.reasoning and assistant.reasoning_summary remain readable and
+  project into one semantic Thinking part.
+- Added ui.thinkingMode = expanded|collapsed|off and
+  model.reasoning.providerSummary = auto|off, with deprecated aliases and
+  deterministic migration warnings. The UI disclosure setting no longer controls
+  provider summary generation.
+Canonical Thinking text is bounded at 4 KiB for provider summaries and 64 KiB for visible detail; oversized parts retain `truncated: true`.
+
 **Config schema 1.0**
 
 - The full §21.4 surface. `subagents.writerPolicy` is a `const` rather than an enum
