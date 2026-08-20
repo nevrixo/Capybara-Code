@@ -159,9 +159,6 @@ export const PERMISSION_PRESETS: readonly string[] = configEnumValues("permissio
 export const TOKEN_SAVING_VALUES: readonly string[] =
   configEnumValues("agent.tokenSaving") ?? ["off", "light", "balanced", "strong"];
 
-/** §8.10 `/export` formats. Not a config key, so the list lives here. */
-export const EXPORT_FORMATS: readonly string[] = ["markdown", "jsonl", "bundle"];
-
 export function isReasoningValue(value: string): boolean {
   return REASONING_VALUES.includes(value);
 }
@@ -207,8 +204,6 @@ export function slashArgumentValues(input: {
       // table. Keep the resolver pure and let the interactive host provide the
       // current workspace's entries.
       return options.sessions ?? [];
-    case "/export":
-      return EXPORT_FORMATS.map((value) => ({ value }));
     default:
       // `undefined` means "no host values"; the popup falls back to the spec's own
       // list, and shows only the signature when there is none.
