@@ -13,6 +13,11 @@
 
 import type { CbcEventKind, EventVisibility } from "@cbc/protocol";
 import {
+  THINKING_MAX_DETAIL_CHARS,
+  THINKING_MAX_SUMMARY_CHARS,
+  ThinkingAssembler,
+} from "./thinking.ts";
+import {
   estimateCostUsd,
   emptyUsage,
   findModel,
@@ -205,13 +210,17 @@ export const STREAM_FLUSH_CHARS = 1_024;
  * provider text delta can be a final answer only after all turn gates accept it,
  * so it is rendered as `candidate_final` until then.
  */
-type AssistantDeltaPhase = "progress" | "reasoning" | "reasoning_summary" | "candidate_final";
+type AssistantDeltaPhase = "progress" | "thinking" | "reasoning" | "reasoning_summary" | "candidate_final";
 interface AssistantDeltaPayload {
   readonly text: string;
   readonly phase: AssistantDeltaPhase;
   /** Stable provider output identity used to reconcile a later durable event. */
   readonly itemId?: string;
   readonly outputIndex?: number;
+  /** Canonical identity for a semantic Thinking segment. */
+  readonly thinkingId?: string;
+  /** Provider channel retained as metadata, never as a UI phase. */
+  readonly channel?: "detail" | "summary";
 }
 
 /** Response-local, ordered fixed-window coalescer for ephemeral assistant text. */
@@ -222,6 +231,8 @@ class AssistantDeltaCoalescer {
   #phase: AssistantDeltaPhase | undefined;
   #itemId: string | undefined;
   #outputIndex: number | undefined;
+  #thinkingId: string | undefined;
+  #channel: "detail" | "summary" | undefined;
   #parts: string[] = [];
   #chars = 0;
   #timer: ReturnType<typeof setTimeout> | undefined;
@@ -245,7 +256,12 @@ class AssistantDeltaCoalescer {
   append(
     text: string,
     phase: AssistantDeltaPhase,
-    identity: { readonly itemId?: string; readonly outputIndex?: number } = {},
+    identity: {
+      readonly itemId?: string;
+      readonly outputIndex?: number;
+      readonly thinkingId?: string;
+      readonly channel?: "detail" | "summary";
+    } = {},
   ): void {
     this.#throwDeferredError();
     if (this.#closed) throw new Error("assistant delta coalescer is closed");
@@ -254,12 +270,16 @@ class AssistantDeltaCoalescer {
     if (
       this.#phase !== phase ||
       this.#itemId !== identity.itemId ||
-      this.#outputIndex !== identity.outputIndex
+      this.#outputIndex !== identity.outputIndex ||
+      this.#thinkingId !== identity.thinkingId ||
+      this.#channel !== identity.channel
     ) {
       this.#endWindow();
       this.#phase = phase;
       this.#itemId = identity.itemId;
       this.#outputIndex = identity.outputIndex;
+      this.#thinkingId = identity.thinkingId;
+      this.#channel = identity.channel;
       // Preserve time-to-first-text. The rest of a continuous response is emitted
       // at one fixed 24 ms window (or the bounded-size escape hatch) at a time.
       this.#emitPayload(text, phase, identity);
@@ -300,6 +320,8 @@ class AssistantDeltaCoalescer {
     this.#phase = undefined;
     this.#itemId = undefined;
     this.#outputIndex = undefined;
+    this.#thinkingId = undefined;
+    this.#channel = undefined;
   }
 
   #flushPending(): void {
@@ -309,6 +331,8 @@ class AssistantDeltaCoalescer {
     const identity = {
       ...(this.#itemId !== undefined ? { itemId: this.#itemId } : {}),
       ...(this.#outputIndex !== undefined ? { outputIndex: this.#outputIndex } : {}),
+      ...(this.#thinkingId !== undefined ? { thinkingId: this.#thinkingId } : {}),
+      ...(this.#channel !== undefined ? { channel: this.#channel } : {}),
     };
     // Clear before calling observers so an exception cannot duplicate this batch.
     this.#parts = [];
@@ -319,7 +343,12 @@ class AssistantDeltaCoalescer {
   #emitPayload(
     text: string,
     phase: AssistantDeltaPhase,
-    identity: { readonly itemId?: string; readonly outputIndex?: number },
+    identity: {
+      readonly itemId?: string;
+      readonly outputIndex?: number;
+      readonly thinkingId?: string;
+      readonly channel?: "detail" | "summary";
+    },
   ): void {
     this.#emit({ text, phase, ...identity });
   }
@@ -337,12 +366,16 @@ class AssistantDeltaCoalescer {
           this.#phase = undefined;
           this.#itemId = undefined;
           this.#outputIndex = undefined;
+          this.#thinkingId = undefined;
+          this.#channel = undefined;
         }
       } catch (error) {
         this.#deferredError = asError(error);
         this.#phase = undefined;
         this.#itemId = undefined;
         this.#outputIndex = undefined;
+        this.#thinkingId = undefined;
+        this.#channel = undefined;
         this.#clearTimer();
       }
     }, STREAM_FLUSH_MS);
@@ -2078,6 +2111,17 @@ export class AgentKernel {
 
     const commentaryParts: string[] = [];
     const providerStartedAt = this.#now();
+    const thinkingAssembler = new ThinkingAssembler({
+      turnId,
+      agentId: this.#options.agentId ?? "root",
+      requestId: request.requestId,
+      modelId: requestModelId,
+      startedAtMs: providerStartedAt,
+      now: this.#now,
+    });
+    // Live detail/summary deltas share the canonical semantic-segment identity.
+    // Provider item ids remain provenance only and may differ across channels.
+    let thinkingLiveId = ["thinking", turnId, this.#options.agentId ?? "root", request.requestId, "0"].join(":");
     const transport = this.#providerSession.transport ?? (
       this.#options.continuationMode === "previous_response" ? "http_previous" : "http_full"
     );
@@ -2099,8 +2143,34 @@ export class AgentKernel {
     let firstDeltaObserved = false;
 
     const reasoningSummaryParts: string[] = [];
+    let reasoningSummaryChars = 0;
+    const appendReasoningSummary = (text: string): void => {
+      const remaining = THINKING_MAX_SUMMARY_CHARS - reasoningSummaryChars;
+      if (remaining <= 0) return;
+      const bounded = text.slice(0, remaining);
+      if (bounded.length === 0) return;
+      reasoningSummaryParts.push(bounded);
+      reasoningSummaryChars += bounded.length;
+    };
     // Provider-visible reasoning is display-only; opaque content remains replay-only.
     const reasoningTextParts = new Map<string, string>();
+    let reasoningTextChars = 0;
+    const appendReasoningText = (itemId: string, text: string): void => {
+      const previous = reasoningTextParts.get(itemId) ?? "";
+      const remaining = THINKING_MAX_DETAIL_CHARS - (reasoningTextChars - previous.length);
+      const bounded = text.slice(0, Math.max(0, remaining));
+      const next = previous + bounded;
+      reasoningTextParts.set(itemId, next);
+      reasoningTextChars += next.length - previous.length;
+    };
+    const replaceReasoningText = (itemId: string, text: string): string => {
+      const previous = reasoningTextParts.get(itemId) ?? "";
+      const remaining = THINKING_MAX_DETAIL_CHARS - (reasoningTextChars - previous.length);
+      const next = text.slice(0, Math.max(0, remaining));
+      reasoningTextParts.set(itemId, next);
+      reasoningTextChars += next.length - previous.length;
+      return next;
+    };
     const textParts: string[] = [];
     // `response.output_item.done` is authoritative and fills gaps when a delta
     // stream was lost or coalesced by a transport. Keep it keyed by provider item
@@ -2109,7 +2179,9 @@ export class AgentKernel {
     const authoritativeReasoning = new Map<string, ModelResponseItem>();
     let lastCommentaryItemId: string | undefined;
     let lastReasoningItemId: string | undefined;
+    let lastReasoningProviderItemId: string | undefined;
     let lastReasoningTextItemId: string | undefined;
+    let lastReasoningTextProviderItemId: string | undefined;
     let lastTextItemId: string | undefined;
     const deltas = new AssistantDeltaCoalescer(
       (payload) => emit("assistant.delta", payload),
@@ -2190,45 +2262,93 @@ export class AgentKernel {
           break;
         }
         case "reasoning.summary.delta": {
-          reasoningSummaryParts.push(event.text);
-          const itemId = event.itemId ?? `response:${request.requestId}:reasoning:${event.outputIndex ?? 0}`;
+          const itemId = event.itemId ?? thinkingLiveId;
           lastReasoningItemId = itemId;
-          deltas.append(event.text, "reasoning_summary", {
+          if (event.itemId !== undefined) lastReasoningProviderItemId = event.itemId;
+          const thinkingUpdate = thinkingAssembler.append({
+            kind: "delta",
+            channel: "summary",
+            text: event.text,
+            requestId: request.requestId,
+            ...(event.itemId !== undefined ? { providerItemId: event.itemId } : {}),
+            ...(event.outputIndex !== undefined ? { outputIndex: event.outputIndex } : {}),
+            ...(event.sequence !== undefined ? { sequence: event.sequence } : {}),
+            ...(event.deltaId !== undefined ? { deltaId: event.deltaId } : {}),
+          });
+          thinkingLiveId = thinkingUpdate.part.thinkingId;
+          if (thinkingUpdate.changed) appendReasoningSummary(event.text);
+          deltas.append(event.text, "thinking", {
             itemId,
+            thinkingId: thinkingLiveId,
+            channel: "summary",
             ...(event.outputIndex !== undefined ? { outputIndex: event.outputIndex } : {}),
           });
           break;
         }
         case "reasoning.text.delta": {
-          const itemId = event.itemId ?? `response:${request.requestId}:thinking:${event.outputIndex ?? 0}`;
-          reasoningTextParts.set(itemId, `${reasoningTextParts.get(itemId) ?? ""}${event.text}`);
+          const itemId = event.itemId ?? thinkingLiveId;
           lastReasoningTextItemId = itemId;
-          deltas.append(event.text, "reasoning", {
+          if (event.itemId !== undefined) lastReasoningTextProviderItemId = event.itemId;
+          const thinkingUpdate = thinkingAssembler.append({
+            kind: "delta",
+            channel: "detail",
+            text: event.text,
+            requestId: request.requestId,
+            ...(event.itemId !== undefined ? { providerItemId: event.itemId } : {}),
+            ...(event.outputIndex !== undefined ? { outputIndex: event.outputIndex } : {}),
+            ...(event.sequence !== undefined ? { sequence: event.sequence } : {}),
+            ...(event.deltaId !== undefined ? { deltaId: event.deltaId } : {}),
+          });
+          thinkingLiveId = thinkingUpdate.part.thinkingId;
+          if (thinkingUpdate.changed) appendReasoningText(itemId, event.text);
+          deltas.append(event.text, "thinking", {
             itemId,
+            thinkingId: thinkingLiveId,
+            channel: "detail",
             ...(event.outputIndex !== undefined ? { outputIndex: event.outputIndex } : {}),
           });
           break;
         }
         case "reasoning.text.done": {
-          const itemId = event.itemId ?? `response:${request.requestId}:thinking:${event.outputIndex ?? 0}`;
+          const itemId = event.itemId ?? thinkingLiveId;
           const streamed = reasoningTextParts.get(itemId);
-          reasoningTextParts.set(itemId, event.text);
           lastReasoningTextItemId = itemId;
+          if (event.itemId !== undefined) lastReasoningTextProviderItemId = event.itemId;
+          const thinkingUpdate = thinkingAssembler.append({
+            kind: "replace",
+            channel: "detail",
+            text: event.text,
+            requestId: request.requestId,
+            ...(event.itemId !== undefined ? { providerItemId: event.itemId } : {}),
+            ...(event.outputIndex !== undefined ? { outputIndex: event.outputIndex } : {}),
+            ...(event.sequence !== undefined ? { sequence: event.sequence } : {}),
+            ...(event.deltaId !== undefined ? { deltaId: event.deltaId } : {}),
+            authoritative: true,
+          });
+          thinkingLiveId = thinkingUpdate.part.thinkingId;
+          const authoritativeText = thinkingUpdate.changed
+            ? replaceReasoningText(itemId, event.text)
+            : reasoningTextParts.get(itemId) ?? "";
           const suffix =
             streamed === undefined
-              ? event.text
-              : event.text.startsWith(streamed)
-                ? event.text.slice(streamed.length)
+              ? authoritativeText
+              : authoritativeText.startsWith(streamed)
+                ? authoritativeText.slice(streamed.length)
                 : "";
           if (suffix.length > 0) {
-            deltas.append(suffix, "reasoning", {
+            deltas.append(suffix, "thinking", {
               itemId,
+              thinkingId: thinkingLiveId,
+              channel: "detail",
               ...(event.outputIndex !== undefined ? { outputIndex: event.outputIndex } : {}),
             });
           }
           break;
         }
         case "text.delta": {
+          if (thinkingAssembler.hasOpenSegment) {
+            thinkingLiveId = thinkingAssembler.boundary("final", request.requestId).part.thinkingId;
+          }
           textParts.push(event.text);
           const itemId = event.itemId ?? `response:${request.requestId}:text:${event.outputIndex ?? 0}`;
           lastTextItemId = itemId;
@@ -2242,6 +2362,9 @@ export class AgentKernel {
           break;
         }
         case "tool.call.started":
+          if (thinkingAssembler.hasOpenSegment) {
+            thinkingLiveId = thinkingAssembler.boundary("tool", request.requestId).part.thinkingId;
+          }
           calls.set(event.callId, { callId: event.callId, name: event.name, argumentsText: "", ...(event.callerId !== undefined ? { callerId: event.callerId } : {}), ...(event.programId !== undefined ? { programId: event.programId } : {}), ...(event.agentId !== undefined ? { agentId: event.agentId } : {}) });
           break;
         case "tool.call.arguments.delta": {
@@ -2269,7 +2392,10 @@ export class AgentKernel {
             (event.item.summaryText !== undefined || event.item.reasoningText !== undefined)
           ) {
             authoritativeReasoning.set(event.item.itemId, event.item);
-            if (event.item.reasoningText !== undefined) lastReasoningTextItemId = event.item.itemId;
+            if (event.item.reasoningText !== undefined) {
+              lastReasoningTextItemId = event.item.itemId;
+              lastReasoningTextProviderItemId = event.item.itemId;
+            }
           }
           if (event.item.kind === "reasoning" && event.item.opaque !== undefined && event.item.opaque.length > 0) {
             opaqueItems.set(event.item.itemId, {
@@ -2313,15 +2439,6 @@ export class AgentKernel {
       firstDeltaObserved,
     });
 
-    if (failure) {
-      this.#options.budgetController?.release(request.requestId);
-      if (failure.kind === "cancelled") return { kind: "cancelled" };
-      return { kind: "error", error: failure };
-    }
-    if (signal.aborted) {
-      this.#options.budgetController?.release(request.requestId);
-      return { kind: "cancelled" };
-    }
 
     const orderedAuthoritativeMessages = [...authoritativeMessages.values()].sort(
       (left, right) => (left.sequence ?? Number.MAX_SAFE_INTEGER) - (right.sequence ?? Number.MAX_SAFE_INTEGER),
@@ -2335,30 +2452,120 @@ export class AgentKernel {
     const orderedAuthoritativeReasoning = [...authoritativeReasoning.values()].sort(
       (left, right) => (left.sequence ?? Number.MAX_SAFE_INTEGER) - (right.sequence ?? Number.MAX_SAFE_INTEGER),
     );
-    const fallbackReasoningSummary = orderedAuthoritativeReasoning
-      .map((item) => item.summaryText ?? "")
-      .join("");
-    const fallbackReasoningText = orderedAuthoritativeReasoning
-      .map((item) => item.reasoningText ?? "")
-      .join("");
+    const fallbackReasoningSummary = joinBounded(
+      orderedAuthoritativeReasoning.map((item) => item.summaryText ?? ""),
+      THINKING_MAX_SUMMARY_CHARS,
+    );
+    const fallbackReasoningText = joinBounded(
+      orderedAuthoritativeReasoning.map((item) => item.reasoningText ?? ""),
+      THINKING_MAX_DETAIL_CHARS,
+    );
     const commentary = commentaryParts.length > 0 ? commentaryParts.join("") : fallbackCommentary;
     const reasoningSummary = reasoningSummaryParts.length > 0
-      ? reasoningSummaryParts.join("")
+      ? joinBounded(reasoningSummaryParts, THINKING_MAX_SUMMARY_CHARS)
       : fallbackReasoningSummary;
     const reasoningText =
       reasoningTextParts.size > 0
-        ? [...reasoningTextParts.values()].join("")
+        ? joinBounded(reasoningTextParts.values(), THINKING_MAX_DETAIL_CHARS)
         : fallbackReasoningText;
     // The done item contains the complete message; prefer it over a partial delta
     // sequence when both are present.
     const text = fallbackText.trim().length > 0 ? fallbackText : textParts.join("");
     const commentaryItemId = fallbackCommentaryItems.at(-1)?.itemId ?? lastCommentaryItemId;
-    const reasoningItemId = orderedAuthoritativeReasoning.at(-1)?.itemId ?? lastReasoningItemId;
+    const reasoningItemId = orderedAuthoritativeReasoning.at(-1)?.itemId ?? lastReasoningProviderItemId;
     const reasoningTextItemId = orderedAuthoritativeReasoning
       .filter((item) => item.reasoningText !== undefined)
       .at(-1)?.itemId ??
-      lastReasoningTextItemId;
+      lastReasoningTextProviderItemId;
     const terminalItemId = fallbackTextItems.at(-1)?.itemId ?? lastTextItemId;
+
+    const opaqueReasoningEvidence = [...opaqueItems.values()].some((item) => item.type === "reasoning");
+    const opaqueReasoningProviderItemIds = [...opaqueItems.entries()]
+      .filter(([, item]) => item.type === "reasoning")
+      .map(([itemId]) => itemId);
+    const thinkingEvidence =
+      reasoningText.trim().length > 0 ||
+      reasoningSummary.trim().length > 0 ||
+      orderedAuthoritativeReasoning.length > 0 ||
+      lastReasoningItemId !== undefined ||
+      lastReasoningTextItemId !== undefined ||
+      opaqueReasoningEvidence;
+    if (thinkingEvidence) {
+      if (
+        opaqueReasoningProviderItemIds.length > 0 &&
+        reasoningText.trim().length === 0 &&
+        reasoningSummary.trim().length === 0 &&
+        orderedAuthoritativeReasoning.every((item) => item.reasoningText === undefined && item.summaryText === undefined) &&
+        !thinkingAssembler.hasOpenSegment &&
+        thinkingAssembler.parts.every((part) => !opaqueReasoningProviderItemIds.some((itemId) => part.providerItemIds.includes(itemId)))
+      ) {
+        thinkingAssembler.boundary("response_end", request.requestId);
+      }
+      const canApplyAuthoritativeFallback = thinkingAssembler.parts.length === 0 || (thinkingAssembler.parts.length === 1 && thinkingAssembler.hasOpenSegment);
+      if (canApplyAuthoritativeFallback && reasoningText.trim().length > 0) {
+        thinkingAssembler.append({
+          kind: "replace",
+          channel: "detail",
+          text: reasoningText,
+          requestId: request.requestId,
+          ...(reasoningTextItemId !== undefined ? { providerItemId: reasoningTextItemId } : {}),
+          authoritative: true,
+        });
+      }
+      if (canApplyAuthoritativeFallback && reasoningSummary.trim().length > 0) {
+        thinkingAssembler.append({
+          kind: "replace",
+          channel: "summary",
+          text: reasoningSummary.trim(),
+          requestId: request.requestId,
+          ...(reasoningItemId !== undefined ? { providerItemId: reasoningItemId } : {}),
+          authoritative: true,
+        });
+      }
+      const thinkingState = failure !== undefined ? (failure.kind === "cancelled" ? "interrupted" : "failed") : signal.aborted || incomplete !== undefined ? "interrupted" : "completed";
+      const assembledThinking = thinkingAssembler.finish(thinkingState);
+      const providerItemIds = [...new Set([
+        ...assembledThinking.providerItemIds,
+        ...opaqueReasoningProviderItemIds,
+        ...orderedAuthoritativeReasoning.map((item) => item.itemId),
+        ...(reasoningItemId !== undefined ? [reasoningItemId] : []),
+        ...(reasoningTextItemId !== undefined ? [reasoningTextItemId] : []),
+      ])];
+      const partsToEmit = thinkingAssembler.parts.length > 0 ? thinkingAssembler.parts : [assembledThinking];
+      const knownPartProviderItemIds = new Set(partsToEmit.flatMap((part) => part.providerItemIds));
+      const fallbackProviderItemIds = providerItemIds.filter((itemId) => !knownPartProviderItemIds.has(itemId));
+      for (const [partIndex, part] of partsToEmit.entries()) {
+        const thinkingId = part.thinkingId;
+        emit("assistant.thinking", {
+          thinkingId,
+          requestId: request.requestId,
+          ...(responseId !== undefined ? { responseId } : {}),
+          modelId: requestModelId,
+          segmentIndex: part.segmentIndex,
+          providerItemIds: [...new Set([...part.providerItemIds, ...(partIndex === partsToEmit.length - 1 ? fallbackProviderItemIds : [])])],
+          state: part.state,
+          sources: part.sources,
+          ...(part.title !== undefined ? { title: part.title } : {}),
+          ...(part.summaryText !== undefined ? { summaryText: part.summaryText } : {}),
+          ...(part.summaryOrigin !== undefined ? { summaryOrigin: part.summaryOrigin } : {}),
+          ...(part.detailText !== undefined ? { detailText: part.detailText } : {}),
+          ...(part.startedAtMs !== undefined ? { startedAtMs: part.startedAtMs } : {}),
+          ...(part.endedAtMs !== undefined ? { endedAtMs: part.endedAtMs } : {}),
+          ...(part.durationMs !== undefined ? { durationMs: part.durationMs } : {}),
+          ...(part.truncated === true ? { truncated: true } : {}),
+        });
+      }
+    }
+
+    if (failure) {
+      this.#options.budgetController?.release(request.requestId);
+      if (failure.kind === "cancelled") return { kind: "cancelled" };
+      return { kind: "error", error: failure };
+    }
+    if (signal.aborted) {
+      this.#options.budgetController?.release(request.requestId);
+      return { kind: "cancelled" };
+    }
 
     // §10.7: commentary and reasoning summary render at the same layer but stay
     // distinct types so replay preserves the phase.
@@ -2371,12 +2578,20 @@ export class AgentKernel {
     if (reasoningText.trim().length > 0) {
       emit("assistant.reasoning", {
         text: reasoningText,
+        thinkingId: thinkingLiveId,
+        requestId: request.requestId,
+        ...(responseId !== undefined ? { responseId } : {}),
+        modelId: requestModelId,
         ...(reasoningTextItemId !== undefined ? { itemId: reasoningTextItemId } : {}),
       });
     }
     if (reasoningSummary.trim().length > 0) {
       emit("assistant.reasoning_summary", {
         text: reasoningSummary.trim(),
+        thinkingId: thinkingLiveId,
+        requestId: request.requestId,
+        ...(responseId !== undefined ? { responseId } : {}),
+        modelId: requestModelId,
         ...(reasoningItemId !== undefined ? { itemId: reasoningItemId } : {}),
       });
     }
@@ -3993,6 +4208,17 @@ function summarizeTests(
   };
 }
 
+
+function joinBounded(values: Iterable<string>, maxChars: number): string {
+  if (maxChars <= 0) return "";
+  let result = "";
+  for (const value of values) {
+    const remaining = maxChars - result.length;
+    if (remaining <= 0) break;
+    result += value.slice(0, remaining);
+  }
+  return result;
+}
 
 function truncateSentences(text: string, max: number): string {
   // §6.8: render a reasoning summary as at most two sentences.

@@ -1402,7 +1402,7 @@ describe("multi-step loop (AC-08, AC-47)", () => {
       expect.objectContaining({ text: "Recovered reasoning summary.", itemId: "reasoning_1" }),
     );
     const thinkingText = (payloadsOf(events, "assistant.delta") as Array<{ text: string; phase: string }>)
-      .filter((delta) => delta.phase === "reasoning")
+      .filter((delta) => delta.phase === "thinking")
       .map((delta) => delta.text)
       .join("");
     expect(thinkingText).toBe("Recovered provider-visible reasoning.");
@@ -1452,16 +1452,17 @@ describe("multi-step loop (AC-08, AC-47)", () => {
 
     const deltas = payloadsOf(events, "assistant.delta") as Array<{
       text: string;
-      phase: "progress" | "reasoning_summary" | "candidate_final";
+      phase: "progress" | "thinking" | "candidate_final";
+      channel?: "detail" | "summary";
     }>;
-    const reconstructed = (phase: typeof deltas[number]["phase"]) =>
-      deltas.filter((delta) => delta.phase === phase).map((delta) => delta.text).join("");
+    const reconstructed = (phase: typeof deltas[number]["phase"], channel?: "detail" | "summary") =>
+      deltas.filter((delta) => delta.phase === phase && (channel === undefined || delta.channel === channel)).map((delta) => delta.text).join("");
     expect(reconstructed("progress")).toBe("commentary-phase");
-    expect(reconstructed("reasoning_summary")).toBe("reasoning-phase");
+    expect(reconstructed("thinking", "summary")).toBe("reasoning-phase");
     expect(reconstructed("candidate_final")).toBe("final-phase");
     const phaseOrder = deltas.map((delta) => delta.phase);
-    expect(phaseOrder.indexOf("progress")).toBeLessThan(phaseOrder.indexOf("reasoning_summary"));
-    expect(phaseOrder.indexOf("reasoning_summary")).toBeLessThan(phaseOrder.indexOf("candidate_final"));
+    expect(phaseOrder.indexOf("progress")).toBeLessThan(phaseOrder.indexOf("thinking"));
+    expect(phaseOrder.indexOf("thinking")).toBeLessThan(phaseOrder.indexOf("candidate_final"));
   });
 
   test("flushes a trailing delta on the fixed deadline while the provider is still open", async () => {
