@@ -1744,32 +1744,6 @@ async function handleSlash(
       return "continue";
     }
 
-    case "todo": {
-      const action = intent.action ?? "show";
-      if (action === "hide") {
-        ui.closeOverlay();
-        return "continue";
-      }
-      if (action === "clear") {
-        const state = session.viewModel.todo;
-        const result = session.writeTodo({
-          expectedRevision: state.revision,
-          items: [],
-          reason: "cleared by user",
-          source: "user",
-          clearDocument: true,
-        });
-        ui.text(result.ok ? "TODO cleared." : result.message);
-        return "continue";
-      }
-      if (action === "approve") {
-        ui.text("TODO approval is now digest-bound; use /plan approve --keep or /plan approve --compact.");
-        return "continue";
-      }
-      ui.openOverlay("todo", renderTodoList(session.viewModel.todo, ui.blockContext));
-      return "continue";
-    }
-
     case "compact": {
       const result = session.compactContext({ userRequested: true });
       if (result === undefined) {

@@ -47,7 +47,6 @@ export type SlashIntent =
       readonly text?: string;
       readonly contextStrategy?: PlanContextStrategy;
     }
-  | { readonly kind: "todo"; readonly action?: "show" | "clear" | "approve" | "hide" }
   | { readonly kind: "status" }
   | { readonly kind: "approvals"; readonly argument?: string }
   | { readonly kind: "compact" }
@@ -123,8 +122,6 @@ export function parseSlash(raw: string): SlashIntent {
         ...(stopActive ? { stopActive: true } : {}),
       };
     }
-    case "/build":
-      return { kind: "set_mode", mode: "build" };
     case "/plan": {
       // Keep the bare alias compatible with existing callers. Subcommands are
       // deliberately separate intents: treating `/plan approve` as a mode toggle
@@ -151,13 +148,6 @@ export function parseSlash(raw: string): SlashIntent {
           ? { instruction, text: instruction }
           : {}),
         ...(contextStrategy !== undefined ? { contextStrategy } : {}),
-      };
-    }
-    case "/todo": {
-      const action = rest.find((token) => !token.startsWith("--"));
-      return {
-        kind: "todo",
-        ...(action === "show" || action === "clear" || action === "approve" || action === "hide" ? { action } : {}),
       };
     }
     case "/status":
@@ -282,8 +272,6 @@ export function slashArgumentValues(input: {
       );
     case "/mode":
       return ["build", "plan"].map((value) => ({ value, detail: value === "plan" ? "read-only" : "implementation" }));
-    case "/todo":
-      return ["show", "clear", "approve", "hide"].map((value) => ({ value }));
     case "/resume":
       // Unlike model/effort values, sessions are not part of the static command
       // table. Keep the resolver pure and let the interactive host provide the

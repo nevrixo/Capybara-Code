@@ -4307,6 +4307,7 @@ describe("slash router", () => {
       "/fork",
       "/undo",
       "/clear",
+      "/todo",
       "/clealr",
       "/reasoning",
       "/agents",
