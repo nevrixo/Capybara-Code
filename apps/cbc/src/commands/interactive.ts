@@ -634,11 +634,9 @@ export async function interactive(
           // just like a permission card. The selected action is explicit: approve
           // only stays in Plan; execute choices call preparePlanExecution, which
           // records the ui approval before installing Build execution scope.
-          // Append-only/plain mode has no redraw-safe focused card, so do not make
-          // Shift+Tab appear to do nothing there; the slash commands remain the
-          // line-oriented fallback.
+          // Append-only/plain mode cannot render the focused approval picker.
           if (!fullScreen) {
-            ui.notice("Plan is ready; use /plan approve --keep|--compact, then /plan execute.");
+            ui.notice("Plan is ready; continue in the full-screen interface to approve or execute it.");
             ui.flush(boot.session.viewModel);
             return undefined;
           }
@@ -859,12 +857,8 @@ export async function interactive(
           if (typeof outcome !== "string") {
             if (outcome.kind === "resume") {
               await switchToSession(outcome.id);
-            } else if (outcome.kind === "new_session") {
-              await startNewSession();
-            } else if (outcome.kind === "submit") {
-              pending = outcome.prompt;
             } else {
-              pending = outcome.directive;
+              await startNewSession();
             }
           }
           continue;
@@ -1160,7 +1154,7 @@ async function configuredMcpServers(context: CommandContext): Promise<SidebarSer
   }
 }
 
-type SlashOutcome = "continue" | "quit" | { readonly kind: "resume"; readonly id: string } | { readonly kind: "new_session" } | { readonly kind: "execute_plan"; readonly directive: string } | { readonly kind: "submit"; readonly prompt: string };
+type SlashOutcome = "continue" | "quit" | { readonly kind: "resume"; readonly id: string } | { readonly kind: "new_session" };
 type ActiveSession = Awaited<ReturnType<typeof bootstrapSession>>["session"];
 type InteractiveSelect = (
   question: string,
@@ -1316,7 +1310,7 @@ function settingDescriptors(ui: InteractiveUi, session: ActiveSession): SettingD
         if (value === "approve") {
           return {
             value: "show",
-            message: "TODO approval is digest-bound; use /plan approve --keep or /plan approve --compact.",
+            message: "TODO approval is digest-bound; switch to Plan mode and press Shift+Tab to review, approve, or execute it.",
           };
         }
         if (value === "hide") {
@@ -1628,51 +1622,6 @@ async function handleSlash(
       }
       return "continue";
     }
-    case "plan": {
-      const strategy = intent.contextStrategy ?? "keep";
-      if (intent.action === "enter") {
-        const result = await session.requestInteractionMode("plan", "slash");
-        ui.text(result.kind === "unchanged" ? "Already in Plan mode." : "Plan mode enabled. Draft a structured Plan Contract, then use /plan approve and /plan execute.");
-        return "continue";
-      }
-      if (intent.action === "show") {
-        ui.openOverlay("plan", renderPlanContract(session.viewModel.todo, ui.blockContext));
-        return "continue";
-      }
-      if (intent.action === "refine") {
-        if (intent.instruction === undefined) {
-          ui.text("Usage: /plan refine <what to change>");
-          return "continue";
-        }
-        const mode = await session.requestInteractionMode("plan", "slash");
-        if (mode.kind !== "applied" && session.viewModel.modeState.selected !== "plan") {
-          ui.text("Could not enter Plan mode to refine the contract.");
-          return "continue";
-        }
-        return {
-          kind: "submit",
-          prompt: [
-            "HOST PLAN REFINEMENT REQUEST:",
-            intent.instruction,
-            "Revise the structured Plan Contract to satisfy this request. Use todo.write with the current revision; preserve unchanged scope, and do not modify files, run processes, or call MCP.",
-            "If the requested change affects files, commands, dependencies, acceptance criteria, or external actions, the previous approval must be considered stale and will be invalidated by the host.",
-          ].join("\n"),
-        };
-      }
-      if (intent.action === "approve") {
-        const result = session.approveTodo("slash", strategy);
-        ui.text(result.ok ? `Plan revision ${result.state.revision} approved (${strategy}); digest ${result.state.approval?.digest ?? "unknown"}.` : result.message);
-        return "continue";
-      }
-      const result = await session.preparePlanExecution(strategy, "slash");
-      if (!result.ok) {
-        ui.text(result.message);
-        for (const blocker of result.blockers ?? []) ui.text(`  blocker: ${blocker}`);
-        return "continue";
-      }
-      ui.text(`Executing approved Plan (${strategy}).`);
-      return { kind: "execute_plan", directive: result.directive };
-    }
 
     case "set_mode": {
       const current = session.viewModel.modeState;
@@ -1710,11 +1659,6 @@ async function handleSlash(
       ui.text("Original journal events were retained.");
       return "continue";
     }
-    case "export": {
-      ui.text(`Run \`capy session export ${session.viewModel.sessionId} --format ${intent.format}\`.`);
-      return "continue";
-    }
-
     case "overlay":
       // §19.3: an overlay is a *lens* over state the session already holds, so in
       // plain mode the same content is printed inline. Pickers use the host's

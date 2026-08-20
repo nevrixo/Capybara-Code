@@ -108,14 +108,6 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: "/setting", description: "open the settings popup" },
   { name: "/permissions", description: "choose permission preset (read|edit|auto|yolo)", args: [{ name: "preset", values: ["read", "edit", "auto", "yolo"] }] },
   { name: "/mode", description: "switch Build or Plan interaction mode", args: [{ name: "mode", values: ["build", "plan"] }] },
-  {
-    name: "/plan",
-    description: "enter, review, approve, or execute the Plan Contract",
-    args: [
-      { name: "action", values: ["enter", "show", "refine", "approve", "execute"] },
-      { name: "strategy", values: ["keep", "compact"], hint: "context strategy" },
-    ],
-  },
   { name: "/status", description: "show usage, cost, and session status" },
   { name: "/skills", description: "list or inspect Skills", args: [{ name: "skill" }] },
   { name: "/mcp", description: "show MCP server health" },

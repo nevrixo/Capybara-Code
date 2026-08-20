@@ -118,7 +118,7 @@ export interface PermissionContext {
   readonly planScope?: ApprovedPlanScope;
   /** A drafted Plan/TODO is present and therefore needs a one-shot execution directive. */
   readonly planExecutionRequired?: boolean;
-  /** True only during the one Build turn explicitly authorized by /plan execute. */
+  /** True only during the one Build turn explicitly authorized by approved Plan execution. */
   readonly planExecutionActive?: boolean;
   /** Trusted canonical workspace root supplied by the host, never by the model. */
   readonly workspaceRoot?: string;

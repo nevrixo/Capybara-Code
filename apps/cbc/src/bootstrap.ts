@@ -453,7 +453,7 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
             const permission = sessionForMcp.permissionContext();
             if (permission.planExecutionRequired !== true) return "eager";
             // Approval alone is not an execution grant. Only the one-shot
-            // directive installed by /plan execute may activate a transport.
+            // one-shot directive installed by approved Plan execution may activate a transport.
             if (permission.planExecutionActive !== true) return "deny";
             // Drafted/approved Plans may inspect only the cached catalog. A
             // declared MCP operation connects its target server lazily, never

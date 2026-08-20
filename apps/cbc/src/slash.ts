@@ -23,10 +23,6 @@ import {
   type OverlayKind,
 } from "@cbc/tui-components";
 
-/** Actions on the durable Plan Contract. */
-export type PlanSlashAction = "enter" | "show" | "refine" | "approve" | "execute";
-export type PlanContextStrategy = "keep" | "compact";
-
 export type SlashIntent =
   | { readonly kind: "not_slash" }
   | { readonly kind: "unknown"; readonly name: string; readonly suggestions: string[] }
@@ -37,20 +33,9 @@ export type SlashIntent =
   | { readonly kind: "setting"; readonly setting?: string; readonly value?: string }
   | { readonly kind: "set_permission"; readonly preset?: string; readonly save?: boolean }
   | { readonly kind: "set_mode"; readonly mode?: "build" | "plan"; readonly save?: boolean; readonly stopActive?: boolean }
-  /** `/plan` with a subcommand operates on the contract rather than only toggling mode. */
-  | {
-      readonly kind: "plan";
-      readonly action: PlanSlashAction;
-      /** Free-form refinement request for `/plan refine ...`. */
-      readonly instruction?: string;
-      /** Alias retained for hosts that call this field `text`. */
-      readonly text?: string;
-      readonly contextStrategy?: PlanContextStrategy;
-    }
   | { readonly kind: "status" }
   | { readonly kind: "compact" }
   | { readonly kind: "resume"; readonly id?: string }
-  | { readonly kind: "export"; readonly format: "markdown" | "jsonl" | "bundle" }
   | { readonly kind: "new_session" }
   | { readonly kind: "quit" };
 
@@ -121,34 +106,6 @@ export function parseSlash(raw: string): SlashIntent {
         ...(stopActive ? { stopActive: true } : {}),
       };
     }
-    case "/plan": {
-      // Keep the bare alias compatible with existing callers. Subcommands are
-      // deliberately separate intents: treating `/plan approve` as a mode toggle
-      // would silently discard the approval strategy and make the execution gate
-      // unenforceable.
-      const actionToken = rest[0]?.toLowerCase();
-      const action: PlanSlashAction | undefined =
-        actionToken === "enter" || actionToken === "show" || actionToken === "refine" ||
-        actionToken === "approve" || actionToken === "execute"
-          ? actionToken
-          : undefined;
-      if (action === undefined) return { kind: "set_mode", mode: "plan" };
-
-      const compact = rest.some((token) => token.toLowerCase() === "--compact");
-      const keep = rest.some((token) => token.toLowerCase() === "--keep");
-      const contextStrategy = compact ? "compact" : keep ? "keep" : undefined;
-      const instruction = action === "refine"
-        ? rest.slice(1).filter((token) => !token.startsWith("--")).join(" ").trim()
-        : undefined;
-      return {
-        kind: "plan",
-        action,
-        ...(instruction !== undefined && instruction.length > 0
-          ? { instruction, text: instruction }
-          : {}),
-        ...(contextStrategy !== undefined ? { contextStrategy } : {}),
-      };
-    }
     case "/status":
       return { kind: "status" };
     case "/compact":
@@ -159,10 +116,6 @@ export function parseSlash(raw: string): SlashIntent {
       return arg === undefined
         ? { kind: "overlay", overlay: "sessions" }
         : { kind: "resume", id: arg };
-    case "/export": {
-      const format = arg === "jsonl" || arg === "bundle" ? arg : "markdown";
-      return { kind: "export", format };
-    }
     case "/quit":
     case "/exit":
       return { kind: "quit" };
@@ -234,26 +187,6 @@ export function slashArgumentValues(input: {
   /** The active model lets effort completion hide unsupported values. */
   readonly model?: string;
 } = {}): readonly CompletionCandidate[] | undefined {
-  // Plan has a small, static action vocabulary followed by an optional
-  // context strategy. Other commands currently expose only one argument.
-  if (input.command === "/plan") {
-    if (input.index === 0) {
-      return [
-        { value: "enter", detail: "enter read-only Plan mode" },
-        { value: "show", detail: "review the Plan Contract" },
-        { value: "refine", detail: "edit the plan with a request" },
-        { value: "approve", detail: "approve the contract" },
-        { value: "execute", detail: "approve and run the contract" },
-      ];
-    }
-    if (input.index === 1 && input.argument?.name === "strategy") {
-      return [
-        { value: "keep", detail: "preserve context" },
-        { value: "compact", detail: "compact provider context" },
-      ];
-    }
-    return undefined;
-  }
   if (input.index > 0) return undefined;
 
   switch (input.command) {

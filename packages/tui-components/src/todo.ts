@@ -558,7 +558,7 @@ export function renderPlanApprovalPicker(
     : typeof root.planRevision === "number" ? root.planRevision : 0;
   // Show the digest that will be recorded even before approval.  The focused
   // picker is the user's last review point; hiding the contract identity here
-  // would make the approval UI less auditable than `/plan show`.
+  // would make the approval UI less auditable than the Plan review overlay.
   const derivedDigest = currentPlanDigest(input, document, items);
   // Prefer the current scope digest over approval metadata: a stale approval
   // must never be presented as the digest of the draft currently on screen.
@@ -631,9 +631,9 @@ export function renderPlanApprovalPicker(
 /**
  * Render the compact TODO projection used once a Plan has been accepted.
  *
- * Keeping this separate from `renderPlanContract` is intentional: the contract
- * remains available through `/plan show`, while the normal conversation and TODO
- * overlay should not repeat all of its detail after approval.
+ * Keeping this separate from `renderPlanContract` is intentional: the Plan review
+ * overlay retains the full contract, while the normal conversation and TODO view
+ * should not repeat all of its detail after approval.
  */
 export function renderNormalTodoList(
   input: {
