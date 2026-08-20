@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-20T13:21:53.151Z",
+  "generatedAt": "2026-08-20T13:54:02.564Z",
   "git": {
-    "commit": "cec95f202eff6568ce6d990eb127c3c257264cda",
-    "dirty": false,
-    "dirtyHash": "909c5bdf8366d2b2766a891bed7c7bcdca00827ca0cf4db2b0e2970b6dacdcd8"
+    "commit": "1466d7197f6459c83df4f9b434bc8e1cfd7ea733",
+    "dirty": true,
+    "dirtyHash": "877334606f72e76af3212ef3aaae0b5dad4cd5bdbc995d7650fa579eabece570"
   },
   "roots": [
     "apps",
@@ -171,8 +171,8 @@
     },
     {
       "path": "apps/cbc/src/agent.ts",
-      "bytes": 148873,
-      "sha256": "ef569710cf30f6d0a6a2afaf6383ae3e6219a495eabd65fde5629597f7731736"
+      "bytes": 148896,
+      "sha256": "e6a18e74761d21a68453eaef86496a7d987f581da4bd0a28bce3804f75cd8ec1"
     },
     {
       "path": "apps/cbc/src/approvals.ts",
@@ -391,8 +391,8 @@
     },
     {
       "path": "apps/cbc/src/tools.ts",
-      "bytes": 83594,
-      "sha256": "dea3f12953e00240d43d1e0bf3a3caba11a54e1584e0be1e863ed73e2dfb0529"
+      "bytes": 83617,
+      "sha256": "db1914986a036a998fcba355bd34afdb4e45b3d4cec1f0996d3747fa7f719e1c"
     },
     {
       "path": "apps/cbc/src/tui-frame.ts",
@@ -731,8 +731,8 @@
     },
     {
       "path": "crates/cbc-artifacts/src/lib.rs",
-      "bytes": 22328,
-      "sha256": "8da66b152ac39af04c05309b52a812fc2c23d31128b94f8a9821ec3fafce349b"
+      "bytes": 26975,
+      "sha256": "a620615d715516f646cace3c39b2700c00345f35a4e80ef009b6d1b47259b891"
     },
     {
       "path": "crates/cbc-fs/Cargo.toml",
@@ -891,8 +891,8 @@
     },
     {
       "path": "crates/cbc-runtime/src/handlers/artifact.rs",
-      "bytes": 7290,
-      "sha256": "8b545923fc4db0a088ed61ba60e8393149048049cad8e94de041136b220c02f3"
+      "bytes": 8395,
+      "sha256": "2a604cfa34e2e5d4c84ced264d4863b06390938a767495891fd65696391c285d"
     },
     {
       "path": "crates/cbc-runtime/src/handlers/credential.rs",
@@ -1236,8 +1236,8 @@
     },
     {
       "path": "packages/agent-kernel/src/observation.ts",
-      "bytes": 26902,
-      "sha256": "56ed768be1294d7181b78c20e180f97e04eb53b9deed9467c7fed4d025ba7839"
+      "bytes": 26921,
+      "sha256": "f8c3ed952120433d34c30a474301fbf2fad52348647d43b5dfbe91697a9dc124"
     },
     {
       "path": "packages/agent-kernel/src/prompt.ts",
@@ -1816,8 +1816,8 @@
     },
     {
       "path": "packages/session-domain/src/reducer.ts",
-      "bytes": 83659,
-      "sha256": "4db44b8cbb9db094da199465206af5d923cdbf7418bf62f47c36e3826e375f59"
+      "bytes": 84800,
+      "sha256": "0deef85d8c6a73f52bfb138e5a7422c603bdc4233055b90bf97a356dc9e4f8c2"
     },
     {
       "path": "packages/session-domain/src/todo.ts",
@@ -1841,8 +1841,8 @@
     },
     {
       "path": "packages/session-domain/test/session.test.ts",
-      "bytes": 70333,
-      "sha256": "aa93ae52824e1008afdcff65f8a92c338aaaebed09d71d312bb78e9222fa0661"
+      "bytes": 71868,
+      "sha256": "38442ea83d833f8b2078f0111ad8c218ed45c7730d24e449f3665e96325f4b8e"
     },
     {
       "path": "packages/session-domain/test/todo.test.ts",
@@ -1946,8 +1946,8 @@
     },
     {
       "path": "packages/tool-registry/src/catalog.ts",
-      "bytes": 35999,
-      "sha256": "975b232571507b56f998d8ac339dac76751efbb5350cf5667986a64762b13827"
+      "bytes": 36275,
+      "sha256": "628de1f121accfd84c22da85466212fff45f14bf6f6f1f20c6377d4cc59872c3"
     },
     {
       "path": "packages/tool-registry/src/discovery.ts",
@@ -1971,8 +1971,8 @@
     },
     {
       "path": "packages/tool-registry/src/validate.ts",
-      "bytes": 8073,
-      "sha256": "ac4696ea2331c52135ecdaaeb5bcd756fe718abc23267f0393096567a72de7f2"
+      "bytes": 8556,
+      "sha256": "51f0164f577ee35a5658f3d5b550c194599a83b697c0aa7da4abff1a83fdd6c5"
     },
     {
       "path": "packages/tool-registry/test/graph.test.ts",
@@ -1981,8 +1981,8 @@
     },
     {
       "path": "packages/tool-registry/test/tools.test.ts",
-      "bytes": 29702,
-      "sha256": "b83def57694a3c38c67247ea077662718df5c579f51cfc25a18c8e8e7207e493"
+      "bytes": 30296,
+      "sha256": "5a6bb9ce9607f96af3386a779854f5bb12d7743b1f867a00b2095e5a1ed59390"
     },
     {
       "path": "packages/tui-components/package.json",
@@ -2260,5 +2260,5 @@
       "sha256": "c69dafb888ab2abc0a1a6bfe0602668806ec94b495ad4f228a4e0486f22ea7e4"
     }
   ],
-  "digest": "88f3cfc5ceed6917734f27be05aeae6b69b534cf8aab58776bb3d25c13278b1d"
+  "digest": "0bdc434b3b743b1b593d99bb8cb3a2c41b15f85247b23b3bd9d9b8438bca5f31"
 }
