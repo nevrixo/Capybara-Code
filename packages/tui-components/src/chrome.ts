@@ -691,6 +691,8 @@ export interface SidebarSubagent {
   readonly toolUses?: number;
   /** Accumulated input and output tokens attributed to this subagent. */
   readonly tokens?: number;
+  /** Whether the token total includes the current request's input estimate. */
+  readonly tokensEstimated?: boolean;
   /** What it is doing right now, e.g. `writing demo.py`. */
   readonly activity?: string;
 }
@@ -865,7 +867,10 @@ export function renderRightSidebar(
               segment(`    ${agent.activity !== undefined ? glyphs.gutter : glyphs.last} `, {
                 fg: "border.warm",
               }),
-              segment(`${formatTokens(agent.tokens)} tokens`, { fg: "fg.muted" }),
+              segment(
+                `${agent.tokensEstimated === true ? "~" : ""}${formatTokens(agent.tokens)} tokens`,
+                { fg: "fg.muted" },
+              ),
             ],
             context,
           ),
@@ -1139,13 +1144,24 @@ export function sidebarFromViewModel(
       task.subagentEvents.length + (task.subagentEventsOmitted ?? 0),
       task.subagentEventCount ?? 0,
     );
+    const elapsedMs =
+      task.durationMs ??
+      (task.state === "running" &&
+        task.startTimeMs !== undefined &&
+        extras.nowMs !== undefined
+        ? Math.max(0, extras.nowMs - task.startTimeMs)
+        : undefined);
+    const pendingTokens = Math.max(0, task.pendingInputTokens ?? 0);
+    const tokensKnown =
+      task.tokens !== undefined || task.pendingInputTokens !== undefined;
     return {
       role: task.role,
       title: task.title,
       state: task.state,
-      ...(task.durationMs !== undefined ? { elapsedMs: task.durationMs } : {}),
+      ...(elapsedMs !== undefined ? { elapsedMs } : {}),
       toolUses,
-      ...(task.tokens !== undefined ? { tokens: task.tokens } : {}),
+      ...(tokensKnown ? { tokens: (task.tokens ?? 0) + pendingTokens } : {}),
+      ...(pendingTokens > 0 ? { tokensEstimated: true } : {}),
       ...(activity !== undefined ? { activity } : {}),
     };
   });

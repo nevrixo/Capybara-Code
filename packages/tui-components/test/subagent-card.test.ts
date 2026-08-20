@@ -73,4 +73,29 @@ describe("subagent TaskCard metrics and tool tree", () => {
     expect(output).not.toContain("docs/**/*.md");
     expect(output).not.toContain("package.json");
   });
+
+  test("marks the in-flight request token count as estimated", () => {
+    const output = renderTaskCard(
+      {
+        role: "executor",
+        title: "Implement",
+        goal: "Apply the fix",
+        constraints: [],
+        contract: [],
+        state: "running",
+        childCount: 1,
+        awaitInterrupted: false,
+        tokens: 500,
+        pendingInputTokens: 750,
+        subagentEvents: [],
+      },
+      context,
+      { compact: true, nowMs: 1_000 },
+    )
+      .map(lineText)
+      .join("\n");
+
+    expect(output).toContain("~1.3k tokens");
+    expect(output).not.toContain("0 tokens");
+  });
 });

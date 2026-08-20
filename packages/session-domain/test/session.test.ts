@@ -544,6 +544,26 @@ describe("subagent tool tree (§6.10)", () => {
     expect(task.subagentEvents[0]?.additions).toBe(18);
   });
 
+  test("publishes an input estimate before reconciling exact child usage", () => {
+    const events = buildScoped([
+      ...spawn(),
+      ["context.pack_compiled", { totalInputTokens: 1_200 }, "agent_1"],
+      ["tool.started", { callId: "c1", toolId: "fs.read" }, "agent_1"],
+      ["usage.updated", { inputTokens: 1_200, outputTokens: 100 }, "agent_1"],
+    ]);
+
+    const pending = replay("ses_1", events.slice(0, 3));
+    expect(taskAt(pending).pendingInputTokens).toBe(1_200);
+    expect(taskAt(pending).tokens).toBeUndefined();
+    expect(pending.activeTasks[0]?.pendingInputTokens).toBe(1_200);
+
+    const settled = replay("ses_1", events);
+    expect(taskAt(settled).subagentEventCount).toBe(1);
+    expect(taskAt(settled).tokens).toBe(1_300);
+    expect(taskAt(settled).pendingInputTokens).toBeUndefined();
+    expect(settled.activeTasks[0]?.tokens).toBe(1_300);
+  });
+
   test("the parent's own calls stay on the timeline", () => {
     const model = replay(
       "ses_1",

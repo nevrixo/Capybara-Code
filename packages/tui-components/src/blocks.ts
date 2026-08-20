@@ -938,6 +938,7 @@ export type TaskCardView = Pick<
       | "subagentEventsOmitted"
       | "startTimeMs"
       | "tokens"
+      | "pendingInputTokens"
     >
   >;
 
@@ -1021,6 +1022,12 @@ export function renderTaskCard(
   const roleToken = subagentRoleToken(roleName);
   const goalText = item.goal || item.title;
   const stateLabel = taskStateLabel(item.state);
+  const pendingTokens = Math.max(0, item.pendingInputTokens ?? 0);
+  const totalTokens = (item.tokens ?? 0) + pendingTokens;
+  const tokenMetric =
+    item.tokens !== undefined || item.pendingInputTokens !== undefined
+      ? `${pendingTokens > 0 ? "~" : ""}${formatTokens(totalTokens)} tokens`
+      : undefined;
 
   if (options.compact === true) {
     const finished = item.state !== "running";
@@ -1032,8 +1039,8 @@ export function renderTaskCard(
     if (toolCountKnown) {
       metrics.push(`${observedEvents} tool use${observedEvents === 1 ? "" : "s"}`);
     }
-    if (item.tokens !== undefined) {
-      metrics.push(`${formatTokens(item.tokens)} tokens`);
+    if (tokenMetric !== undefined) {
+      metrics.push(tokenMetric);
     }
     if (item.durationMs !== undefined) {
       metrics.push(formatDuration(item.durationMs));
@@ -1168,8 +1175,8 @@ export function renderTaskCard(
     );
   }
 
-  if (item.tokens !== undefined) {
-    metrics.push(`${formatTokens(item.tokens)} tokens`);
+  if (tokenMetric !== undefined) {
+    metrics.push(tokenMetric);
   }
 
   if (item.summary !== undefined && item.summary.length > 0) {

@@ -1883,7 +1883,9 @@ describe("right context sidebar (§6.21, AC-45)", () => {
           state: "running",
           childCount: 1,
           awaitInterrupted: false,
+          startTimeMs: 1_000,
           tokens: 1_250,
+          pendingInputTokens: 750,
           subagentEvents: [
             {
               id: "e1",
@@ -1911,11 +1913,13 @@ describe("right context sidebar (§6.21, AC-45)", () => {
       activeTasks: model.timeline.filter((i): i is Extract<TimelineItem, { type: "task" }> => i.type === "task"),
     };
 
-    const input = sidebarFromViewModel(withActive, { title: "Signup" });
+    const input = sidebarFromViewModel(withActive, { title: "Signup", nowMs: 3_400 });
     expect(input.subagents).toHaveLength(1);
     expect(input.subagents[0]?.activity).toBe("writing demo.py");
     expect(input.subagents[0]?.toolUses).toBe(2);
-    expect(input.subagents[0]?.tokens).toBe(1_250);
+    expect(input.subagents[0]?.tokens).toBe(2_000);
+    expect(input.subagents[0]?.tokensEstimated).toBe(true);
+    expect(input.subagents[0]?.elapsedMs).toBe(2_400);
     expect(input.todo).toHaveLength(1);
     expect(input.title).toBe("Signup");
   });

@@ -216,6 +216,8 @@ export interface TimelineTask {
   startTimeMs?: number;
   /** Accumulated tokens consumed by this subagent. */
   tokens?: number;
+  /** Estimated input tokens for the in-flight provider request. */
+  pendingInputTokens?: number;
   /** Latest progress line, shown in the §6.21 sidebar while the child runs. */
   progress?: string;
   /** Tool calls this subagent made, in order, for the §6.10 tree. */
@@ -1230,6 +1232,8 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
       if (isContextUsageSnapshot(snapshot)) next.contextUsage = snapshot;
       const tokens = num(payloadOf(event).totalInputTokens, next.contextUsedTokens);
       if (tokens > 0) next.contextUsedTokens = tokens;
+      const owner = subagentOwner(next.timeline, event, indexes);
+      if (owner !== undefined && tokens > 0) owner.pendingInputTokens = tokens;
       break;
     }
 
@@ -1484,7 +1488,6 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
         childCount: num(p.childCount, 1),
         awaitInterrupted: false,
         ...(typeof p.startTimeMs === "number" ? { startTimeMs: num(p.startTimeMs) } : {}),
-        tokens: 0,
         subagentEvents: [],
         subagentEventCount: 0,
         subagentEventsOmitted: 0,
@@ -1564,6 +1567,7 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
         task.state = "completed";
         task.summary = str(p.summary);
         task.durationMs = num(p.durationMs);
+        delete task.pendingInputTokens;
       }
       // §6.4 background completion notification.
       const seconds = (num(p.durationMs) / 1000).toFixed(1);
@@ -1587,6 +1591,7 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
       if (task) {
         task.state = event.kind === "task.failed" ? "failed" : "cancelled";
         task.summary = str(p.summary, str(p.reason));
+        delete task.pendingInputTokens;
       }
       next.timeline.push(
         notice(
@@ -1654,6 +1659,7 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
       if (owner !== undefined && addedTokens > 0) {
         owner.tokens = (owner.tokens ?? 0) + addedTokens;
       }
+      if (owner !== undefined) delete owner.pendingInputTokens;
       next.usage = {
         inputTokens: next.usage.inputTokens + num(p.inputTokens),
         cachedInputTokens: next.usage.cachedInputTokens + num(p.cachedInputTokens),
@@ -1830,7 +1836,8 @@ function refreshActiveLifecycle(
   const taskRelated =
     event.kind.startsWith("task.") ||
     event.kind.startsWith("tool.") ||
-    event.kind === "usage.updated";
+    event.kind === "usage.updated" ||
+    event.kind === "context.pack_compiled";
   if (taskRelated) {
     const taskIds = new Set(model.activeTasks.map((task) => task.taskId));
     const payload = payloadOf(event);
