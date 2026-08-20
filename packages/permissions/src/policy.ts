@@ -19,9 +19,9 @@ import {
   type CommandSpec,
 } from "./classifier.ts";
 import {
-  inferPermissionPresetFromConfig,
-  legacyPermissionModeToPreset,
+  resolvePermissionPolicy,
   type PermissionPreset,
+  type ResolvedPermissionPolicy,
 } from "./presets.ts";
 
 /** §13.1 permission modes. `full`/`dangerously-skip-permissions` do not exist. */
@@ -124,6 +124,10 @@ export interface PermissionContext {
   readonly workspaceRoot?: string;
   /** New preset surface — when set, overrides legacy mode branching. */
   readonly preset?: PermissionPreset;
+  /** Optional host-resolved policy; evaluator and presentation may share its digest. */
+  readonly effectivePolicy?: ResolvedPermissionPolicy;
+  /** True when the runtime has an enforceable workspace sandbox. */
+  readonly sandboxEnforceable?: boolean;
   readonly trust: TrustState;
   /** Rules from config plus rules the user granted this session (§13.3). */
   readonly rules: readonly StoredRule[];
@@ -534,8 +538,10 @@ export function mutationBlockReason(context: PermissionContext): string | undefi
   }
   if (context.trust === "untrusted") return "this project is not trusted, so mutation is refused";
   if (context.trust === "read-only") return "this project was opened read-only";
-  if (context.preset === "read" && !(context.approvedPlan !== undefined && context.interactionMode === "build")) return "Plan mode does not modify the workspace";
   if ((context.interactionMode === undefined && context.mode === "plan") || context.interactionMode === "plan") return "Plan mode does not modify the workspace";
+  const resolved = context.effectivePolicy ?? resolvePermissionPolicy(context.preset, context.configPermissions, context.mode);
+  if (context.configPermissions?.projectWrite === "plan") return "permissions.project_write = \"plan\" denies workspace mutation and process execution";
+  if (resolved.axes.nativeWrite === "deny") return "the effective permission policy denies workspace mutation";
   return undefined;
 }
 
@@ -561,12 +567,10 @@ export function processBlockReason(context: PermissionContext): string | undefin
   if (context.trust === "read-only") {
     return "this project was opened read-only; process execution is not allowed";
   }
-  if (context.preset === "read" && !(context.approvedPlan !== undefined && context.interactionMode === "build")) {
-    return "Plan mode does not run processes";
-  }
-  if ((context.interactionMode === undefined && context.mode === "plan") || context.interactionMode === "plan") {
-    return "Plan mode does not run processes";
-  }
+  if ((context.interactionMode === undefined && context.mode === "plan") || context.interactionMode === "plan") return "Plan mode does not run processes";
+  const resolved = context.effectivePolicy ?? resolvePermissionPolicy(context.preset, context.configPermissions, context.mode);
+  if (context.configPermissions?.projectWrite === "plan") return "permissions.project_write = \"plan\" denies workspace mutation and process execution";
+  if (resolved.axes.directProcess === "deny") return "the effective permission policy denies process execution";
   return undefined;
 }
 
@@ -574,202 +578,124 @@ export function processBlockReason(context: PermissionContext): string | undefin
  * The core policy evaluation. Order follows §13.8 so headless and interactive
  * runs agree on precedence.
  */
+export interface ActionTraits {
+  readonly risk: RiskClass;
+  readonly nativeWrite: boolean;
+  readonly processExecution: boolean;
+  readonly directExecutable: boolean;
+  readonly shellLike: boolean;
+  readonly network: boolean;
+  readonly destructive: boolean;
+  readonly privileged: boolean;
+  readonly credentials: boolean;
+  readonly externalSideEffect: boolean;
+  readonly unknown: boolean;
+  readonly executesProjectCode: boolean;
+}
+
+/** Derive one normalized action shape used by every policy branch. */
+export function deriveActionTraits(action: ProposedAction, catalog: readonly ToolDefinition[]): ActionTraits {
+  const tool = catalog.find((t) => t.id === action.toolId);
+  const assessed = assessRisk(action, catalog);
+  const classification = assessed.classification;
+  const mcpSideEffect = action.mcp !== undefined && (
+    action.mcp.sideEffectHint === "write" ||
+    action.mcp.sideEffectHint === "destructive" ||
+    MCP_WRITE_NAME.test(action.mcp.tool)
+  );
+  const mcpUnknownOrSideEffect = action.mcp !== undefined && action.mcp.sideEffectHint !== "read";
+  const processExecution = isProcessExecutionTool(action.toolId);
+  const shellLike = action.toolId === "shell.run" || action.command?.rawShell === true || classification?.shellLike === true;
+  return {
+    risk: assessed.risk,
+    nativeWrite: tool?.mutates === true || (action.writes?.length ?? 0) > 0 || mcpSideEffect === true || mcpUnknownOrSideEffect === true,
+    processExecution,
+    directExecutable: processExecution && action.command !== undefined && !shellLike,
+    shellLike,
+    network: classification?.network === true || tool?.network === true || action.command?.networkIntent?.required === true,
+    destructive: classification?.destructive === true || action.mcp?.sideEffectHint === "destructive",
+    privileged: classification?.privileged === true,
+    credentials: assessed.risk === "R5" || classification?.touchesCredentials === true,
+    externalSideEffect: classification?.externalSideEffect === true || mcpSideEffect === true,
+    unknown: classification?.unknownProgram === true || (action.mcp !== undefined && action.mcp.sideEffectHint === "unknown"),
+    executesProjectCode: classification?.executesProjectCode === true,
+  };
+}
+
+/**
+ * The core policy evaluation. Hard boundaries are evaluated before the selected
+ * preset. AUTO and YOLO then consume the same resolved axes as status/TUI.
+ */
 export function evaluate(
   action: ProposedAction,
   context: PermissionContext,
 ): PermissionDecision {
   const tool = context.catalog.find((t) => t.id === action.toolId);
-  const { risk, classification, reasons } = assessRisk(action, context.catalog);
+  const assessed = assessRisk(action, context.catalog);
+  const { risk, classification, reasons } = assessed;
+  const traits = deriveActionTraits(action, context.catalog);
   const hash = actionHash(action);
-  const mcpSideEffect =
-    action.mcp !== undefined &&
-    (action.mcp.sideEffectHint === "write" ||
-      action.mcp.sideEffectHint === "destructive" ||
-      MCP_WRITE_NAME.test(action.mcp.tool));
-  const mcpDestructive = action.mcp?.sideEffectHint === "destructive";
-  const mcpUnknownOrSideEffect = action.mcp !== undefined && action.mcp.sideEffectHint !== "read";
-  /** A local or external mutation declared by the normalized operation. */
-  const isWrite = tool?.mutates === true || (action.writes?.length ?? 0) > 0 || mcpSideEffect || mcpUnknownOrSideEffect;
-  const isProcessExecution = isProcessExecutionTool(action.toolId);
-  /**
-   * P0-02: running code is a *potential* mutation whatever the tool metadata
-   * says — a process can write anywhere the user can, which is also why the
-   * executor drops the read cache before every run. Read-only gates key on
-   * this, while the role gate below still keys on declared writes alone so a
-   * read-only subagent keeps its read-shaped commands.
-   */
-  const potentialMutation = isWrite || isProcessExecution;
-  const network =
-    classification?.network === true ||
-    tool?.network === true ||
-    action.command?.networkIntent?.required === true;
-  const shellLike =
-    action.toolId === "shell.run" ||
-    action.command?.rawShell === true ||
-    classification?.shellLike === true;
+  const config = context.configPermissions;
+  const resolved = context.effectivePolicy ?? resolvePermissionPolicy(context.preset, config, context.mode);
+  // A selected YOLO is still YOLO even when a soft config overlay says `ask`.
+  // The overlay remains visible in the resolver, but may not reintroduce prompts.
+  const effectivePreset: PermissionPreset | "custom" =
+    resolved.selectedPreset === "yolo" ? "yolo" : resolved.effectiveKind;
   let planForceAskReason: string | undefined;
   let planScopeForcesAsk = false;
+  const effectful = traits.nativeWrite || traits.processExecution || action.mcp !== undefined;
 
-  // ---- Step 1: hard deny invariants ----
+  // ---- Hard boundaries: these always run before presets and stored rules. ----
   for (const rule of context.hardDeny ?? []) {
-    if (matchesRule(rule, action)) {
-      return { kind: "deny", reason: `denied by policy rule for ${rule.tool}` };
-    }
+    if (matchesRule(rule, action)) return { kind: "deny", reason: `denied by policy rule for ${rule.tool}` };
   }
-  // §21.4 `credentials = "deny"` is a hard invariant, not an ask.
-  if (risk === "R5" && (context.configPermissions?.credentials ?? "deny") === "deny") {
-    return {
-      kind: "deny",
-      reason:
-        "credential material is denied by policy; it is not passed to the model even with approval",
-    };
+  if (traits.credentials && ((config?.credentials ?? "deny") === "deny" || effectivePreset === "yolo")) {
+    return { kind: "deny", reason: "credential material is denied by policy; it is not passed to the model even with approval" };
   }
-
-  // ---- Step 2: CLI --read-only (P0-02: processes included) ----
   if (context.readOnly === true) {
-    if (isProcessExecution) {
-      return {
-        kind: "deny",
-        reason:
-          "read-only mode does not allow process execution; a process can mutate the workspace",
-      };
-    }
-    if (isWrite) {
-      return { kind: "deny", reason: "--read-only forbids workspace mutation" };
-    }
+    if (traits.processExecution) return { kind: "deny", reason: "read-only mode does not allow process execution; a process can mutate the workspace" };
+    if (traits.nativeWrite) return { kind: "deny", reason: "--read-only forbids workspace mutation" };
   }
-
-  // ---- Trust gates (§13.6, P0-02) ----
   if (context.trust === "untrusted") {
-    if (isProcessExecution) {
-      return {
-        kind: "deny",
-        reason: "workspace is untrusted; running processes requires a trust decision",
-      };
-    }
-    if (potentialMutation) {
-      return { kind: "deny", reason: "this project is not trusted, so mutation is refused" };
-    }
+    if (traits.processExecution) return { kind: "deny", reason: "workspace is untrusted; running processes requires a trust decision" };
+    if (effectful) return { kind: "deny", reason: "this project is not trusted, so mutation is refused" };
   }
   if (context.trust === "read-only") {
-    if (isProcessExecution) {
-      return {
-        kind: "deny",
-        reason: "this project was opened read-only; process execution is not allowed",
-      };
-    }
-    if (potentialMutation) {
-      return { kind: "deny", reason: "this project was opened read-only" };
-    }
+    if (traits.processExecution) return { kind: "deny", reason: "this project was opened read-only; process execution is not allowed" };
+    if (effectful) return { kind: "deny", reason: "this project was opened read-only" };
   }
-
-  // ---- Config deny gates (P0-05: before any stored allow rule) ----
-  // A deny configured *after* a rule was granted must win immediately; a saved
-  // allow is a convenience for the user, never an override of current policy.
-  const config = context.configPermissions;
   if (config) {
-    if ((classification?.destructive === true || mcpDestructive) && config.destructive === "deny") {
-      return { kind: "deny", reason: "destructive actions are denied by policy" };
-    }
-    if (network && config.network === "deny") {
-      return { kind: "deny", reason: "network access is denied by policy" };
-    }
-    if ((classification?.externalSideEffect === true || mcpSideEffect) && config.externalSideEffect === "deny") {
-      return { kind: "deny", reason: "external side effects are denied by policy" };
-    }
-    // P0-04: `shell = "deny"` covers every shell-shaped invocation, whichever
-    // tool carries it — `process.run sh -c` included.
-    if (config.shell === "deny" && shellLike) {
-      // AC-27: a Skill cannot bypass this.
-      return { kind: "deny", reason: "raw shell is denied by policy" };
-    }
-    if ((config.projectWrite ?? "auto") === "plan" && potentialMutation) {
-      return { kind: "deny", reason: 'permissions.project_write = "plan" denies workspace mutation and process execution' };
-    }
+    if (traits.destructive && config.destructive === "deny") return { kind: "deny", reason: "destructive actions are denied by policy" };
+    if (traits.network && config.network === "deny") return { kind: "deny", reason: "network access is denied by policy" };
+    if (traits.externalSideEffect && config.externalSideEffect === "deny") return { kind: "deny", reason: "external side effects are denied by policy" };
+    if (config.shell === "deny" && traits.shellLike) return { kind: "deny", reason: "raw shell is denied by policy" };
+    if (config.projectWrite === "plan" && effectful) return { kind: "deny", reason: 'permissions.project_write = "plan" denies workspace mutation and process execution' };
   }
 
-  // `network = ask` is an approval boundary even for a classifier-known read
-  // operation. In particular, an MCP server's read annotation must not turn a
-  // remote connection into an automatic allow.
-  if (network && config?.network === "ask") {
-    planForceAskReason ??= "network access requires approval";
-  }
-
-  // ---- Stored deny rules (still outrank every allow) ----
+  // Stored deny rules and capability ceilings are hard boundaries as well.
   for (const stored of context.rules) {
-    if (stored.decision === "deny" && matchesRule(stored.rule, action)) {
-      return { kind: "deny", reason: `denied by a ${stored.scope} rule` };
-    }
+    if (stored.decision === "deny" && matchesRule(stored.rule, action)) return { kind: "deny", reason: `denied by a ${stored.scope} rule` };
   }
-
-  // ---- Role scoping (§15.2) ----
-  // `refactorer` writes by definition — removing a code smell means editing the
-  // code. `architect` does not: it assesses impact, and an assessor that can
-  // rewrite what it is assessing is no longer an independent check.
-  if (isWrite && !["root", "executor", "refactorer"].includes(context.agentRole)) {
-    return {
-      kind: "deny",
-      reason: `the ${context.agentRole} role is read-only and may not mutate the workspace`,
-    };
+  if (traits.nativeWrite && !["root", "executor", "refactorer"].includes(context.agentRole)) {
+    return { kind: "deny", reason: `the ${context.agentRole} role is read-only and may not mutate the workspace` };
   }
-
-  const isProcessTool = isProcessExecution || action.toolId === "process.stop";
+  const isProcessTool = traits.processExecution || action.toolId === "process.stop";
   if (isProcessTool && action.toolId !== "process.stop" && context.agentCapabilities?.canRunProcess === false) {
-    return {
-      kind: "deny",
-      reason: "the " + context.agentRole + " role is not permitted to run processes",
-    };
+    return { kind: "deny", reason: `the ${context.agentRole} role is not permitted to run processes` };
   }
-  // Delegated capability ceilings are independent of role labels and stored
-  // rules. Unknown MCP effects count as writes until a read annotation proves
-  // otherwise; a read-only child can never turn that uncertainty into an ask.
   const capabilities = context.agentCapabilities;
-  if (capabilities?.canWrite === false && isWrite) {
-    return { kind: "deny", reason: `the ${context.agentRole} capability does not permit workspace or external mutation` };
-  }
-  const capabilityPaths = [
-    ...(action.reads ?? []),
-    ...(action.writes ?? []),
-    ...(isProcessExecution && action.command?.cwd !== undefined ? [action.command.cwd] : []),
-  ];
-  const workspaceBoundAction = action.toolId.startsWith("fs.") || action.toolId.startsWith("git.") || isProcessExecution;
-  if (workspaceBoundAction && capabilityPaths.length === 0 && (capabilities?.allowedPaths?.length ?? 0) > 0) {
-    return { kind: "deny", reason: "the delegated path scope cannot prove this workspace-wide action is allowed" };
-  }
-  if (workspaceBoundAction && capabilityPaths.length === 0 && (capabilities?.forbiddenPaths?.length ?? 0) > 0) {
-    return { kind: "deny", reason: "the delegated path scope cannot prove this workspace-wide action avoids forbidden paths" };
-  }
+  if (capabilities?.canWrite === false && traits.nativeWrite) return { kind: "deny", reason: `the ${context.agentRole} capability does not permit workspace or external mutation` };
+  const capabilityPaths = [...(action.reads ?? []), ...(action.writes ?? []), ...(traits.processExecution && action.command?.cwd !== undefined ? [action.command.cwd] : [])];
+  const workspaceBoundAction = action.toolId.startsWith("fs.") || action.toolId.startsWith("git.") || traits.processExecution;
+  if (workspaceBoundAction && capabilityPaths.length === 0 && (capabilities?.allowedPaths?.length ?? 0) > 0) return { kind: "deny", reason: "the delegated path scope cannot prove this workspace-wide action is allowed" };
+  if (workspaceBoundAction && capabilityPaths.length === 0 && (capabilities?.forbiddenPaths?.length ?? 0) > 0) return { kind: "deny", reason: "the delegated path scope cannot prove this workspace-wide action avoids forbidden paths" };
   if (capabilityPaths.length > 0) {
-    if (capabilities?.forbiddenPaths?.some((pattern) => capabilityPaths.some((path) => capabilityPathMatches(pattern, path)))) {
-      return { kind: "deny", reason: "the action touches a path forbidden to this delegated agent" };
-    }
-    // An explicit positive scope is a ceiling for reads, writes, and process
-    // working directories. Empty means the task did not request path scoping;
-    // writer tasks are rejected earlier unless they provide a non-empty lease.
-    if (capabilities?.allowedPaths !== undefined && capabilities.allowedPaths.length > 0 && capabilityPaths.some((path) => !capabilities.allowedPaths!.some((pattern) => capabilityPathMatches(pattern, path)))) {
-      return { kind: "deny", reason: "the action touches a path outside this delegated agent's allowed scope" };
-    }
+    if (capabilities?.forbiddenPaths?.some((pattern) => capabilityPaths.some((path) => capabilityPathMatches(pattern, path)))) return { kind: "deny", reason: "the action touches a path forbidden to this delegated agent" };
+    if (capabilities?.allowedPaths !== undefined && capabilities.allowedPaths.length > 0 && capabilityPaths.some((path) => !capabilities.allowedPaths!.some((pattern) => capabilityPathMatches(pattern, path)))) return { kind: "deny", reason: "the action touches a path outside this delegated agent's allowed scope" };
   }
-  // ---- Preset gates (new surface — §4.1) ----
-  // Interaction mode is the live work-intent authority. Legacy callers that
-  // omit it retain `mode: plan` semantics; AgentSession always supplies it so
-  // an explicitly installed Build execution can leave a Plan-started session.
+
   const inPlan = context.interactionMode === "plan" || (context.interactionMode === undefined && context.mode === "plan");
   const approvedScope = normalizeApprovedPlanScope(context.approvedPlan ?? context.planScope);
-  const configuredPreset: PermissionPreset | "custom" | undefined =
-    context.preset ??
-    (context.mode ? legacyPermissionModeToPreset(context.mode) : undefined) ??
-    inferPermissionPresetFromConfig(config as Record<string, string> | undefined);
-  // `--plan` historically installs the read preset as a startup default. An
-  // explicit digest-bound execution is the documented escape hatch; keep all
-  // hard/config deny gates, but run the ordinary risk policy instead of making
-  // every approved file operation impossible.
-  const effectivePreset: PermissionPreset | "custom" | undefined =
-    approvedScope !== undefined && !inPlan && configuredPreset === "read" ? "auto" : configuredPreset;
-  const effectful = potentialMutation || action.mcp !== undefined || tool?.source === "mcp";
-  // An approved scope is a ceiling in Build execution too. It is deliberately
-  // checked before presets and stored rules, so YOLO or an old allow rule cannot
-  // widen the digest-bound contract.
   const planScopeProvided = context.approvedPlan !== undefined || context.planScope !== undefined;
   if (!inPlan && effectful && (context.planExecutionRequired === true || planScopeProvided) && approvedScope === undefined) {
     return { kind: "deny", reason: "a drafted Plan requires explicit digest-bound execution approval" };
@@ -778,121 +704,74 @@ export function evaluate(
     if (action.toolId === "process.stop") return { kind: "allow", scope: "operation", reason: "stopping an existing process is always safe" };
     const membership = actionInApprovedPlanScope(action, approvedScope, context.workspaceRoot === undefined ? {} : { workspaceRoot: context.workspaceRoot });
     if (!membership.inScope) return { kind: "deny", reason: membership.reason ?? "operation is outside the approved Plan scope" };
-    if (membership.forceAsk) {
-      planForceAskReason = membership.reason;
-      planScopeForcesAsk = true;
-    }
-    if (classification !== undefined && (
-      classification.destructive || classification.privileged || classification.externalSideEffect ||
-      classification.touchesCredentials || classification.network || ["R4", "R5", "R6"].includes(risk)
-    )) {
+    if (membership.forceAsk) { planForceAskReason = membership.reason; planScopeForcesAsk = true; }
+    if (classification !== undefined && (classification.destructive || classification.privileged || classification.externalSideEffect || classification.touchesCredentials || classification.network || ["R4", "R5", "R6"].includes(risk))) {
       planForceAskReason ??= "high-risk or externally effectful command requires one-operation approval";
       planScopeForcesAsk = true;
     }
   }
   if (inPlan) {
-    // Termination is safe even if trust was revoked or the runtime is already in Plan.
-    if (action.toolId === "process.stop") {
-      return { kind: "allow", scope: "operation", reason: "stopping an existing process is always safe" };
-    }
-    if (effectful) {
-      // A digest-bound scope authorizes only the subsequent Build turn. It
-      // never turns Plan into a write-capable mode, even when a caller passes
-      // an otherwise valid approval object directly to policy.
-      return { kind: "deny", reason: "Plan mode is read-only; execute the approved Plan in Build mode" };
-    }
-    if (network || risk !== "R0") return { kind: "deny", reason: `Plan mode allows read-only inspection only (this action is ${risk})` };
+    if (action.toolId === "process.stop") return { kind: "allow", scope: "operation", reason: "stopping an existing process is always safe" };
+    if (effectful) return { kind: "deny", reason: "Plan mode is read-only; execute the approved Plan in Build mode" };
+    if (traits.network || risk !== "R0") return { kind: "deny", reason: `Plan mode allows read-only inspection only (this action is ${risk})` };
     return { kind: "allow", scope: "operation", reason: "read-only inspection in Plan mode" };
   }
-  if (effectivePreset === "read" && !(approvedScope !== undefined && !inPlan)) {
-    if (potentialMutation || network || action.mcp !== undefined || tool?.source === "mcp") return { kind: "deny", reason: "read preset does not modify the workspace or use network" };
+
+  if (effectivePreset === "read") {
+    if (effectful || traits.network || action.mcp !== undefined) return { kind: "deny", reason: "read preset does not modify the workspace or use network" };
     if (risk !== "R0") return { kind: "deny", reason: `read preset allows read-only inspection only (this action is ${risk})` };
     return { kind: "allow", scope: "operation", reason: "read-only inspection" };
   }
-  if (effectivePreset === "yolo" && planForceAskReason === undefined) {
-    return { kind: "allow", scope: "operation", reason: "YOLO — hard boundaries already passed" };
-  }
+
+  // YOLO is a no-ask policy. All hard boundaries above still apply.
+  if (effectivePreset === "yolo") return { kind: "allow", scope: "operation", reason: "YOLO — hard boundaries already passed" };
+
   if (effectivePreset === "edit") {
-    if (isProcessExecution || network) {
-      return { kind: "deny", reason: "Edit mode does not run processes or use network" };
+    if (traits.processExecution || traits.network) return { kind: "deny", reason: "Edit mode does not run processes or use network" };
+    if (traits.destructive || traits.externalSideEffect) {
+      if (resolved.axes.destructive === "ask" || resolved.axes.externalSideEffect === "ask") planForceAskReason ??= "effectful edit requires approval";
+      else return { kind: "deny", reason: `Edit mode denies ${risk} actions` };
     }
-    if (risk !== "R0" && risk !== "R1" && risk !== "R2") {
-      return { kind: "deny", reason: `Edit mode denies ${risk} actions` };
-    }
-    return { kind: "allow", scope: "operation", reason: `Edit mode allows ${risk} file operation` };
+    if (traits.nativeWrite && resolved.axes.nativeWrite === "deny") return { kind: "deny", reason: "Edit mode denies workspace mutation" };
+    if (traits.nativeWrite && resolved.axes.nativeWrite === "ask") planForceAskReason ??= "workspace mutation requires approval";
+    if (risk !== "R0" && risk !== "R1" && risk !== "R2" && !traits.destructive && !traits.externalSideEffect) return { kind: "deny", reason: `Edit mode denies ${risk} actions` };
+    if (planForceAskReason === undefined) return { kind: "allow", scope: "operation", reason: `Edit mode allows ${risk} file operation` };
   }
 
-  // ---- Stored allow rules (P0-05: after every deny above) ----
+  // Stored allow rules are considered only after hard boundaries and Plan scope.
   for (const stored of context.rules) {
-    if (planScopeForcesAsk) break;
-    if (stored.decision !== "allow" || !matchesRule(stored.rule, action)) continue;
-    // PERM-003: a rule granted at a lower risk does not cover an escalation.
-    if (riskExceeds(risk, stored.grantedForRisk)) {
-      break;
-    }
-    // §13.2: R4–R6 can never have been stored broadly, but double-check.
-    if (!allowsBroadRule(risk)) break;
-    if (stored.scope === "project" && context.trust !== "trusted-always" && context.trust !== "trusted-once") {
-      break;
-    }
-    return {
-      kind: "allow",
-      scope: stored.scope === "session" ? "session" : "turn",
-      reason: `matched a ${stored.scope} allow rule`,
-    };
+    if (planScopeForcesAsk || stored.decision !== "allow" || !matchesRule(stored.rule, action)) continue;
+    if (riskExceeds(risk, stored.grantedForRisk) || !allowsBroadRule(risk)) continue;
+    if (stored.scope === "project" && context.trust !== "trusted-always" && context.trust !== "trusted-once") continue;
+    return { kind: "allow", scope: stored.scope === "session" ? "session" : "turn", reason: `matched a ${stored.scope} allow rule` };
   }
 
-  // `project_write = "ask"` forces an approval for every mutation path,
-  // including a write-capable process, regardless of the permission mode
-  // (P0-06). Falling through here lands the action at the ask below.
-  const projectWriteForcesAsk =
-    (config?.projectWrite ?? "auto") === "ask" && (isWrite || isProcessExecution);
-
-  // ---- Auto and Auto Review ----
   const autoMode = context.mode === "auto" || context.mode === "auto-review";
   const isAutoPreset = effectivePreset === "auto";
-  const autoEffective = (autoMode || isAutoPreset) && !projectWriteForcesAsk && planForceAskReason === undefined;
-  if (autoEffective) {
-    if (risk === "R0" || (risk === "R1" && classification?.executesProjectCode !== true)) {
-      const label = isAutoPreset ? "auto" : context.mode;
-      return { kind: "allow", scope: "operation", reason: `${risk} action in ${label} mode` };
+  const autoEffective = autoMode || isAutoPreset;
+  if (autoEffective && planForceAskReason === undefined) {
+    if (traits.network && resolved.axes.network !== "allow") planForceAskReason = "network access requires approval";
+    if (traits.shellLike && resolved.axes.shellLike !== "allow") planForceAskReason ??= "raw shell commands require approval";
+    if (traits.destructive && resolved.axes.destructive !== "allow") planForceAskReason ??= "destructive action requires approval";
+    if (traits.privileged) planForceAskReason ??= "privileged action requires approval";
+    if (traits.externalSideEffect && resolved.axes.externalSideEffect !== "allow") planForceAskReason ??= "external side effect requires approval";
+    if (traits.unknown) planForceAskReason ??= "unknown program or side effect requires approval";
+    if (traits.nativeWrite && !traits.processExecution && riskAtMost(risk, "R2") && resolved.axes.nativeWrite === "allow") return { kind: "allow", scope: "operation", reason: "bounded workspace mutation in Auto mode" };
+    const sandboxOk = context.sandboxEnforceable === true ||
+      (context.sandboxEnforceable === undefined && riskAtMost(risk, "R1") && classification?.readsOnly === true && classification.executesProjectCode === false);
+    if (traits.directExecutable && riskAtMost(risk, "R2") && sandboxOk && resolved.axes.directProcess === "risk" && !traits.network && !traits.destructive && !traits.privileged && !traits.credentials && !traits.externalSideEffect && !traits.unknown) {
+      return { kind: "allow", scope: "operation", reason: `${risk} direct executable in Auto mode` };
     }
-    if (risk === "R2" && (config?.destructive ?? "ask") !== "deny") {
-      return {
-        kind: "allow",
-        scope: "operation",
-        reason: "bounded workspace mutation in Auto mode",
-      };
-    }
+    if (risk === "R0" && !traits.processExecution && planForceAskReason === undefined) return { kind: "allow", scope: "operation", reason: "read-only action" };
+    if (risk === "R2" && !traits.processExecution && !traits.network && !traits.destructive && resolved.axes.nativeWrite === "allow" && planForceAskReason === undefined) return { kind: "allow", scope: "operation", reason: "bounded workspace mutation in Auto mode" };
   }
 
-  // ---- Ask mode ----
-  if (context.mode === "ask" && !projectWriteForcesAsk && planForceAskReason === undefined) {
-    if (risk === "R0") {
-      return { kind: "allow", scope: "operation", reason: "read-only action" };
-    }
-    // §13.1: safe process may be allowed by the classifier in ask mode. A
-    // shell-shaped invocation never qualifies, whichever tool carries it.
-    if (
-      risk === "R1" &&
-      config?.shell === "safe-auto" &&
-      classification?.readsOnly === true &&
-      classification.executesProjectCode === false &&
-      !shellLike
-    ) {
-      return {
-        kind: "allow",
-        scope: "operation",
-        reason: "classified as a safe local command",
-      };
-    }
+  // Legacy ASK retains its safe read-only command allowance.
+  if (context.mode === "ask" && planForceAskReason === undefined) {
+    if (risk === "R0") return { kind: "allow", scope: "operation", reason: "read-only action" };
+    if (risk === "R1" && config?.shell === "safe-auto" && classification?.readsOnly === true && classification.executesProjectCode === false && !traits.shellLike) return { kind: "allow", scope: "operation", reason: "classified as a safe local command" };
   }
 
-  // ---- Everything else asks ----
-  // §13.8 / AC-38: `evaluate` decides only allow/ask/deny. How an ask is resolved
-  // when nobody can answer it — deny-on-ask, fail-on-ask, allow-listed — belongs
-  // to the approval broker, because `fail-on-ask` must abort the run with exit
-  // code 4 (§8.9), and a denial decided here would never reach it.
   const ruleCandidate = commandPrefixRule(action);
   const request: ApprovalRequest = {
     approvalId: `ap_${hash}`,
@@ -901,20 +780,15 @@ export function evaluate(
     display: action.display,
     ...(action.command ? { cwd: action.command.cwd } : {}),
     riskClass: risk,
-    reason: [
-      ...reasons,
-      ...(planForceAskReason !== undefined && !reasons.includes(planForceAskReason) ? [planForceAskReason] : []),
-    ].join("; ") || `${risk} action requires approval`,
-    network,
+    reason: [...reasons, ...(planForceAskReason !== undefined && !reasons.includes(planForceAskReason) ? [planForceAskReason] : [])].join("; ") || `${risk} action requires approval`,
+    network: traits.network,
     sideEffects: classification?.sideEffects ?? [],
-    offeredScopes: offeredScopes(risk, context, shellLike),
+    offeredScopes: offeredScopes(risk, context, traits.shellLike),
     actionHash: hash,
     ...(ruleCandidate !== undefined ? { ruleCandidate } : {}),
   };
-
   return { kind: "ask", request };
 }
-
 function offeredScopes(
   risk: RiskClass,
   context: PermissionContext,
@@ -929,6 +803,11 @@ function offeredScopes(
   // §13.4: `allow_project` requires a trusted project.
   if (context.trust === "trusted-always") scopes.push("project");
   return scopes;
+}
+
+function riskAtMost(risk: RiskClass, ceiling: RiskClass): boolean {
+  const order: RiskClass[] = ["R0", "R1", "R2", "R3", "R4", "R5", "R6"];
+  return order.indexOf(risk) <= order.indexOf(ceiling);
 }
 
 function riskExceeds(risk: RiskClass, granted: RiskClass): boolean {
