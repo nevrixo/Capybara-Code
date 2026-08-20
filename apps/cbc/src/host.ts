@@ -17,7 +17,7 @@ export interface HostIo {
   /** Returns false when the underlying stream applies backpressure. */
   stdout(text: string): boolean | number | void;
   stderr(text: string): void;
-  /** Read all of stdin, for `capy run --stdin` and `capy auth api --stdin`. */
+  /** Read all of stdin for credential import and other host-owned input flows. */
   readStdin(): Promise<string>;
   /** Prompt for a line. `masked` is required for a credential (§7.2, §9.3). */
   prompt(question: string, options?: { masked?: boolean }): Promise<string>;

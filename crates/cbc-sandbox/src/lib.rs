@@ -125,7 +125,7 @@ impl SandboxCapabilities {
 /// §24.5: every backend listed here is verified by actually exercising the
 /// mechanism (`enforce::probe`), never by reading a file that claims it exists.
 /// A backend that is merely present in the kernel but cannot be applied by this
-/// process is not reported, so `capy doctor` and the status bar never overclaim.
+/// process is not reported, so diagnostics and the status bar never overclaim.
 pub fn detect(requested: SandboxLevel) -> SandboxCapabilities {
     #[allow(unused_mut)]
     let mut backends: Vec<SandboxBackend> = Vec::new();

@@ -2,7 +2,7 @@
   "x-dialect": "json-schema-draft-2020-12",
   "$id": "cbc:events/event",
   "title": "Capybara Code domain event",
-  "description": "PRD 20.6 and 20.7. One envelope serves the agent kernel, the TUI reducer, the session journal, and the headless JSONL stream. 20.10 makes this the public contract for `cbc run --jsonl`, so a change here is a consumer-visible change and must be recorded in schemas/CHANGELOG.md.",
+  "description": "PRD 20.6 and 20.7. One envelope serves the agent kernel, the TUI reducer, the durable session journal, and repository-owned benchmark adapters. A change here affects persisted sessions and internal consumers and must be recorded in schemas/CHANGELOG.md.",
   "type": "object",
   "additionalProperties": false,
   "required": [

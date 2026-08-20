@@ -2088,9 +2088,9 @@ export function renderReportEvidence(
 // §6.19 update banner
 // ---------------------------------------------------------------------------
 
-/** §6.19 / AC-41: a non-blocking banner naming the version and the command. */
+/** §6.19 / AC-41: a non-blocking banner naming the version and upgrade path. */
 export function renderUpdateBanner(
-  input: { version: string; command?: string },
+  input: { version: string },
   context: BlockContext,
 ): StyledLine[] {
   return [
@@ -2099,7 +2099,7 @@ export function renderUpdateBanner(
       "banner",
       [
         segment(
-          `New version ${input.version} is available. Run: ${input.command ?? "capy update"}`,
+          `New version ${input.version} is available. Update with the package manager used to install Capybara Code.`,
           { fg: "fg.primary" },
         ),
       ],

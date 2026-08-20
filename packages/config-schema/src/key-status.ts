@@ -31,9 +31,9 @@ export interface ConfigKeyInfo {
  */
 const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
   // ---- ui: theme/mouse/animations/showCost/statusDensity are wired (P1-02);
-  // colour mode still follows NO_COLOR / --no-color ----
+  // colour mode still follows the `NO_COLOR` environment variable ----
   ["ui.theme", { status: "wired", consumer: "tui.ts theme palette selection" }],
-  ["ui.color", { status: "experimental", note: "colour follows NO_COLOR / --no-color; this key is not read" }],
+  ["ui.color", { status: "experimental", note: "colour follows the `NO_COLOR` environment variable; this key is not read" }],
   ["ui.mouse", { status: "wired", consumer: "tui.ts / opentui-view.ts mouse tracking gate" }],
   ["ui.animations", { status: "wired", consumer: "tui.ts reduced-motion capability override" }],
   ["ui.showCost", { status: "wired", consumer: "tui-components planLayout / status bar & sidebar" }],

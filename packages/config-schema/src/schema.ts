@@ -489,7 +489,7 @@ export interface ConfigIssue {
 
 export interface EffectiveConfig {
   readonly config: CbcConfig;
-  /** Which source last set each dotted path, for `capy config validate`. */
+  /** Which source last set each dotted path, for configuration diagnostics. */
   readonly provenance: Record<string, ConfigSource>;
   readonly issues: ConfigIssue[];
 }
@@ -1088,7 +1088,7 @@ function validateSemantics(
 ): ConfigIssue[] {
   const issues: ConfigIssue[] = [];
   // Attribute each finding to the layer that actually set the offending value,
-  // so `capy config validate` points at the file to fix rather than at defaults.
+  // so configuration diagnostics point at the file to fix rather than at defaults.
   const sourceOf = (path: string): ConfigSource => provenance[path] ?? "default";
 
   for (const [name, configured] of Object.entries(config.lspServers)) {

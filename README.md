@@ -60,7 +60,7 @@ Linux ARM64 and musl-based distributions are outside this first Public Alpha.
 
 ### Installation notes
 
-Use one global package manager for `capy` at a time so npm and Bun do not install competing shims. `capy update` provides reinstall guidance only; it never downloads or replaces a binary automatically. GitHub Release archives include `SHA256SUMS.txt` for manual checksum verification.
+Use one global package manager for `capy` at a time so npm and Bun do not install competing shims. Upgrade with that same package manager. GitHub Release archives include `SHA256SUMS.txt` for manual checksum verification.
 
 Inside WSL, use native Linux `node`, `npm`, and `bun` for installation and testing. They must resolve to Linux paths rather than `/mnt/c/...` Windows executables.
 
@@ -74,36 +74,28 @@ Once installed globally, launch Capybara Code in your workspace:
 capy
 ```
 
-## Global configuration
+## CLI and settings
 
-Capybara Code uses one global `config.toml`. It creates the file automatically on
-first use, preserves an existing file, and never reads `.capybara/config.toml` or
-`.capybara/config.local.toml` from a project. Print the exact platform-specific path
-with:
+The public CLI intentionally stays small:
 
-```bash
-capy config path
+```text
+capy [prompt...]
+capy run [prompt...]
+capy auth login [--device]
+capy auth api [--stdin]
+capy auth status
+capy auth logout [--all]
+capy model refresh
+capy config set <path> <value>
+capy version
+capy help [topic]
 ```
 
-The generated file explicitly contains the Context7 MCP endpoint and the TypeScript
-and Python LSP definitions. Service definitions are not hidden in code defaults, so
-they can be edited, disabled, replaced, or removed. For another language, add a table
-such as:
-
-```toml
-[lsp.servers.rust]
-command = "rust-analyzer"
-args = []
-extensions = [".rs"]
-language_id = "rust"
-enabled = true
-timeout_ms = 15000
-```
-
-Inspect and manage configured language servers with `capy lsp list`,
-`capy lsp doctor [name]`, and `capy lsp enable|disable <name>`. Capybara reports a
-missing executable but never installs one automatically. LSP processes start only in
-a trusted Build workspace and remain read-only, bounded indexing helpers.
+Use `/setting` inside the TUI for supported interactive settings. For scripting,
+`capy config set <path> <value>` writes one user setting. Capybara Code creates its
+single global `config.toml` on first use and never reads project-local Capybara
+configuration files. MCP and LSP service definitions remain visible in that global
+file; missing external executables are reported but never installed automatically.
 
 Root agent turns have no configurable maximum step, tool-call, or wall-time ceiling;
 they continue until completion or explicit cancellation. Subagent budgets and
@@ -116,7 +108,7 @@ Keep the published `capy` command separate from the checked-out source tree. Reg
 ```bash
 bun install
 bun run dev:link
-capy-dev --version
+capy-dev version
 ```
 
 Remove that development registration when needed:

@@ -8,7 +8,7 @@
  *
  * The router is pure — it maps input to an intent. Executing the intent belongs to
  * whichever front end is running, so the same table serves the full TUI and
- * `--plain`.
+ * automatic line mode.
  */
 
 import { configEnumValues } from "@cbc/config-schema";

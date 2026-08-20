@@ -4,7 +4,7 @@
  * This package is renderer-independent on purpose. §19.3 puts OpenTUI and Solid in
  * `apps/cbc`, and §19.3 also requires a plain fallback when the renderer cannot
  * start. Keeping theme resolution, width measurement, sanitization, and every block
- * renderer here means the OpenTUI view and the `--plain` view are the same layout
+ * renderer here means the OpenTUI view and automatic line mode are the same layout
  * decisions with two serializers — and §25.8's golden tests can assert semantic
  * cells and ANSI bytes from one source.
  */

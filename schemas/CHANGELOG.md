@@ -66,9 +66,9 @@ Initial published contract, matching PRD v1.0.
 - Per-kind defaults for `level`, `visibility`, and `durability`; the §20.9 MUST-journal
   set is expressed as `durability: "journaled"`.
 - `sequence` is strictly monotonic within a session (§20.10).
-- `run.completed` carries the §8.9 `exitCode`, so a JSONL consumer learns the outcome
+- `run.completed` carries the §8.9 `exitCode`, so a journal consumer learns the outcome
   without inspecting the process. The kernel emits exactly one `turn.completed` per
-  turn; the headless runner appends `run.completed` for the process-level status.
+  turn; the headless runner appends `run.completed` for the invocation-level status.
 - Added the journaled `permission.changed` event used when the effective permission
   policy changes.
 

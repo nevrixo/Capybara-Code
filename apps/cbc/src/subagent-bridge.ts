@@ -286,7 +286,7 @@ export class SubagentBridge {
           ),
           text:
             `A ${roleValue} subagent needs to write the workspace, but ${blocked}. ` +
-            "Resolve the trust decision first (`capy trust add .`), then spawn again.",
+            "Reopen the workspace and choose a writable trust option, then spawn again.",
         };
       }
     }
@@ -300,7 +300,7 @@ export class SubagentBridge {
           ),
           text:
             `A ${roleValue} subagent needs to run processes, but ${blocked}. ` +
-            "Resolve the trust decision first (`capy trust add .`), then spawn again.",
+            "Reopen the workspace and choose a writable trust option, then spawn again.",
         };
       }
     }

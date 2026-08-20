@@ -578,8 +578,8 @@ describe("spawn-time preflight (§15.3)", () => {
     expect(mutationBlockReason(context({ trust: "read-only" }))).toContain("read-only");
   });
 
-  test("--read-only and plan mode block mutation regardless of trust", () => {
-    expect(mutationBlockReason(context({ readOnly: true }))).toContain("--read-only");
+  test("read-only mode and plan mode block mutation regardless of trust", () => {
+    expect(mutationBlockReason(context({ readOnly: true }))).toContain("read-only mode");
     expect(mutationBlockReason(context({ mode: "plan" }))).toContain("Plan mode");
   });
 
@@ -840,13 +840,13 @@ describe("non-interactive policy (§13.8, AC-38)", () => {
     expect(decision.kind).toBe("allow");
   });
 
-  test("--read-only forbids mutation before anything else", () => {
+  test("read-only mode forbids mutation before anything else", () => {
     const decision = evaluate(
       { callId: "c", toolId: "fs.write", arguments: {}, writes: ["a.ts"], display: "w" },
       context({ readOnly: true }),
     );
     expect(decision.kind).toBe("deny");
-    if (decision.kind === "deny") expect(decision.reason).toContain("--read-only");
+    if (decision.kind === "deny") expect(decision.reason).toContain("read-only mode");
   });
 
   test("the ask request carries the exact command-prefix rule candidate (P0-13)", () => {
@@ -988,7 +988,7 @@ describe("process semantics detection (P0-04)", () => {
 });
 
 describe("read-only denies process execution (P0-02)", () => {
-  test("--read-only denies node -e writes and shell redirects alike", () => {
+  test("read-only mode denies node -e writes and shell redirects alike", () => {
     for (const action of [
       shellLikeAction("node", ["-e", "require('fs').writeFileSync('x.txt','owned')"], {
         semantics: "interpreter-inline-code",

@@ -161,7 +161,7 @@ fn resolve_trust_target(params: &Value) -> Result<(PathBuf, String, String), Rpc
     Ok((canonical, canonical_str, fs_id))
 }
 
-/// Every persisted decision, for `capy trust status` — the CLI no longer reads
+/// Every persisted decision for trust surfaces; the TypeScript host no longer reads
 /// the store file itself (P0-01).
 pub fn trust_list(state: &RuntimeState) -> Result<Value, RpcError> {
     let store = state.trust_store.lock().expect("trust lock");

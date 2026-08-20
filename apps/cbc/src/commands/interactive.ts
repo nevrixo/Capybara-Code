@@ -1124,7 +1124,7 @@ async function configuredMcpServers(context: CommandContext): Promise<SidebarSer
       detail: config.transport,
     }));
   } catch {
-    // A malformed config is reported by `capy doctor`; it must not stop the
+    // A malformed config is reported through configuration diagnostics; it must not stop the
     // session from painting (§7.1, AC-04).
     return [];
   }

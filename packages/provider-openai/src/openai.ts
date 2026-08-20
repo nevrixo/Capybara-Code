@@ -243,7 +243,7 @@ export class OpenAiResponsesProvider implements ModelProvider {
       }
 
       // Keep the bundled descriptors authoritative for known models, but retain
-      // provider-only IDs so `capy model list --available` can explain the count
+      // provider-only IDs so model-registry diagnostics can explain the count
       // difference without pretending to know their context or tool surface.
       const knownIds = new Set(
         MODEL_REGISTRY.flatMap((model) => [model.id, ...model.aliases].map((id) => id.toLowerCase())),

@@ -153,7 +153,7 @@ export interface PermissionContext {
   };
   /** True in `capy run` (§13.8): never prompt. */
   readonly nonInteractive: boolean;
-  /** `--read-only` CLI flag (§13.8 step 2). */
+  /** Read-only execution state, used by Plan and untrusted workspaces. */
   readonly readOnly?: boolean;
   /** Headless approval policy file (§13.8 step 3). */
   readonly headlessPolicy?: "deny-on-ask" | "allow-listed" | "fail-on-ask";
@@ -532,7 +532,7 @@ function actionInApprovedPlanScope(
  * work that could never land (§15.3). Failing at spawn is the honest version.
  */
 export function mutationBlockReason(context: PermissionContext): string | undefined {
-  if (context.readOnly === true) return "--read-only forbids workspace mutation";
+  if (context.readOnly === true) return "read-only mode forbids workspace mutation";
   if ((context.planExecutionRequired === true || context.approvedPlan !== undefined || context.planScope !== undefined) && context.interactionMode === "build" && normalizeApprovedPlanScope(context.approvedPlan ?? context.planScope) === undefined) {
     return "a drafted Plan requires explicit digest-bound execution approval";
   }
@@ -654,7 +654,7 @@ export function evaluate(
   }
   if (context.readOnly === true) {
     if (traits.processExecution) return { kind: "deny", reason: "read-only mode does not allow process execution; a process can mutate the workspace" };
-    if (traits.nativeWrite) return { kind: "deny", reason: "--read-only forbids workspace mutation" };
+    if (traits.nativeWrite) return { kind: "deny", reason: "read-only mode forbids workspace mutation" };
   }
   if (context.trust === "untrusted") {
     if (traits.processExecution) return { kind: "deny", reason: "workspace is untrusted; running processes requires a trust decision" };

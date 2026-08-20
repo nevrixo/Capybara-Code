@@ -5,7 +5,7 @@
  * the tool registry, the context engine, the Skill catalog, the event sequencer, and
  * the reduced view model. 짠20.8 makes the reducer the only path from events to view
  * model, so every emitter in the process funnels through `#emit` here ??the TUI, the
- * JSONL stream, and the journal all observe the same ordered sequence.
+ * internal event tap, and the journal all observe the same ordered sequence.
  */
 
 import { createHash } from "node:crypto";
@@ -158,7 +158,7 @@ export interface AgentSessionOptions {
   readonly beforeInteractionMode?: (target: InteractionMode) => Promise<void>;
   readonly globalInstructionReader?: import("@cbc/context-engine").InstructionReader;
   readonly bridges?: ToolBridges;
-  /** Every event, after reduction. The TUI and the JSONL writer both use this. */
+  /** Every event, after reduction. The TUI and internal integrations use this. */
   readonly onEvent?: (event: CbcEvent, model: SessionViewModel) => void;
   readonly onJournalError?: (event: CbcEvent, error: unknown) => void;
   readonly now?: () => number;
@@ -2181,7 +2181,7 @@ export class AgentSession {
    * 짠13.3's policy inputs, rebuilt on every evaluation.
    *
    * Rebuilding rather than caching matters: a rule granted mid-turn has to apply to
-   * the very next call in the same batch, and `--read-only` has to keep applying
+   * the very next call in the same batch, and read-only mode has to keep applying
    * even if the model asks again.
    */
   #permissionPreset: PermissionPreset | undefined;

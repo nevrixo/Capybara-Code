@@ -502,7 +502,7 @@ describe("paths", () => {
     expect(resolveWorkspace(host, "~/x")).toBe("/home/dev/x");
   });
 
-  test("`.` collapses, so `capy trust add .` keys on the workspace itself", () => {
+  test("`.` collapses so trust records key on the workspace itself", () => {
     const host = createFakeHost({ cwd: "/work/project" });
     // The bug this guards: `join(cwd, ".")` produced `/work/project/.`, which never
     // matched the workspace, so the trust decision silently did nothing.
@@ -530,7 +530,7 @@ describe("paths", () => {
 });
 
 // ---------------------------------------------------------------------------
-// §19.3 render mode, §20.10 JSONL
+// §19.3 render mode
 // ---------------------------------------------------------------------------
 
 describe("render mode", () => {

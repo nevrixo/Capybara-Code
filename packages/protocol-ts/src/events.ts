@@ -1,7 +1,7 @@
 /**
  * Domain event envelope — PRD §20.6 and §20.7.
  *
- * The agent kernel, the TUI, headless JSONL, and the session journal all use
+ * The agent kernel, the TUI, internal event taps, and the session journal all use
  * this one schema. §20.8 makes the reducer the only path from events to view
  * model, which is what makes deterministic replay, crash recovery, golden TUI
  * tests, and the headless contract share an implementation.

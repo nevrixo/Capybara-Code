@@ -171,7 +171,7 @@ async function migrateHostSessionIndex(
   }
 }
 
-/** Resolve `--resume <id|prefix|last|title>` against the durable store (P0-05). */
+/** Resolve a TUI resume selector against the durable store (P0-05). */
 async function resolveResumedSession(
   runtime: Runtime,
   selector: string,

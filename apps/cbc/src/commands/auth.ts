@@ -903,7 +903,7 @@ export async function authLogout(
   }
 
   if (removed === 0) context.out("No stored credential to remove.");
-  context.out("Session transcripts were kept. Use `capy session delete` to remove them.");
+  context.out("Session transcripts were kept.");
 
   if (context.host.env.OPENAI_API_KEY !== undefined && context.host.env.OPENAI_API_KEY.length > 0) {
     context.out("");

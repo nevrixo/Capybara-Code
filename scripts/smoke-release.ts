@@ -78,10 +78,10 @@ export async function smokeStage(outDirectory: string, targetName: ReleaseTarget
   }
 
   const binary = join(stage, "bin", `capy${target.executableExtension}`);
-  const versionOutput = await execute(binary, ["--version"]);
-  if (!versionOutput.includes(version)) throw new Error(`--version did not report ${version}`);
-  const helpOutput = await execute(binary, ["--help"]);
-  if (!helpOutput.toLowerCase().includes("capy")) throw new Error("--help did not identify capy");
+  const versionOutput = await execute(binary, ["version"]);
+  if (!versionOutput.includes(version)) throw new Error(`version did not report ${version}`);
+  const helpOutput = await execute(binary, ["help"]);
+  if (!helpOutput.toLowerCase().includes("capy")) throw new Error("help did not identify capy");
 }
 
 export async function main(argv: readonly string[]): Promise<number> {

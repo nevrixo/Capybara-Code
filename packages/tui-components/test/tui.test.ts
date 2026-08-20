@@ -1261,11 +1261,11 @@ describe("timeline blocks (§6.4, §6.7–§6.12, AC-06)", () => {
     expect(text).not.toContain("Final answer");
   });
 
-  test("the update banner names the version and command (§6.19)", () => {
+  test("the update banner names the version and upgrade path (§6.19)", () => {
     const text = renderUpdateBanner({ version: "0.12.5" }, context()).map(lineText).join("\n");
     expect(text).toContain("Update Available");
     expect(text).toContain("0.12.5");
-    expect(text).toContain("capy update");
+    expect(text).toContain("package manager");
   });
 
   test("chronological timeline keeps delegated responses beside their action", () => {

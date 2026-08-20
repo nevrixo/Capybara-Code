@@ -97,7 +97,7 @@ On Windows PowerShell:
 ```powershell
 $npmPrefix = Join-Path ([System.IO.Path]::GetTempPath()) "capy-npm-alpha"
 npm install --prefix $npmPrefix --global capybara-code@alpha
-& (Join-Path $npmPrefix "capy.cmd") --version
+& (Join-Path $npmPrefix "capy.cmd") version
 
 # Use a dedicated Bun configuration for a separate check.
 $bunGlobal = Join-Path ([System.IO.Path]::GetTempPath()) "capy-bun-alpha"
@@ -109,7 +109,7 @@ globalDir = "$($bunGlobal.Replace([char]92, '/'))"
 globalBinDir = "$($bunBin.Replace([char]92, '/'))"
 "@ | Set-Content -LiteralPath $bunfig -Encoding utf8
 bun install "--config=$bunfig" --global capybara-code@alpha
-& (Join-Path $bunBin "capy.exe") --version
+& (Join-Path $bunBin "capy.exe") version
 Remove-Item -LiteralPath $bunfig
 ```
 
@@ -127,14 +127,14 @@ None of those resolved paths may start with `/mnt/c/`. Then use isolated prefixe
 ```bash
 npm_prefix="$(mktemp -d)"
 npm install --prefix "$npm_prefix" --global capybara-code@alpha
-"$npm_prefix/bin/capy" --version
+"$npm_prefix/bin/capy" version
 
 bun_global="$(mktemp -d)"
 bun_bin="$(mktemp -d)"
 bunfig="$(mktemp)"
 printf '[install]\nglobalDir = "%s"\nglobalBinDir = "%s"\n' "$bun_global" "$bun_bin" > "$bunfig"
 bun install "--config=$bunfig" --global capybara-code@alpha
-"$bun_bin/capy" --version
+"$bun_bin/capy" version
 rm -f "$bunfig"
 ```
 
@@ -146,7 +146,7 @@ npm install --global capybara-code@alpha
 bun install --global capybara-code@alpha
 ```
 
-Confirm `capy --version`, `capy --help`, and `capy update`. The update command gives the supported reinstall commands; it deliberately does not download or install an update automatically.
+Confirm `capy version` and `capy help`. Upgrade later with the same package manager used for installation.
 
 ## Remove legacy local wiring
 
@@ -177,7 +177,7 @@ The checkout never owns the public `capy` command. In each development environme
 
 ```bash
 bun run dev:link
-capy-dev --version
+capy-dev version
 # later, when no longer needed
 bun run dev:unlink
 ```

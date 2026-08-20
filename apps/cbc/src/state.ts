@@ -233,7 +233,7 @@ export function configValue(config: CbcConfig, path: string): unknown {
  * Write one dotted path into the single global config file.
  *
  * Project configuration files are not part of the product's configuration model;
- * every persistent edit targets the path returned by `capy config path`.
+ * every persistent edit targets the resolved global user-config path.
  */
 export interface UserConfigTransaction {
   readonly set?: Readonly<Record<string, unknown>>;

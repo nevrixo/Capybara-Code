@@ -1,5 +1,5 @@
 {
-  "x-note": "AC-19 and §13.8: run this under `cbc run --permission deny-on-ask`. The first call is denied, the model observes the structured denial, and the second step proceeds without it. A script that instead retried the same call would show the denial observation was not reaching the model.",
+  "x-note": "AC-19 and §13.8: run this with the internal headless policy set to `deny-on-ask`. The first call is denied, the model observes the structured denial, and the second step proceeds without it. A script that instead retried the same call would show the denial observation was not reaching the model.",
   "steps": [
     {
       "commentary": "Checking whether the dependency is installed.",

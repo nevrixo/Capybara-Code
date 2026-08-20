@@ -347,7 +347,7 @@ function normalizeResource(resource: string): string {
  * The `capy.` prefix is a storage key, not a command name. It was renamed alongside
  * the executable while the product is pre-release, because that is the only point at
  * which no stored token has to be migrated. A token saved under the previous prefix
- * is not read back; `capy mcp login <server>` obtains a fresh one.
+ * is not read back; the interactive authorization flow obtains a fresh one.
  */
 export function keychainRefFor(server: string, issuer: string): string {
   return `capy.mcp.${server}.${issuer.replace(/[^A-Za-z0-9._-]/g, "_")}`;

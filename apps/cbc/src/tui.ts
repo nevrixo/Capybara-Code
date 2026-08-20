@@ -2172,7 +2172,7 @@ export class InteractiveUi {
       this.#eraseComposer();
       // A live phase is UI output, not a diagnostic. In plain mode diagnostics
       // go to stderr, which some terminal hosts do not show in the transcript.
-      // `text()` keeps JSONL safe by routing non-event prose to stderr.
+      // `text()` keeps normal output clean by routing diagnostic prose to stderr.
       this.#options.writer.text(`  ${label}`);
     }
   }
@@ -3086,7 +3086,7 @@ export { resolveComposerCursor } from "./tui-frame.ts";
  * Bridges session events to the UI.
  *
  * Returned as a closure rather than wired inside `InteractiveUi` so headless runs can
- * substitute the JSONL writer for the same seam (§8.3).
+ * attach an internal event observer at the same seam (§8.3).
  */
 export function uiEventSink(
   ui: InteractiveUi,

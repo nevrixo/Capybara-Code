@@ -5,7 +5,7 @@
  * interesting parts are both about ordering:
  *
  *   - The runtime is started lazily. §22.1's startup budget and AC-04's "paint
- *     before any network call" both fail if `capy config path` spawns a sidecar, so
+ *     before any network call" both fail if a config-only operation spawns a sidecar, so
  *     commands that never touch the workspace never pay for one.
  *   - Configuration is global and independent of workspace trust. Trust is still
  *     resolved before executable workspace integrations are launched.
@@ -96,7 +96,7 @@ export class CommandContext {
   /**
    * The trust state for this workspace.
    *
-   * Read from the host store first so `capy trust status` works without a sidecar.
+   * Read from the host store first so trust lookup works without a sidecar.
    * When the runtime is already up, its answer wins: §13.6 keys trust on filesystem
    * identity, and only the runtime can see that.
    */
@@ -220,7 +220,7 @@ export function failure(code: ExitCode): CommandResult {
  *
  * `~` is expanded, separators are normalized, and `.`/`..` segments are collapsed, so a
  * trust record written from PowerShell still matches the same directory entered from
- * bash. Collapsing is not cosmetic: `capy trust add .` used to key its record on
+ * bash. Collapsing is not cosmetic: historical path-based trust writes could key a record on
  * `<cwd>/.`, which never matched the workspace, so the decision silently did nothing.
  *
  * Canonicalization proper — symlinks, junctions, case folding — is the runtime's job.

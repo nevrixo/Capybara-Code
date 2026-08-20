@@ -158,7 +158,7 @@ export function buildMcpBridge(options: McpBridgeOptions): McpBridge {
       return {
         result: errorResult(
           "MCP_UNAVAILABLE",
-          "no MCP server is connected; configure one with `capy mcp add` and restart",
+          "no MCP server is connected; configure one in `/setting` and restart",
           { summary: "MCP not connected" },
         ),
         text: "MCP is not connected, so the call was not made.",

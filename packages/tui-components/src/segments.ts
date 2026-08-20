@@ -7,7 +7,7 @@
  * plain text.
  *
  * The split pays for itself three ways. A golden test can assert meaning without
- * matching escape bytes; `--plain` and `--jsonl` reuse the same renderers (§19.3);
+ * matching escape bytes; interactive and line-oriented output reuse the same renderers (§19.3);
  * and the colour-depth fallbacks in §6.5 apply at serialization, so no block
  * renderer needs to know what the terminal supports.
  */
@@ -165,7 +165,7 @@ export function toAnsi(styled: StyledLine, options: RenderOptions): string {
   return parts.join("");
 }
 
-/** Serialize to plain text (`--plain`, `NO_COLOR`, golden cell assertions). */
+/** Serialize to plain text (line mode, `NO_COLOR`, golden cell assertions). */
 export function toPlain(styled: StyledLine, _options?: RenderOptions): string {
   return lineText(styled);
 }

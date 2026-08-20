@@ -99,7 +99,7 @@ export class InteractiveApprovalBroker implements ApprovalBroker {
     request: ApprovalRequest,
     choices: readonly string[],
   ): Promise<number> {
-    // The card goes to stderr so a `--plain` run piped to a file keeps stdout for
+    // The line-oriented card goes to stderr so normal stdout remains available for
     // the answer (§8.3).
     for (const line of renderApprovalCard(request)) {
       this.#options.host.io.stderr(`${line}\n`);
@@ -189,7 +189,7 @@ export interface HeadlessBrokerOptions {
   /** Rules that pre-approve an action, from config (§13.3). */
   readonly allowList?: readonly StoredRule[];
   readonly onResolved?: (request: ApprovalRequest, decision: ApprovalDecision) => void;
-  /** Diagnostics sink; never stdout in `--jsonl` mode (§20.10). */
+  /** Diagnostics sink kept separate from normal command output. */
   readonly diagnostic?: (line: string) => void;
 }
 

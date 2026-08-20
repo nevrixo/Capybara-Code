@@ -189,7 +189,7 @@ export interface SessionRecorderOptions {
     model: SessionViewModel,
     position: SessionHydrationPosition,
   ) => Record<string, unknown>;
-  /** Called for every event so the TUI and JSONL writer both see it. */
+  /** Called for every event so presentation and internal observers see the same sequence. */
   readonly onEvent?: (event: CbcEvent) => void;
   readonly onDurable?: (event: CbcEvent) => void;
   readonly onJournalError?: (event: CbcEvent, error: unknown) => void;

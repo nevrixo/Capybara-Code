@@ -167,7 +167,7 @@ export function stateForResult(result: ChildAgentResult): AgentState {
  *
  * Requirements from §6.10: role, goal, constraints, contract, and child count are
  * shown; a writer task shows its lease scope; status is one of the documented
- * states. The card is plain text so the same renderer serves the TUI, `--plain`,
+ * states. The card is plain text so the same renderer serves the TUI, automatic line mode,
  * and a golden test (§25.8).
  */
 export function renderTaskCard(

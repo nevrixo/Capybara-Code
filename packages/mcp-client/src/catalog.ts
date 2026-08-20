@@ -112,7 +112,7 @@ export class McpCatalog {
       ?.capabilities.find((capability) => capability.name === name);
   }
 
-  /** Set the enabled flag, e.g. from `capy mcp disable`. */
+  /** Set the enabled flag from settings or configuration. */
   setEnabled(server: string, enabled: boolean): number {
     const entry = this.#byServer.get(server);
     if (entry === undefined) return 0;

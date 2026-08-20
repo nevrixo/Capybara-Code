@@ -61,7 +61,7 @@ const PERMISSION_CLASSES: readonly PermissionClass[] = ["read", "write", "proces
  * Parse one `*.md` agent definition.
  *
  * `trusted` gates whether a project definition is usable at all. An untrusted
- * project's file still parses so `capy doctor` can show it exists and why it was
+ * project's file still parses so configuration diagnostics can show it exists and why it was
  * not activated — silence would look like a missing file.
  */
 export function parseCustomAgent(

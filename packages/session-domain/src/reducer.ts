@@ -3,7 +3,7 @@
  *
  * The TUI renders a view model computed from events, never ad-hoc mutable
  * widgets. That single rule is what gives §20.8's benefits: deterministic replay,
- * crash recovery, golden TUI tests, headless JSONL reuse, and exact
+ * crash recovery, golden TUI tests, internal event reuse, and exact
  * event-to-UI traceability.
  */
 
@@ -1688,7 +1688,7 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
         notice(
           event,
           "info",
-          `New version ${str(p.version)} is available. Run: capy update`,
+          `New version ${str(p.version)} is available. Update with the package manager used to install Capybara Code.`,
           "●",
         ),
       );
