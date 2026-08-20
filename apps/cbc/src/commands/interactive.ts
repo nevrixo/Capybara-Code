@@ -36,11 +36,9 @@ import {
 import { bootstrapSession, warmContext } from "../bootstrap.ts";
 import type { ToolBridges } from "../tools.ts";
 import { EXIT, type ExitCode } from "../exit.ts";
-import { workspaceIdentityFor } from "../host.ts";
 import { InputReader } from "../input-reader.ts";
 import { inertKeyStream } from "../keys.ts";
 import { WorkspacePathMentionIndex } from "../path-mentions.ts";
-import { listApprovalRules, revokeApprovalRule } from "../rules-store.ts";
 import { setUserConfigValue } from "../state.ts";
 import {
   REASONING_EFFORTS,
@@ -1453,50 +1451,6 @@ async function handleSlash(
         "",
       ];
       ui.openOverlay("status", lines);
-      return "continue";
-    }
-
-    case "approvals": {
-      const identity = await workspaceIdentityFor(context.host, context.workspacePath);
-      const argument = intent.argument?.trim();
-      if (argument !== undefined && argument.startsWith("revoke")) {
-        const id = argument.replace(/^revoke\s+/, "").trim();
-        if (id.length === 0) {
-          ui.text("Usage: /approvals revoke <id> — see /approvals for ids.");
-          return "continue";
-        }
-        const removed = await revokeApprovalRule(context.host, context.paths, id);
-        ui.text(removed ? `Revoked ${id}.` : `No saved approval with id ${id}.`);
-        return "continue";
-      }
-      const entries = await listApprovalRules(context.host, context.paths, identity);
-      if (entries.length === 0) {
-        ui.openOverlay("approvals", [
-          "No saved approval rules for this workspace.",
-          "",
-          "Approve an action with 'Always allow' to add one; revoke it with",
-          "/approvals revoke <id>.",
-        ]);
-        return "continue";
-      }
-      const lines = entries.map((entry) => {
-        const rule = entry.rule;
-        const what = [
-          rule.tool,
-          ...(rule.program !== undefined ? [rule.program] : []),
-          ...(rule.argsExact !== undefined
-            ? [`[${rule.argsExact.join(" ")}]`]
-            : rule.argsPrefix !== undefined && rule.argsPrefix.length > 0
-              ? [`${rule.argsPrefix.join(" ")}…`]
-              : []),
-          ...(rule.cwd !== undefined ? [`cwd=${rule.cwd}`] : []),
-          ...(rule.server !== undefined ? [rule.server] : []),
-        ].join(" ");
-        const age = entry.grantedAt.slice(0, 10);
-        return `${entry.id}  ${entry.decision.padEnd(5)} ${what.padEnd(36)} ${age}${entry.legacy ? "  [legacy]" : ""}`;
-      });
-      lines.push("", "Revoke one with /approvals revoke <id>.");
-      ui.openOverlay("approvals", lines);
       return "continue";
     }
 

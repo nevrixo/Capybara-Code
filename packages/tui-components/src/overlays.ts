@@ -109,11 +109,6 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     args: [{ name: "effort", hint: "effort or mode" }],
   },
   { name: "/setting", description: "open the settings popup" },
-  {
-    name: "/approvals",
-    description: "list or revoke saved approval rules",
-    args: [{ name: "action", hint: "revoke <id>" }],
-  },
   { name: "/permissions", description: "choose permission preset (read|edit|auto|yolo)", args: [{ name: "preset", values: ["read", "edit", "auto", "yolo"] }] },
   { name: "/mode", description: "switch Build or Plan interaction mode", args: [{ name: "mode", values: ["build", "plan"] }] },
   {

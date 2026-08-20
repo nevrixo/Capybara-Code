@@ -48,7 +48,6 @@ export type SlashIntent =
       readonly contextStrategy?: PlanContextStrategy;
     }
   | { readonly kind: "status" }
-  | { readonly kind: "approvals"; readonly argument?: string }
   | { readonly kind: "compact" }
   | { readonly kind: "resume"; readonly id?: string }
   | { readonly kind: "export"; readonly format: "markdown" | "jsonl" | "bundle" }
@@ -152,8 +151,6 @@ export function parseSlash(raw: string): SlashIntent {
     }
     case "/status":
       return { kind: "status" };
-    case "/approvals":
-      return { kind: "approvals", ...(arg !== undefined ? { argument: arg } : {}) };
     case "/compact":
       return { kind: "compact" };
     case "/new":

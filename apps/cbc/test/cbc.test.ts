@@ -2411,7 +2411,7 @@ describe("interactive UI (§6.2, §6.21)", () => {
     const rows = frame.split(/\r?\n/);
     const composerIndex = rows.findLastIndex((row) => row.includes("> /"));
     const footerIndex = rows.findIndex((row) => row.includes("Build"));
-    const completionIndex = rows.findIndex((row) => row.includes("/approvals"));
+    const completionIndex = rows.findIndex((row) => row.includes("/setting"));
     const composerRow = rows[composerIndex] ?? "";
     const completionRow = rows[completionIndex] ?? "";
     const leadingSpaces = (value: string) => value.length - value.trimStart().length;
@@ -4308,6 +4308,7 @@ describe("slash router", () => {
       "/undo",
       "/clear",
       "/todo",
+      "/approvals",
       "/clealr",
       "/reasoning",
       "/agents",
