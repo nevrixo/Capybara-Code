@@ -120,6 +120,52 @@ describe("incremental timeline projection", () => {
     );
   });
 
+  test("keeps recent child calls hidden unless diagnostics opt in", () => {
+    const task: TimelineTask = {
+      type: "task",
+      id: "task-recent",
+      sequence: 1,
+      taskId: "agent-recent",
+      role: "executor",
+      title: "Recent work",
+      goal: "Inspect files",
+      constraints: [],
+      contract: [],
+      state: "running",
+      childCount: 1,
+      awaitInterrupted: false,
+      subagentEvents: Array.from({ length: 4 }, (_, index) => ({
+        id: `child-${index}`,
+        sequence: index + 2,
+        callId: `call-${index}`,
+        toolId: "fs.write",
+        argumentsSummary: `file-${index}.ts`,
+        status: "succeeded" as const,
+      })),
+    };
+    const inlineOptions: TimelineRenderOptions = { subagentDetail: "inline" };
+    const primary = new ProjectedTimeline(inlineOptions);
+    primary.sync([task], inlineOptions);
+
+    expect(primary.projectedItems().map((item) => item.id)).toEqual(["task-recent"]);
+
+    const diagnosticOptions: TimelineRenderOptions = {
+      ...inlineOptions,
+      inlineSubagentEvents: true,
+    };
+    const diagnostic = new ProjectedTimeline(diagnosticOptions);
+    diagnostic.sync([task], diagnosticOptions);
+    const diagnosticIds = diagnostic.projectedItems().map((item) => item.id);
+
+    expect(diagnosticIds).toContain("task-recent::subagent-hidden");
+    expect(diagnosticIds).not.toContain("child-0");
+    expect(diagnosticIds.filter((id) => id.startsWith("child-"))).toEqual([
+      "child-1",
+      "child-2",
+      "child-3",
+    ]);
+  });
+
   test("an unchanged or one-item-appended 10k history inspects no completed prefix", () => {
     const items = Array.from({ length: 10_000 }, (_, index) => notice(index));
     const projection = new ProjectedTimeline();

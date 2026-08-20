@@ -1120,10 +1120,7 @@ export class ProjectedTimeline {
       },
     ];
 
-    const policy = resolvePresentationPolicy(this.#projectionOptions);
-    const inlineChildren =
-      policy.subagentDetail === "inline" ||
-      this.#projectionOptions.inlineSubagentEvents === true;
+    const inlineChildren = this.#projectionOptions.inlineSubagentEvents === true;
     if (
       inlineChildren &&
       item.type === "task" &&
@@ -1195,7 +1192,6 @@ export class ProjectedTimeline {
   }
 
   #isVisible(item: TimelineItem): boolean {
-    const policy = resolvePresentationPolicy(this.#projectionOptions);
     if (item.type === "approval") return false;
     if (
       (item.type === "commentary" || item.type === "thinking" || item.type === "final") &&
@@ -1208,7 +1204,7 @@ export class ProjectedTimeline {
       item.type === "tool" &&
       item.agentId !== undefined &&
       item.agentId !== "root" &&
-      policy.subagentDetail === "drawer"
+      this.#projectionOptions.inlineSubagentEvents !== true
     ) {
       return false;
     }

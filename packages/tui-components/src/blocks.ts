@@ -2191,8 +2191,8 @@ export interface TimelineRenderOptions {
   readonly maxToolNodes?: number;
   /**
    * Render delegated calls as chronological siblings of the task anchor.
-   * Enabled by default so the conversation reads in the order work happened.
-   * Pass false for the compact nested tree view.
+   * This is an explicit diagnostic opt-in; normal task cards keep child calls
+   * summarized even when their own detail mode is inline.
    */
   readonly inlineSubagentEvents?: boolean;
   /** Internal card option used by the chronological projection. */
@@ -2618,8 +2618,7 @@ export function projectTimeline(
   options: TimelineRenderOptions = {},
 ): TimelineItem[] {
   const policy = resolvePresentationPolicy(options);
-  const inlineChildren =
-    policy.subagentDetail === "inline" || options.inlineSubagentEvents === true;
+  const inlineChildren = options.inlineSubagentEvents === true;
   const expanded = inlineChildren
     ? expandChronologicalTimeline(items)
     : items
@@ -2640,7 +2639,7 @@ export function projectTimeline(
         item.type === "tool" &&
         item.agentId !== undefined &&
         item.agentId !== "root" &&
-        policy.subagentDetail === "drawer"
+        !inlineChildren
       ),
   );
   // `plan.created`/`plan.updated` are durable snapshots, not separate user-facing
@@ -2671,10 +2670,9 @@ export function renderTimeline(
   let previousWasAssistant = false;
 
   // A task owns its child events in the reducer so the sidebar can derive one
-  // coherent task state. That storage shape must not dictate the conversation
-  // layout, though: delegated calls belong directly after the event that preceded
-  // them. Expand the child events into render-only tool blocks and order the result
-  // by the journal sequence. The original view model stays untouched for replay.
+  // coherent task state. Normal conversation views retain that compact shape;
+  // diagnostic callers can explicitly project child events as chronological
+  // siblings. The original view model stays untouched for replay.
   const orderedItems = projectTimeline(items, options);
 
   // Only the newest reasoning phase is live; every earlier one has stopped.

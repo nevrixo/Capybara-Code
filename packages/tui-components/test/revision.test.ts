@@ -123,8 +123,15 @@ describe("shared presentation projection", () => {
     expect(projected.some((item) => item.id === "child-thinking")).toBe(false);
 
     const inline = projectTimeline(items, { subagentDetail: "inline" });
-    expect(inline.some((item) => item.id === "child-tool")).toBe(true);
+    expect(inline.some((item) => item.id === "child-tool")).toBe(false);
     expect(inline.some((item) => item.id === "child-thinking")).toBe(false);
+
+    const diagnostic = projectTimeline(items, {
+      subagentDetail: "inline",
+      inlineSubagentEvents: true,
+    });
+    expect(diagnostic.some((item) => item.id === "child-tool")).toBe(true);
+    expect(diagnostic.some((item) => item.id === "child-thinking")).toBe(false);
   });
 
   test("applies expanded, collapsed, and off Thinking disclosure consistently", () => {

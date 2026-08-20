@@ -1300,6 +1300,7 @@ describe("timeline blocks (§6.4, §6.7–§6.12, AC-06)", () => {
         task,
       ],
       context(120),
+      { subagentDetail: "inline" },
     );
     const text = rendered.map(lineText).join("\n");
 
@@ -1307,6 +1308,15 @@ describe("timeline blocks (§6.4, §6.7–§6.12, AC-06)", () => {
     expect(text).not.toContain("[List]");
     expect(text).not.toContain("3 entries");
     expect(text).toContain("1 tool");
+
+    const diagnosticText = renderTimeline([task], context(120), {
+      subagentDetail: "inline",
+      inlineSubagentEvents: true,
+    })
+      .map(lineText)
+      .join("\n");
+    expect(diagnosticText).toContain("[List]");
+    expect(diagnosticText).toContain("3 entries");
   });
   test("formatDuration is readable across magnitudes", () => {
     expect(formatDuration(18)).toBe("18ms");
