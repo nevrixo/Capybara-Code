@@ -18,27 +18,26 @@ import {
 import { normalizeConfigKeys, parseToml, type TomlIssue } from "./toml.ts";
 
 export interface LoadConfigInput {
-  /** Raw contents of the user config file, if it exists. */
+  /** Raw contents of the one global user config file, if it exists. */
   readonly userToml?: string;
-  /** Raw contents of the project config file, if it exists. */
-  readonly projectToml?: string;
-  readonly projectLocalToml?: string;
-  /** §21.3: the project layer is dropped entirely when the project is untrusted. */
-  readonly projectTrusted: boolean;
   readonly env: Record<string, string | undefined>;
   /** Already-parsed CLI flags as dotted paths. */
   readonly cliOverrides?: ConfigLayer;
   /** Interactive `/model`, `/mode`, `/effort` overrides. */
   readonly sessionOverrides?: ConfigLayer;
+  /** @deprecated Project configuration is ignored; retained for source compatibility. */
+  readonly projectToml?: string;
+  /** @deprecated Project-local configuration is ignored. */
+  readonly projectLocalToml?: string;
+  /** @deprecated Workspace trust no longer participates in configuration loading. */
+  readonly projectTrusted?: boolean;
 }
 
 export interface LoadConfigResult extends EffectiveConfig {
   readonly tomlIssues: Array<TomlIssue & { source: ConfigSource }>;
-  readonly projectLayerApplied: boolean;
-  readonly projectLocalLayerApplied: boolean;
 }
 
-/** Assemble the effective configuration following §21.2 precedence. */
+/** Assemble the effective configuration following global-only precedence. */
 export function loadConfig(input: LoadConfigInput): LoadConfigResult {
   const tomlIssues: Array<TomlIssue & { source: ConfigSource }> = [];
   const layers: Array<{ source: ConfigSource; values: ConfigLayer }> = [];
@@ -47,22 +46,6 @@ export function loadConfig(input: LoadConfigInput): LoadConfigResult {
     const parsed = parseToml(input.userToml);
     tomlIssues.push(...parsed.issues.map((i) => ({ ...i, source: "user" as ConfigSource })));
     layers.push({ source: "user", values: normalizeConfigKeys(parsed.values) });
-  }
-
-  let projectLayerApplied = false;
-  if (input.projectToml !== undefined && input.projectTrusted) {
-    const parsed = parseToml(input.projectToml);
-    tomlIssues.push(...parsed.issues.map((i) => ({ ...i, source: "project" as ConfigSource })));
-    layers.push({ source: "project", values: normalizeConfigKeys(parsed.values) });
-    projectLayerApplied = true;
-  }
-
-  let projectLocalLayerApplied = false;
-  if (input.projectLocalToml !== undefined && input.projectTrusted) {
-    const parsed = parseToml(input.projectLocalToml);
-    tomlIssues.push(...parsed.issues.map((i) => ({ ...i, source: "project-local" as ConfigSource })));
-    layers.push({ source: "project-local", values: normalizeConfigKeys(parsed.values) });
-    projectLocalLayerApplied = true;
   }
 
   layers.push({ source: "environment", values: environmentLayer(input.env) });
@@ -84,5 +67,5 @@ export function loadConfig(input: LoadConfigInput): LoadConfigResult {
           cache: { ...merged.config.model.cache, ttlMinutes: 30 },
         },
       };
-  return { ...merged, config, tomlIssues, projectLayerApplied, projectLocalLayerApplied };
+  return { ...merged, config, tomlIssues };
 }

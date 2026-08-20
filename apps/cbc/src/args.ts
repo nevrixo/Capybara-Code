@@ -105,7 +105,7 @@ export type Command =
   | { readonly kind: "config"; readonly sub: "path" }
   | { readonly kind: "config"; readonly sub: "paths" }
   | { readonly kind: "config"; readonly sub: "validate"; readonly explain: boolean }
-  | { readonly kind: "config"; readonly sub: "init"; readonly project: boolean; readonly local: boolean; readonly full: boolean; readonly force: boolean }
+  | { readonly kind: "config"; readonly sub: "init"; readonly full: boolean; readonly force: boolean }
   | { readonly kind: "config"; readonly sub: "sources" }
   | { readonly kind: "init"; readonly force: boolean }
   | { readonly kind: "trust"; readonly sub: "status" }
@@ -781,8 +781,6 @@ function buildConfig(sub: string, operands: readonly string[], flags: Map<string
       return {
         kind: "config",
         sub: "init",
-        project: flagBool(flags, "--project"),
-        local: flagBool(flags, "--local"),
         full: flagBool(flags, "--full"),
         force: flagBool(flags, "--force"),
       };

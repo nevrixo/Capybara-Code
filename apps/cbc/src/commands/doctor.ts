@@ -124,10 +124,11 @@ export async function doctor(
       ? `${loaded.userConfigPath}`
       : `${configErrors.length} error(s), ${loaded.tomlIssues.length} syntax issue(s)`,
   );
+  const trust = await context.trust();
   push(
     "trust",
-    loaded.trust === "untrusted" ? "warn" : "pass",
-    `${loaded.trust} for ${context.workspacePath}`,
+    trust === "untrusted" ? "warn" : "pass",
+    `${trust} for ${context.workspacePath}`,
   );
 
   // ---- runtime binary and protocol ----

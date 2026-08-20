@@ -7,9 +7,8 @@
  *   - The runtime is started lazily. §22.1's startup budget and AC-04's "paint
  *     before any network call" both fail if `capy config path` spawns a sidecar, so
  *     commands that never touch the workspace never pay for one.
- *   - Trust is resolved *before* configuration, because §13.6 makes trust a
- *     precondition for reading project config at all. Doing it the other way round
- *     would let an untrusted repository influence the decision about itself.
+ *   - Configuration is global and independent of workspace trust. Trust is still
+ *     resolved before executable workspace integrations are launched.
  */
 
 import type { CbcConfig } from "@cbc/config-schema";
@@ -135,16 +134,12 @@ export class CommandContext {
   setTrust(state: TrustState, store?: TrustStore): void {
     this.#trust = state;
     if (store !== undefined) this.#trustStore = store;
-    // The effective config depends on trust, so it has to be rebuilt.
-    this.#config = undefined;
+
   }
 
   async config(): Promise<LoadedConfig> {
     if (this.#config !== undefined) return this.#config;
-    const trust = await this.trust();
     this.#config = await loadEffectiveConfig(this.host, {
-      workspacePath: this.workspacePath,
-      trust,
       ...(this.#options.cliOverrides !== undefined
         ? { cliOverrides: this.#options.cliOverrides }
         : {}),

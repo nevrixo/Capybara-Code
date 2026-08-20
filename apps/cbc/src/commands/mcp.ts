@@ -4,9 +4,7 @@
  * Two details from §8.8 shape the `add` implementation. First, command and args are
  * stored as an *array*, because a shell string is ambiguous and re-splitting it later
  * is how argument-injection bugs happen. Second, a server added from the CLI is
- * written to the *user* config: §17.5 lets a project define servers, but a project
- * may never be the thing that grants them, and writing there from a command would
- * blur that line.
+ * always written to the one global config file.
  *
  * `login` implements §17.9 with no weaker fallbacks: PKCE S256 only, a loopback
  * redirect only, an explicit scope consent step, and a token bound to one resource
@@ -184,15 +182,7 @@ export async function mcpList(
     }
   }
 
-  if (!loaded.projectLayerApplied) {
-    const projectFile = loaded.projectConfigPath;
-    if (await context.host.fs.exists(projectFile)) {
-      // §17.5 + §13.6: a project may define servers, but not from an untrusted
-      // workspace. Saying so is better than silently showing a shorter list.
-      context.out("");
-      context.out(`Project servers in ${projectFile} are not applied (trust: ${loaded.trust}).`);
-    }
-  }
+
   return ok();
 }
 
@@ -678,13 +668,12 @@ export async function mcpDoctor(
   let healthy = true;
 
   for (const [name, config] of entries) {
-    const source = loaded.provenance[`mcpServers.${name}.transport`];
     const record = await readMcpCredentialRecord(context.host, context.paths, name);
     const report = await runDoctor({
       server: name,
       config: config as McpServerConfig,
       workspaceTrusted,
-      fromProjectConfig: source === "project",
+      fromProjectConfig: false,
       ...(record !== undefined ? { credential: record } : {}),
       commandExists: async (command: string) => await commandExists(context, command),
       now: () => context.host.now(),

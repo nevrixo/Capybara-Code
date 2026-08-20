@@ -451,6 +451,30 @@ class NodeHostFs implements HostFs {
     await writeFile(path, content, "utf8");
   }
 
+  async writeNew(path: string, content: string): Promise<boolean> {
+    await mkdir(dirname(path), { recursive: true });
+    let handle: Awaited<ReturnType<typeof open>> | undefined;
+    try {
+      handle = await open(path, "wx", 0o600);
+      await handle.writeFile(content, "utf8");
+      await handle.sync();
+      await handle.close();
+      handle = undefined;
+      return true;
+    } catch (error) {
+      await handle?.close().catch(() => undefined);
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "EEXIST"
+      ) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
   async atomicWrite(path: string, content: string): Promise<void> {
     await mkdir(dirname(path), { recursive: true });
     const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;

@@ -50,6 +50,8 @@ export interface HostFs {
   /** Optional bounded read used for metadata-only startup discovery. */
   readPrefix?(path: string, maxBytes: number): Promise<HostReadPrefixResult | undefined>;
   write(path: string, content: string): Promise<void>;
+  /** Create a new file without replacing an existing one. */
+  writeNew?(path: string, content: string): Promise<boolean>;
   /** Durable same-directory temp write followed by an atomic rename. */
   atomicWrite(path: string, content: string): Promise<void>;
   exists(path: string): Promise<boolean>;

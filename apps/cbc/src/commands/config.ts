@@ -1,13 +1,11 @@
 /**
- * `capy config` — PRD §8.1, §21.1, §21.2, §21.3, §21.7.
+ * `capy config` — PRD §8.1, §21.1, §21.2, §21.7.
  *
  * `config get` prints the *effective* value with its provenance, because §21.2's
- * six-layer precedence is otherwise invisible: seeing `permission_mode = "ask"` in a
+ * layered precedence is otherwise invisible: seeing `permission_mode = "ask"` in a
  * file tells you nothing if an environment variable is overriding it.
  *
- * `config set` always writes the user file. §21.3 forbids project config from
- * carrying credentials and §17.5 forbids it from weakening policy, so a `set` that
- * targeted the project file would be a way to smuggle either into a repository.
+ * `config set` always writes the one global user file.
  */
 
 import {
@@ -19,7 +17,7 @@ import {
 } from "@cbc/config-schema";
 
 import { configError, EXIT } from "../exit.ts";
-import { setUserConfigValue } from "../state.ts";
+import { ensureGlobalConfig, setUserConfigValue } from "../state.ts";
 import { ok, type CommandContext, type CommandResult } from "./context.ts";
 
 export interface ConfigGetArgs {
@@ -77,6 +75,7 @@ export async function configSet(
 }
 
 export async function configPath(context: CommandContext): Promise<CommandResult> {
+  await ensureGlobalConfig(context.host);
   context.out(context.paths.configFile);
   return ok();
 }
@@ -97,8 +96,6 @@ export async function configPaths(context: CommandContext): Promise<CommandResul
     ["trust store", paths.trustStore],
     ["bundled share", paths.share],
     ["runtime binary", paths.runtimeBinary],
-    ["project config", `${context.workspacePath}/.capybara/config.toml`],
-    ["project local config", `${context.workspacePath}/.capybara/config.local.toml`],
     ["global instructions", `${paths.config}/AGENTS.md`],
     ["global override", `${paths.config}/AGENTS.override.md`],
   ];
@@ -111,7 +108,7 @@ export interface ConfigValidateArgs {
   readonly explain?: boolean;
 }
 
-/** §21.7 validation, including the project-layer trust gate. */
+/** §21.7 validation for the effective global configuration. */
 export async function configValidate(
   context: CommandContext,
   args: ConfigValidateArgs = {},
@@ -119,23 +116,7 @@ export async function configValidate(
   const loaded = await context.config();
   const lines: string[] = [];
 
-  lines.push(`User config          ${loaded.userConfigPath}`);
-  lines.push(`Project config       ${loaded.projectConfigPath}`);
-  lines.push(`Project local config ${loaded.projectLocalConfigPath}`);
-  lines.push(
-    `Project layer        ${
-      loaded.projectLayerApplied
-        ? "applied"
-        : `not applied (trust: ${loaded.trust})`
-    }`,
-  );
-  lines.push(
-    `Project-local layer  ${
-      loaded.projectLocalLayerApplied
-        ? "applied"
-        : `not applied (trust: ${loaded.trust})`
-    }`,
-  );
+  lines.push(`Global config ${loaded.userConfigPath}`);
   lines.push("");
 
   for (const issue of loaded.tomlIssues) {
@@ -207,11 +188,9 @@ function jsonReplacer(_key: string, value: unknown): unknown {
 export async function configSources(context: CommandContext): Promise<CommandResult> {
   const loaded = await context.config();
   const lines: string[] = [];
-  lines.push("Effective config sources (highest wins)");
+  lines.push("Effective config sources (later entries win)");
   lines.push(`  default`);
   lines.push(`  user            ${loaded.userConfigPath}`);
-  lines.push(`  project         ${loaded.projectConfigPath} ${loaded.projectLayerApplied ? "(applied)" : `(not applied: ${loaded.trust})`}`);
-  lines.push(`  project-local   ${loaded.projectLocalConfigPath} ${loaded.projectLocalLayerApplied ? "(applied)" : `(not applied: ${loaded.trust})`}`);
   lines.push(`  environment     (CBC_* / NO_COLOR)`);
   lines.push(`  cli             (--model / --mode flags)`);
   lines.push(`  session         (/model / /mode overrides)`);

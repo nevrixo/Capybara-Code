@@ -436,12 +436,7 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
           sessionId,
           resolveEnv: (name) => context.host.env[name],
           workspaceTrusted: trust === "trusted-always" || trust === "trusted-once",
-          // Provenance is field-granular. Treat a server as project-owned if
-          // any of its effective fields came from the project layer; checking
-          // only transport lets an untrusted project override command/URL/env
-          // beneath a user-owned transport declaration.
-          fromProjectConfig: (name) => Object.entries(loadedConfig.provenance).some(([key, source]) =>
-            source === "project" && key.startsWith(`mcpServers.${name}.`)),
+          fromProjectConfig: () => false,
           now: () => context.host.now(),
           // A resumed session's durable mode is not known until its journal is
           // replayed. Fail closed to Plan so resume cannot launch MCP transports

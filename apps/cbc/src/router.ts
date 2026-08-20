@@ -205,8 +205,6 @@ async function dispatch(context: CommandContext, command: Command): Promise<Comm
           return await configValidate(context, { explain: command.explain });
         case "init":
           return await configInitCommand(context, {
-            project: command.project,
-            local: command.local,
             full: command.full,
             force: command.force,
           });

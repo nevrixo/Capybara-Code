@@ -274,26 +274,17 @@ describe("precedence (§21.2)", () => {
   });
 });
 
-describe("project config restrictions (§13.6, §21.3, PERM-001)", () => {
-  test("untrusted project config is not applied at all", () => {
-    const result = loadConfig({
-      projectToml: '[agent]\npermission_mode = "auto"\n',
-      projectTrusted: false,
-      env: {},
-    });
-    expect(result.projectLayerApplied).toBe(false);
-    // The default stands.
-    expect(result.config.agent.permissionMode).toBe("ask");
-  });
-
-  test("trusted project config is applied", () => {
-    const result = loadConfig({
-      projectToml: '[agent]\npermission_mode = "ask"\n',
-      projectTrusted: true,
-      env: {},
-    });
-    expect(result.projectLayerApplied).toBe(true);
-    expect(result.config.agent.permissionMode).toBe("ask");
+describe("legacy project config compatibility", () => {
+  test("project TOML inputs are ignored regardless of trust", () => {
+    for (const projectTrusted of [false, true]) {
+      const result = loadConfig({
+        projectToml: '[agent]\npermission_mode = "auto"\n',
+        projectTrusted,
+        env: {},
+      });
+      expect(result.config.agent.permissionMode).toBe("ask");
+      expect(result.provenance["agent.permissionMode"]).toBeUndefined();
+    }
   });
 
   test("project config may not set a credential field", () => {
@@ -738,33 +729,19 @@ describe("full load", () => {
     expect(result.config.permissions.rules[1]).toMatchObject({ decision: "deny" });
   });
 
-  test("P0-13: project declarative allow rules are rejected and removed", () => {
+  test("legacy project permission rules are ignored", () => {
     const result = loadConfig({
       projectToml: [
         "[[permissions.rules]]",
         'tool = "process.run"',
         'decision = "allow"',
         'risk = "R1"',
-        "",
-        "[[permissions.rules]]",
-        'tool = "fs.delete"',
-        'decision = "deny"',
-        'risk = "R4"',
       ].join("\n"),
       projectTrusted: true,
       env: {},
     });
-    expect(result.config.permissions.rules).toEqual([
-      { tool: "fs.delete", decision: "deny", risk: "R4" },
-    ]);
-    expect(
-      result.issues.some(
-        (issue) =>
-          issue.path === "permissions.rules" &&
-          issue.severity === "error" &&
-          issue.message.includes("allow rules require explicit user approval"),
-      ),
-    ).toBe(true);
+    expect(result.config.permissions.rules).toEqual([]);
+    expect(result.issues).toEqual([]);
   });
 
   test("P0-02: projectWrite cannot weaken a user plan", () => {

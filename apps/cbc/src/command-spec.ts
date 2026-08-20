@@ -284,8 +284,7 @@ export const COMMAND_REGISTRY: readonly CommandSpec[] = [
         name: "init",
         summary: "create a config file",
         flags: [
-          { name: "--project", kind: "boolean", summary: "create <workspace>/.capybara/config.toml" },
-          { name: "--local", kind: "boolean", summary: "create <workspace>/.capybara/config.local.toml" },
+
           { name: "--full", kind: "boolean", summary: "write every default key" },
           { name: "--force", kind: "boolean", summary: "overwrite an existing file" },
         ],

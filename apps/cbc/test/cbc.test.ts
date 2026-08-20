@@ -5050,6 +5050,35 @@ describe("TOML upsert", () => {
     expect(toml).toContain('default = "gpt-5.6-terra"');
 });
 
+  test("the global config is created on first use and project config is ignored", async () => {
+    const host = createFakeHost();
+    host.files.set(
+      "/work/project/.capybara/config.toml",
+      '[model]\ndefault = "project-model"\n',
+    );
+
+    const loaded = await loadEffectiveConfig(host);
+    const globalPath = resolvePaths(host).configFile;
+    const globalToml = host.files.get(globalPath) ?? "";
+
+    expect(globalToml).toContain("# Capybara Code global config");
+    expect(globalToml).toContain("[mcp.servers.context7]");
+    expect(loaded.config.model.default).toBe("gpt-5.6-sol");
+    expect(loaded.provenance["model.default"]).toBe("user");
+  });
+
+  test("first-use creation never replaces an existing global config", async () => {
+    const host = createFakeHost();
+    const globalPath = resolvePaths(host).configFile;
+    const existing = '[model]\ndefault = "gpt-5.6-terra"\n';
+    host.files.set(globalPath, existing);
+
+    const loaded = await loadEffectiveConfig(host);
+
+    expect(host.files.get(globalPath)).toBe(existing);
+    expect(loaded.config.model.default).toBe("gpt-5.6-terra");
+  });
+
   test("TUI presentation settings persist through the user config", async () => {
     const host = createFakeHost();
     const thinking = await setUserConfigValue(host, "ui.thinkingMode", "off");
@@ -5065,10 +5094,7 @@ describe("TOML upsert", () => {
     expect(toml).toContain('tool_detail = "full"');
     expect(toml).toContain('subagent_detail = "inline"');
     expect(toml).toContain('sidebar = "hide"');
-    const loaded = await loadEffectiveConfig(host, {
-      workspacePath: "/work/project",
-      trust: "trusted-always",
-    });
+    const loaded = await loadEffectiveConfig(host);
     expect(loaded.config.ui.thinkingMode).toBe("off");
     expect(loaded.config.ui.toolDetail).toBe("full");
     expect(loaded.config.ui.subagentDetail).toBe("inline");

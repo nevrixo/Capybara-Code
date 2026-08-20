@@ -1,10 +1,9 @@
 /**
- * Host-side persistent state — PRD §13.6, §18.6, §21.2, §21.3, PERM-001.
+ * Host-side persistent state — PRD §13.6, §18.6, §21.2, PERM-001.
  *
- * Three stores live here: the effective configuration, the project trust record, and
- * the session index. All three are read before anything else happens, because §13.6
- * makes trust a precondition for loading project config at all — an untrusted
- * workspace must not get a vote on its own permissions.
+ * Three stores live here: the global configuration, the project trust record, and
+ * the session index. Configuration is user-global and does not depend on workspace
+ * trust; trust still gates executable workspace features such as LSP and Skills.
  */
 
 import {
@@ -20,6 +19,7 @@ import {
 } from "@cbc/config-schema";
 import type { TrustState } from "@cbc/permissions";
 
+import { GLOBAL_CONFIG_TEMPLATE } from "./config-template.ts";
 import { join, type Host } from "./host.ts";
 import { resolvePaths, type CbcPaths } from "./host.ts";
 
@@ -181,43 +181,39 @@ export function withoutTrust(store: TrustStore, workspacePath: string): TrustSto
 
 export interface LoadedConfig extends LoadConfigResult {
   readonly userConfigPath: string;
-  readonly projectConfigPath: string;
-  readonly projectLocalConfigPath: string;
-  readonly trust: TrustState;
 }
 
 /**
- * Assemble the effective configuration.
- *
- * §21.2's precedence is implemented by `loadConfig`; the job here is deciding
- * whether the project layer is even offered to it. §21.3 says project config applies
- * only after trust, and `loadConfig` drops the layer entirely when `projectTrusted`
- * is false rather than merging and then filtering — a dropped layer cannot leak.
+ * Create the one global config file on first use without replacing an existing
+ * file. `writeNew` gives the real host an exclusive create; small test hosts fall
+ * back to a checked atomic write.
  */
+export async function ensureGlobalConfig(host: Host): Promise<boolean> {
+  const paths = resolvePaths(host);
+  if (await host.fs.exists(paths.configFile)) return false;
+  await host.fs.mkdirp(paths.config);
+  if (host.fs.writeNew !== undefined) {
+    return await host.fs.writeNew(paths.configFile, GLOBAL_CONFIG_TEMPLATE);
+  }
+  if (await host.fs.exists(paths.configFile)) return false;
+  await host.fs.atomicWrite(paths.configFile, GLOBAL_CONFIG_TEMPLATE);
+  return true;
+}
+
+/** Assemble the effective global configuration. */
 export async function loadEffectiveConfig(
   host: Host,
   options: {
-    readonly workspacePath: string;
-    readonly trust: TrustState;
     readonly cliOverrides?: Record<string, unknown>;
     readonly sessionOverrides?: Record<string, unknown>;
-  },
+  } = {},
 ): Promise<LoadedConfig> {
   const paths = resolvePaths(host);
-  const projectConfigPath = join(options.workspacePath, ".capybara", "config.toml");
-  const projectLocalConfigPath = join(options.workspacePath, ".capybara", "config.local.toml");
-
+  await ensureGlobalConfig(host);
   const userToml = await host.fs.read(paths.configFile);
-  const projectToml = await host.fs.read(projectConfigPath);
-  const projectLocalToml = await host.fs.read(projectLocalConfigPath);
-
-  const trusted = options.trust === "trusted-always" || options.trust === "trusted-once";
 
   const result = loadConfig({
     ...(userToml !== undefined ? { userToml } : {}),
-    ...(projectToml !== undefined ? { projectToml } : {}),
-    ...(projectLocalToml !== undefined ? { projectLocalToml } : {}),
-    projectTrusted: trusted,
     env: host.env,
     ...(options.cliOverrides !== undefined ? { cliOverrides: options.cliOverrides } : {}),
     ...(options.sessionOverrides !== undefined
@@ -225,13 +221,7 @@ export async function loadEffectiveConfig(
       : {}),
   });
 
-  return {
-    ...result,
-    userConfigPath: paths.configFile,
-    projectConfigPath,
-    projectLocalConfigPath,
-    trust: options.trust,
-  };
+  return { ...result, userConfigPath: paths.configFile };
 }
 
 /** Read one dotted config path from the effective config. */
@@ -268,6 +258,7 @@ export async function updateUserConfigTransaction(
   transaction: UserConfigTransaction,
 ): Promise<UserConfigTransactionResult> {
   const paths = resolvePaths(host);
+  await ensureGlobalConfig(host);
   const existing = await host.fs.read(paths.configFile);
   const before = (existing ?? "").replace(/\r\n/g, "\n");
   let lines = before.length === 0 ? [] : before.split("\n");
@@ -283,13 +274,11 @@ export async function updateUserConfigTransaction(
   const candidate = lines.length === 0 ? "" : `${lines.join("\n").replace(/\n+$/u, "")}\n`;
   const baseline = loadConfig({
     ...(before.length > 0 ? { userToml: before } : {}),
-    projectTrusted: false,
     env: {},
   });
   const baselineErrors = new Set(baseline.issues.filter((issue) => issue.severity === "error").map((issue) => issue.path + "|" + issue.source + "|" + issue.message));
   const merged = loadConfig({
     ...(candidate.length > 0 ? { userToml: candidate } : {}),
-    projectTrusted: false,
     env: {},
   });
   const newErrors = merged.issues.filter((issue) => issue.severity === "error" && !baselineErrors.has(issue.path + "|" + issue.source + "|" + issue.message));
