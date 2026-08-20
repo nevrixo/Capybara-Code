@@ -263,98 +263,86 @@ function createFakeHost(options: {
 
 describe("parseArgs", () => {
   test("bare invocation opens the interactive TUI", () => {
-    const { command } = parseArgs([]);
-    expect(command.kind).toBe("interactive");
+    expect(parseArgs([]).command).toEqual({ kind: "interactive" });
   });
 
-  test("an unrecognized leading word becomes the prompt (§8.2)", () => {
-    const { command } = parseArgs(["fix", "the", "parser", "test"]);
-    expect(command).toMatchObject({ kind: "interactive", prompt: "fix the parser test" });
+  test("an unrecognized leading word becomes the prompt", () => {
+    expect(parseArgs(["fix", "the", "parser", "test"]).command).toEqual({
+      kind: "interactive",
+      prompt: "fix the parser test",
+    });
   });
 
   test("-- ends flag parsing so a dash-leading prompt is possible", () => {
-    const { command } = parseArgs(["--", "--not-a-flag"]);
-    expect(command).toMatchObject({ kind: "interactive", prompt: "--not-a-flag" });
+    expect(parseArgs(["--", "--not-a-flag"]).command).toEqual({
+      kind: "interactive",
+      prompt: "--not-a-flag",
+    });
   });
 
-  test("--plan is shorthand for --mode plan", () => {
-    const { command } = parseArgs(["--plan"]);
-    expect(command).toMatchObject({ kind: "interactive", flags: { plan: true, mode: "plan" } });
-  });
-
-  test("--plan wins over a conflicting --mode, and says so", () => {
-    const { command, warnings } = parseArgs(["--plan", "--mode", "auto"]);
-    expect(command).toMatchObject({ flags: { mode: "plan" } });
-    expect(warnings.join(" ")).toContain("--plan wins");
-  });
-
-  test("an invalid --mode is a usage error", () => {
-    expect(() => parseArgs(["--mode", "full"])).toThrow(/--mode must be one of/);
-  });
-
-  test("run collects headless flags", () => {
-    const { command } = parseArgs([
-      "run",
-      "--jsonl",
-      "--permission",
-      "fail-on-ask",
-      "Review the diff",
-    ]);
-    expect(command).toMatchObject({
+  test("run accepts only a positional prompt", () => {
+    expect(parseArgs(["run", "Review", "the", "diff"]).command).toEqual({
       kind: "run",
-      jsonl: true,
-      permission: "fail",
       prompt: "Review the diff",
     });
   });
 
-  test("an invalid --permission is a usage error", () => {
-    expect(() => parseArgs(["run", "--permission", "always-allow", "x"])).toThrow(
-      /--permission must be one of/,
-    );
-  });
-
-  test("P1-03: an unknown flag is a usage error, with a hint", () => {
-    expect(() => parseArgs(["run", "--jsoml", "x"])).toThrow(/unknown flag --jsoml/);
-    expect(() => parseArgs(["--modle", "high"])).toThrow(/unknown flag --modle/);
-    let thrown: CliError | undefined;
-    try {
-      parseArgs(["run", "--modle", "x"]);
-    } catch (error) {
-      thrown = error as CliError;
+  test("removed global and headless flags are rejected", () => {
+    const removed = [
+      "--jsonl",
+      "--stdin",
+      "--output",
+      "--on-approval",
+      "-h",
+      "--help",
+      "-v",
+      "--version",
+      "--model",
+      "--reasoning",
+      "--reasoning-mode",
+      "--mode",
+      "--interaction-mode",
+      "--permission",
+      "--review",
+      "-p",
+      "--plan",
+      "--yolo",
+      "--plain",
+      "--no-color",
+      "--resume",
+      "--read-only",
+      "--workspace",
+      "--verbose",
+    ];
+    for (const flag of removed) {
+      expect(() => parseArgs(["run", flag])).toThrow(/unknown flag/);
     }
-    expect(thrown?.detail.join(" ")).toContain("Did you mean --mode?");
   });
 
-  test("P1-03: a flag a command does not take is refused", () => {
-    // --jsonl belongs to `run`, not to `auth login`.
-    expect(() => parseArgs(["auth", "login", "--jsonl"])).toThrow(/unknown flag --jsonl/);
-    expect(() => parseArgs(["doctor", "--plan"])).toThrow(/unknown flag --plan/);
-    expect(() => parseArgs(["config", "get", "--device"])).toThrow(/unknown flag --device/);
+  test("authentication commands retain only their dedicated options", () => {
+    expect(parseArgs(["auth", "login", "--device"]).command).toEqual({
+      kind: "auth",
+      sub: "login",
+      device: true,
+    });
+    expect(parseArgs(["auth", "api", "--stdin"]).command).toEqual({
+      kind: "auth",
+      sub: "api",
+      fromStdin: true,
+    });
+    expect(parseArgs(["auth", "status"]).command).toEqual({
+      kind: "auth",
+      sub: "status",
+    });
+    expect(parseArgs(["auth", "logout", "--all"]).command).toEqual({
+      kind: "auth",
+      sub: "logout",
+      all: true,
+    });
+    expect(() => parseArgs(["auth", "login", "--stdin"])).toThrow(/unknown flag --stdin/);
   });
 
-  test("P1-03: a value flag with no value is refused", () => {
-    expect(() => parseArgs(["run", "--output"])).toThrow(/--output needs a value/);
-    expect(() => parseArgs(["mcp", "add", "x", "--stdio"])).toThrow(/--stdio needs a value/);
-  });
-
-  test("P1-03: a boolean flag rejects an =value", () => {
-    expect(() => parseArgs(["run", "--jsonl=yes", "x"])).toThrow(/--jsonl takes no value/);
-  });
-
-  test("P1-03: surplus positionals are refused", () => {
-    expect(() => parseArgs(["session", "list", "extra"])).toThrow(/takes no arguments/);
-    expect(() => parseArgs(["model", "use", "a", "b"])).toThrow(/at most 1 argument/);
-    expect(() => parseArgs(["doctor", "extra"])).toThrow(/takes no arguments/);
-    expect(() => parseArgs(["config", "set", "a", "b", "c"])).toThrow(/at most 2 argument/);
-  });
-
-  test("P1-03: `skill` and `skills` validate identically", () => {
-    expect(() => parseArgs(["skill", "inspect"])).toThrow(/needs a skill name/);
-    expect(() => parseArgs(["skill", "inspect", "a", "b"])).toThrow(/at most 1 argument/);
-  });
-
-  test("§8.4: auth api refuses a positional key", () => {
+  test("auth api refuses a positional key", () => {
     let thrown: CliError | undefined;
     try {
       parseArgs(["auth", "api", "sk-secret-value"]);
@@ -365,84 +353,72 @@ describe("parseArgs", () => {
     expect(thrown?.detail.join(" ")).toContain("shell history");
   });
 
-  test("auth api --stdin is accepted", () => {
-    const { command } = parseArgs(["auth", "api", "--stdin"]);
-    expect(command).toMatchObject({ kind: "auth", sub: "api", fromStdin: true });
-  });
-
-  test("--resume with no value means the last session", () => {
-    const { command } = parseArgs(["--resume"]);
-    expect(command).toMatchObject({ flags: { resume: "last" } });
-  });
-
-  test("mcp add requires exactly one transport", () => {
-    expect(() => parseArgs(["mcp", "add", "x"])).toThrow(/--stdio or --url/);
-    expect(() =>
-      parseArgs(["mcp", "add", "x", "--stdio", "a", "--url", "https://e.com/mcp"]),
-    ).toThrow(/not both/);
-  });
-
-  test("lsp commands use the global language-server surface", () => {
-    expect(parseArgs(["lsp"]).command).toEqual({ kind: "lsp", sub: "list" });
-    expect(parseArgs(["lsp", "doctor", "rust"]).command).toEqual({
-      kind: "lsp",
-      sub: "doctor",
-      name: "rust",
+  test("model exposes refresh only", () => {
+    expect(parseArgs(["model", "refresh"]).command).toEqual({
+      kind: "model",
+      sub: "refresh",
     });
-    expect(() => parseArgs(["lsp", "enable"])).toThrow(/needs a server name/);
+    expect(() => parseArgs(["model", "list"])).toThrow(/needs a subcommand/);
+    expect(() => parseArgs(["model"])).toThrow(/needs a subcommand/);
   });
 
-  test("both `skills` and `skill` reach the same command", () => {
-    expect(parseArgs(["skill", "validate", "p"]).command).toEqual(
-      parseArgs(["skills", "validate", "p"]).command,
-    );
-  });
-
-  test("session export defaults to markdown and accepts --format", () => {
-    expect(parseArgs(["session", "export", "s1"]).command).toMatchObject({
-      format: "markdown",
+  test("config exposes set only and validates both operands", () => {
+    expect(parseArgs(["config", "set", "ui.sidebar", "hide"]).command).toEqual({
+      kind: "config",
+      sub: "set",
+      path: "ui.sidebar",
+      value: "hide",
     });
-    expect(parseArgs(["session", "export", "s1", "--format", "jsonl"]).command).toMatchObject({
-      format: "jsonl",
-    });
-    expect(() => parseArgs(["session", "export", "s1", "--format", "pdf"])).toThrow(/--format/);
+    expect(() => parseArgs(["config", "get"])).toThrow(/needs a subcommand/);
+    expect(() => parseArgs(["config", "set", "ui.sidebar"])).toThrow(/needs <path> <value>/);
+    expect(() => parseArgs(["config", "set", "a", "b", "c"])).toThrow(/at most 2 argument/);
   });
 
-  test("every §8.1 command is reachable and none throws", () => {
-    for (const command of COMMANDS) {
-      const subs = COMMAND_TREE[command] ?? [];
-      const argv = subs.length > 0 ? [command, subs[0] as string] : [command];
-      // `mcp add` and the id-taking subcommands need an operand; the rest must parse.
-      if (command === "mcp" || command === "session" || command === "skills") continue;
-      expect(() => parseArgs(argv)).not.toThrow();
-    }
+  test("version and help are commands rather than flags", () => {
+    expect(parseArgs(["version"]).command).toEqual({ kind: "version" });
+    expect(parseArgs(["help", "auth"]).command).toEqual({ kind: "help", topic: "auth" });
+    expect(() => parseArgs(["--version"])).toThrow(/unknown flag --version/);
+    expect(() => parseArgs(["--help"])).toThrow(/unknown flag --help/);
   });
 
-  test("HELP_TEXT documents every exit code in §8.9", () => {
-    for (const code of [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
-      expect(HELP_TEXT).toContain(String(code));
+  test("the registry and help expose only the minimal public surface", () => {
+    expect(COMMANDS).toEqual(["run", "auth", "model", "config", "version", "help"]);
+    for (const text of [
+      "auth login",
+      "auth api",
+      "auth status",
+      "auth logout",
+      "model refresh",
+      "config set",
+      "version",
+      "help",
+    ]) {
+      expect(HELP_TEXT).toContain(text);
     }
-  });
-
-  test("P1-03: help text and completion derive from the same registry", () => {
-    // Every registry command is documented and completable; nothing stale
-    // survives in either surface because both are generated from command-spec.
-    for (const command of COMMANDS) {
-      if (command === "run") continue; // documented in the Usage block instead
-      expect(HELP_TEXT).toContain(command);
-    }
-    for (const [, subs] of Object.entries(COMMAND_TREE)) {
-      if (subs.length === 0) continue;
-      // Help renders each command's subcommands joined by `|`.
-      expect(HELP_TEXT).toContain(subs.join("|"));
+    for (const removed of [
+      "session",
+      "skills",
+      "mcp",
+      "lsp",
+      "init",
+      "trust",
+      "doctor",
+      "update",
+      "completion",
+      "permission",
+      "--jsonl",
+      "--model",
+      "--mode",
+      "--plain",
+    ]) {
+      expect(HELP_TEXT).not.toContain(removed);
     }
   });
 });
 
 // ---------------------------------------------------------------------------
-// §8.9 exit codes
+// Exit codes
 // ---------------------------------------------------------------------------
-
 describe("exit codes", () => {
   test("§8.9 mapping is exact", () => {
     expect(exitForStatus("completed")).toBe(0);
@@ -5485,7 +5461,7 @@ describe("completion scripts", () => {
 // ---------------------------------------------------------------------------
 
 describe("router", () => {
-  test("capy --version prints and exits 0 without starting a runtime", async () => {
+  test("capy version prints and exits 0 without starting a runtime", async () => {
     const host = createFakeHost();
     const { route } = await import("../src/router.ts");
     const code = await route({
@@ -5497,11 +5473,14 @@ describe("router", () => {
     expect(host.out.join("")).toContain("0.1.0-test");
   });
 
-  test("capy help prints the §8.1 tree", async () => {
+  test("capy help prints the minimal command tree", async () => {
     const host = createFakeHost();
     const { route } = await import("../src/router.ts");
     await route({ host, version: "0.1.0", command: { kind: "help" } });
-    expect(host.out.join("")).toContain("capy run");
+    const output = host.out.join("");
+    expect(output).toContain("capy run");
+    expect(output).toContain("config set");
+    expect(output).not.toContain("session");
   });
 
   test("auth login requires an interactive terminal before account authorization", async () => {
@@ -5514,94 +5493,24 @@ describe("router", () => {
     });
     expect(code).toBe(EXIT.auth);
     expect(host.err.join("")).toContain("interactive terminal");
-    expect(host.out.join("")).not.toContain("Account login is unavailable");
   });
-  test("config path needs no sidecar", async () => {
+
+  test("config set writes the global config without starting a runtime", async () => {
     const host = createFakeHost();
     const { route } = await import("../src/router.ts");
     const code = await route({
       host,
       version: "0.1.0",
-      command: { kind: "config", sub: "path" },
+      command: { kind: "config", sub: "set", path: "ui.sidebar", value: "hide" },
     });
     expect(code).toBe(EXIT.ok);
-    expect(host.out.join("")).toContain("config.toml");
-  });
-
-  test("lsp list and disable use only the global config file", async () => {
-    const host = createFakeHost();
-    const configFile = resolvePaths(host).configFile;
-    host.files.set(
-      configFile,
-      '[lsp.servers.rust]\ncommand = "rust-analyzer"\nargs = []\nextensions = [".rs"]\nlanguage_id = "rust"\nenabled = true\n',
-    );
-    const { route } = await import("../src/router.ts");
-
-    const listCode = await route({
-      host,
-      version: "0.1.0",
-      command: { kind: "lsp", sub: "list" },
-    });
-    expect(listCode).toBe(EXIT.ok);
-    expect(host.out.join("")).toContain("rust-analyzer");
-
-    const disableCode = await route({
-      host,
-      version: "0.1.0",
-      command: { kind: "lsp", sub: "disable", name: "rust" },
-    });
-    expect(disableCode).toBe(EXIT.ok);
-    expect(host.files.get(configFile)).toContain("enabled = false");
-  });
-
-  test("parser warnings are surfaced on stderr", async () => {
-    const host = createFakeHost();
-    const { route } = await import("../src/router.ts");
-    await route({
-      host,
-      version: "0.1.0",
-      command: { kind: "version" },
-      warnings: ["--plan and --mode auto conflict; --plan wins"],
-    });
-    expect(host.err.join("")).toContain("--plan wins");
-  });
-
-  test("a missing runtime is reported as a §8.9 internal failure, not a crash", async () => {
-    const host = createFakeHost();
-    const { route } = await import("../src/router.ts");
-    const code = await route({
-      host,
-      version: "0.1.0",
-      command: { kind: "trust", sub: "status" },
-    });
-    // `trust status` reads the host store, so it succeeds without a sidecar.
-    expect(code).toBe(EXIT.ok);
-  });
-
-  test("model list works offline from the bundled registry (§10.12)", async () => {
-    const host = createFakeHost();
-    const { route } = await import("../src/router.ts");
-    const code = await route({
-      host,
-      version: "0.1.0",
-      command: { kind: "model", sub: "list", available: false },
-    });
-    expect(code).toBe(EXIT.ok);
-    expect(host.out.join("")).toContain("gpt-5.6");
+    expect(host.files.get(resolvePaths(host).configFile)).toContain('sidebar = "hide"');
   });
 });
 
 // ---------------------------------------------------------------------------
-// Per-install registration document (§9.5, §9.6)
+// Per-install registration document
 // ---------------------------------------------------------------------------
-
-/**
- * A registration document that satisfies §9.6.
- *
- * Points at `example.com` on purpose. These tests are about the document being read,
- * validated, and gated correctly — not about any particular provider — and a
- * fabricated authorization server keeps that true.
- */
 const REGISTRATION_DOCUMENT = {
   clientId: "capybara-code",
   issuer: "https://auth.example.com",

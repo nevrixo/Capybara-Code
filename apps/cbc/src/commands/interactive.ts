@@ -58,15 +58,6 @@ import { ensureTrust, trustLabel } from "./trust.ts";
 
 export interface InteractiveArgs {
   readonly prompt?: string;
-  readonly model?: string;
-  readonly reasoning?: string;
-  readonly reasoningMode?: string;
-  readonly mode?: string;
-  readonly interactionMode?: "build" | "plan";
-  readonly permissionPreset?: "read" | "edit" | "auto" | "yolo";
-  readonly review?: "off" | "auto";
-  readonly resume?: string;
-  readonly readOnly?: boolean;
 }
 
 export async function interactive(
@@ -88,14 +79,9 @@ export async function interactive(
   for (const issue of remapped.issues) context.warn(`keymap: ${issue}`);
 
   const perms = loaded.config.permissions;
-  const startupPreset = args.permissionPreset ??
-    (args.mode === "plan" || args.interactionMode === "plan" ? "read" :
-      args.mode === "read" || args.mode === "edit" || args.mode === "auto" || args.mode === "yolo"
-        ? args.mode
-        : undefined);
-  const policy = resolvePermissionPolicy(startupPreset, { projectWrite: perms.projectWrite, shell: perms.shell, network: perms.network, destructive: perms.destructive, credentials: perms.credentials, externalSideEffect: perms.externalSideEffect }, args.mode ?? loaded.config.agent.permissionMode);
+  const policy = resolvePermissionPolicy(undefined, { projectWrite: perms.projectWrite, shell: perms.shell, network: perms.network, destructive: perms.destructive, credentials: perms.credentials, externalSideEffect: perms.externalSideEffect }, loaded.config.agent.permissionMode);
   const presetLabel = policy.effectiveKind.toUpperCase();
-  const permissionsSummary = args.readOnly === true ? `RO · ${presetLabel}` : presetLabel;
+  const permissionsSummary = presetLabel;
   let settingWriteTail: Promise<void> = Promise.resolve();
   const persistSetting = (
     key: "thinkingVisibility" | "thinkingMode" | "toolDetail" | "subagentDetail" | "sidebar",
@@ -224,7 +210,7 @@ export async function interactive(
         const selected = typeof eventPayload?.selectedPreset === "string" ? eventPayload.selectedPreset.toUpperCase() : undefined;
         const effective = typeof eventPayload?.effectiveKind === "string" ? eventPayload.effectiveKind.toUpperCase() : undefined;
         const label = selected === "YOLO" && effective === "YOLO" ? "YOLO" : effective ?? selected ?? "CUSTOM";
-        ui.setPermissionSummary(args.readOnly === true ? `RO · ${label}` : label);
+        ui.setPermissionSummary(label);
       }
       sink(event, model);
     };
@@ -252,16 +238,6 @@ export async function interactive(
 
     const bootstrapOptions = (resume: string | undefined) => ({
       context,
-      overrides: {
-        ...(args.model !== undefined ? { model: args.model } : {}),
-        ...(args.reasoning !== undefined ? { reasoningEffort: args.reasoning } : {}),
-        ...(args.reasoningMode !== undefined ? { reasoningMode: args.reasoningMode } : {}),
-        ...(args.mode !== undefined ? { permissionMode: args.mode } : {}),
-        ...(args.interactionMode !== undefined ? { interactionMode: args.interactionMode } : {}),
-        ...(args.permissionPreset !== undefined ? { permissionPreset: args.permissionPreset } : {}),
-        ...(args.review !== undefined ? { reviewMode: args.review } : {}),
-      },
-      ...(args.readOnly === true ? { readOnly: true } : {}),
       ...(resume !== undefined ? { resume } : {}),
       ...(fullScreen ? { bridges: { ask: fullScreenUserAsk } } : {}),
       interactiveApprovals: {
@@ -284,7 +260,7 @@ export async function interactive(
       onEvent,
     });
 
-    let boot = await bootstrapSession(bootstrapOptions(args.resume));
+    let boot = await bootstrapSession(bootstrapOptions(undefined));
     activeSessionId = boot.sessionId;
     ui.setSessionInfo(boot.sessionId, boot.credentialSource);
     ui.setEarlierHistoryLoader(boot.loadEarlierHistory);
