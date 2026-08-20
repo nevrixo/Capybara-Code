@@ -1181,7 +1181,8 @@ function capitalize(text: string): string {
  * `agent.tokenSaving` — a user-only key a project config can never set.
  */
 interface SettingDescriptor extends SettingsMenuItem {
-  readonly configPath: string;
+  /** Omitted for session actions that belong in the picker but are not config. */
+  readonly configPath?: string;
   readonly apply: (session: ActiveSession, value: string) => SettingsMenuChange;
 }
 
@@ -1312,6 +1313,8 @@ function persistAgentSetting(
   descriptor: SettingDescriptor,
   value: string,
 ): void {
+  const configPath = descriptor.configPath;
+  if (configPath === undefined) return;
   const reportFailure = (reason: string): void => {
     ui.notice(
       `${descriptor.label} ${value.toUpperCase()} is active for this session, ` +
@@ -1320,7 +1323,7 @@ function persistAgentSetting(
   };
   agentSettingWriteTail = agentSettingWriteTail
     .then(async () => {
-      const written = await setUserConfigValue(context.host, descriptor.configPath, value);
+      const written = await setUserConfigValue(context.host, configPath, value);
       const error = written.issues.find((issue) => issue.severity === "error");
       if (error !== undefined) reportFailure(error.message);
     })
@@ -1525,6 +1528,7 @@ async function handleSlash(
         const result = applySetting(ui, session, descriptors, key, next);
         if (
           descriptor !== undefined &&
+          descriptor.configPath !== undefined &&
           result.value !== undefined &&
           // ui.* rows persist through the UI's onSettingChange callback.
           !descriptor.configPath.startsWith("ui.")
