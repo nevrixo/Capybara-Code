@@ -288,6 +288,50 @@ describe("reducer basics (§20.8)", () => {
 });
 
 describe("tool lifecycle", () => {
+  test("uses semantic write labels and clears a settled TODO call from RUN", () => {
+    const writing = replay(
+      "ses_1",
+      build([
+        ["turn.started", { model: "gpt-5.6" }],
+        ["tool.started", { callId: "write-1", toolId: "fs.write" }],
+      ]),
+    );
+    expect(writing.live.label).toBe("Writing...");
+
+    const updatingTodo = replay(
+      "ses_1",
+      build([
+        ["turn.started", { model: "gpt-5.6" }],
+        ["tool.started", { callId: "todo-1", toolId: "todo.write" }],
+      ]),
+    );
+    expect(updatingTodo.live.label).toBe("Updating TODO...");
+
+    const settled = replay(
+      "ses_1",
+      build([
+        ["turn.started", { model: "gpt-5.6" }],
+        ["tool.started", { callId: "todo-1", toolId: "todo.write" }],
+        ["tool.completed", { callId: "todo-1", toolId: "todo.write", summary: "updated" }],
+      ]),
+    );
+    expect(settled.activeTools).toEqual([]);
+    expect(settled.live.label).toBe("Working...");
+    expect(settled.live.label).not.toContain("todo.write");
+
+    const concurrent = replay(
+      "ses_1",
+      build([
+        ["turn.started", { model: "gpt-5.6" }],
+        ["tool.started", { callId: "read-1", toolId: "fs.read" }],
+        ["tool.started", { callId: "todo-1", toolId: "todo.write" }],
+        ["tool.completed", { callId: "todo-1", toolId: "todo.write", summary: "updated" }],
+      ]),
+    );
+    expect(concurrent.activeTools.map((tool) => tool.callId)).toEqual(["read-1"]);
+    expect(concurrent.live.label).toBe("Running fs.read...");
+  });
+
   test("start then complete updates the same card in place", () => {
     const model = replay(
       "ses_1",

@@ -1296,7 +1296,7 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
       }
 
       next.turnStatus = "executing";
-      next.live = { kind: "working", label: `Running ${str(p.toolId)}...`, interruptHint: "esc" };
+      next.live = { kind: "working", label: toolLiveLabel(str(p.toolId)), interruptHint: "esc" };
       break;
     }
 
@@ -1743,8 +1743,38 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
   }
 
   refreshActiveLifecycle(next, event, indexes);
+  refreshLiveAfterRootTool(next, event, indexes);
   MODEL_TIMELINE_INDEXES.set(next, indexes);
   return next;
+}
+
+function toolLiveLabel(toolId: string): string {
+  if (toolId === "fs.write" || toolId === "fs.apply_patch") return "Writing...";
+  if (toolId === "todo.write") return "Updating TODO...";
+  return "Running " + toolId + "...";
+}
+
+function refreshLiveAfterRootTool(
+  model: Mutable<SessionViewModel>,
+  event: CbcEvent,
+  indexes: TimelineIndexes,
+): void {
+  if (event.kind !== "tool.completed" && event.kind !== "tool.failed") return;
+  if (event.agentId !== undefined && event.agentId !== "root") return;
+
+  const callId = str(payloadOf(event).callId);
+  const location = indexes.calls.get(callId);
+  if (location === undefined || location.childIndex !== undefined) return;
+  const settled = model.timeline[location.timelineIndex];
+  if (settled === undefined || settled.type !== "tool") return;
+  if (model.live.kind !== "working" || model.live.label !== toolLiveLabel(settled.toolId)) return;
+
+  const active = model.activeTools.at(-1);
+  model.live = {
+    kind: "working",
+    label: active === undefined ? "Working..." : toolLiveLabel(active.toolId),
+    interruptHint: "esc",
+  };
 }
 
 function activeTaskState(state: TaskState): boolean {
