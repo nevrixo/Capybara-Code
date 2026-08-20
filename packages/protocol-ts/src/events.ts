@@ -78,6 +78,7 @@ export const EVENT_KINDS = [
 
 /** v1.3 provider-native lifecycle kinds, kept separate for legacy consumers. */
 export const V13_EVENT_KINDS = [
+  "assistant.thinking",
   "model.capability_snapshot",
   "model.route_decided",
   "model.phase_changed",
@@ -214,6 +215,7 @@ const KIND_DEFAULTS: Record<
   "assistant.commentary": { level: "info", visibility: "timeline", durability: "journaled" },
   "assistant.reasoning": { level: "info", visibility: "timeline", durability: "journaled" },
   "assistant.reasoning_summary": { level: "info", visibility: "timeline", durability: "journaled" },
+  "assistant.thinking": { level: "info", visibility: "timeline", durability: "journaled" },
   "assistant.final": { level: "info", visibility: "timeline", durability: "journaled" },
   "plan.created": { level: "info", visibility: "timeline", durability: "journaled" },
   "plan.updated": { level: "info", visibility: "timeline", durability: "journaled" },

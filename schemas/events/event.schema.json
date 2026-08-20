@@ -64,7 +64,9 @@
     "durability": {
       "$ref": "#/$defs/durability"
     },
-    "payload": true,
+    "payload": {
+      "description": "Canonical assistant.thinking payloads are validated below; other event kinds retain their provider-specific payload shapes."
+    },
     "callerId": {
       "type": "string"
     },
@@ -76,6 +78,101 @@
     }
   },
   "$defs": {
+    "thinkingPayload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "thinkingId",
+        "requestId",
+        "segmentIndex",
+        "providerItemIds",
+        "state",
+        "sources"
+      ],
+      "properties": {
+        "thinkingId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "responseId": {
+          "type": "string"
+        },
+        "modelId": {
+          "type": "string"
+        },
+        "segmentIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "providerItemIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "completed",
+            "interrupted",
+            "failed"
+          ]
+        },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "enum": [
+              "provider_summary",
+              "provider_reasoning",
+              "status_only"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "summaryText": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "summaryOrigin": {
+          "type": "string",
+          "enum": [
+            "provider",
+            "derived_from_visible_detail"
+          ]
+        },
+        "detailText": {
+          "type": "string",
+          "maxLength": 65536
+        },
+        "startedAtMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "endedAtMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "durationMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
+    },
     "level": {
       "type": "string",
       "enum": [
@@ -161,6 +258,7 @@
         "token_saving.changed",
         "token_saving.policy_applied",
         "token_saving.relaxed",
+        "assistant.thinking",
         "model.capability_snapshot",
         "model.route_decided",
         "model.phase_changed",
@@ -301,6 +399,22 @@
     }
   },
   "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "assistant.thinking"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/thinkingPayload"
+          }
+        }
+      }
+    },
     {
       "if": {
         "properties": {
