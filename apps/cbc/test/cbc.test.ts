@@ -4295,11 +4295,6 @@ describe("slash router", () => {
     }
   });
 
-  test("/export defaults to markdown and accepts a format", () => {
-    expect(parseSlash("/export")).toMatchObject({ kind: "export", format: "markdown" });
-    expect(parseSlash("/export bundle")).toMatchObject({ kind: "export", format: "bundle" });
-  });
-
   test("removed commands are no longer routed, and /new creates a new session intent", () => {
     for (const command of [
       "/diff",
@@ -4308,6 +4303,7 @@ describe("slash router", () => {
       "/clear",
       "/todo",
       "/approvals",
+      "/export",
       "/clealr",
       "/reasoning",
       "/agents",

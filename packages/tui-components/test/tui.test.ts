@@ -1416,10 +1416,6 @@ describe("completion popup (§6.14, §8.10)", () => {
   });
 
   test("a known command with no values still shows its signature", () => {
-    const state = computeCompletions("/export ", 8, sources);
-    // `/export`'s values come from the spec rather than the host.
-    expect(state.candidates.map((c) => c.value)).toEqual(["markdown", "jsonl", "bundle"]);
-
     const noValues = computeCompletions("/skills ", 8, sources);
     expect(noValues.open).toBe(false);
     expect(noValues.signature?.command).toBe("/skills");

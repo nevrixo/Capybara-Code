@@ -115,11 +115,6 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: "/compact", description: "compact the session context" },
   { name: "/new", description: "start a new chat" },
   { name: "/resume", description: "resume a session", args: [{ name: "session" }] },
-  {
-    name: "/export",
-    description: "export the transcript",
-    args: [{ name: "format", values: ["markdown", "jsonl", "bundle"] }],
-  },
   { name: "/quit", description: "exit" },
 ];
 
