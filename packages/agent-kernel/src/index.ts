@@ -9,3 +9,4 @@ export * from "./prompt.ts";
 export * from "./kernel.ts";
 export * from "./risk.ts";
 export * from "./token-saving.ts";
+export * from "./thinking.ts";
