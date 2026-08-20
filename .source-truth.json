@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-20T13:54:02.564Z",
+  "generatedAt": "2026-08-20T16:03:13.155Z",
   "git": {
-    "commit": "1466d7197f6459c83df4f9b434bc8e1cfd7ea733",
-    "dirty": true,
-    "dirtyHash": "877334606f72e76af3212ef3aaae0b5dad4cd5bdbc995d7650fa579eabece570"
+    "commit": "5fe5d8ffdfb8a376d2611e1ff9786e92cfffbe09",
+    "dirty": false,
+    "dirtyHash": "63775ebd0e40a5e6c203669ba6f9657b40a90a873d2e182ced2eb3c5cba4d77d"
   },
   "roots": [
     "apps",
@@ -396,8 +396,8 @@
     },
     {
       "path": "apps/cbc/src/tui-frame.ts",
-      "bytes": 56690,
-      "sha256": "506086fa50bc39f1c8ce522020cbd7f02fa666482a9211c0e0f0e977495e6a11"
+      "bytes": 56756,
+      "sha256": "9c89a18b0ab686a0e4c6f5ca16982309f86e0164499ad69d68542b61ada10139"
     },
     {
       "path": "apps/cbc/src/tui-lifecycle.ts",
@@ -416,8 +416,8 @@
     },
     {
       "path": "apps/cbc/src/tui.ts",
-      "bytes": 116180,
-      "sha256": "811f99612bcdb3a685e1473c39ec6af3448c4334b13241e7b0db05c274073cfc"
+      "bytes": 116871,
+      "sha256": "ae8398070c5a3d84eda172b9b9a7b4b4e913ec4234e91cd65869424e72ae6ce4"
     },
     {
       "path": "apps/cbc/src/workspace-trust.ts",
@@ -441,8 +441,8 @@
     },
     {
       "path": "apps/cbc/test/cbc.test.ts",
-      "bytes": 226154,
-      "sha256": "4bcb3bb85dae7bbdf5689a26cd27af3d21d9563aa27ee6035198ada32ac61156"
+      "bytes": 228282,
+      "sha256": "f56d40d3361bb042a6b2a868ccfdc3ed31f44cfcb802611c9ab73da43089b3ea"
     },
     {
       "path": "apps/cbc/test/config-template.test.ts",
@@ -1816,8 +1816,8 @@
     },
     {
       "path": "packages/session-domain/src/reducer.ts",
-      "bytes": 84800,
-      "sha256": "0deef85d8c6a73f52bfb138e5a7422c603bdc4233055b90bf97a356dc9e4f8c2"
+      "bytes": 85417,
+      "sha256": "a6333c783604d9aebe064e9c549859d8c629fefcca6dc3dbdfadc7b97ab41d08"
     },
     {
       "path": "packages/session-domain/src/todo.ts",
@@ -1841,8 +1841,8 @@
     },
     {
       "path": "packages/session-domain/test/session.test.ts",
-      "bytes": 71868,
-      "sha256": "38442ea83d833f8b2078f0111ad8c218ed45c7730d24e449f3665e96325f4b8e"
+      "bytes": 73827,
+      "sha256": "9f87aa6fdd64d8b2c41384c2eee401a91c3f4f40c21e275e10a46007831eeaf4"
     },
     {
       "path": "packages/session-domain/test/todo.test.ts",
@@ -1991,13 +1991,13 @@
     },
     {
       "path": "packages/tui-components/src/blocks.ts",
-      "bytes": 108513,
-      "sha256": "ff3fb2ac38fecd29ac55ccf21c4ceabc0db960941b4fdbf25874863775843ed9"
+      "bytes": 108647,
+      "sha256": "90198b39317f5affe7da1f8016b0c2a1474929f63c73e9ec15f5635a45fc904d"
     },
     {
       "path": "packages/tui-components/src/chrome.ts",
-      "bytes": 42015,
-      "sha256": "9dbdc223f3b1a48c55c53c8ea8391be6edf18a067c0128e2883c6f7ea32c029f"
+      "bytes": 42678,
+      "sha256": "0099f10964c90b91fc398fbd2075000eafda8185c220b675c36aeb44a4e4e9d5"
     },
     {
       "path": "packages/tui-components/src/clipboard.ts",
@@ -2046,8 +2046,8 @@
     },
     {
       "path": "packages/tui-components/src/screen.ts",
-      "bytes": 27594,
-      "sha256": "aa7e171a72b282ba82070d10e05db96deaaeaccfa683e5c98b8abefb08842f5b"
+      "bytes": 27695,
+      "sha256": "541cd2a64a9a5d8b402a499ff7fe8ff609fe97ceafed45c4140ba4711f39660c"
     },
     {
       "path": "packages/tui-components/src/segments.ts",
@@ -2071,8 +2071,8 @@
     },
     {
       "path": "packages/tui-components/src/timeline.ts",
-      "bytes": 68348,
-      "sha256": "14aa723b47302e98fa4683b4853d097eb55560adade37e5cbbac07173cef7158"
+      "bytes": 68175,
+      "sha256": "d76174b47a7a70afed88de140fa4b3c6d5ae8e7280afddd16a8edc4f555bb7c0"
     },
     {
       "path": "packages/tui-components/src/toast.ts",
@@ -2101,8 +2101,8 @@
     },
     {
       "path": "packages/tui-components/test/performance.test.ts",
-      "bytes": 19765,
-      "sha256": "3a335d6ff291eea2f712a0d59aea019038c6f8cc8ca470fc29e169224c844834"
+      "bytes": 21296,
+      "sha256": "c8fa622db96478918c95d2b8313da983f2f527960d686f0dd08e3f359e13921c"
     },
     {
       "path": "packages/tui-components/test/plan-contract-ui.test.ts",
@@ -2111,18 +2111,18 @@
     },
     {
       "path": "packages/tui-components/test/revision.test.ts",
-      "bytes": 9339,
-      "sha256": "b464dbd727ccad14d4cb92526dedf878e40ab0573f6a319daad50782790762d4"
+      "bytes": 9620,
+      "sha256": "20bb8b1f77cd610a37dcc8cc9aa13bf6aecbfb8e4c0bccd95e8b42f679d593b6"
     },
     {
       "path": "packages/tui-components/test/subagent-card.test.ts",
-      "bytes": 2237,
-      "sha256": "2da7f79a446e4dacac48a79a3bf17ea9f690963a9b55262cf3309bba398c3595"
+      "bytes": 2856,
+      "sha256": "376b94bfa698101d4d49d0524b979d1b34a0b5ddc31301e3218b73c66cee3a1f"
     },
     {
       "path": "packages/tui-components/test/tui.test.ts",
-      "bytes": 118228,
-      "sha256": "74213dd401da7547ae2d159618adc6643ea91470e6d1ccb6397e0ad32e63be4b"
+      "bytes": 118737,
+      "sha256": "1cb2c60e79132670d3e8c1d580f81aeeb87a372c686cba26241d9148134ca833"
     },
     {
       "path": "pnpm-workspace.yaml",
@@ -2260,5 +2260,5 @@
       "sha256": "c69dafb888ab2abc0a1a6bfe0602668806ec94b495ad4f228a4e0486f22ea7e4"
     }
   ],
-  "digest": "0bdc434b3b743b1b593d99bb8cb3a2c41b15f85247b23b3bd9d9b8438bca5f31"
+  "digest": "9c57a2c17cb1068fa3ea7b406a4b70677c17dc131bfe9aeca84238f1d6ca7470"
 }
