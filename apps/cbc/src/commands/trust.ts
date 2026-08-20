@@ -1,8 +1,8 @@
 /**
  * `capy trust` and the §7.1 first-run trust prompt — PRD §7.1, §13.6, AC-28.
  *
- * §13.6 makes trust the gate on project config, project MCP stdio servers, project
- * agent definitions, and project Skill bodies. That is why the prompt runs before
+ * Trust gates workspace instructions, agent definitions, Skill bodies, and local
+ * executable integrations such as LSP. That is why the prompt runs before
  * anything else reads the workspace, and why a corrupt or absent record resolves to
  * `untrusted` rather than to a permissive default.
  */

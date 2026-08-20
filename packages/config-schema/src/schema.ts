@@ -1,16 +1,15 @@
 /**
  * Configuration schema and precedence — PRD §21.
  *
- * §21.2 precedence, lowest to highest:
+ * Product precedence, lowest to highest:
  *   1. built-in defaults
- *   2. user config
- *   3. trusted project config
- *   4. environment variables
- *   5. CLI flags
- *   6. interactive session override
+ *   2. the single global user config
+ *   3. environment variables
+ *   4. CLI flags
+ *   5. interactive session override
  *
- * §21.3: project config applies only after trust, and may never contain a
- * credential value.
+ * Deprecated project source labels remain in `mergeConfig` only for source
+ * compatibility. `loadConfig` never reads or applies a project configuration.
  */
 
 import { configKeyInfo } from "./key-status.ts";

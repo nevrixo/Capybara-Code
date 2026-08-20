@@ -145,8 +145,7 @@ export interface ModelUseArgs {
 /**
  * `capy model use <id|profile:name>`.
  *
- * Written to the user config rather than the project config: §21.3 keeps project
- * config from carrying anything that alters credentials or weakens policy, and a
+ * Written to the single global config. No project configuration is loaded, and a
  * model choice is a personal default rather than a repository fact.
  */
 export async function modelUse(

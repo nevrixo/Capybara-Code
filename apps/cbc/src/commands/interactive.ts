@@ -1169,8 +1169,8 @@ function capitalize(text: string): string {
  * One row in the `/setting` picker.
  *
  * Presentation rows apply through the UI and persist to `ui.*`; the token
- * saving row applies through the running session and persists to
- * `agent.tokenSaving` — a user-only key a project config can never set.
+ * saving row applies through the running session and persists to the single global
+ * `agent.tokenSaving` setting.
  */
 interface SettingDescriptor extends SettingsMenuItem {
   /** Omitted for session actions that belong in the picker but are not config. */

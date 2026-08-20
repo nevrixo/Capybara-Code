@@ -61,10 +61,6 @@ export interface McpHostOptions {
   readonly sessionId: string;
   /** Reads host environment variables (§14.5: config only names variables). */
   readonly resolveEnv: (name: string) => string | undefined;
-  /** Whether the workspace is trusted (trusted-always/trusted-once). */
-  readonly workspaceTrusted: boolean;
-  /** Whether a server name came from project config (§17.5). */
-  readonly fromProjectConfig: (name: string) => boolean;
   readonly spill?: (label: string, content: string, mediaType: string) => unknown;
   readonly now?: () => number;
   /** Fast servers may finish inside this budget; slow ones continue in background. */
@@ -466,23 +462,6 @@ function runtimeStdioChannel(options: {
   };
 }
 
-/** A never-launched channel for a disabled server (untrusted project config). */
-function disabledChannel(): StdioChannel {
-  return {
-    start: async () => {
-      throw new Error("this server is disabled by project trust policy");
-    },
-    write: async () => {
-      throw new Error("this server is disabled by project trust policy");
-    },
-    onLine: () => undefined,
-    onDiagnostic: () => undefined,
-    onExit: () => undefined,
-    stop: async () => undefined,
-  };
-}
-
-
 function configEnv(
   resolveEnv: (name: string) => string | undefined,
   config: McpServerConfig,
@@ -532,46 +511,10 @@ function assembleMcpHost(options: McpHostOptions): AssembledMcpHost {
   const failures: Array<{ server: string; error: string }> = [];
 
   for (const [name, config] of Object.entries(options.servers)) {
-    const fromProject = options.fromProjectConfig(name);
-    const allowed = !fromProject || options.workspaceTrusted;
-
     if (config.transport === "stdio") {
       const command = config.command ?? "";
       if (command.length === 0) {
         failures.push({ server: name, error: "a stdio server needs a 'command'" });
-        continue;
-      }
-      // A project may not bind host environment values into a process. Trusting a
-      // repository permits its code to run, not to choose which host secrets its
-      // process receives; keep the entry visible but never launch it.
-      const requestsHostEnvironment = fromProject && (config.env?.length ?? 0) > 0;
-      if (requestsHostEnvironment) {
-        failures.push({
-          server: name,
-          error: "project MCP configuration may not request host environment variables; configure them in user config",
-        });
-      }
-      // §17.5 / PERM-001: a project stdio command only runs in a trusted
-      // workspace. Otherwise add the entry disabled — visible, never launched.
-      if (!allowed || requestsHostEnvironment) {
-        manager.add({
-          name,
-          client: new McpClient(
-            {
-              serverName: name,
-              transport: new StdioTransport({
-                serverName: name,
-                channel: disabledChannel(),
-              }),
-              clientVersion: options.clientVersion,
-              workspaceRoot: options.workspaceRoot,
-              ...(options.now !== undefined ? { now: options.now } : {}),
-            },
-            manager.catalog,
-          ),
-          fromProjectConfig: true,
-          enabled: false,
-        });
         continue;
       }
       manager.add({
@@ -597,7 +540,7 @@ function assembleMcpHost(options: McpHostOptions): AssembledMcpHost {
           },
           manager.catalog,
         ),
-        fromProjectConfig: fromProject,
+        fromProjectConfig: false,
         enabled: config.enabled !== false,
       });
       continue;
@@ -609,7 +552,7 @@ function assembleMcpHost(options: McpHostOptions): AssembledMcpHost {
         failures.push({ server: name, error: "an HTTP server needs a 'url'" });
         continue;
       }
-      const enabled = config.enabled !== false && allowed;
+      const enabled = config.enabled !== false;
       manager.add({
         name,
         client: new McpClient(
@@ -626,7 +569,7 @@ function assembleMcpHost(options: McpHostOptions): AssembledMcpHost {
           },
           manager.catalog,
         ),
-        fromProjectConfig: fromProject,
+        fromProjectConfig: false,
         enabled,
       });
       continue;

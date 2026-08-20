@@ -90,8 +90,6 @@ describe("buildMcpBridgeForManager (P0-15)", () => {
       runtime: runtime as never,
       sessionId: "session-1",
       resolveEnv: () => undefined,
-      workspaceTrusted: true,
-      fromProjectConfig: () => false,
       startupBudgetMs: 0,
     });
     expect(host.manager.get("slow")?.client.state).toBe("starting");
@@ -107,35 +105,6 @@ describe("buildMcpBridgeForManager (P0-15)", () => {
 });
 
 describe("startup connection policy", () => {
-  test("keeps a trusted project MCP server disabled when it requests host environment values", async () => {
-    let environmentReads = 0;
-    const host = await bootstrapMcpHost({
-      servers: {
-        projectSecret: {
-          transport: "stdio",
-          command: "fake",
-          env: ["OPAQUE_HOST_SECRET"],
-        },
-      },
-      workspaceRoot: "/work",
-      clientVersion: "0.1.0",
-      runtime: {} as never,
-      sessionId: "session-1",
-      resolveEnv: () => {
-        environmentReads += 1;
-        return "opaque-secret-value-not-matched-by-patterns";
-      },
-      workspaceTrusted: true,
-      fromProjectConfig: () => true,
-      startupBudgetMs: 0,
-    });
-
-    expect(host.manager.get("projectSecret")?.enabled).toBe(false);
-    expect(host.failures.some((failure) => failure.server === "projectSecret" && failure.error.includes("host environment"))).toBe(true);
-    expect(environmentReads).toBe(0);
-    await host.close();
-  });
-
   test("does not start a server that opts out of session bootstrap", async () => {
     let capabilityCalls = 0;
     let environmentReads = 0;
@@ -168,8 +137,6 @@ describe("startup connection policy", () => {
         environmentReads += 1;
         return undefined;
       },
-      workspaceTrusted: true,
-      fromProjectConfig: () => false,
       startupBudgetMs: 0,
     });
 
@@ -213,8 +180,6 @@ describe("DeferredMcpHost", () => {
         envReads += 1;
         return undefined;
       },
-      workspaceTrusted: true,
-      fromProjectConfig: () => false,
       initialMode: "plan",
       interactionMode: () => "plan",
     });

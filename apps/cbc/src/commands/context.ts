@@ -84,8 +84,8 @@ export class CommandContext {
 
   /**
    * Print text that came from an external source (a Skill body, an HTTP error,
-   * project config, tool output). Sanitized so a hostile source cannot drive the
-   * terminal (P1-01).
+   * workspace instructions, tool output). Sanitized so a hostile source cannot
+   * drive the terminal (P1-01).
    */
   untrusted(text: string): void {
     this.writer.untrustedText(text);

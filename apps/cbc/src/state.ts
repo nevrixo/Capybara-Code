@@ -230,11 +230,10 @@ export function configValue(config: CbcConfig, path: string): unknown {
 }
 
 /**
- * Write one dotted path into the *user* config file.
+ * Write one dotted path into the single global config file.
  *
- * Always the user file, never the project one: §21.3 forbids a project config from
- * carrying credentials and §17.5 forbids it from weakening policy, so `capy config
- * set` writing there would be a way to smuggle either into a repository.
+ * Project configuration files are not part of the product's configuration model;
+ * every persistent edit targets the path returned by `capy config path`.
  */
 export interface UserConfigTransaction {
   readonly set?: Readonly<Record<string, unknown>>;

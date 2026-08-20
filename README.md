@@ -74,6 +74,41 @@ Once installed globally, launch Capybara Code in your workspace:
 capy
 ```
 
+## Global configuration
+
+Capybara Code uses one global `config.toml`. It creates the file automatically on
+first use, preserves an existing file, and never reads `.capybara/config.toml` or
+`.capybara/config.local.toml` from a project. Print the exact platform-specific path
+with:
+
+```bash
+capy config path
+```
+
+The generated file explicitly contains the Context7 MCP endpoint and the TypeScript
+and Python LSP definitions. Service definitions are not hidden in code defaults, so
+they can be edited, disabled, replaced, or removed. For another language, add a table
+such as:
+
+```toml
+[lsp.servers.rust]
+command = "rust-analyzer"
+args = []
+extensions = [".rs"]
+language_id = "rust"
+enabled = true
+timeout_ms = 15000
+```
+
+Inspect and manage configured language servers with `capy lsp list`,
+`capy lsp doctor [name]`, and `capy lsp enable|disable <name>`. Capybara reports a
+missing executable but never installs one automatically. LSP processes start only in
+a trusted Build workspace and remain read-only, bounded indexing helpers.
+
+Root agent turns have no configurable maximum step, tool-call, or wall-time ceiling;
+they continue until completion or explicit cancellation. Subagent budgets and
+process/protocol resource limits remain safety boundaries.
+
 ## Developing from source
 
 Keep the published `capy` command separate from the checked-out source tree. Register the source CLI as `capy-dev` with native Bun on each operating system where you develop:

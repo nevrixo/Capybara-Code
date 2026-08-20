@@ -230,8 +230,8 @@ export class LineWriter {
 
   /**
    * Write text that came from somewhere else — a Skill body, an HTTP error body,
-   * project config, tool or process output (P1-01). It is sanitized so a hostile
-   * source cannot drive the terminal with escape sequences, and truncated so it
+   * workspace instructions, tool or process output (P1-01). It is sanitized so a
+   * hostile source cannot drive the terminal with escape sequences, and truncated so it
    * cannot flood the screen.
    */
   untrustedText(value: string): void {

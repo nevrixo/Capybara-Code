@@ -5,7 +5,7 @@
  * Scope is deliberately the subset the PRD's configuration format uses: tables,
  * dotted keys, strings, integers, floats, booleans, and flat arrays. Anything
  * outside that surface is reported as an issue rather than silently accepted, so
- * a malformed project config cannot be misread as a permissive one.
+ * malformed global config cannot be misread as a permissive one.
  */
 
 export interface TomlIssue {

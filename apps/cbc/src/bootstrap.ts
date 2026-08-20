@@ -212,10 +212,9 @@ async function resolveResumedSession(
 /**
  * Bring up a session.
  *
- * Note the ordering of trust and config: the caller has already resolved trust (§7.1
- * step 3) before this runs, and `context.requireConfig()` reads it. Doing config first
- * would let an untrusted project's `config.toml` influence the run that was supposed
- * to gate it.
+ * Global configuration is independent of workspace trust. Trust is resolved here
+ * only for workspace-owned instructions, Skills, and executable integrations such
+ * as LSP; no project configuration file participates in the effective config.
  */
 export async function bootstrapSession(options: BootstrapOptions): Promise<Bootstrapped> {
   const context = options.context;
@@ -228,7 +227,7 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
 
   // ---- §21.2: session overrides sit above config ----
   // Work on a session-local clone: the effective budget is model-dependent and
-  // must not mutate the cached user/project configuration object.
+  // must not mutate the cached global configuration object.
   const effective = structuredCloneConfig(applyOverrides(config, options.overrides));
   const directModelOverride =
     options.overrides?.model !== undefined && !options.overrides.model.startsWith("profile:");
@@ -436,8 +435,6 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
           runtime,
           sessionId,
           resolveEnv: (name) => context.host.env[name],
-          workspaceTrusted: trust === "trusted-always" || trust === "trusted-once",
-          fromProjectConfig: () => false,
           now: () => context.host.now(),
           // A resumed session's durable mode is not known until its journal is
           // replayed. Fail closed to Plan so resume cannot launch MCP transports
