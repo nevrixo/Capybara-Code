@@ -183,6 +183,25 @@ export class InputReader {
     this.#keys.stop();
   }
 
+  /**
+   * Temporarily release the terminal input stream to a line-oriented/native
+   * prompt, then restore this reader even when that prompt fails.
+   *
+   * Interactive slash commands call this only between `readPrompt()` calls,
+   * when no composer sink is pending. Keeping the handoff here makes raw-mode
+   * ownership explicit and prevents the key decoder and a native picker from
+   * observing the same bytes at once.
+   */
+  async withExternalInput<T>(action: () => Promise<T>): Promise<T> {
+    const restart = this.#started;
+    if (restart) this.stop();
+    try {
+      return await action();
+    } finally {
+      if (restart) this.start();
+    }
+  }
+
   #overlayCapturesInput(): boolean {
     return (this.#ui as unknown as { overlayCapturesInput?: boolean }).overlayCapturesInput === true;
   }

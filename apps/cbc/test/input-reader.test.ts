@@ -48,6 +48,27 @@ function fakeUi(draws: DrawnComposer[]): InteractiveUi {
 }
 
 describe("input reader composer ownership", () => {
+  test("releases terminal input to an external picker and always restores it", async () => {
+    const keys = new FakeKeyStream();
+    const reader = new InputReader({ keys, ui: fakeUi([]) });
+    reader.start();
+
+    const selected = await reader.withExternalInput(async () => {
+      expect(keys.running).toBe(false);
+      return 2;
+    });
+    expect(selected).toBe(2);
+    expect(keys.running).toBe(true);
+
+    await expect(reader.withExternalInput(async () => {
+      expect(keys.running).toBe(false);
+      throw new Error("picker failed");
+    })).rejects.toThrow("picker failed");
+    expect(keys.running).toBe(true);
+
+    reader.stop();
+  });
+
   test("Ctrl+C clears a draft without leaving the prompt", async () => {
     const keys = new FakeKeyStream();
     const draws: DrawnComposer[] = [];

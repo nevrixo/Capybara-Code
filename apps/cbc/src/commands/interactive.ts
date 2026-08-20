@@ -718,6 +718,15 @@ export async function interactive(
     });
     refreshPathCompletions = () => reader.refreshCompletions();
     reader.start();
+    const selectOutsideTui = async (
+      question: string,
+      choices: readonly string[],
+    ): Promise<number> =>
+      await reader.withExternalInput(async () =>
+        await ui.withExternalPrompt(async () =>
+          await context.host.io.select(question, choices),
+        ),
+      );
 
     const switchToSession = async (id: string): Promise<boolean> => {
       if (id === boot.sessionId) {
@@ -826,7 +835,14 @@ export async function interactive(
 
         const intent = parseSlash(text);
         if (intent.kind !== "not_slash") {
-          const outcome = await handleSlash(context, ui, boot, intent, effectiveKeymap);
+          const outcome = await handleSlash(
+            context,
+            ui,
+            boot,
+            intent,
+            effectiveKeymap,
+            selectOutsideTui,
+          );
           if (outcome === "quit") break;
           if (typeof outcome !== "string") {
             if (outcome.kind === "resume") {
@@ -1134,6 +1150,10 @@ async function configuredMcpServers(context: CommandContext): Promise<SidebarSer
 
 type SlashOutcome = "continue" | "quit" | { readonly kind: "resume"; readonly id: string } | { readonly kind: "new_session" } | { readonly kind: "execute_plan"; readonly directive: string } | { readonly kind: "submit"; readonly prompt: string };
 type ActiveSession = Awaited<ReturnType<typeof bootstrapSession>>["session"];
+type InteractiveSelect = (
+  question: string,
+  choices: readonly string[],
+) => Promise<number>;
 
 function capitalize(text: string): string {
   return text.length === 0 ? text : text.charAt(0).toUpperCase() + text.slice(1);
@@ -1308,6 +1328,7 @@ async function handleSlash(
   boot: Awaited<ReturnType<typeof bootstrapSession>>,
   intent: ReturnType<typeof parseSlash>,
   effectiveKeymap: readonly KeyBinding[],
+  selectOutsideTui: InteractiveSelect,
 ): Promise<SlashOutcome> {
   const session = boot.session;
 
@@ -1505,13 +1526,13 @@ async function handleSlash(
           return "continue";
         }
 
-        const settingIndex = await context.host.io.select(
+        const settingIndex = await selectOutsideTui(
           "Setting",
           descriptors.map((item) => `${item.label} (${item.value})`),
         );
         const selected = descriptors[settingIndex];
         if (selected === undefined) return "continue";
-        const valueIndex = await context.host.io.select(
+        const valueIndex = await selectOutsideTui(
           selected.label,
           selected.values.map((entry) => entry.label),
         );
@@ -1536,7 +1557,7 @@ async function handleSlash(
           return "continue";
         }
 
-        const valueIndex = await context.host.io.select(
+        const valueIndex = await selectOutsideTui(
           selected.label,
           selected.values.map((entry) => entry.label),
         );

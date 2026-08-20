@@ -289,6 +289,8 @@ export class InteractiveUi {
   /** Coalesces all full-screen frame requests behind one dirty boundary. */
   #frameTimer: ReturnType<typeof setTimeout> | undefined;
   #frameDirty = false;
+  /** Native/line-oriented prompts temporarily own the physical terminal. */
+  #externalPromptDepth = 0;
   #dirtyRegions = new Set<FrameRegion>();
   #frameRevisions: FrameRevisions = {
     layout: 0,
@@ -2214,22 +2216,37 @@ export class InteractiveUi {
   async withExternalPrompt<T>(prompt: () => Promise<T>): Promise<T> {
     if (!this.#fullScreen) return await prompt();
 
+    const ownsHandoff = this.#externalPromptDepth === 0;
+    this.#externalPromptDepth += 1;
     const view = this.#openTui;
-    if (view !== undefined) {
-      view.suspend();
-    } else {
-      this.#options.host.io.stdout(restoreSequence());
+    if (ownsHandoff) {
+      // A composer erase or background event may already have queued a frame.
+      // Do not let that timer paint into the native prompt after terminal
+      // ownership has moved away from the TUI.
+      this.#cancelScheduledFrame();
+      if (view !== undefined) {
+        view.suspend();
+      } else {
+        this.#options.host.io.stdout(restoreSequence());
+      }
     }
 
     try {
       return await prompt();
     } finally {
-      if (view !== undefined) {
-        view.resume();
-      } else {
-        this.#options.host.io.stdout(enterSequence({ mouse: this.#options.uiMouse !== false }));
+      this.#externalPromptDepth = Math.max(0, this.#externalPromptDepth - 1);
+      if (ownsHandoff && this.#externalPromptDepth === 0 && !this.#restored) {
+        if (view !== undefined) {
+          view.resume();
+        } else {
+          this.#options.host.io.stdout(enterSequence({ mouse: this.#options.uiMouse !== false }));
+        }
+        // Re-entering the alternate screen invalidates both native and ANSI
+        // back buffers. A diff against the pre-prompt frame would leave every
+        // unchanged row blank, producing the stepped/corrupted screen seen after
+        // a picker closes, so force one complete repaint.
+        this.#scheduleFrame({ immediate: true, clearScreen: true });
       }
-      this.#scheduleFrame({ immediate: true });
     }
   }
 
@@ -2436,6 +2453,11 @@ export class InteractiveUi {
     }
     this.#frameDirty = true;
     this.#clearScreenOnNextFrame ||= options.clearScreen === true;
+
+    // Semantic state may continue changing while a native prompt is visible,
+    // but the physical terminal belongs exclusively to that prompt. Keep the
+    // newest dirty state and paint it once ownership is restored.
+    if (this.#externalPromptDepth > 0) return;
 
     if (options.immediate === true || process.stdout.isTTY !== true) {
       this.#paintScheduledFrame();

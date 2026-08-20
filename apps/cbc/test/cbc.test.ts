@@ -2408,6 +2408,13 @@ describe("interactive UI (§6.2, §6.21)", () => {
 
   test("a full-screen picker yields terminal ownership and repaints afterward", async () => {
     const host = createFakeHost({ isTty: true, columns: 140, env: { NO_COLOR: "1" } });
+    // Match a real Node stdout stream: returning a boolean enables row diffs in
+    // TerminalFrameWriter. Re-entering an alternate screen must invalidate that
+    // diff cache and still produce a complete frame.
+    host.io.stdout = (text) => {
+      host.out.push(text);
+      return true;
+    };
     const decision = decideRenderMode({ host, rendererAvailable: true });
     const instance = new InteractiveUi({
       host,
@@ -2419,18 +2426,25 @@ describe("interactive UI (§6.2, §6.21)", () => {
 
     await instance.open();
     host.out.length = 0;
-    let outputDuringPrompt = "";
+    let outputOnSuspend = "";
+    let outputWhileSuspended = "";
     const selected = await instance.withExternalPrompt(async () => {
-      outputDuringPrompt = host.out.join("");
+      outputOnSuspend = host.out.join("");
+      host.out.length = 0;
+      instance.notice("deferred while picker owns the terminal");
+      outputWhileSuspended = host.out.join("");
       return 2;
     });
 
     const resumed = host.out.join("");
     expect(selected).toBe(2);
-    expect(outputDuringPrompt).toContain("\u001B[?1049l");
-    expect(outputDuringPrompt).not.toContain("\u001B[?1049h");
+    expect(outputOnSuspend).toContain("\u001B[?1049l");
+    expect(outputOnSuspend).not.toContain("\u001B[?1049h");
+    expect(outputWhileSuspended).toBe("");
     expect(resumed).toContain("\u001B[?1049h");
+    expect(resumed).toContain("\u001B[2J\u001B[H");
     expect(resumed).toContain("capybara");
+    expect(resumed).toContain("deferred while picker owns the terminal");
 
     instance.restore();
   });
