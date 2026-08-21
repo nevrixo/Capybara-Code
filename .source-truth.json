@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-21T07:29:19.377Z",
+  "generatedAt": "2026-08-21T08:36:59.279Z",
   "git": {
-    "commit": "931343e63b3823a0b1ea335c118ee81731c5ad55",
+    "commit": "db280ca09b7ad905faec372e34b5b2880885b300",
     "dirty": true,
-    "dirtyHash": "11f07d8c6eecbee39f0c8f1a9b1707ceddab478fadd9773c18c908014d4cf2f5"
+    "dirtyHash": "8acd1533f71a6fa72b754954ca483ba53a5eeb982b794284821458add9258a06"
   },
   "roots": [
     "apps",
@@ -53,7 +53,7 @@
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
     "typescript": "5.9.3"
   },
-  "fileCount": 423,
+  "fileCount": 429,
   "historicalArtifacts": [
     {
       "path": ".tmp/openai.ts.new.orig",
@@ -171,8 +171,8 @@
     },
     {
       "path": "apps/cbc/src/agent.ts",
-      "bytes": 157573,
-      "sha256": "e2cc524391faad10b312d40a0e98a74646734f7c8c04bc4d695c432c27328457"
+      "bytes": 163471,
+      "sha256": "008aa478e01edc41e672dd6230b7c68f4719657e6475c4dc0bfd44076ac4ee45"
     },
     {
       "path": "apps/cbc/src/approvals.ts",
@@ -390,6 +390,11 @@
       "sha256": "e354415fe8353d89ab962c168c3b1801975bce1374f8a48349a2bccb5d36b6a7"
     },
     {
+      "path": "apps/cbc/src/tool-recovery.ts",
+      "bytes": 8082,
+      "sha256": "357dbe83e829f71302a794554970827edb75929e118044602beebfc99585b810"
+    },
+    {
       "path": "apps/cbc/src/tools.ts",
       "bytes": 86275,
       "sha256": "dd5cdac00f5d4d8f24f3815d4cfa3a99f79d2ddeda1f860813be8929fd8f99f0"
@@ -563,6 +568,11 @@
       "path": "apps/cbc/test/token-saving.test.ts",
       "bytes": 5556,
       "sha256": "0c38840798f5bc1c8dd5a06a3d078ae854c302539a1907ff4c8bf6a4e3462942"
+    },
+    {
+      "path": "apps/cbc/test/tool-recovery.test.ts",
+      "bytes": 3889,
+      "sha256": "56327f32e76ab84a9a0ac403a03ac5f86183bf487638d4feebc3116df9569963"
     },
     {
       "path": "apps/cbc/test/tui-frame-revision.test.ts",
@@ -1231,8 +1241,8 @@
     },
     {
       "path": "packages/agent-kernel/src/kernel.ts",
-      "bytes": 187178,
-      "sha256": "2f24397f6e0fb4caedf928b2cc4723b9effbe089f58ca64f11eaaf340d1063c7"
+      "bytes": 189088,
+      "sha256": "3cb5922ce4acc90c67d5ca7cd7fa5d43b1c752803f9062424bce25b675f555a0"
     },
     {
       "path": "packages/agent-kernel/src/observation.ts",
@@ -1301,8 +1311,8 @@
     },
     {
       "path": "packages/config-schema/src/key-status.ts",
-      "bytes": 11626,
-      "sha256": "51f5ff7582716934ba0d608f35bea73cc58351a56523c01c0de267fc4d731a6c"
+      "bytes": 12050,
+      "sha256": "a52a2adf69b59347bc32f66048ae595f91899b7dac3ddf5878647978f1872e3c"
     },
     {
       "path": "packages/config-schema/src/performance-rollbacks.ts",
@@ -1311,8 +1321,8 @@
     },
     {
       "path": "packages/config-schema/src/schema.ts",
-      "bytes": 49773,
-      "sha256": "44a1bf54c2d68e98cec20400a8606fe9c59420339a7b48587dc07c2c1ed15a30"
+      "bytes": 50282,
+      "sha256": "fc42c995683b6da9d8586cbc5f8dcc93113e2ac1e5da21674fd6237806f5505c"
     },
     {
       "path": "packages/config-schema/src/toml.ts",
@@ -1333,6 +1343,11 @@
       "path": "packages/config-schema/test/performance-rollback.test.ts",
       "bytes": 7061,
       "sha256": "fd36777013c7d5d159f39ad5ea9cd8d4ae7bf556947b72d0266c91e1e9d49c01"
+    },
+    {
+      "path": "packages/config-schema/test/recovery-config.test.ts",
+      "bytes": 1578,
+      "sha256": "102526a81b4018d22e70f90a934b63ac2913e3a02c44f7b814194bce4d08d333"
     },
     {
       "path": "packages/config-schema/test/review-monotonic.test.ts",
@@ -1676,8 +1691,8 @@
     },
     {
       "path": "packages/protocol-ts/src/events.ts",
-      "bytes": 25721,
-      "sha256": "f9694e4b661092b486a0a6512dca7d68097f5d86b74f85307a862368342aa7e6"
+      "bytes": 26317,
+      "sha256": "6e905418b5bb228460c648957a4c1c2264ca5ba8f838b7ed23e57a0192f9af5b"
     },
     {
       "path": "packages/protocol-ts/src/index.ts",
@@ -1692,7 +1707,7 @@
     {
       "path": "packages/protocol-ts/test/protocol.test.ts",
       "bytes": 15467,
-      "sha256": "1ba834c9a95f875f9aee5090e23d020a30e6f018c2f1eb5a315553e27f4ef103"
+      "sha256": "6acb62f70c8c3565706cfa167cbaeb92e82a8788632b51892680b5046de0c5aa"
     },
     {
       "path": "packages/provider-openai/package.json",
@@ -1826,13 +1841,13 @@
     },
     {
       "path": "packages/session-domain/src/reducer.ts",
-      "bytes": 86653,
-      "sha256": "1edc129ec511bc4f7a5d07dba4d395f33579cbeb8ebcbee7ddc7965fff8d7d84"
+      "bytes": 89553,
+      "sha256": "fabb51927b0e01224d38bd0b31c3d4acc09b800d23b0088b7ae9143be6cd3c11"
     },
     {
       "path": "packages/session-domain/src/todo.ts",
-      "bytes": 39252,
-      "sha256": "a0098adb32e375c904838ec127b2e2538d287f2909732477ba36e45f6dffa1e6"
+      "bytes": 49619,
+      "sha256": "340b779df48557d74b69c4653eef901f59276d466685e67881a590a3d166d292"
     },
     {
       "path": "packages/session-domain/test/final-answer.test.ts",
@@ -1853,6 +1868,11 @@
       "path": "packages/session-domain/test/session.test.ts",
       "bytes": 75637,
       "sha256": "6b1efdeaa91c326256891c87da8aa6faa1b119985eddbd8a89eb406f23245b34"
+    },
+    {
+      "path": "packages/session-domain/test/todo-recovery.test.ts",
+      "bytes": 4469,
+      "sha256": "5f8720b3e34238961b30821ec2792c98c5af39f7bc07a6b077dc7a0d37d436f1"
     },
     {
       "path": "packages/session-domain/test/todo.test.ts",
@@ -1956,8 +1976,8 @@
     },
     {
       "path": "packages/tool-registry/src/catalog.ts",
-      "bytes": 36359,
-      "sha256": "b243114fcabbe9ed22849d5abaac1be306fa47040a320c2c24ec30f616e1b8b3"
+      "bytes": 37716,
+      "sha256": "37588aafa2f98439be0254298e2d5d1ebbbb7f4198846b8bcdeaa5a744fafa34"
     },
     {
       "path": "packages/tool-registry/src/discovery.ts",
@@ -1971,8 +1991,13 @@
     },
     {
       "path": "packages/tool-registry/src/index.ts",
-      "bytes": 6331,
-      "sha256": "6e7f8fdb406d41e877656e126aacd853221fe3db3fa1314970342d24fcb6567c"
+      "bytes": 6362,
+      "sha256": "4cfcdff20a494650320902a1bb1184f547b383bb34b043f8e3477e3b9d0fda86"
+    },
+    {
+      "path": "packages/tool-registry/src/recovery.ts",
+      "bytes": 5157,
+      "sha256": "2fda0b88364140ef7abaecbaaca7312ba30a141f7f7fa0c606731c2282ee7f88"
     },
     {
       "path": "packages/tool-registry/src/scheduler.ts",
@@ -1988,6 +2013,11 @@
       "path": "packages/tool-registry/test/graph.test.ts",
       "bytes": 2999,
       "sha256": "5ff25a32adc6dc63b2daba5e0660f60375a9e08bd4b2bc0b332674e82033b3ac"
+    },
+    {
+      "path": "packages/tool-registry/test/recovery.test.ts",
+      "bytes": 1629,
+      "sha256": "0406e70ed0d4775757e34ecbda63d8589c0cc5e88143dddf9b6a0d4795420cab"
     },
     {
       "path": "packages/tool-registry/test/tools.test.ts",
@@ -2156,18 +2186,18 @@
     },
     {
       "path": "schemas/CHANGELOG.md",
-      "bytes": 7513,
-      "sha256": "2bb6e7b80b912188848ad0b2214b5e9bf3ac365599537936a50fe1b6ad5f7f47"
+      "bytes": 7759,
+      "sha256": "50de94945cdf10587229c63a503f6448152e5c0791f57fbb56950933e5c77a85"
     },
     {
       "path": "schemas/config/config.schema.json",
-      "bytes": 30295,
-      "sha256": "49c20f605621f8e927ad83893321140228913019e632e75e10519c89f14a72d2"
+      "bytes": 31372,
+      "sha256": "73bba410be46df29b65878c133ddeaa0099578e191cc99949ad83b6e64905d0f"
     },
     {
       "path": "schemas/events/event.schema.json",
-      "bytes": 12025,
-      "sha256": "e30c3827c4aa8ba975dc214a86261fa6a0e45f3f45f66ee159cdf9775dc5097d"
+      "bytes": 12186,
+      "sha256": "94ee240c9503e91c6102a54cfacd2145eedc82ec755efde9147f59f4ef4819d1"
     },
     {
       "path": "schemas/protocol/handshake.schema.json",
@@ -2275,5 +2305,5 @@
       "sha256": "c69dafb888ab2abc0a1a6bfe0602668806ec94b495ad4f228a4e0486f22ea7e4"
     }
   ],
-  "digest": "46f7106c2136b04cfaee5c8a24d7c080cffbc8b4958b74d7a2b55103b865e576"
+  "digest": "8db9db0693dd9d4565691b69383c7e2b0ae8627863af3c842e90e646011d6eeb"
 }
