@@ -500,6 +500,14 @@ export interface KernelOptions {
   readonly continuationMode?: ContinuationMode;
   readonly registry: ToolRegistry;
   readonly executor: ToolExecutor;
+  /** Optional host wrapper for safe internal recovery of one logical call. */
+  readonly executeWithRecovery?: (
+    action: ProposedAction,
+    signal: AbortSignal,
+    context: { readonly emit: <T>(kind: CbcEventKind, payload: T) => void },
+  ) => Promise<Awaited<ReturnType<ToolExecutor["execute"]>>>;
+  /** Repair host-owned state immediately before a logical tool dispatch. */
+  readonly beforeToolExecute?: (action: ProposedAction, signal: AbortSignal) => void | Promise<void>;
   readonly approvals: ApprovalBroker;
   readonly normalizer: ActionNormalizer;
   readonly emitter: KernelEmitter;
@@ -2779,6 +2787,21 @@ export class AgentKernel {
     };
   }
 
+  async #executeTool(
+    action: ProposedAction,
+    signal: AbortSignal,
+    emit: <T>(kind: CbcEventKind, payload: T) => void = () => {},
+  ): Promise<Awaited<ReturnType<ToolExecutor["execute"]>>> {
+    if (this.#options.executeWithRecovery !== undefined) {
+      return await this.#options.executeWithRecovery(action, signal, { emit });
+    }
+    return await this.#options.executor.execute(action, signal);
+  }
+
+  async #beforeToolExecute(action: ProposedAction, signal: AbortSignal): Promise<void> {
+    await this.#options.beforeToolExecute?.(action, signal);
+  }
+
   async #runPendingCalls(
     turnId: string,
     budget: BudgetState,
@@ -2852,6 +2875,12 @@ export class AgentKernel {
       };
     });
     const graphPlan = graph.plan(graphCalls);
+    // Validate every streamed call before launching any side effect in the batch.
+    // The cached results keep prefetch and sequential execution on one schema snapshot.
+    const preflightValidation = new Map<string, ReturnType<ToolRegistry["validateCall"]>>();
+    for (const call of calls) {
+      preflightValidation.set(call.callId, this.#options.registry.validateCall(call.name, call.argumentsText, this.#activeInteractionMode));
+    }
     for (const rejected of graphPlan.rejected) {
       this.#risks.push(`tool graph rejected ${rejected.callId}: ${rejected.message}`);
     }
@@ -2864,6 +2893,7 @@ export class AgentKernel {
         barrier: batch.barrier,
       });
       const prefetched = new Map<string, Promise<Awaited<ReturnType<ToolExecutor["execute"]>>>>();
+      const preparedCallIds = new Set<string>();
       const prefetchedByKey = new Map<string, Promise<Awaited<ReturnType<ToolExecutor["execute"]>>>>();
       const releasePrefetched = (): void => {
         // A cancellation can leave work that was started concurrently but is no
@@ -2881,12 +2911,14 @@ export class AgentKernel {
           if (budget.toolCalls + prefetched.size >= this.#limits.maxToolCalls) break;
           const call = pendingById.get(graphCall.callId);
           if (call === undefined) continue;
-          const validation = this.#options.registry.validateCall(call.name, call.argumentsText, this.#activeInteractionMode);
+          const validation = preflightValidation.get(call.callId) ?? this.#options.registry.validateCall(call.name, call.argumentsText, this.#activeInteractionMode);
           if (!validation.ok) continue;
           const args = validation.value as Record<string, unknown>;
           const action = this.#options.normalizer.normalize(call.callId, call.name, args);
           const decision = this.#evaluateAction(action, actionHash(action));
           if (decision.kind !== "allow") continue;
+          await this.#beforeToolExecute(action, signal);
+          preparedCallIds.add(call.callId);
           emit("tool.started", {
             callId: call.callId,
             toolId: call.name,
@@ -2899,7 +2931,7 @@ export class AgentKernel {
           let execution = sharedKey === undefined ? undefined : prefetchedByKey.get(sharedKey);
           if (execution === undefined) {
             try {
-              execution = Promise.resolve(this.#options.executor.execute(action, signal));
+              execution = Promise.resolve(this.#executeTool(action, signal, emit));
             } catch (error) {
               execution = Promise.reject(error);
             }
@@ -2938,7 +2970,7 @@ export class AgentKernel {
 
       // ---- Handle the discovery tool inline (§6.9) ----
       if (call.name === "tool.discover") {
-        const validation = this.#options.registry.validateCall(call.name, call.argumentsText, this.#activeInteractionMode);
+        const validation = preflightValidation.get(call.callId) ?? this.#options.registry.validateCall(call.name, call.argumentsText, this.#activeInteractionMode);
         if (!validation.ok) {
           this.#recordObservationError(call, validation.errors, emit);
           // §11.2: an invalid call is an error observation, not a dead end.
@@ -2963,7 +2995,7 @@ export class AgentKernel {
       }
 
       if (call.name === "verification.run_many") {
-        const validation = this.#options.registry.validateCall(
+        const validation = preflightValidation.get(call.callId) ?? this.#options.registry.validateCall(
           call.name,
           call.argumentsText,
           this.#activeInteractionMode,
@@ -3077,7 +3109,7 @@ export class AgentKernel {
       }
 
       // ---- Validate (§12.1, AC-10) ----
-      const validation = this.#options.registry.validateCall(call.name, call.argumentsText, this.#activeInteractionMode);
+      const validation = preflightValidation.get(call.callId) ?? this.#options.registry.validateCall(call.name, call.argumentsText, this.#activeInteractionMode);
       if (!validation.ok) {
         this.#recordObservationError(call, validation.errors, emit);
         // §11.2 `invalid schema → Observing(error)`. Skipping this transition
@@ -3154,6 +3186,10 @@ export class AgentKernel {
       }
 
       // ---- Execute ----
+      if (!preparedCallIds.has(call.callId)) {
+        await this.#beforeToolExecute(action, signal);
+        preparedCallIds.add(call.callId);
+      }
       if (!prefetched.has(call.callId)) {
         emit("tool.started", {
           callId: call.callId,
@@ -3166,7 +3202,7 @@ export class AgentKernel {
       let execution: Awaited<ReturnType<ToolExecutor["execute"]>>;
       try {
         const prefetchedExecution = prefetched.get(call.callId);
-        execution = prefetchedExecution !== undefined ? await prefetchedExecution : await this.#options.executor.execute(action, signal);
+        execution = prefetchedExecution !== undefined ? await prefetchedExecution : await this.#executeTool(action, signal, emit);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         emit("tool.failed", { callId: call.callId, toolId: call.name, code: "INTERNAL", message });
@@ -4022,7 +4058,7 @@ export class AgentKernel {
       if (authorization.kind === "rejected") return authorization.record;
 
       try {
-        const execution = await this.#options.executor.execute(authorization.action, signal);
+        const execution = await this.#executeTool(authorization.action, signal);
         if (!execution.result.ok) {
           return {
             command,
@@ -4101,7 +4137,7 @@ export class AgentKernel {
       const authorization = await this.#authorizeVerificationAction(command, action, signal, emit);
       if (authorization.kind === "rejected") return authorization.record;
       try {
-        const execution = await this.#options.executor.execute(authorization.action, signal);
+        const execution = await this.#executeTool(authorization.action, signal);
         if (!execution.result.ok) {
           return {
             command,
@@ -4139,7 +4175,7 @@ export class AgentKernel {
     signal: AbortSignal,
   ): Promise<{ command: string; status: "passed" | "failed"; evidence: string }> {
     try {
-      const execution = await this.#options.executor.execute(action, signal);
+      const execution = await this.#executeTool(action, signal);
       const exitCode = execution.exitCode ?? (execution.result.ok ? 0 : 1);
       const detail = (execution.text ?? execution.result.summary ?? "").trim();
       const evidence = detail.length > 2_000 ? `${detail.slice(0, 2_000)}??truncated]` : detail;

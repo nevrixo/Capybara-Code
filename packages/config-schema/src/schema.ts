@@ -146,6 +146,17 @@ export interface ModelProfileConfig {
 }
 
 export type SavingLevel = "off" | "light" | "balanced" | "strong";
+export type ToolRecoveryMode = "off" | "safe" | "full";
+
+export interface ToolRecoveryConfig {
+  mode: ToolRecoveryMode;
+  maxAttempts: number;
+}
+
+export interface TodoConfig {
+  autoProgress: boolean;
+  safeRebase: boolean;
+}
 
 // Adaptive saving profile.
 export interface AgentConfig {
@@ -157,6 +168,8 @@ export interface AgentConfig {
   tokenSaving: SavingLevel;
   promptCompiler: "v1" | "v2";
   compoundTools: boolean;
+  toolRecovery: ToolRecoveryConfig;
+  todo: TodoConfig;
   toolGraph: ToolGraphConfig;
   verification: VerificationConfig;
 }
@@ -372,6 +385,8 @@ export function defaultConfig(): CbcConfig {
       tokenSaving: "off",
       promptCompiler: "v2",
       compoundTools: true,
+      toolRecovery: { mode: "safe", maxAttempts: 3 },
+      todo: { autoProgress: true, safeRebase: true },
       toolGraph: {
         maxParallelReads: 8,
         maxParallelTests: 2,
@@ -579,6 +594,7 @@ const ENUMS: Record<string, readonly string[]> = {
   "provider.openai.transport": ["http_full", "http_previous", "websocket"],
   "provider.openai.serviceTier": ["standard", "fast"],
   "agent.tokenSaving": ["off", "light", "balanced", "strong"],
+  "agent.toolRecovery.mode": ["off", "safe", "full"],
   "perf.budgetEnforcement": ["shadow", "advisory", "hard"],
   "agent.promptCompiler": ["v1", "v2"],
   "agent.verification.reviewPolicy": ["always", "risk"],
@@ -1066,6 +1082,7 @@ const INTEGER_CONSTRAINTS: Readonly<Record<string, IntegerConstraint>> = {
   "model.cache.ttlMinutes": { minimum: 1 },
   "agent.toolGraph.maxParallelReads": { minimum: 1 },
   "agent.toolGraph.maxParallelTests": { minimum: 1 },
+  "agent.toolRecovery.maxAttempts": { minimum: 1, maximum: 5 },
   "subagents.maxConcurrent": { minimum: 1, maximum: 8 },
   "subagents.maxDepth": { minimum: 0, maximum: 1 },
   "subagents.maxPerTurn": { minimum: 1, maximum: 3 },

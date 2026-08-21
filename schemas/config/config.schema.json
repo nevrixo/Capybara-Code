@@ -408,6 +408,8 @@
         "tokenSaving",
         "promptCompiler",
         "compoundTools",
+        "toolRecovery",
+        "todo",
         "toolGraph",
         "verification"
       ],
@@ -451,6 +453,49 @@
         "compoundTools": {
           "type": "boolean",
           "default": true
+        },
+        "toolRecovery": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "maxAttempts"
+          ],
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "off",
+                "safe",
+                "full"
+              ],
+              "default": "safe"
+            },
+            "maxAttempts": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5,
+              "default": 3
+            }
+          }
+        },
+        "todo": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "autoProgress",
+            "safeRebase"
+          ],
+          "properties": {
+            "autoProgress": {
+              "type": "boolean",
+              "default": true
+            },
+            "safeRebase": {
+              "type": "boolean",
+              "default": true
+            }
+          }
         },
         "toolGraph": {
           "type": "object",

@@ -81,6 +81,10 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
   // ---- agent ----
   ["agent.permissionMode", { status: "wired", consumer: "agent.ts / approval flow" }],
   ["agent.tokenSaving", { status: "wired", consumer: "AgentSession saving controller → context, prompt, compaction, reporting" }],
+  ["agent.toolRecovery.mode", { status: "wired", consumer: "agent.ts → logical tool recovery runner" }],
+  ["agent.toolRecovery.maxAttempts", { status: "wired", consumer: "agent.ts → logical tool recovery runner" }],
+  ["agent.todo.autoProgress", { status: "wired", consumer: "agent.ts → TODO preflight activation" }],
+  ["agent.todo.safeRebase", { status: "wired", consumer: "agent.ts → TODO revision recovery" }],
 
   ["agent.promptCompiler", { status: "wired", consumer: "agent-kernel compiled prompt hot path" }],
   ["agent.compoundTools", { status: "wired", consumer: "agent.ts native compound tool activation" }],

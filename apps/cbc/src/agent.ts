@@ -83,6 +83,8 @@ import {
   type PlanDocument,
   type PlanApproval,
   type PlanContextStrategy,
+  type TodoActionIntent,
+  type TodoHostEvidence,
   type CompactionResult,
   type JournalTransport,
   type SessionHydrationPosition,
@@ -106,10 +108,12 @@ import type { Runtime } from "./runtime.ts";
 import {
   ReadCache,
   RuntimeToolExecutor,
+  type Execution,
   type ToolBridges,
   type ToolObservationAck,
   type ToolObservationEnvelope,
 } from "./tools.ts";
+import { executeWithRecovery as runToolWithRecovery } from "./tool-recovery.ts";
 import { extractPathMentions, extractSymbolMentions } from "./path-mentions.ts";
 import { scanRepository, scanRepositoryDelta } from "./repository-map.ts";
 
@@ -481,6 +485,9 @@ export class AgentSession {
   #lastCompiledRootHistoryLength = 0;
   #lastRepositoryScanPaths: readonly string[] = [];
   readonly #changedPaths = new Set<string>();
+  /** Paths and verification proof observed during the current root turn. */
+  readonly #turnChangedPaths = new Set<string>();
+  #turnVerificationPassed = false;
   readonly #verificationGenerations = new Map<string, { generation: number; ok: boolean }>();
   #verificationInvalidatingGeneration = 0;
   readonly #readObservationGenerations = new Map<string, { paths: readonly string[]; generation: number }>();
@@ -780,6 +787,43 @@ export class AgentSession {
       provider: options.provider,
       registry: this.registry,
       executor: this.executor,
+      executeWithRecovery: (action, signal, context) => {
+        const tool = this.registry.get(action.toolId);
+        if (tool === undefined) return this.executor.execute(action, signal);
+        return runToolWithRecovery(this.executor, tool, action, signal, {
+          mode: options.config.agent.toolRecovery?.mode ?? "safe",
+          maxAttempts: options.config.agent.toolRecovery?.maxAttempts ?? 3,
+          sessionId: options.sessionId,
+          emit: context.emit,
+          ...(options.config.agent.todo?.safeRebase === false ? {} : { rebase: ({ action: recoveryAction, execution }: { readonly action: ProposedAction; readonly execution: Execution }) => this.#rebaseRecoveryAction(recoveryAction, execution) }),
+          reconcile: ({ action: recoveryAction, execution, operationId, attempt, signal: recoverySignal }) =>
+            this.#reconcileToolOperation(recoveryAction, execution, operationId, attempt, recoverySignal),
+        });
+      },
+      beforeToolExecute: async (action) => {
+        if (options.config.agent.todo?.autoProgress === false || this.recorder.model.modeState.selected !== "build") return;
+        const command = action.command === undefined
+          ? undefined
+          : [action.command.program, ...action.command.args].join(" ");
+        const intent: TodoActionIntent = {
+          toolId: action.toolId,
+          ...(action.reads === undefined ? {} : { reads: action.reads }),
+          ...(action.writes === undefined ? {} : { writes: action.writes }),
+          ...(action.display.length === 0 ? {} : { display: action.display }),
+          ...(command === undefined ? {} : { command }),
+        };
+        const beforeRevision = this.#todoController.current().revision;
+        const repaired = this.#todoController.autoActivateForAction(intent);
+        if (repaired.ok && repaired.changed) {
+          this.#emitKernelEvent("tool.preflight_repaired", {
+            callId: action.callId,
+            toolId: action.toolId,
+            recoveryClass: "todo_auto_progress",
+            fromRevision: beforeRevision,
+            toRevision: repaired.state.revision,
+          }, this.#currentScope());
+        }
+      },
       onGeneratedImage: async (callId, image) => {
         const stored = await this.executor.saveGeneratedImage(callId, image);
         if (stored.artifact !== undefined) {
@@ -1193,6 +1237,7 @@ export class AgentSession {
         verificationProcessClass(event.action.toolId, event.action.display) ?? event.action.display,
         { generation: compilerGeneration, ok: event.execution.result.ok },
       );
+      if (event.execution.result.ok) this.#turnVerificationPassed = true;
     }
     for (const entry of result.rejected) {
       this.#emit("context.evidence_rejected", {
@@ -1477,6 +1522,7 @@ export class AgentSession {
       }
     }
     this.#changedPaths.add(path);
+    if (this.recorder.model.currentTurnId !== undefined) this.#turnChangedPaths.add(path);
     while (this.#changedPaths.size > 256) {
       const oldestChanged = this.#changedPaths.values().next().value;
       if (typeof oldestChanged !== "string") break;
@@ -2016,6 +2062,61 @@ export class AgentSession {
     return result;
   }
 
+  #rebaseRecoveryAction(action: ProposedAction, execution: Execution): ProposedAction | undefined {
+    if (action.toolId !== "todo.write") return undefined;
+    const details = execution.result.error?.details;
+    const currentRevision = isRecord(details) ? details.currentRevision : undefined;
+    if (typeof currentRevision !== "number" || !Number.isSafeInteger(currentRevision) || currentRevision < 0) return undefined;
+    return {
+      ...action,
+      arguments: {
+        ...action.arguments,
+        expectedRevision: currentRevision,
+      },
+    };
+  }
+
+  async #reconcileToolOperation(
+    action: ProposedAction,
+    execution: Execution,
+    operationId: string,
+    attempt: number,
+    signal: AbortSignal,
+  ): Promise<Execution | undefined> {
+    if (signal.aborted || (action.toolId !== "process.run" && action.toolId !== "process.start")) return undefined;
+    if (typeof this.#options.runtime.jobStatus !== "function") return undefined;
+    const details = execution.result.error?.details;
+    const resultData = isRecord(execution.result.data) ? execution.result.data : undefined;
+    const jobId = isRecord(details) && typeof details.jobId === "string"
+      ? details.jobId
+      : resultData !== undefined && typeof resultData.jobId === "string"
+        ? resultData.jobId
+        : undefined;
+    if (jobId === undefined || jobId.length === 0) return undefined;
+    const raw = await this.#options.runtime.jobStatus(jobId, this.#options.sessionId);
+    if (!isRecord(raw) || typeof raw.state !== "string") return undefined;
+    const state = raw.state.toLowerCase();
+    if (["starting", "running", "queued", "pending"].includes(state)) return undefined;
+    const exitCode = typeof raw.exitCode === "number" ? raw.exitCode : undefined;
+    const succeeded = exitCode === 0 || (exitCode === undefined && ["completed", "complete", "exited", "succeeded", "success", "done"].includes(state));
+    const summary = `reconciled ${action.display} as ${state} (operation ${operationId}, attempt ${attempt})`;
+    if (succeeded) {
+      return {
+        result: okResult(summary, { jobId, state, ...(exitCode === undefined ? {} : { exitCode }), reconciled: true }),
+        text: `${summary}${exitCode === undefined ? "" : `; exit ${exitCode}`}`,
+        ...(exitCode === undefined ? {} : { exitCode }),
+      };
+    }
+    return {
+      result: errorResult(
+        "PROCESS_EXIT_NONZERO",
+        `${action.display} reached terminal state ${state}`,
+        { retryable: false, details: { jobId, state, ...(exitCode === undefined ? {} : { exitCode }), reconciled: true } },
+      ),
+      text: `${summary}${exitCode === undefined ? "" : `; exit ${exitCode}`}`,
+      ...(exitCode === undefined ? {} : { exitCode }),
+    };
+  }
   async #executeTodoWrite(action: ProposedAction): Promise<import("./tools.ts").Execution> {
     const input = action.arguments;
     const expectedRevision = input.expectedRevision;
@@ -2051,6 +2152,13 @@ export class AgentSession {
       reason,
       source: "model",
       ...(document === undefined || ignoredBuildModeDocument ? {} : { document }),
+      hostEvidence: {
+        turnId: this.recorder.model.currentTurnId,
+        workStarted: this.#turnChangedPaths.size > 0 || this.#turnVerificationPassed,
+        changedPaths: [...this.#turnChangedPaths],
+        delegatedChanges: [...this.#turnChangedPaths],
+        verificationPassed: this.#turnVerificationPassed,
+      } as TodoHostEvidence,
     });
     if (!result.ok) {
       const recoveryState = {
@@ -3032,6 +3140,8 @@ export class AgentSession {
         throw new Error(`MODE_CHANGE_PENDING: cannot start a turn until ${pendingMode} mode is quiescent`);
       }
     }
+    this.#turnChangedPaths.clear();
+    this.#turnVerificationPassed = false;
     this.setTaskDescription(prompt);
     this.context.select({
       taskText: prompt,
