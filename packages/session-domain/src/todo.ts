@@ -453,7 +453,9 @@ function hostEvidenceSupportsCompletion(
       ...(evidence.delegatedChanges ?? []),
     ];
     const scoped = (next.files ?? []).some((file) => observedPaths.some((path) => pathsOverlap(file, path)));
-    return scoped || (next.files === undefined && observedPaths.length > 0) || (evidence.delegatedChanges?.length ?? 0) > 0;
+    // Delegation is host evidence, not a blanket completion grant: the
+    // delegated paths must still overlap the implementation item scope.
+    return scoped || (next.files === undefined && observedPaths.length > 0);
   }
   if (next.kind === "verification") return evidence.verificationPassed === true;
   return false;

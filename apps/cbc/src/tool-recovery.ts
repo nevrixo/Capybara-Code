@@ -81,6 +81,16 @@ async function defaultSleep(delayMs: number, signal: AbortSignal): Promise<void>
   });
 }
 
+function withRecoveryExhaustedSummary(execution: ToolExecution, summary: string | undefined): ToolExecution {
+  if (summary === undefined) return execution;
+  const line = `Recovery exhausted ${summary}`;
+  const text = execution.text?.trim();
+  return {
+    ...execution,
+    text: text === undefined || text.length === 0 ? line : `${text}\n${line}`,
+  };
+}
+
 /**
  * Execute one logical tool call while keeping physical attempts internal.
  *
@@ -123,6 +133,9 @@ export async function executeWithRecovery(
         result: errorResult("INTERNAL", asErrorMessage(error), { retryable: true }),
       };
     }
+    // Abort is terminal for the logical call. Do not classify an executor-side
+    // abort as a transient INTERNAL failure and start another physical attempt.
+    if (signal.aborted) return cancellationExecution();
     if (execution.result.ok) return execution;
 
     const failure = asFailure(execution);
@@ -184,7 +197,8 @@ export async function executeWithRecovery(
     }
 
     if (!decision.retry || attempt >= maxAttempts) {
-      if (attempt > 1 || decision.recoveryClass !== "terminal" || decision.reconcile) {
+      const recoveryAttempted = attempt > 1 || decision.recoveryClass !== "terminal" || decision.reconcile;
+      if (recoveryAttempted) {
         emit("tool.recovery_exhausted", {
           operationId,
           attemptId,
@@ -196,7 +210,12 @@ export async function executeWithRecovery(
           reason: decision.reason,
         });
       }
-      return execution;
+      return withRecoveryExhaustedSummary(
+        execution,
+        recoveryAttempted
+          ? `after ${attempt} attempt${attempt === 1 ? "" : "s"} (${decision.recoveryClass}): ${decision.reason}`
+          : undefined,
+      );
     }
 
     if (decision.recoveryClass === "state_rebase") {
@@ -218,7 +237,7 @@ export async function executeWithRecovery(
           recoveryClass: decision.recoveryClass,
           reason: "state rebase did not produce a new action",
         });
-        return execution;
+        return withRecoveryExhaustedSummary(execution, "state_rebase did not produce a new action");
       }
       currentAction = rebased;
     }

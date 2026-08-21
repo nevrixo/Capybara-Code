@@ -105,4 +105,50 @@ describe("logical tool recovery runner", () => {
     expect(execution.result.ok).toBe(true);
     expect(events).toEqual(["tool.attempt_failed", "tool.recovery_applied"]);
   });
+
+  test("stops without replay when the executor aborts the logical call", async () => {
+    const tool = findTool("fs.read");
+    expect(tool).toBeDefined();
+    const controller = new AbortController();
+    let attempts = 0;
+    const events: string[] = [];
+    const executor = {
+      execute: async () => {
+        attempts += 1;
+        controller.abort();
+        return { result: errorResult("TIMEOUT", "aborted read", { retryable: true }) };
+      },
+    };
+
+    const execution = await executeWithRecovery(executor, tool!, action("fs.read"), controller.signal, {
+      sleep: async () => {},
+      emit: (kind) => events.push(kind),
+    });
+
+    expect(attempts).toBe(1);
+    expect(execution.result.error?.code).toBe("CANCELLED");
+    expect(events).toEqual([]);
+  });
+
+  test("summarizes an exhausted transient recovery", async () => {
+    const tool = findTool("fs.read");
+    expect(tool).toBeDefined();
+    const events: string[] = [];
+    const executor = {
+      execute: async () => ({
+        text: "read timed out",
+        result: errorResult("TIMEOUT", "temporary read timeout", { retryable: true }),
+      }),
+    };
+
+    const execution = await executeWithRecovery(executor, tool!, action("fs.read"), signal, {
+      maxAttempts: 2,
+      sleep: async () => {},
+      emit: (kind) => events.push(kind),
+    });
+
+    expect(execution.result.ok).toBe(false);
+    expect(execution.text).toContain("Recovery exhausted after 2 attempts");
+    expect(events).toContain("tool.recovery_exhausted");
+  });
 });

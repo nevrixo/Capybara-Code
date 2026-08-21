@@ -104,4 +104,17 @@ describe("TODO recovery contract", () => {
     expect(model.todo.revision).toBe(3);
     expect(model.todo.items).toMatchObject([{ id: "impl", status: "done" }]);
   });
+
+  test("does not use unrelated delegated paths for completion", () => {
+    const todos = controller();
+    expect(todos.replace({ expectedRevision: 0, reason: "track work", source: "model", items: [implementation] }).ok).toBe(true);
+    const rejected = todos.replace({
+      expectedRevision: 1,
+      reason: "finish unrelated work",
+      source: "model",
+      hostEvidence: { workStarted: true, delegatedChanges: ["src/other.ts"] },
+      items: [{ ...implementation, status: "done", evidence: ["delegated"] }],
+    });
+    expect(rejected).toMatchObject({ ok: false, code: "TODO_INVALID_TRANSITION" });
+  });
 });
