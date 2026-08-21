@@ -2090,6 +2090,7 @@ export class AgentSession {
       : undefined;
     if (currentItems === undefined || requestedItems === undefined || !sameTodoProgressScope(currentItems, requestedItems)) return undefined;
     if (
+      this.recorder.model.modeState.selected === "plan" &&
       action.arguments.document !== undefined &&
       !sameTodoDocumentScope(currentState?.document, action.arguments.document)
     ) return undefined;
