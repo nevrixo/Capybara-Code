@@ -2066,8 +2066,34 @@ export class AgentSession {
   #rebaseRecoveryAction(action: ProposedAction, execution: Execution): ProposedAction | undefined {
     if (action.toolId !== "todo.write") return undefined;
     const details = execution.result.error?.details;
-    const currentRevision = isRecord(details) ? details.currentRevision : undefined;
-    if (typeof currentRevision !== "number" || !Number.isSafeInteger(currentRevision) || currentRevision < 0) return undefined;
+    if (!isRecord(details)) return undefined;
+    const currentRevision = details.currentRevision;
+    const expectedRevision = action.arguments.expectedRevision;
+    if (
+      typeof currentRevision !== "number" ||
+      !Number.isSafeInteger(currentRevision) ||
+      currentRevision < 0 ||
+      typeof expectedRevision !== "number" ||
+      !Number.isSafeInteger(expectedRevision) ||
+      expectedRevision >= currentRevision
+    ) return undefined;
+
+    // A revision update is recoverable only when the model changed progress,
+    // not the approved work scope. The executor includes the authoritative
+    // state in the conflict details; fail closed if it is absent or malformed.
+    const currentState = isRecord(details.currentState) ? details.currentState : undefined;
+    const currentItems = currentState !== undefined && Array.isArray(currentState.items)
+      ? currentState.items as PlanItem[]
+      : undefined;
+    const requestedItems = Array.isArray(action.arguments.items)
+      ? action.arguments.items as PlanItem[]
+      : undefined;
+    if (currentItems === undefined || requestedItems === undefined || !sameTodoProgressScope(currentItems, requestedItems)) return undefined;
+    if (
+      action.arguments.document !== undefined &&
+      !sameTodoDocumentScope(currentState?.document, action.arguments.document)
+    ) return undefined;
+
     return {
       ...action,
       arguments: {
@@ -3506,6 +3532,56 @@ function historyFromEvents(
   return history;
 }
 
+function todoProgressScope(item: PlanItem): unknown {
+  return {
+    id: item.id,
+    text: item.text,
+    kind: item.kind ?? null,
+    details: item.details ?? null,
+    files: item.files ?? [],
+    symbols: item.symbols ?? [],
+    acceptanceCriteria: item.acceptanceCriteria ?? [],
+    dependsOn: item.dependsOn ?? [],
+    commands: item.commands ?? [],
+  };
+}
+
+function sameTodoProgressScope(currentItems: readonly PlanItem[], requestedItems: readonly PlanItem[]): boolean {
+  if (currentItems.length !== requestedItems.length) return false;
+  const requestedIds = new Set(requestedItems.map((item) => item.id));
+  if (requestedIds.size !== requestedItems.length) return false;
+  return currentItems.every((current, index) => {
+    const requested = requestedItems[index];
+    if (requested === undefined || requested.id !== current.id) return false;
+    const merged = {
+      ...requested,
+      ...(requested.kind === undefined && current.kind !== undefined ? { kind: current.kind } : {}),
+      ...(requested.details === undefined && current.details !== undefined ? { details: current.details } : {}),
+      ...(requested.files === undefined && current.files !== undefined ? { files: current.files } : {}),
+      ...(requested.symbols === undefined && current.symbols !== undefined ? { symbols: current.symbols } : {}),
+      ...(requested.acceptanceCriteria === undefined && current.acceptanceCriteria !== undefined ? { acceptanceCriteria: current.acceptanceCriteria } : {}),
+      ...(requested.dependsOn === undefined && current.dependsOn !== undefined ? { dependsOn: current.dependsOn } : {}),
+      ...(requested.commands === undefined && current.commands !== undefined ? { commands: current.commands } : {}),
+    };
+    return JSON.stringify(todoProgressScope(current)) === JSON.stringify(todoProgressScope(merged));
+  });
+}
+
+function todoDocumentScope(document: unknown): unknown {
+  if (!isRecord(document)) return document;
+  const verification = Array.isArray(document.verification)
+    ? document.verification.map((check) => {
+      if (!isRecord(check)) return check;
+      const { status: _status, evidence: _evidence, ...scope } = check;
+      return scope;
+    })
+    : document.verification;
+  return { ...document, verification };
+}
+
+function sameTodoDocumentScope(current: unknown, requested: unknown): boolean {
+  return JSON.stringify(todoDocumentScope(current)) === JSON.stringify(todoDocumentScope(requested));
+}
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
