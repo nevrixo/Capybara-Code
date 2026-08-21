@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-21T08:36:59.279Z",
+  "generatedAt": "2026-08-21T08:43:43.195Z",
   "git": {
-    "commit": "db280ca09b7ad905faec372e34b5b2880885b300",
+    "commit": "0e4d006a27c55915eab7fdd67779132f0b2b2d65",
     "dirty": true,
-    "dirtyHash": "8acd1533f71a6fa72b754954ca483ba53a5eeb982b794284821458add9258a06"
+    "dirtyHash": "482c1924b8e6e3da8042083e4ddbc23f52c615f1d46b5c28e3f1fa5a8c32513c"
   },
   "roots": [
     "apps",
@@ -391,8 +391,8 @@
     },
     {
       "path": "apps/cbc/src/tool-recovery.ts",
-      "bytes": 8082,
-      "sha256": "357dbe83e829f71302a794554970827edb75929e118044602beebfc99585b810"
+      "bytes": 8995,
+      "sha256": "dc593c5492bca8bb29c68a4af284771f46291d4cf9aa6046cacb3fc98e0ce7ba"
     },
     {
       "path": "apps/cbc/src/tools.ts",
@@ -571,8 +571,8 @@
     },
     {
       "path": "apps/cbc/test/tool-recovery.test.ts",
-      "bytes": 3889,
-      "sha256": "56327f32e76ab84a9a0ac403a03ac5f86183bf487638d4feebc3116df9569963"
+      "bytes": 5409,
+      "sha256": "ed4fd321ddfac9ca6c34e8b3cd8bbd466bdc3a2860c4195547ae1e3d3e3c855e"
     },
     {
       "path": "apps/cbc/test/tui-frame-revision.test.ts",
@@ -1846,8 +1846,8 @@
     },
     {
       "path": "packages/session-domain/src/todo.ts",
-      "bytes": 49619,
-      "sha256": "340b779df48557d74b69c4653eef901f59276d466685e67881a590a3d166d292"
+      "bytes": 49716,
+      "sha256": "432f097a3018f29556c77d423f9d4b6d1ba6f50ce337e2299241df893ab59b71"
     },
     {
       "path": "packages/session-domain/test/final-answer.test.ts",
@@ -1871,8 +1871,8 @@
     },
     {
       "path": "packages/session-domain/test/todo-recovery.test.ts",
-      "bytes": 4469,
-      "sha256": "5f8720b3e34238961b30821ec2792c98c5af39f7bc07a6b077dc7a0d37d436f1"
+      "bytes": 5086,
+      "sha256": "422173d500f1ec31168506651b37d17f303e9ed9196978a874bdda4763a8aad7"
     },
     {
       "path": "packages/session-domain/test/todo.test.ts",
@@ -2305,5 +2305,5 @@
       "sha256": "c69dafb888ab2abc0a1a6bfe0602668806ec94b495ad4f228a4e0486f22ea7e4"
     }
   ],
-  "digest": "8db9db0693dd9d4565691b69383c7e2b0ae8627863af3c842e90e646011d6eeb"
+  "digest": "d3862e1118dffb338d4918c3b51e9c02bdcd2f82accedd280ae2bccfbaf41632"
 }
