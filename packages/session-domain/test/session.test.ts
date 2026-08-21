@@ -1172,6 +1172,49 @@ describe("model transparency (AC-48)", () => {
     expect(model.reasoningEffort).toBe("low");
     expect(model.permissionMode).toBe("ask");
   });
+
+  test("a low-effort child turn cannot replace the root model or selected effort", () => {
+    const sequencer = new EventSequencer();
+    const events = [
+      createEvent(
+        sequencer,
+        "session.started",
+        { modelId: "gpt-5.6-sol", reasoningEffort: "max", permissionMode: "ask" },
+        { sessionId: "ses_1", agentId: "root" },
+      ),
+      createEvent(
+        sequencer,
+        "turn.started",
+        { model: "gpt-5.6-sol", reasoning: { effort: "max" }, permissionMode: "ask" },
+        { sessionId: "ses_1", turnId: "root_turn", agentId: "root" },
+      ),
+      createEvent(
+        sequencer,
+        "turn.started",
+        { model: "gpt-5.6-terra", reasoning: { effort: "low" }, permissionMode: "ask" },
+        { sessionId: "ses_1", turnId: "child_turn", agentId: "agent_1" },
+      ),
+      createEvent(
+        sequencer,
+        "assistant.commentary",
+        { text: "Child is exploring.", reasoningEffort: "low" },
+        { sessionId: "ses_1", turnId: "child_turn", agentId: "agent_1" },
+      ),
+      createEvent(
+        sequencer,
+        "turn.completed",
+        { status: "completed" },
+        { sessionId: "ses_1", turnId: "child_turn", agentId: "agent_1" },
+      ),
+    ];
+
+    const model = replay("ses_1", events);
+    expect(model.modelId).toBe("gpt-5.6-sol");
+    expect(model.reasoningEffort).toBe("max");
+    expect(model.currentTurnId).toBe("root_turn");
+    expect(model.turnCount).toBe(1);
+    expect(model.turnStatus).toBe("preparing");
+  });
 });
 
 describe("compaction (§18.9, AC-34)", () => {

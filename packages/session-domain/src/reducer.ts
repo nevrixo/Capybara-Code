@@ -797,6 +797,10 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
     }
 
     case "turn.started": {
+      // A child kernel has its own model, effort, and turn id. Its lifecycle is
+      // represented by the task card, so it must never replace the root
+      // session's composer chrome or current-turn pointer.
+      if (isChildScopedEvent(event)) break;
       const p = payloadOf(event);
       // `exactOptionalPropertyTypes` forbids writing `undefined` into an
       // optional field; a turn without an id clears the pointer instead of
@@ -825,6 +829,7 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
     }
 
     case "turn.completed": {
+      if (isChildScopedEvent(event)) break;
       const p = payloadOf(event);
       const status = terminalCompletionStatus(p.status);
       next.turnStatus = status;
@@ -861,6 +866,7 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
     }
 
     case "turn.cancelled": {
+      if (isChildScopedEvent(event)) break;
       next.turnStatus = "cancelled";
       next.cancelledTurns += 1;
       next.live = { kind: "cancelled", label: "Cancelled" };
@@ -871,6 +877,7 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
     }
 
     case "turn.interrupted": {
+      if (isChildScopedEvent(event)) break;
       next.turnStatus = "observing";
       next.timeline.push(
         notice(event, "warning", str(payloadOf(event).reason, "Turn interrupted"), "!"),
@@ -962,7 +969,11 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
     case "assistant.reasoning":
     case "assistant.reasoning_summary": {
       const payload = payloadOf(event);
-      if (typeof payload.reasoningEffort === "string") next.reasoningEffort = payload.reasoningEffort;
+      // Child profiles commonly run at a lower effort than root. Their events
+      // belong to task detail and cannot change the root effort selector.
+      if (!isChildScopedEvent(event) && typeof payload.reasoningEffort === "string") {
+        next.reasoningEffort = payload.reasoningEffort;
+      }
       if (event.kind === "assistant.reasoning" || event.kind === "assistant.reasoning_summary") {
         if (event.visibility !== "hidden") upsertThinking(next, event, "legacy");
         next.turnStatus = "sampling";
@@ -2088,6 +2099,11 @@ function subagentOwner(
   const agentId = event.agentId;
   if (agentId === undefined || agentId === "root" || agentId.length === 0) return undefined;
   return findTask(timeline, agentId, indexes);
+}
+
+/** Whether an event belongs to a child kernel rather than the root session. */
+function isChildScopedEvent(event: CbcEvent): boolean {
+  return event.agentId !== undefined && event.agentId !== "root" && event.agentId.length > 0;
 }
 
 /** Apply the fields shared by `tool.completed` and `tool.failed`. */
