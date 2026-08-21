@@ -1708,12 +1708,11 @@ async function handleOverlay(
     }
 
     case "context": {
-      const { renderContextInspection } = await import("@cbc/context-engine");
       const inspection = session.inspectContext();
-      ui.openOverlay("context", [
-        ...renderContextUsage(session.viewModel.contextUsage, ui.blockContext).map(lineText),
-        ...renderContextInspection(inspection),
-      ]);
+      ui.openOverlay(
+        "context",
+        renderContextUsage(session.viewModel.contextUsage, ui.blockContext, { inspection }),
+      );
       return "continue";
     }
 
