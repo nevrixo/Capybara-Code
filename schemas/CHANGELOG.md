@@ -82,6 +82,7 @@ Initial published contract, matching PRD v1.0.
   `context.evidence_rejected`, and `context.cache_segment`. These additive events make
   compiled prompt/token accounting, evidence rejection, working-set eviction, and
   cache segmentation derivable from the ordinary journal stream.
+- Added scoped-agent lifecycle and validated handoff events: context.scope_created, context.scope_seeded, context.handoff_created, context.handoff_validation_failed, context.handoff_accepted, context.handoff_rejected, context.handoff_consumed, and context.scope_disposed. These events expose isolation and exactly-once collection without recording exact source bodies.
 - Added optional `callerId`, `taskEpochId`, and `workspaceIdentityDigest` envelope
   fields so provider-native observations remain attributable and identity-aware.
 - v1.3 program/hosted/tool-batch events now require turn, agent, caller, and epoch ancestry; opaque provider items remain bounded and non-executable.

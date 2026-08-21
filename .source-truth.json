@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-21T07:26:11.021Z",
+  "generatedAt": "2026-08-21T07:29:19.377Z",
   "git": {
-    "commit": "34de6e226c89a91c9064dd4acb2248a0f607dc29",
+    "commit": "931343e63b3823a0b1ea335c118ee81731c5ad55",
     "dirty": true,
-    "dirtyHash": "0bbe7fe8b024375f7a0adca34306a543c1b07ac94fbe5bbc52f1535cbbe256ef"
+    "dirtyHash": "11f07d8c6eecbee39f0c8f1a9b1707ceddab478fadd9773c18c908014d4cf2f5"
   },
   "roots": [
     "apps",
@@ -2156,8 +2156,8 @@
     },
     {
       "path": "schemas/CHANGELOG.md",
-      "bytes": 7144,
-      "sha256": "bb1a4c00b1e435af4ff11c81d95d1dfcffdb09dfdecb615fa695e1ab1ded73ff"
+      "bytes": 7513,
+      "sha256": "2bb6e7b80b912188848ad0b2214b5e9bf3ac365599537936a50fe1b6ad5f7f47"
     },
     {
       "path": "schemas/config/config.schema.json",
@@ -2166,8 +2166,8 @@
     },
     {
       "path": "schemas/events/event.schema.json",
-      "bytes": 11738,
-      "sha256": "e0ba080134fdf0c43130b08f8c3d38af19a529f141f907cd0e52ef2d7f7410ee"
+      "bytes": 12025,
+      "sha256": "e30c3827c4aa8ba975dc214a86261fa6a0e45f3f45f66ee159cdf9775dc5097d"
     },
     {
       "path": "schemas/protocol/handshake.schema.json",
@@ -2275,5 +2275,5 @@
       "sha256": "c69dafb888ab2abc0a1a6bfe0602668806ec94b495ad4f228a4e0486f22ea7e4"
     }
   ],
-  "digest": "b5cd05bb5cfa48e09cf8e4292fc6fda952166a3800edb5309c2f908b5cfa3ed3"
+  "digest": "46f7106c2136b04cfaee5c8a24d7c080cffbc8b4958b74d7a2b55103b865e576"
 }
