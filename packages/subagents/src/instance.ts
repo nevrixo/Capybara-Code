@@ -3,6 +3,7 @@
  */
 
 import type { WriterLease } from "@cbc/tool-registry";
+import type { ChildContextHandoff } from "@cbc/context-engine";
 
 import type { SubagentRole } from "./roles.ts";
 import type { AgentTask } from "./task.ts";
@@ -127,6 +128,10 @@ export interface ChildAgentResult {
   readonly findings?: ReviewFinding[];
   readonly openRisks: string[];
   readonly recommendedNextStep?: string;
+  /** Validated, digest-bound context that may be explicitly collected by the parent. */
+  readonly contextHandoff?: ChildContextHandoff;
+  /** Set by the bridge only after the parent accepts the handoff exactly once. */
+  readonly contextHandoffAccepted?: boolean;
 }
 
 export function emptyChildResult(

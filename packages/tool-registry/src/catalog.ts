@@ -699,7 +699,11 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
     network: false,
     keywords: ["subagent", "status", "inspect", "await", "monitor", "task", "progress"],
     parameters: objectSchema(
-      { taskId: { type: "string" }, awaitCompletion: { type: "boolean", default: false } },
+      {
+        taskId: { type: "string" },
+        awaitCompletion: { type: "boolean", default: false },
+        collectContext: { type: "boolean", default: false },
+      },
       [],
     ),
   },

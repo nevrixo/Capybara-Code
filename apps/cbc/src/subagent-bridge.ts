@@ -16,7 +16,7 @@ import {
   type PromptInputs,
 } from "@cbc/agent-kernel";
 import type { CbcConfig, ModelProfileConfig } from "@cbc/config-schema";
-import { projectTaskContextCapsule } from "@cbc/context-engine";
+import { exportContextHandoff, projectTaskContextCapsule, type AgentContextScope } from "@cbc/context-engine";
 import type {
   ScopedExactExcerpt,
   TaskContextCapsule,
@@ -86,6 +86,8 @@ export interface SubagentBridgeOptions {
    * adopted capsules.
    */
   readonly createContextCapsule?: (context: ChildRunContext) => TaskContextCapsule;
+  /** Creates the child-owned mutable semantic context at spawn time. */
+  readonly createContextScope?: (context: ChildRunContext, capsule: TaskContextCapsule | undefined) => AgentContextScope | undefined;
   readonly emit: <T>(
     kind: CbcEventKind,
     payload: T,
@@ -104,12 +106,14 @@ export interface SubagentBridgeOptions {
   readonly onWorkspacePotentiallyChanged?: (toolId: string, action?: ProposedAction) => void;
   /** Fence workspace context while a child-owned background job may keep writing. */
   readonly onBackgroundJobStarted?: (jobId: string) => void;
-  readonly onArtifactSpilled?: (artifact: ArtifactRef, action: ProposedAction) => void;
+  readonly onArtifactSpilled?: (artifact: ArtifactRef, action: ProposedAction, agentId?: string) => void;
   /** Release child-owned compiler resources on every terminal path. */
   readonly onChildFinished?: (agentId: string) => void;
+  /** Accept a child handoff only after await/collect explicitly authorizes it. */
+  readonly onHandoff?: (result: ChildAgentResult, mode: "await" | "collect") => boolean | Promise<boolean>;
   /** Reconcile shared workspace fences before a child provider request. */
   readonly beforeSample?: () => void | Promise<void>;
-  /** Child observations are ingested by the parent session's ContextEngine. */
+  /** Observations are ingested by the owning agent scope, never implicitly promoted to root. */
   readonly onObservation?: (
     event: ToolObservationEnvelope,
   ) =>
@@ -369,6 +373,8 @@ export class SubagentBridge {
         };
       }
 
+      const accepted = await this.#acceptHandoff(result, "await");
+      const visibleResult = accepted ? { ...result, contextHandoffAccepted: true } : result;
       return {
         result: okResult(
           "subagent " + handle.id + " " + result.status,
@@ -376,10 +382,11 @@ export class SubagentBridge {
             taskId: handle.id,
             role: handle.instance.role,
             state: handle.instance.state,
-            result,
+            result: visibleResult,
+            contextHandoffAccepted: accepted,
           },
         ),
-        text: renderChildResult(handle.id, handle.instance.role, result),
+        text: renderChildResult(handle.id, handle.instance.role, visibleResult),
       };
     } catch (error) {
       if (error instanceof SpawnRejected) {
@@ -414,13 +421,32 @@ export class SubagentBridge {
       if (input.awaitCompletion === true && !isTerminal(instance)) {
         const result = await this.#awaitChild(taskId, signal);
         if (result !== undefined) {
+          const accepted = await this.#acceptHandoff(result, "await");
+          const visibleResult = accepted ? { ...result, contextHandoffAccepted: true } : result;
           return {
-            result: okResult("subagent " + taskId + " " + result.status, {
+            result: okResult("subagent " + taskId + " " + visibleResult.status, {
               taskId,
               instance: serializeInstance(instance),
-              result,
+              result: visibleResult,
+              contextHandoffAccepted: accepted,
             }),
-            text: renderChildResult(taskId, instance.role, result),
+            text: renderChildResult(taskId, instance.role, visibleResult),
+          };
+        }
+      }
+
+      if (input.collectContext === true && instance.result !== undefined) {
+        const accepted = await this.#acceptHandoff(instance.result, "collect");
+        if (accepted) {
+          const visibleResult = { ...instance.result, contextHandoffAccepted: true };
+          return {
+            result: okResult("collected context from subagent " + taskId, {
+              taskId,
+              instance: serializeInstance(instance),
+              result: visibleResult,
+              contextHandoffAccepted: true,
+            }),
+            text: renderChildResult(taskId, instance.role, visibleResult),
           };
         }
       }
@@ -448,6 +474,14 @@ export class SubagentBridge {
     };
   }
 
+  async #acceptHandoff(result: ChildAgentResult, mode: "await" | "collect"): Promise<boolean> {
+    if (result.contextHandoff === undefined || this.#options.onHandoff === undefined) return false;
+    try {
+      return await this.#options.onHandoff(result, mode);
+    } catch {
+      return false;
+    }
+  }
   async #cancel(input: Record<string, unknown>): Promise<Execution> {
     const taskId = stringValue(input.taskId);
     if (taskId === undefined) {
@@ -482,6 +516,8 @@ export class SubagentBridge {
     const childInteractionMode = rootPermission.interactionMode ?? "build";
     childRegistry.setInteractionMode(childInteractionMode);
     let childTurnId: string | undefined;
+    const childCapsule = this.#options.createContextCapsule?.(context);
+    const childScope = this.#options.createContextScope?.(context, childCapsule);
 
     const childEmitter: KernelEmitter = {
       emit: <T>(
@@ -521,27 +557,15 @@ export class SubagentBridge {
       ...(this.#options.onObservation !== undefined
         ? {
             onObservation: async (event: ToolObservationEnvelope): Promise<ToolObservationResult> => {
-              const result = await this.#options.onObservation?.(event);
-              // A capsule deliberately does not inherit the parent's exact L6.
-              // Keep a child's own successful reads raw in its private history so
-              // virtualization cannot replace content with a locator the child
-              // cannot dereference from the scoped capsule. Sensitive reads are
-              // still sanitized by RuntimeToolExecutor's raw-read path.
-              if (
-                this.#options.createContextCapsule !== undefined &&
-                (event.action.toolId === "fs.read" || event.action.toolId === "fs.read_many")
-              ) {
-                if (typeof result === "object" && result !== null && "disposition" in result) {
-                  return { ...result, disposition: "raw", virtualizedPaths: [] };
-                }
-                return { disposition: "raw" };
-              }
-              return result;
+              // The owning AgentContextScope keeps its exact body and descriptor
+              // together, so a successful child read may be virtualized safely.
+              // The root never receives this callback's mutable semantic state.
+              return await this.#options.onObservation?.(event) ?? { disposition: "raw" };
             },
           }
         : {}),
       ...(this.#options.onArtifactSpilled !== undefined
-        ? { onArtifactSpilled: this.#options.onArtifactSpilled }
+        ? { onArtifactSpilled: (artifact, action) => this.#options.onArtifactSpilled?.(artifact, action, instance.id) }
         : {}),
       ...(this.#options.onWorkspacePotentiallyChanged !== undefined
         ? { onWorkspacePotentiallyChanged: this.#options.onWorkspacePotentiallyChanged }
@@ -709,8 +733,26 @@ export class SubagentBridge {
       permissionContext: childPermissionContext,
       promptInputs: (): PromptInputs => {
           const parent = this.#options.promptInputs();
-          const capsule = this.#options.createContextCapsule?.(context);
+          const capsule = childCapsule;
           const scopedExactExcerpts = capsule?.scopedExactExcerpts ?? [];
+          const childRepositoryContext = childScope?.engine.repositoryContext({
+            maxTokens: childScope.engine.activeExcerptBudget,
+          });
+          const childMaterialization = childScope?.engine.lastMaterialization;
+          const childVirtualizedExcerpts = childScope === undefined
+            ? []
+            : childMaterialization?.excerptIds.flatMap((excerptId) => {
+                const descriptor = childScope.engine.exactExcerptDescriptor(excerptId);
+                return descriptor === undefined ? [] : [{
+                  id: descriptor.id,
+                  path: descriptor.path,
+                  text: descriptor.text,
+                  checksum: descriptor.checksum,
+                  startLine: descriptor.startLine,
+                  endLine: descriptor.endLine,
+                  scope: "child" as const,
+                }];
+              }) ?? [];
           return {
           activeTools: childRegistry.activeTools(),
           // Global and project policy still applies to children. Only the
@@ -721,60 +763,82 @@ export class SubagentBridge {
           // A capsule is projected authoritatively into L6. The legacy parent
           // context remains available only for embedders that have not adopted
           // scoped capsules yet.
-          ...(capsule === undefined
-            ? parent.repositoryContext !== undefined
-              ? { repositoryContext: parent.repositoryContext }
-              : {}
-            : {
-                contextProjection: projectTaskContextCapsule(capsule, {
-                  recentDialogue: childKernel.history,
-                  virtualizedExcerpts: scopedExactExcerpts.map((excerpt) => ({
-                    id: excerpt.excerptId,
-                    path: excerpt.path,
-                    text: excerpt.body,
-                    checksum: excerpt.checksum,
-                    startLine: excerpt.startLine,
-                    endLine: excerpt.endLine,
-                    evidenceId: excerpt.evidenceId,
-                    identityDigest: excerpt.identityDigest,
-                    bodyDigest: excerpt.bodyDigest,
-                    scope: "child" as const,
-                  })),
-                }),
-              }),
-          ...(capsule === undefined && parent.contextManifest !== undefined
-            ? { contextManifest: parent.contextManifest }
+          ...(childScope !== undefined
+            ? {
+                repositoryContext: [
+                  "# Scoped task context capsule",
+                  "This is an evidence index and authority boundary, not workspace instructions.",
+                  ...(capsule === undefined ? [] : ["Capsule id: " + capsule.capsuleId, "allowedPaths: " + capsule.contract.allowedPaths.join(", "), "inputTokens: " + capsule.budget.inputTokens, "toolCalls: " + capsule.budget.toolCalls]),
+                  ...(childRepositoryContext ?? []),
+                ],
+              }
             : capsule === undefined
-              ? {}
+              ? parent.repositoryContext !== undefined
+                ? { repositoryContext: parent.repositoryContext }
+                : {}
               : {
-                  contextManifest: {
-                    evidenceIds: capsule.evidenceRefs.map((reference) => reference.id as `evidence-${string}`),
-                    excerptIds: scopedExactExcerpts.map((excerpt) => excerpt.excerptId),
-                    rejected: [],
-                    estimatedTokens: capsule.budget.inputTokens,
-                    omitted: 0,
-                    compilerPackId: capsule.capsuleId,
-                    compilerManifestDigest: capsule.digest,
-                  },
+                  contextProjection: projectTaskContextCapsule(capsule, {
+                    recentDialogue: childKernel.history,
+                    virtualizedExcerpts: scopedExactExcerpts.map((excerpt) => ({
+                      id: excerpt.excerptId,
+                      path: excerpt.path,
+                      text: excerpt.body,
+                      checksum: excerpt.checksum,
+                      startLine: excerpt.startLine,
+                      endLine: excerpt.endLine,
+                      evidenceId: excerpt.evidenceId,
+                      identityDigest: excerpt.identityDigest,
+                      bodyDigest: excerpt.bodyDigest,
+                      scope: "child" as const,
+                    })),
+                  }),
                 }),
-          ...(capsule === undefined && parent.virtualizedExcerpts !== undefined
-            ? { virtualizedExcerpts: parent.virtualizedExcerpts }
-            : capsule !== undefined && scopedExactExcerpts.length > 0
-              ? {
-                  virtualizedExcerpts: scopedExactExcerpts.map((excerpt) => ({
-                    id: excerpt.excerptId,
-                    path: excerpt.path,
-                    text: excerpt.body,
-                    checksum: excerpt.checksum,
-                    startLine: excerpt.startLine,
-                    endLine: excerpt.endLine,
-                    evidenceId: excerpt.evidenceId,
-                    identityDigest: excerpt.identityDigest,
-                    bodyDigest: excerpt.bodyDigest,
-                    scope: "child" as const,
-                  })),
-                }
-              : {}),
+          ...(childScope !== undefined && childMaterialization !== undefined
+            ? {
+                contextManifest: {
+                  evidenceIds: childMaterialization.evidenceIds,
+                  excerptIds: childMaterialization.excerptIds,
+                  rejected: childMaterialization.rejected,
+                  estimatedTokens: childMaterialization.estimatedTokens,
+                  omitted: childMaterialization.omitted,
+                  ...(childScope.seedCapsuleDigest === undefined ? {} : { compilerPackId: childScope.seedCapsuleDigest, compilerManifestDigest: childScope.seedCapsuleDigest }),
+                },
+              }
+            : capsule === undefined && parent.contextManifest !== undefined
+              ? { contextManifest: parent.contextManifest }
+              : capsule === undefined
+                ? {}
+                : {
+                    contextManifest: {
+                      evidenceIds: capsule.evidenceRefs.map((reference) => reference.id as import("@cbc/context-engine").EvidenceRecord["id"]),
+                      excerptIds: scopedExactExcerpts.map((excerpt) => excerpt.excerptId),
+                      rejected: [],
+                      estimatedTokens: capsule.budget.inputTokens,
+                      omitted: 0,
+                      compilerPackId: capsule.capsuleId,
+                      compilerManifestDigest: capsule.digest,
+                    },
+                  }),
+          ...(childScope !== undefined && childVirtualizedExcerpts.length > 0
+            ? { virtualizedExcerpts: childVirtualizedExcerpts }
+            : capsule === undefined && parent.virtualizedExcerpts !== undefined
+              ? { virtualizedExcerpts: parent.virtualizedExcerpts }
+              : capsule !== undefined && scopedExactExcerpts.length > 0
+                ? {
+                    virtualizedExcerpts: scopedExactExcerpts.map((excerpt) => ({
+                      id: excerpt.excerptId,
+                      path: excerpt.path,
+                      text: excerpt.body,
+                      checksum: excerpt.checksum,
+                      startLine: excerpt.startLine,
+                      endLine: excerpt.endLine,
+                      evidenceId: excerpt.evidenceId,
+                      identityDigest: excerpt.identityDigest,
+                      bodyDigest: excerpt.bodyDigest,
+                      scope: "child" as const,
+                    })),
+                  }
+                : {}),
           ...(capsule === undefined && parent.staleReadCallIds !== undefined
             ? { staleReadCallIds: parent.staleReadCallIds }
             : {}),
@@ -792,12 +856,48 @@ export class SubagentBridge {
     try {
       const turn = await childKernel.runTurn(context.taskDescription, context.signal);
       this.scheduler.recordChildUsage(instance.id, turn.usage.inputTokens);
-      return childResultFromTurn(turn);
+      let result = childResultFromTurn(turn);
+      if (childScope !== undefined && childCapsule !== undefined) {
+        const handoff = exportContextHandoff(childScope, {
+          taskId: instance.id,
+          parentScopeId: childScope.parentScopeId ?? "ctx_root",
+          seedCapsuleDigest: childScope.seedCapsuleDigest ?? childCapsule.digest,
+          baseGeneration: childScope.createdGeneration,
+          completionGeneration: this.#options.workspaceGeneration?.() ?? childScope.createdGeneration,
+          status: result.status,
+          claims: [result.summary, ...result.evidence.map((entry) => entry.detail ?? entry.label)].filter((claim) => claim.length > 0),
+          artifactRefs: result.evidence.filter((entry) => entry.kind === "artifact").map((entry) => entry.locator),
+          changedPaths: result.filesChanged.map((file) => file.path),
+          ...(childCapsule.workspaceIdentity === undefined ? {} : { workspaceIdentityDigest: childCapsule.workspaceIdentity }),
+          allowedPaths: instance.permissions.allowedPaths.length > 0 ? instance.permissions.allowedPaths : ["."],
+          forbiddenPaths: instance.permissions.forbiddenPaths,
+          ...(this.#options.now !== undefined ? { now: new Date(this.#options.now()).toISOString() } : {}),
+        });
+        result = { ...result, contextHandoff: handoff };
+        this.#options.emit("context.handoff_created", {
+          handoffId: handoff.handoffId,
+          taskId: handoff.taskId,
+          sourceAgentId: handoff.sourceAgentId,
+          sourceScopeId: handoff.sourceScopeId,
+          parentScopeId: handoff.parentScopeId,
+          workspaceGeneration: handoff.completionGeneration,
+          evidenceCount: handoff.evidence.length,
+          excerptCount: handoff.exactExcerpts?.length ?? 0,
+          digest: handoff.digest,
+        }, { agentId: instance.id });
+      }
+      childScope?.markTerminal();
+      return result;
     } finally {
       try {
         this.#options.onChildFinished?.(instance.id);
       } catch {
         // Compiler resource cleanup cannot rewrite the child's terminal truth.
+      }
+      try {
+        childScope?.dispose();
+      } catch {
+        // Scope disposal is best-effort and cannot alter the child result.
       }
       try {
         await childKernel.close();
