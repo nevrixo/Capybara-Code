@@ -28,14 +28,24 @@ export function allowsBroadRule(risk: RiskClass): boolean {
 }
 
 export type ToolSource = "native" | "skill" | "mcp";
+export type ToolIdempotency = "pure" | "idempotent" | "reconcilable" | "non_idempotent";
+
+export interface ToolRecoveryMetadata {
+  readonly maxAttempts: number;
+  readonly retryableCodes: readonly string[];
+  readonly retrySafety: "always" | "before_dispatch" | "reconcile" | "never";
+  readonly reconcile?: "runtime_operation" | "process_job" | "mcp_operation";
+}
+
 export interface ToolExecutionMetadata {
-  readonly idempotency: "pure" | "idempotent" | "non_idempotent";
+  readonly idempotency: ToolIdempotency;
   readonly authority: "read" | "session_state" | "workspace_write" | "process" | "network" | "external_effect";
   readonly conflictKeys: (args: unknown) => readonly string[];
   readonly canRunInProgram: boolean;
   readonly canRunInHostedAgent: boolean;
   readonly maxParallelism: number;
   readonly resultSchemaId: string;
+  readonly recovery: ToolRecoveryMetadata;
 }
 
 export interface ToolDefinition {
@@ -64,6 +74,7 @@ export interface ToolDefinition {
   readonly canRunInHostedAgent?: boolean;
   readonly maxParallelism?: number;
   readonly resultSchemaId?: string;
+  readonly recovery?: Partial<ToolRecoveryMetadata>;
 }
 
 function objectSchema(
@@ -792,6 +803,8 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
     alwaysActive: false,
     mutates: false,
     network: true,
+    authority: "network",
+    idempotency: "idempotent",
     keywords: ["mcp", "resource", "read", "document", "docs"],
     parameters: objectSchema(
       { server: { type: "string", minLength: 1 }, uri: { type: "string", minLength: 1 } },
@@ -809,6 +822,8 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
     mutates: false,
     network: false,
     authority: "session_state",
+    idempotency: "reconcilable",
+    recovery: { maxAttempts: 2, retryableCodes: ["TODO_REVISION_CONFLICT"], retrySafety: "before_dispatch" },
     keywords: ["todo", "plan", "checklist", "track", "progress"],
     parameters: objectSchema(
       {
@@ -958,13 +973,23 @@ export function withExecutionMetadata(tool: ToolDefinition): ToolDefinition {
       : tool.network
         ? (tool.id.startsWith("mcp.") ? "external_effect" : "network")
         : "read");
-  const idempotency: ToolExecutionMetadata["idempotency"] = tool.mutates || authority === "external_effect" || authority === "process"
-    ? "non_idempotent"
-    : tool.network
-      ? "idempotent"
-      : "pure";
+  const idempotency: ToolExecutionMetadata["idempotency"] = tool.idempotency ?? (
+    authority === "session_state"
+      ? "reconcilable"
+      : tool.mutates || authority === "external_effect" || authority === "process"
+        ? "non_idempotent"
+        : tool.network
+          ? "idempotent"
+          : "pure"
+  );
   const readOnlyLocal = authority === "read" && tool.network === false;
   const maxParallelism = authority === "read" ? 8 : authority === "process" ? 2 : 1;
+  const recovery: ToolRecoveryMetadata = {
+    maxAttempts: tool.recovery?.maxAttempts ?? (idempotency === "pure" || idempotency === "idempotent" || idempotency === "reconcilable" ? 3 : 1),
+    retryableCodes: tool.recovery?.retryableCodes ?? ["NOT_INITIALIZED", "TIMEOUT", "PATH_CHANGED", "HASH_MISMATCH", "NETWORK_UNAVAILABLE", "RATE_LIMITED", "TEMPORARY_UNAVAILABLE"],
+    retrySafety: tool.recovery?.retrySafety ?? (idempotency === "pure" || idempotency === "idempotent" ? "always" : "never"),
+    ...(tool.recovery?.reconcile === undefined ? {} : { reconcile: tool.recovery.reconcile }),
+  };
   return {
     ...tool,
     idempotency: tool.idempotency ?? idempotency,
@@ -974,6 +999,7 @@ export function withExecutionMetadata(tool: ToolDefinition): ToolDefinition {
     canRunInHostedAgent: tool.canRunInHostedAgent ?? (readOnlyLocal && ["fs.read", "fs.read_many", "fs.list", "fs.glob", "fs.search", "git.status", "git.diff", "git.log"].includes(tool.id)),
     maxParallelism: tool.maxParallelism ?? maxParallelism,
     resultSchemaId: tool.resultSchemaId ?? `${tool.id}.result`,
+    recovery,
   };
 }
 

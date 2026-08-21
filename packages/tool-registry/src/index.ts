@@ -8,6 +8,7 @@ export * from "./validate.ts";
 export * from "./discovery.ts";
 export * from "./scheduler.ts";
 export * from "./graph.ts";
+export * from "./recovery.ts";
 
 import { isPlanSafeTool, NATIVE_TOOLS, withExecutionMetadata, type ToolDefinition } from "./catalog.ts";
 import { discover, type DiscoveryOptions, type ToolDiscoveryResult } from "./discovery.ts";
