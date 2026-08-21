@@ -162,6 +162,8 @@ export type TodoUpdateResult =
 export interface TodoControllerOptions {
   readonly mode: () => InteractionMode;
   readonly now?: () => string;
+  /** Disable automatic progress-only revision rebasing for rollback/debug. */
+  readonly safeRebase?: boolean;
   readonly emit: (
     kind: "plan.created" | "plan.updated" | "plan.approved",
     payload: Record<string, unknown>,
@@ -691,7 +693,7 @@ export class TodoController {
     // A stale model revision may be rebased exactly once when the requested
     // change preserves every item's approved scope. Status/evidence progress is
     // safe to merge; additions, removals, or any scope change are not.
-    const safeRebase = staleRevision && input.source === "model" &&
+    const safeRebase = this.#options.safeRebase !== false && staleRevision && input.source === "model" &&
       items.length === previousItems.length &&
       sameScope(document, items, this.#state.document, previousItems) &&
       items.every((item) => {

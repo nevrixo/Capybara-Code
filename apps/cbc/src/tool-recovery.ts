@@ -112,6 +112,7 @@ export async function executeWithRecovery(
 
   let currentAction = action;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const attemptId = `${operationId}:attempt-${attempt}`;
     if (signal.aborted) return cancellationExecution();
 
     let execution: ToolExecution;
@@ -128,6 +129,7 @@ export async function executeWithRecovery(
     const decision = decideRecovery({ tool, failure, attempt });
     emit("tool.attempt_failed", {
       operationId,
+      attemptId,
       callId: currentAction.callId,
       toolId: currentAction.toolId,
       attempt,
@@ -150,6 +152,7 @@ export async function executeWithRecovery(
       } catch (error) {
         emit("tool.reconciled", {
           operationId,
+          attemptId,
           callId: currentAction.callId,
           toolId: currentAction.toolId,
           attempt,
@@ -160,6 +163,7 @@ export async function executeWithRecovery(
       if (reconciled !== undefined) {
         emit("tool.reconciled", {
           operationId,
+          attemptId,
           callId: currentAction.callId,
           toolId: currentAction.toolId,
           attempt,
@@ -170,6 +174,7 @@ export async function executeWithRecovery(
       }
       emit("tool.reconciled", {
         operationId,
+        attemptId,
         callId: currentAction.callId,
         toolId: currentAction.toolId,
         attempt,
@@ -182,6 +187,7 @@ export async function executeWithRecovery(
       if (attempt > 1 || decision.recoveryClass !== "terminal" || decision.reconcile) {
         emit("tool.recovery_exhausted", {
           operationId,
+          attemptId,
           callId: currentAction.callId,
           toolId: currentAction.toolId,
           attempt,
@@ -204,6 +210,7 @@ export async function executeWithRecovery(
       if (rebased === undefined) {
         emit("tool.recovery_exhausted", {
           operationId,
+          attemptId,
           callId: currentAction.callId,
           toolId: currentAction.toolId,
           attempt,
@@ -218,10 +225,12 @@ export async function executeWithRecovery(
 
     emit("tool.recovery_applied", {
       operationId,
+      attemptId,
       callId: currentAction.callId,
       toolId: currentAction.toolId,
       attempt,
       nextAttempt: attempt + 1,
+      nextAttemptId: `${operationId}:attempt-${attempt + 1}`,
       recoveryClass: decision.recoveryClass,
       delayMs: decision.delayMs,
       ...(decision.recoveryClass === "state_rebase" ? { actionRebased: true } : {}),

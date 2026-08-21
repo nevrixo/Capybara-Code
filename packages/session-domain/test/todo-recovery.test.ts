@@ -4,10 +4,11 @@ import { EventSequencer, createEvent } from "@cbc/protocol";
 import { replay } from "../src/reducer.ts";
 import { TodoController, type PlanItem } from "../src/todo.ts";
 
-function controller() {
+function controller(options: { readonly safeRebase?: boolean } = {}) {
   return new TodoController({
     mode: () => "build",
     now: () => "2026-01-01T00:00:00.000Z",
+    ...(options.safeRebase === undefined ? {} : { safeRebase: options.safeRebase }),
     emit: () => undefined,
   });
 }
@@ -63,6 +64,17 @@ describe("TODO recovery contract", () => {
     expect(todos.current().revision).toBe(3);
   });
 
+  test("can disable stale progress rebasing", () => {
+    const todos = controller({ safeRebase: false });
+    expect(todos.replace({ expectedRevision: 0, reason: "track work", source: "model", items: [implementation] }).ok).toBe(true);
+    const stale = todos.replace({
+      expectedRevision: 0,
+      reason: "stale progress",
+      source: "model",
+      items: [{ ...implementation, status: "active" }],
+    });
+    expect(stale).toMatchObject({ ok: false, code: "TODO_REVISION_CONFLICT" });
+  });
   test("auto-activates the unique actionable item before a write", () => {
     const todos = controller();
     expect(todos.replace({ expectedRevision: 0, reason: "track work", source: "model", items: [implementation] }).ok).toBe(true);

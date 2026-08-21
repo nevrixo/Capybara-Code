@@ -595,6 +595,7 @@ export class AgentSession {
     this.#todoController = new TodoController({
       mode: () => this.recorder.model.modeState.selected,
       now: () => new Date(options.now?.() ?? options.host.now()).toISOString(),
+      safeRebase: options.config.agent.todo?.safeRebase !== false,
       emit: (kind, payload) => this.#emit(kind, payload),
     });
     this.context = new ContextEngine({
