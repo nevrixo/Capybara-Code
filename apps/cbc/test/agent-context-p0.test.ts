@@ -120,7 +120,7 @@ describe("AgentSession Context P0 production loop", () => {
     expect(session.inspectContext()).toEqual(exactSnapshot);
     expect(session.context.lastMaterialization).toEqual(manifestBeforeInspect);
   });
-  test("a sub-agent read enters the parent prompt with child provenance", async () => {
+  test("an accepted child handoff enters the parent prompt with child provenance", async () => {
     const source = "export const CHILD_CONTEXT_P0_SENTINEL = 2;";
     const checksum = "c".repeat(64);
     const provider = new MockProvider({
@@ -219,6 +219,9 @@ describe("AgentSession Context P0 production loop", () => {
     expect((parentPack?.payload as { evidenceIds?: string[] }).evidenceIds).toEqual(
       expect.arrayContaining(payload.evidenceIds ?? []),
     );
+    expect(events.some((event) => event.kind === "context.handoff_created" && event.agentId !== "root")).toBe(true);
+    expect(events.some((event) => event.kind === "context.handoff_accepted" && event.agentId === "root")).toBe(true);
+    expect(events.some((event) => event.kind === "context.handoff_consumed" && event.agentId === "root")).toBe(true);
   });
 
   test("a child capsule excludes parent exact context outside its task path boundary", async () => {

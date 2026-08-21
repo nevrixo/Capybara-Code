@@ -31,6 +31,11 @@ import type { CbcConfig, ReasoningEffort } from "@cbc/config-schema";
 import { requestModeChange, TaskEpochManager, type InteractionMode, type ModeChangeSource } from "@cbc/session-domain";
 import {
   ContextEngine,
+  createContextScope,
+  forkContextFromCapsule,
+  importContextHandoff,
+  contextScopeDigest,
+  type AgentContextScope,
   planVerification,
   projectContextPack,
   toLegacyVerificationCommand,
@@ -486,6 +491,8 @@ export class AgentSession {
   #backgroundJobsReconciled = true;
   #compacting = false;
   #epochAnnounced = false;
+  readonly #contextScopes = new Map<string, AgentContextScope>();
+  #rootContextScope!: AgentContextScope;
   readonly #subagentBridge: SubagentBridge;
   readonly #readCache: ReadCache;
   /** Integrated token-saving controller (`agent.tokenSaving`). */
@@ -591,6 +598,17 @@ export class AgentSession {
       ...(options.workspaceIdentityDigest !== undefined ? { workspaceIdentityDigest: options.workspaceIdentityDigest } : {}),
       ...(options.now !== undefined ? { now: options.now } : {}),
     });
+    this.#rootContextScope = createContextScope({
+      scopeId: "ctx_root",
+      agentId: "root",
+      createdGeneration: this.#workspaceGeneration,
+      baseline: {
+        workspaceGeneration: this.#workspaceGeneration,
+        workspaceIdentityDigest: options.workspaceIdentityDigest ?? stableDigest(options.workspacePath),
+      },
+      engine: this.context,
+    });
+    this.#contextScopes.set("root", this.#rootContextScope);
     this.skills = new SkillRegistry({
       productVersion: "0.1.0",
       workspaceTrusted: options.trust === "trusted-always" || options.trust === "trusted-once",
@@ -617,6 +635,7 @@ export class AgentSession {
       permissionContext: () => this.permissionContext(),
       promptInputs: () => this.promptInputs(),
       createContextCapsule: (childContext) => this.#createSubagentContextCapsule(childContext),
+      createContextScope: (childContext, capsule) => this.#createChildContextScope(childContext, capsule),
       emit: <T>(
         kind: CbcEventKind,
         payload: T,
@@ -635,12 +654,11 @@ export class AgentSession {
         });
       },
       onObservation: (event) => this.#ingestToolObservation(event),
-      onArtifactSpilled: (artifact, action) => {
-        this.context.recordArtifactHandle(artifact, `${action.toolId} ${action.callId}`);
+      onArtifactSpilled: (artifact, action, agentId) => {
+        this.#contextForAgent(agentId).recordArtifactHandle(artifact, `${action.toolId} ${action.callId}`);
       },
-      onChildFinished: (agentId) => {
-        this.context.cancelPromotionLeasesForOwner(agentId);
-      },
+      onChildFinished: (agentId) => this.#disposeChildContextScope(agentId),
+      onHandoff: (result) => this.#acceptChildContextHandoff(result),
       onBackgroundJobStarted: (jobId) => { this.#activeBackgroundJobs.add(jobId); },
       beforeSample: () => this.#reconcileBackgroundJobs(),
       onPromptCompiled: (prompt, route, childScope) => {
@@ -661,7 +679,7 @@ export class AgentSession {
           updateRootInspector: false,
         });
       },
-      cacheKey: (prompt, route) => this.#cacheKeyForPrompt(prompt, route),
+      cacheKey: (prompt, route, agentId) => this.#cacheKeyForPrompt(prompt, route, agentId),
       testCommandFor: (paths) => testCommandFor(paths, options.config.perf.verificationPlannerV2 !== false),
       ...(options.now !== undefined ? { now: options.now } : {}),
     });
@@ -1074,6 +1092,9 @@ export class AgentSession {
   }
 
   async #ingestToolObservation(event: ToolObservationEnvelope): Promise<ToolObservationAck> {
+    const scopeAgentId = event.agentId ?? "root";
+    const targetContext = this.#contextForAgent(scopeAgentId);
+    const isRootScope = targetContext === this.context;
     if (event.action.toolId === "process.stop" && event.execution.result.ok) {
       const jobId = (event.action.arguments as Record<string, unknown>).jobId;
       if (typeof jobId === "string") this.#activeBackgroundJobs.delete(jobId);
@@ -1092,9 +1113,9 @@ export class AgentSession {
       }
     }
     const contextObservation = event.agentId !== undefined && event.agentId !== "root"
-      ? { ...event, promotionOwner: "root" }
+      ? { ...event, promotionOwner: scopeAgentId }
       : event;
-    const result = this.context.ingestToolObservation(contextObservation);
+    const result = targetContext.ingestToolObservation(contextObservation);
     const scope = {
       ...(event.turnId !== undefined ? { turnId: event.turnId } : {}),
       agentId: event.agentId ?? "root",
@@ -1150,6 +1171,7 @@ export class AgentSession {
     }
     const compilerGeneration = this.#workspaceGeneration;
     if (
+      isRootScope &&
       event.execution.result.ok &&
       (event.action.toolId === "fs.read" || event.action.toolId === "fs.read_many")
     ) {
@@ -1164,6 +1186,7 @@ export class AgentSession {
       }
     }
     if (
+      isRootScope &&
       isVerificationProcess(event.action.toolId, event.action.display)
     ) {
       this.#verificationGenerations.set(
@@ -1180,15 +1203,15 @@ export class AgentSession {
 
     const touched = [...new Set([...(event.action.reads ?? []), ...(event.action.writes ?? [])])];
     if (touched.length > 0) {
-      const instructionDigestBefore = stableDigest(this.context.instructions);
-      await this.context.refreshInstructionsForPaths(touched);
-      const instructionDigestAfter = stableDigest(this.context.instructions);
+      const instructionDigestBefore = stableDigest(targetContext.instructions);
+      await targetContext.refreshInstructionsForPaths(touched);
+      const instructionDigestAfter = stableDigest(targetContext.instructions);
       if (instructionDigestAfter !== instructionDigestBefore) {
         this.#cacheKey = undefined;
         this.#emit("context.cache_segment", {
           segmentId: "stable-instructions",
           digest: instructionDigestAfter,
-          tokens: estimateTokens(this.context.instructions.map((instruction) => instruction.content).join("\n")),
+          tokens: estimateTokens(targetContext.instructions.map((instruction) => instruction.content).join("\n")),
           stable: true,
           invalidated: true,
           reason: "project instructions changed",
@@ -1203,15 +1226,15 @@ export class AgentSession {
       event.action.toolId === "process.input" ||
       event.action.toolId === "process.stop"
     ) {
-      const instructionDigestBefore = stableDigest(this.context.instructions);
-      await this.context.refreshInstructionsForPaths([]);
-      const instructionDigestAfter = stableDigest(this.context.instructions);
+      const instructionDigestBefore = stableDigest(targetContext.instructions);
+      await targetContext.refreshInstructionsForPaths([]);
+      const instructionDigestAfter = stableDigest(targetContext.instructions);
       if (instructionDigestAfter !== instructionDigestBefore) {
         this.#cacheKey = undefined;
         this.#emit("context.cache_segment", {
           segmentId: "stable-instructions",
           digest: instructionDigestAfter,
-          tokens: estimateTokens(this.context.instructions.map((instruction) => instruction.content).join("\n")),
+          tokens: estimateTokens(targetContext.instructions.map((instruction) => instruction.content).join("\n")),
           stable: true,
           invalidated: true,
           reason: `${event.action.toolId} changed project instructions`,
@@ -1219,11 +1242,12 @@ export class AgentSession {
       }
     }
     const pendingDeltaPaths = this.#takeRepositoryDeltaPaths();
-    if (pendingDeltaPaths.length > 0 && !this.context.repositoryMapDirty) {
+    if (isRootScope && pendingDeltaPaths.length > 0 && !targetContext.repositoryMapDirty) {
       await this.#refreshRepositoryDelta(pendingDeltaPaths);
     }
-    if (this.context.repositoryMapDirty) await this.#refreshRepositoryMap();
+    if (isRootScope && targetContext.repositoryMapDirty) await this.#refreshRepositoryMap();
     if (
+      isRootScope &&
       (event.action.toolId === "process.run" ||
         event.action.toolId === "shell.run" ||
         event.action.toolId === "process.start" ||
@@ -1231,15 +1255,15 @@ export class AgentSession {
         event.action.toolId === "process.stop") &&
       this.#lastRepositoryScanPaths.length > 0
     ) {
-      const instructionDigestBefore = stableDigest(this.context.instructions);
-      await this.context.refreshInstructionsForPaths(this.#lastRepositoryScanPaths);
-      const instructionDigestAfter = stableDigest(this.context.instructions);
+      const instructionDigestBefore = stableDigest(targetContext.instructions);
+      await targetContext.refreshInstructionsForPaths(this.#lastRepositoryScanPaths);
+      const instructionDigestAfter = stableDigest(targetContext.instructions);
       if (instructionDigestAfter !== instructionDigestBefore) {
         this.#cacheKey = undefined;
         this.#emit("context.cache_segment", {
           segmentId: "stable-instructions",
           digest: instructionDigestAfter,
-          tokens: estimateTokens(this.context.instructions.map((instruction) => instruction.content).join("\n")),
+          tokens: estimateTokens(targetContext.instructions.map((instruction) => instruction.content).join("\n")),
           stable: true,
           invalidated: true,
           reason: `${event.action.toolId} changed nested project instructions`,
@@ -1247,24 +1271,24 @@ export class AgentSession {
       }
     }
 
-    if (this.#taskDescription !== undefined) {
-      this.context.select({
+    if (isRootScope && this.#taskDescription !== undefined) {
+      targetContext.select({
         taskText: this.#taskDescription,
         mentionedPaths: extractPathMentions(this.#taskDescription),
-        searchMatches: this.context.searchMatches(),
-        recentToolPaths: this.context.recentToolPaths(),
+        searchMatches: targetContext.searchMatches(),
+        recentToolPaths: targetContext.recentToolPaths(),
         changedPaths: [...this.#changedPaths],
-        recentFailurePaths: this.context.recentFailurePaths(),
+        recentFailurePaths: targetContext.recentFailurePaths(),
       });
     }
-    this.#turnEvidence = this.context.selectEvidence({ limit: 64, requireFresh: true });
-    this.#emitExcerptEvictions(scope);
+    if (isRootScope) this.#turnEvidence = targetContext.selectEvidence({ limit: 64, requireFresh: true });
+    this.#emitExcerptEvictions(scope, targetContext);
 
     // Only suppress an exact read's L7 body when the complete observation is
     // active in the bounded L6 working set. Evidence-only storage is not enough.
-    const leaseOwner = "root";
+    const leaseOwner = scopeAgentId;
     const cancelNewLeases = (): void => {
-      this.context.cancelPromotionLeases(result.newlyLeasedExcerptIds, leaseOwner);
+      targetContext.cancelPromotionLeases(result.newlyLeasedExcerptIds, leaseOwner);
     };
     if (
       (this.#activeBackgroundJobs.size > 0 || !this.#backgroundJobsReconciled) &&
@@ -1408,7 +1432,6 @@ export class AgentSession {
     options: { readonly verificationNeutral?: boolean } = {},
   ): void {
     this.#pendingRepositoryDeltaPaths.clear();
-    this.#subagentCapsules.clear();
     this.#workspaceGeneration += 1;
     this.kernel.resetProviderContinuation(`workspace generation changed: ${reason}`);
     this.#wholeWorkspaceReadInvalidationGeneration = this.#workspaceGeneration;
@@ -1416,9 +1439,12 @@ export class AgentSession {
       this.#verificationInvalidatingGeneration = this.#workspaceGeneration;
     }
     this.#cacheKey = undefined;
-    const invalidation = this.context.invalidateWorkspace(reason);
-    const scope = this.#currentScope();
-    for (const record of invalidation.evidenceInvalidated) {
+    for (const [agentId, agentScope] of this.#contextScopes) {
+      const invalidation = agentScope.engine.invalidateWorkspace(reason);
+      const scope = agentId === "root"
+        ? this.#currentScope()
+        : { agentId, callerId: agentId };
+      for (const record of invalidation.evidenceInvalidated) {
       this.#emit("context.evidence_invalidated", {
         evidenceId: record.id,
         reason,
@@ -1432,7 +1458,8 @@ export class AgentSession {
         reason: `stale evidence rejected: ${reason}`,
       }, scope);
     }
-    this.#emitExcerptEvictions(scope);
+      this.#emitExcerptEvictions(scope, agentScope.engine);
+    }
   }
 
   #recordPathMutation(path: string): void {
@@ -1465,9 +1492,12 @@ export class AgentSession {
     this.#pendingRepositoryDeltaPaths.add(this.#canonicalWorkspacePath(path));
     // The exact path is known, so keep unrelated repository-map entries and let
     // the bounded delta refresh replace/remove only this path.
-    const invalidation = this.context.invalidate(path, reason, { workspaceChanged: false });
-    const scope = this.#currentScope();
-    for (const record of invalidation.evidenceInvalidated) {
+    for (const [agentId, agentScope] of this.#contextScopes) {
+      const invalidation = agentScope.engine.invalidate(path, reason, { workspaceChanged: false });
+      const scope = agentId === "root"
+        ? this.#currentScope()
+        : { agentId, callerId: agentId };
+      for (const record of invalidation.evidenceInvalidated) {
       this.#emit("context.evidence_invalidated", {
         evidenceId: record.id,
         path,
@@ -1483,7 +1513,8 @@ export class AgentSession {
         reason: `stale evidence rejected: ${reason}`,
       }, scope);
     }
-    this.#emitExcerptEvictions(scope);
+      this.#emitExcerptEvictions(scope, agentScope.engine);
+    }
   }
 
   #cachePlanForPrompt(
@@ -1530,8 +1561,18 @@ export class AgentSession {
   #cacheKeyForPrompt(
     assembled: CompiledModelRequest,
     route: InferencePolicyDecision | undefined = this.#currentRoute,
+    agentId = "root",
   ): string | undefined {
-    return this.#cachePlanForPrompt(assembled, route).key;
+    const baseKey = this.#cachePlanForPrompt(assembled, route).key;
+    if (baseKey === undefined) return undefined;
+    const capsuleDigest = this.#subagentCapsules.get(agentId)?.capsule.digest;
+    return stableDigest({
+      baseKey,
+      contextScopeId: agentId === "root" ? "ctx_root" : "ctx_" + agentId,
+      agentId,
+      workspaceGeneration: this.#workspaceGeneration,
+      ...(capsuleDigest === undefined ? {} : { capsuleDigest }),
+    });
   }
 
   /** Plan cache + emit manifest/inspector for every exact provider sample. */
@@ -1621,7 +1662,7 @@ export class AgentSession {
       readonly interactionMode: "build" | "plan";
     },
   ): void {
-    const materialized = assembled.contextManifest ?? this.context.lastMaterialization;
+    const materialized = assembled.contextManifest ?? this.#contextForAgent(scope.agentId).lastMaterialization;
     const compilerPackId = assembled.contextManifest?.compilerPackId;
     const compilerManifestDigest = assembled.contextManifest?.compilerManifestDigest;
     if (updateRootInspector) this.#lastCompiledPackId = packId;
@@ -1651,7 +1692,7 @@ export class AgentSession {
     );
     let duplicateTokens = 0;
     for (const excerptId of materialized.excerptIds) {
-      const exactText = this.context.exactExcerptText(excerptId);
+      const exactText = this.#contextForAgent(scope.agentId).exactExcerptText(excerptId);
       if (exactText !== undefined && exactText.length > 0 && priorOutputs.some((output) => output.includes(exactText))) {
         duplicateTokens += estimateTokens(exactText);
       }
@@ -1666,7 +1707,7 @@ export class AgentSession {
       stablePrefixTokens: assembled.stablePrefixTokens,
       variableTokens: Math.max(0, assembled.inputTokens - assembled.stablePrefixTokens),
       exactEvidenceTokens: materialized.estimatedTokens,
-      excerptTokens: this.context.estimatedTokensForExcerpts(materialized.excerptIds),
+      excerptTokens: this.#contextForAgent(scope.agentId).estimatedTokensForExcerpts(materialized.excerptIds),
       itemIds: [...materialized.evidenceIds, ...materialized.excerptIds],
       evidenceIds: materialized.evidenceIds,
       excerptIds: materialized.excerptIds,
@@ -1697,7 +1738,7 @@ export class AgentSession {
       }, scope);
     }
     if (updateRootInspector) {
-      this.#lastContextInspection = this.context.inspect({
+      this.#lastContextInspection = this.#contextForAgent(scope.agentId).inspect({
         activeSkills: this.skills.promptCatalog(),
         loadedSkillBodies: [...this.#loadedSkills.values()].map((definition) => ({
           name: definition.manifest.name,
@@ -1720,14 +1761,15 @@ export class AgentSession {
       });
     }
     // Release only after this exact object has captured the leased ranges.
-    this.context.markPromptCompiled(materialized.excerptIds, scope.agentId ?? "root");
+    this.#contextForAgent(scope.agentId).markPromptCompiled(materialized.excerptIds, scope.agentId ?? "root");
     this.#emitExcerptEvictions(scope);
   }
 
   #emitExcerptEvictions(
     scope: { turnId?: string; agentId: string; callerId: string; taskEpochId?: string; workspaceIdentityDigest?: string },
+    engine: ContextEngine = this.#contextForAgent(scope.agentId),
   ): void {
-    for (const eviction of this.context.drainEvictions()) {
+    for (const eviction of engine.drainEvictions()) {
       this.#emit("context.item_evicted", {
         itemId: eviction.id,
         excerptId: eviction.id,
@@ -2595,6 +2637,144 @@ export class AgentSession {
     });
   }
 
+  #contextForAgent(agentId: string | undefined): ContextEngine {
+    return this.#contextScopes.get(agentId ?? "root")?.engine ?? this.context;
+  }
+
+  #createChildContextScope(
+    childContext: ChildRunContext,
+    capsule: TaskContextCapsule | undefined,
+  ): AgentContextScope {
+    const engine = new ContextEngine({
+      reader: new RuntimeInstructionReader(this.#options.runtime),
+      ...(this.#options.globalInstructionReader !== undefined ? { globalReader: this.#options.globalInstructionReader } : {}),
+      softContextTokens: childContext.instance.budget.softContextTokens,
+      activeExcerptTokens: Math.min(24_000, Math.max(2_000, Math.floor(childContext.instance.budget.softContextTokens * 0.2))),
+      ...(capsule?.workspaceIdentity !== undefined ? { workspaceIdentityDigest: capsule.workspaceIdentity } : {}),
+      ...(this.#options.now !== undefined ? { now: this.#options.now } : {}),
+    });
+    const scope = capsule === undefined
+      ? createContextScope({
+          scopeId: `ctx_${childContext.instance.id}`,
+          agentId: childContext.instance.id,
+          parentScopeId: "ctx_root",
+          taskId: childContext.instance.id,
+          createdGeneration: this.#workspaceGeneration,
+          baseline: (() => {
+            const workspaceIdentityDigest = this.taskEpoch.current()?.workspaceIdentityDigest;
+            return workspaceIdentityDigest === undefined
+              ? { workspaceGeneration: this.#workspaceGeneration }
+              : { workspaceGeneration: this.#workspaceGeneration, workspaceIdentityDigest };
+          })(),
+          engine,
+        })
+      : forkContextFromCapsule({
+          scopeId: `ctx_${childContext.instance.id}`,
+          agentId: childContext.instance.id,
+          parentScopeId: "ctx_root",
+          taskId: childContext.instance.id,
+          createdGeneration: this.#workspaceGeneration,
+          baseline: {
+            workspaceGeneration: this.#workspaceGeneration,
+            ...(capsule.workspaceIdentity === undefined ? {} : { workspaceIdentityDigest: capsule.workspaceIdentity }),
+          },
+          engine,
+          capsule,
+        });
+    this.#contextScopes.set(childContext.instance.id, scope);
+    this.#emit("context.scope_created", {
+      scopeId: scope.scopeId,
+      agentId: scope.agentId,
+      ...(scope.parentScopeId === undefined ? {} : { parentScopeId: scope.parentScopeId }),
+      ...(scope.taskId === undefined ? {} : { taskId: scope.taskId }),
+      workspaceGeneration: scope.createdGeneration,
+      digest: contextScopeDigest(scope),
+    }, { agentId: scope.agentId });
+    this.#emit("context.scope_seeded", {
+      scopeId: scope.scopeId,
+      ...(scope.seedCapsuleDigest === undefined ? {} : { seedCapsuleDigest: scope.seedCapsuleDigest }),
+      workspaceGeneration: scope.createdGeneration,
+    }, { agentId: scope.agentId });
+    return scope;
+  }
+
+  #disposeChildContextScope(agentId: string): void {
+    const scope = this.#contextScopes.get(agentId);
+    if (scope === undefined) return;
+    scope.markTerminal();
+    const digest = contextScopeDigest(scope);
+    scope.dispose();
+    this.#contextScopes.delete(agentId);
+    this.#emit("context.scope_disposed", {
+      scopeId: scope.scopeId,
+      agentId,
+      workspaceGeneration: this.#workspaceGeneration,
+      digest,
+    }, { agentId });
+  }
+
+  #acceptChildContextHandoff(result: import("@cbc/subagents").ChildAgentResult): boolean {
+    const handoff = result.contextHandoff;
+    if (handoff === undefined || handoff.status !== "completed") return false;
+    const instance = this.subagents.get(handoff.taskId);
+    const capsule = this.#subagentCapsules.get(handoff.taskId)?.capsule;
+    const taskAllowed = instance?.task.allowedPaths.length === 0 ? ["."] : instance?.task.allowedPaths;
+    const workspaceIdentityDigest = this.taskEpoch.current()?.workspaceIdentityDigest;
+    const imported = importContextHandoff(this.#rootContextScope, handoff, {
+      parentScopeId: "ctx_root",
+      expectedTaskId: handoff.taskId,
+      expectedSourceAgentId: handoff.sourceAgentId,
+      ...(capsule === undefined ? {} : { expectedSeedCapsuleDigest: capsule.digest }),
+      ...(workspaceIdentityDigest === undefined ? {} : { workspaceIdentityDigest }),
+      currentGeneration: this.#workspaceGeneration,
+      allowedPaths: taskAllowed ?? ["."],
+      forbiddenPaths: instance?.task.forbiddenPaths ?? [],
+    });
+    const scope = { agentId: "root", callerId: "root" };
+    if (!imported.accepted && !imported.alreadyConsumed) {
+      this.#emit("context.handoff_validation_failed", {
+        handoffId: handoff.handoffId,
+        taskId: handoff.taskId,
+        sourceAgentId: handoff.sourceAgentId,
+        rejected: imported.rejected,
+      }, scope);
+    }
+    this.#emit(imported.accepted ? "context.handoff_accepted" : "context.handoff_rejected", {
+      handoffId: handoff.handoffId,
+      taskId: handoff.taskId,
+      sourceAgentId: handoff.sourceAgentId,
+      importedEvidenceIds: imported.importedEvidenceIds,
+      importedExcerptIds: imported.importedExcerptIds,
+      rejected: imported.rejected,
+    }, scope);
+    if (imported.accepted) {
+      this.#emit("context.handoff_consumed", { handoffId: handoff.handoffId, taskId: handoff.taskId }, scope);
+      this.#subagentCapsules.delete(handoff.taskId);
+    }
+    return imported.accepted;
+  }
+
+  inspectAgentContext(agentId: string): {
+    readonly scopeId: string;
+    readonly agentId: string;
+    readonly lifecycle: string;
+    readonly digest: string;
+    readonly evidenceCount: number;
+    readonly excerptCount: number;
+    readonly consumedHandoffIds: readonly string[];
+  } | undefined {
+    const scope = this.#contextScopes.get(agentId);
+    if (scope === undefined) return undefined;
+    return {
+      scopeId: scope.scopeId,
+      agentId: scope.agentId,
+      lifecycle: scope.lifecycle,
+      digest: contextScopeDigest(scope),
+      evidenceCount: scope.engine.evidence.all().length,
+      excerptCount: scope.engine.excerpts.excerpts().length,
+      consumedHandoffIds: scope.consumedHandoffIds,
+    };
+  }
   /** Build P1's immutable candidate pack after all async maintenance settles. */
   async #prepareContextPack(): Promise<void> {
     if (this.#activeBackgroundJobs.size > 0 || !this.#backgroundJobsReconciled) {
