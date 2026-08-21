@@ -4,7 +4,8 @@ import { createHash } from "node:crypto";
 import type { InteractionMode } from "./mode.ts";
 
 export type TodoStatus = "pending" | "active" | "done" | "blocked" | "skipped";
-export type TodoSource = "model" | "user" | "migration";
+export type TodoSource = "model" | "user" | "migration" | "host";
+export type TodoTransitionSource = TodoSource | "host_recovery";
 export type PlanApprovalVia = "shift_tab" | "slash" | "ui";
 export type PlanContextStrategy = "keep" | "compact";
 
@@ -68,6 +69,52 @@ export interface PlanItem {
   readonly hostGenerated?: true;
 }
 
+/** Host-owned proof that a completion reflects work observed during this turn. */
+export interface TodoHostEvidence {
+  readonly turnId?: string;
+  readonly workStarted?: boolean;
+  readonly changedPaths?: readonly string[];
+  readonly delegatedChanges?: readonly string[];
+  readonly verificationPassed?: boolean;
+  readonly evidenceRefs?: readonly string[];
+}
+
+/** Durable trace for a lifecycle mutation, including host-compiled steps. */
+export interface TodoTransitionStep {
+  readonly revision: number;
+  readonly id: string;
+  readonly from: TodoStatus | "new";
+  readonly to: TodoStatus;
+  readonly source: TodoTransitionSource;
+  readonly evidenceRefs?: readonly string[];
+}
+
+export interface TodoActionIntent {
+  readonly toolId: string;
+  readonly reads?: readonly string[];
+  readonly writes?: readonly string[];
+  readonly display?: string;
+  readonly command?: string;
+}
+
+export interface TodoMutationInput {
+  readonly expectedRevision: number;
+  readonly items: readonly PlanItem[];
+  readonly reason: string;
+  readonly source: TodoSource;
+  readonly document?: PlanDocument;
+  readonly clearDocument?: boolean;
+  readonly hostEvidence?: TodoHostEvidence;
+}
+
+export interface TodoMutationPlan {
+  readonly baseRevision: number;
+  readonly finalRevision: number;
+  readonly steps: readonly TodoTransitionStep[];
+  readonly finalState: TodoListState;
+  readonly recovery: readonly string[];
+  readonly input: TodoMutationInput;
+}
 export interface PlanApproval {
   readonly revision: number;
   /** `plan-sha256-<hex>`; the prefix makes accidental cross-domain use obvious. */
@@ -96,7 +143,7 @@ export interface TodoListState {
 }
 
 export type TodoUpdateResult =
-  | { readonly ok: true; readonly changed: boolean; readonly state: TodoListState }
+  | { readonly ok: true; readonly changed: boolean; readonly state: TodoListState; readonly transitionTrace?: readonly TodoTransitionStep[] }
   | {
       readonly ok: false;
       readonly code:
@@ -380,6 +427,76 @@ function mergeOmittedModelFields(previous: PlanItem | undefined, next: PlanItem)
   };
 }
 
+function safeNormalizedPath(raw: string): string | undefined {
+  try { return normalizedPlanPath(raw); } catch { return undefined; }
+}
+
+function pathsOverlap(left: string, right: string): boolean {
+  const a = safeNormalizedPath(left);
+  const b = safeNormalizedPath(right);
+  if (a === undefined || b === undefined) return false;
+  return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+}
+
+function hostEvidenceSupportsCompletion(
+  previous: PlanItem,
+  next: PlanItem,
+  evidence: TodoHostEvidence | undefined,
+): boolean {
+  if (evidence === undefined || evidence.workStarted !== true) return false;
+  if (previous.status !== "pending" || next.status !== "done") return false;
+  if (next.kind === "implementation") {
+    const observedPaths = [
+      ...(evidence.changedPaths ?? []),
+      ...(evidence.delegatedChanges ?? []),
+    ];
+    const scoped = (next.files ?? []).some((file) => observedPaths.some((path) => pathsOverlap(file, path)));
+    return scoped || (next.files === undefined && observedPaths.length > 0) || (evidence.delegatedChanges?.length ?? 0) > 0;
+  }
+  if (next.kind === "verification") return evidence.verificationPassed === true;
+  return false;
+}
+
+function dependenciesSatisfied(item: PlanItem, items: readonly PlanItem[]): boolean {
+  const byId = new Map(items.map((entry) => [entry.id, entry]));
+  return (item.dependsOn ?? []).every((dependency) => {
+    const dependencyItem = byId.get(dependency);
+    return dependencyItem !== undefined && (dependencyItem.status === "done" || dependencyItem.status === "skipped");
+  });
+}
+
+function actionMatchesTodo(item: PlanItem, action: TodoActionIntent): boolean {
+  const actionPaths = [...(action.reads ?? []), ...(action.writes ?? [])];
+  const pathMatch = (item.files ?? []).some((file) => actionPaths.some((path) => pathsOverlap(file, path)));
+  const actionText = `${action.command ?? ""} ${action.display ?? ""}`.trim();
+  const commandMatch = actionText.length > 0 && (item.commands ?? []).some((command) =>
+    actionText === command || actionText.includes(command) || command.includes(actionText),
+  );
+  return pathMatch || commandMatch;
+}
+
+function isWorkAction(action: TodoActionIntent): boolean {
+  return (action.writes?.length ?? 0) > 0 ||
+    action.toolId === "process.run" ||
+    action.toolId === "shell.run" ||
+    action.toolId === "process.start" ||
+    action.toolId === "verification.run_many";
+}
+
+function transitionTraceFor(
+  previous: readonly PlanItem[],
+  next: readonly PlanItem[],
+  revision: number,
+  source: TodoTransitionSource,
+): TodoTransitionStep[] {
+  const previousById = new Map(previous.map((item) => [item.id, item]));
+  return next.flatMap((item) => {
+    const before = previousById.get(item.id);
+    if (before === undefined || before.status === item.status) return [];
+    return [{ revision, id: item.id, from: before.status, to: item.status, source }];
+  });
+}
+
 /**
  * Planning often discovers an analysis result before the first durable TODO
  * write. Unlike implementation work, that observation has already happened
@@ -496,31 +613,108 @@ export class TodoController {
     this.#state = sanitizeHydratedTodoState(state, this.#options.now?.() ?? new Date().toISOString());
     this.#lastModelMutationError = this.#state.modelMutationError;
   }
-  replace(input: { readonly expectedRevision: number; readonly items: readonly PlanItem[]; readonly reason: string; readonly source: TodoSource; readonly document?: PlanDocument; readonly clearDocument?: boolean }): TodoUpdateResult {
-    if (input.expectedRevision !== this.#state.revision) return this.conflict(`expected revision ${input.expectedRevision}, current revision is ${this.#state.revision}`, input.source);
+
+  /**
+   * Build-mode fast path: record the one actionable pending item before a
+   * workspace/process action starts. Ambiguous plans stay untouched.
+   */
+  autoActivateForAction(action: TodoActionIntent): TodoUpdateResult {
+    if (this.#options.mode() !== "build" || !isWorkAction(action)) {
+      return { ok: true, changed: false, state: this.current() };
+    }
+    if (this.#state.items.some((item) => item.status === "active")) {
+      return { ok: true, changed: false, state: this.current() };
+    }
+    const candidates = this.#state.items.filter((item) => item.status === "pending" && dependenciesSatisfied(item, this.#state.items));
+    const matches = candidates.filter((item) => actionMatchesTodo(item, action));
+    const target = matches.length === 1 ? matches[0] : matches.length === 0 && candidates.length === 1 ? candidates[0] : undefined;
+    if (target === undefined) return { ok: true, changed: false, state: this.current() };
+    const items = this.#state.items.map((item) => item.id === target.id ? { ...item, status: "active" as const } : item);
+    return this.replace({
+      expectedRevision: this.#state.revision,
+      reason: `host recovery: started TODO '${target.id}' before ${action.toolId}`,
+      source: "host",
+      items,
+    });
+  }
+
+  /** Compute a durable mutation without changing this controller. */
+  planMutation(input: TodoMutationInput): TodoMutationPlan | TodoUpdateResult {
+    const shadow = new TodoController({ ...this.#options, emit: () => undefined }, this.current());
+    const result = shadow.replace(input);
+    if (!result.ok) return result;
+    return {
+      baseRevision: this.#state.revision,
+      finalRevision: result.state.revision,
+      steps: result.transitionTrace ?? [],
+      finalState: result.state,
+      recovery: result.transitionTrace?.some((step) => step.source === "host_recovery") ? ["lifecycle_compiled"] : [],
+      input,
+    };
+  }
+
+  /** Commit a plan only if its CAS base is still the current revision. */
+  commitMutation(plan: TodoMutationPlan): TodoUpdateResult {
+    if (plan.baseRevision !== this.#state.revision) {
+      return this.conflict(`planned revision ${plan.baseRevision} is stale; current revision is ${this.#state.revision}`, plan.input.source);
+    }
+    return this.replace({ ...plan.input, expectedRevision: plan.baseRevision });
+  }
+  replace(input: TodoMutationInput): TodoUpdateResult {
+    const currentRevision = this.#state.revision;
+    const staleRevision = input.expectedRevision !== currentRevision;
+    if (input.expectedRevision > currentRevision || (staleRevision && input.source !== "model")) {
+      return this.conflict(`expected revision ${input.expectedRevision}, current revision is ${currentRevision}`, input.source);
+    }
     const reason = sanitizeTodoText(input.reason, 300);
     if (!reason) return this.invalid("TODO reason is required", "TODO_INVALID_INPUT", input.source);
     if (input.source === "model" && this.#state.items.some((item) => item.id === "todo-hydration-error")) {
       return this.invalid("persisted TODO state is corrupt; a user must repair it before model updates", "TODO_INVALID_TRANSITION", input.source);
     }
-    const previousById = new Map(this.#state.items.map((item) => [item.id, item]));
+    const previousItems = this.#state.items;
+    const previousById = new Map(previousItems.map((item) => [item.id, item]));
     const requestedItems = input.source === "model"
       ? input.items.map((item) => mergeOmittedModelFields(previousById.get(item.id), item))
       : input.items;
-    let items: PlanItem[]; let document: PlanDocument | undefined;
-    try { items = normalizeTodoItems(requestedItems, this.#options.now?.() ?? new Date().toISOString()); document = input.clearDocument === true ? undefined : normalizePlanDocument(input.document ?? this.#state.document); }
-    catch (error) { const message = error instanceof Error ? error.message : String(error); return this.invalid(message, message.includes("at most") ? "TODO_LIMIT_EXCEEDED" : "TODO_INVALID_INPUT", input.source); }
+    let items: PlanItem[];
+    let document: PlanDocument | undefined;
+    try {
+      items = normalizeTodoItems(requestedItems, this.#options.now?.() ?? new Date().toISOString());
+      document = input.clearDocument === true
+        ? undefined
+        : normalizePlanDocument(input.document ?? this.#state.document);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return this.invalid(message, message.includes("at most") ? "TODO_LIMIT_EXCEEDED" : "TODO_INVALID_INPUT", input.source);
+    }
+
+    // A stale model revision may be rebased exactly once when the requested
+    // change preserves every item's approved scope. Status/evidence progress is
+    // safe to merge; additions, removals, or any scope change are not.
+    const safeRebase = staleRevision && input.source === "model" &&
+      items.length === previousItems.length &&
+      sameScope(document, items, this.#state.document, previousItems) &&
+      items.every((item) => {
+        const previous = previousById.get(item.id);
+        return previous !== undefined &&
+          JSON.stringify(todoScope(previous)) === JSON.stringify(todoScope(item)) &&
+          !(previous.status === "active" && item.status === "pending") &&
+          !(previous.status === "done" && item.status !== "done") &&
+          !(previous.status === "skipped" && item.status !== "skipped");
+      });
+    if (staleRevision && !safeRebase) {
+      return this.conflict(`expected revision ${input.expectedRevision}, current revision is ${currentRevision}`, input.source);
+    }
+
     // A structured document is a user-reviewable execution contract, not a
     // richer spelling of an ordinary Build TODO. If a Build-mode model could
-    // introduce one, the next mutation would correctly be denied by the
-    // digest-bound policy, but the user would be stranded in a contract they
-    // never chose to review. Progress updates may still repeat an unchanged
-    // existing contract; only creating or changing execution scope is refused.
+    // introduce one, the next mutation would correctly be denied by the digest-
+    // bound policy, but the user would be stranded in a contract they never chose.
     if (
       input.source === "model" &&
       input.document !== undefined &&
       this.#options.mode() !== "plan" &&
-      !sameScope(document, items, this.#state.document, this.#state.items)
+      !sameScope(document, items, this.#state.document, previousItems)
     ) {
       return this.invalid(
         "structured Plan Contracts can only be drafted in Plan mode; use ordinary TODO items in Build mode or explicitly enter Plan mode first",
@@ -528,11 +722,15 @@ export class TodoController {
         input.source,
       );
     }
-    if (items.filter((item) => item.status === "active").length > 1) return this.invalid("only one root TODO may be active", "TODO_INVALID_TRANSITION", input.source);
+    if (items.filter((item) => item.status === "active").length > 1) {
+      return this.invalid("only one root TODO may be active", "TODO_INVALID_TRANSITION", input.source);
+    }
     if (input.source === "model") {
       const nextIds = new Set(items.map((item) => item.id));
-      const removedUnfinished = this.#state.items.filter((item) => item.status !== "done" && !nextIds.has(item.id));
-      if (removedUnfinished.length > 0) return this.invalid(`model TODO update cannot remove unfinished item(s): ${removedUnfinished.map((item) => item.id).join(", ")}`, "TODO_INVALID_TRANSITION", input.source);
+      const removedUnfinished = previousItems.filter((item) => item.status !== "done" && !nextIds.has(item.id));
+      if (removedUnfinished.length > 0) {
+        return this.invalid(`model TODO update cannot remove unfinished item(s): ${removedUnfinished.map((item) => item.id).join(", ")}`, "TODO_INVALID_TRANSITION", input.source);
+      }
     }
     if (input.source === "model" && this.#options.mode() === "plan" && document !== undefined) {
       const planModeError = items
@@ -540,12 +738,39 @@ export class TodoController {
         .find((message): message is string => message !== undefined);
       if (planModeError !== undefined) return this.invalid(planModeError, "TODO_INVALID_TRANSITION", input.source);
     }
+
+    // Compile the narrow pending -> active -> done gap only when the host can
+    // prove that this turn actually changed the item's scope (or passed its
+    // verification). The model still supplies the final evidence and status.
+    const compiledIds = new Set<string>();
+    for (const item of items) {
+      const previous = previousById.get(item.id);
+      if (
+        input.source === "model" &&
+        previous !== undefined &&
+        previous.status === "pending" &&
+        item.status === "done" &&
+        hostEvidenceSupportsCompletion(previous, item, input.hostEvidence)
+      ) {
+        compiledIds.add(item.id);
+      }
+    }
+    if (compiledIds.size > 0 && previousItems.some((item) => item.status === "active" && !compiledIds.has(item.id))) {
+      return this.invalid("host completion compiler cannot activate a second root TODO while another item is active", "TODO_INVALID_TRANSITION", input.source);
+    }
     const transitionError = items
-      .map((item) => todoTransitionError(previousById.get(item.id), item))
+      .map((item) => {
+        const previous = previousById.get(item.id);
+        const compilerPrevious = compiledIds.has(item.id) && previous !== undefined
+          ? { ...previous, status: "active" as const }
+          : previous;
+        return todoTransitionError(compilerPrevious, item);
+      })
       .find((message): message is string => message !== undefined);
     if (transitionError !== undefined) return this.invalid(transitionError, "TODO_INVALID_TRANSITION", input.source);
+
     const previousRevision = this.#state.revision;
-    const sameScopeAsCurrent = sameItems(items, this.#state.items) && sameScope(document, items, this.#state.document, this.#state.items);
+    const sameScopeAsCurrent = sameItems(items, previousItems) && sameScope(document, items, this.#state.document, previousItems);
     if (this.#state.modelMutationError !== undefined && input.source === "model" && sameScopeAsCurrent) {
       return this.invalid("an explicit user repair is required after a rejected TODO update", "TODO_INVALID_TRANSITION", input.source);
     }
@@ -572,19 +797,50 @@ export class TodoController {
       }
       return { ok: true, changed: repairedMutationError !== undefined, state: this.current() };
     }
+
     this.#lastModelMutationError = undefined;
-    const preserveApproval = this.#state.approval !== undefined && sameScope(document, items, this.#state.document, this.#state.items);
+    const preserveApproval = this.#state.approval !== undefined && sameScope(document, items, this.#state.document, previousItems);
+    const finalRevision = previousRevision + (compiledIds.size > 0 ? 2 : 1);
+    const transitionTrace: TodoTransitionStep[] = compiledIds.size > 0
+      ? items.flatMap((item) => {
+          if (!compiledIds.has(item.id)) return [];
+          return [
+            { revision: previousRevision + 1, id: item.id, from: "pending" as const, to: "active" as const, source: "host_recovery" as const },
+            {
+              revision: previousRevision + 2,
+              id: item.id,
+              from: "active" as const,
+              to: "done" as const,
+              source: "model" as const,
+              ...(input.hostEvidence?.evidenceRefs === undefined ? {} : { evidenceRefs: [...input.hostEvidence.evidenceRefs] }),
+            },
+          ];
+        })
+      : transitionTraceFor(previousItems, items, finalRevision, input.source === "host" ? "host_recovery" : input.source);
     this.#state = {
-      revision: previousRevision + 1,
+      revision: finalRevision,
       ...(preserveApproval && this.#state.approval !== undefined ? { approval: this.#state.approval } : {}),
       ...(preserveApproval && this.#state.approvedRevision !== undefined ? { approvedRevision: this.#state.approvedRevision } : {}),
-      items, updatedAt: this.#options.now?.() ?? new Date().toISOString(),
+      items,
+      updatedAt: this.#options.now?.() ?? new Date().toISOString(),
       ...(document === undefined ? {} : { document }),
     };
-    this.#options.emit(previousRevision === 0 ? "plan.created" : "plan.updated", { revision: this.#state.revision, previousRevision, source: input.source, reason, mode: this.#options.mode(), items: this.#state.items, ...(document === undefined ? {} : { document }), ...(this.#state.approvedRevision === undefined ? {} : { approvedRevision: this.#state.approvedRevision }), ...(this.#state.approval === undefined ? {} : { approval: this.#state.approval }), ...(this.digest() === undefined ? {} : { digest: this.digest() }) });
-    return { ok: true, changed: true, state: this.current() };
-  }
-  clear(input: { readonly expectedRevision: number; readonly reason: string; readonly source: "user" | "model" }): TodoUpdateResult { return this.replace({ ...input, items: [], clearDocument: true }); }
+    this.#options.emit(previousRevision === 0 ? "plan.created" : "plan.updated", {
+      revision: this.#state.revision,
+      previousRevision,
+      source: input.source,
+      reason,
+      mode: this.#options.mode(),
+      items: this.#state.items,
+      ...(document === undefined ? {} : { document }),
+      ...(this.#state.approvedRevision === undefined ? {} : { approvedRevision: this.#state.approvedRevision }),
+      ...(this.#state.approval === undefined ? {} : { approval: this.#state.approval }),
+      ...(this.digest() === undefined ? {} : { digest: this.digest() }),
+      ...(transitionTrace.length === 0 ? {} : { transitionTrace }),
+      ...((safeRebase || compiledIds.size > 0) ? { recovery: [...(safeRebase ? ["safe_rebase"] : []), ...(compiledIds.size > 0 ? ["lifecycle_compiled"] : [])] } : {}),
+    });
+    return { ok: true, changed: true, state: this.current(), ...(transitionTrace.length === 0 ? {} : { transitionTrace }) };
+  }  clear(input: { readonly expectedRevision: number; readonly reason: string; readonly source: "user" | "model" }): TodoUpdateResult { return this.replace({ ...input, items: [], clearDocument: true }); }
   approve(revision: number, via: PlanApprovalVia, contextStrategy: PlanContextStrategy = "keep"): TodoUpdateResult {
     if (revision !== this.#state.revision) return this.conflict(`expected revision ${revision}, current revision is ${this.#state.revision}`);
     if (!(via === "shift_tab" || via === "slash" || via === "ui")) return this.invalid("Plan approval source is invalid", "TODO_INVALID_INPUT");

@@ -12,7 +12,7 @@ import type { SessionModeState } from "./mode.ts";
 import { createModeState } from "./mode.ts";
 import type { ContextUsageSnapshot } from "./context-usage.ts";
 import { reconcileContextUsageSnapshot } from "./context-usage.ts";
-import { normalizePlanDocument, normalizeTodoItems, planDigest, sanitizeTodoText, todoTransitionAllowed, type PlanApproval, type PlanDocument, type PlanItem, type TodoListState } from "./todo.ts";
+import { normalizePlanDocument, normalizeTodoItems, planDigest, sanitizeTodoText, todoTransitionAllowed, type PlanApproval, type PlanDocument, type PlanItem, type TodoListState, type TodoTransitionStep } from "./todo.ts";
 
 const MAX_THINKING_SUMMARY_CHARS = 4 * 1024;
 const MAX_THINKING_DETAIL_CHARS = 64 * 1024;
@@ -527,6 +527,50 @@ function num(value: unknown, fallback = 0): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+function validateTransitionTrace(
+  previous: readonly PlanItem[],
+  finalItems: readonly PlanItem[],
+  trace: readonly TodoTransitionStep[],
+  previousRevision: number,
+  revision: number,
+): void {
+  if (trace.length === 0) return;
+  let lastRevision = previousRevision;
+  const working = new Map(previous.map((item) => [item.id, { ...item }]));
+  for (const step of trace) {
+    if (!Number.isSafeInteger(step.revision) || step.revision <= previousRevision || step.revision < lastRevision || step.revision > revision) {
+      throw new Error("TODO transition trace revision is invalid");
+    }
+    if (!step.id || !["pending", "active", "done", "blocked", "skipped", "new"].includes(step.from) || !["pending", "active", "done", "blocked", "skipped"].includes(step.to)) {
+      throw new Error("TODO transition trace status is invalid");
+    }
+    if (!["model", "user", "migration", "host", "host_recovery"].includes(step.source)) {
+      throw new Error("TODO transition trace source is invalid");
+    }
+    const before = working.get(step.id);
+    if (step.from === "new") {
+      if (before !== undefined) throw new Error(`TODO transition trace creates existing item '${step.id}'`);
+      const finalItem = finalItems.find((item) => item.id === step.id);
+      if (finalItem === undefined) throw new Error(`TODO transition trace references missing item '${step.id}'`);
+      const candidate = { ...finalItem, status: step.to };
+      if (!todoTransitionAllowed(undefined, candidate)) throw new Error(`TODO transition trace cannot create '${step.id}' as ${step.to}`);
+      working.set(step.id, candidate);
+    } else {
+      if (before === undefined || before.status !== step.from) throw new Error(`TODO transition trace has stale source status for '${step.id}'`);
+      const finalItem = finalItems.find((item) => item.id === step.id);
+      const candidate = { ...(finalItem ?? before), ...before, status: step.to };
+      if (!todoTransitionAllowed(before, candidate)) throw new Error(`TODO transition trace cannot move '${step.id}' from ${step.from} to ${step.to}`);
+      working.set(step.id, candidate);
+    }
+    lastRevision = step.revision;
+  }
+  if (lastRevision !== revision) throw new Error("TODO transition trace does not reach final revision");
+  const finalById = new Map(finalItems.map((item) => [item.id, item]));
+  for (const [id, item] of working) {
+    const final = finalById.get(id);
+    if (final !== undefined && final.status !== item.status) throw new Error(`TODO transition trace does not match final status for '${id}'`);
+  }
+}
 function strArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 }
@@ -1046,7 +1090,7 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
       const rawSource = payload.source;
       const source = rawSource === undefined
         ? "migration"
-        : rawSource === "model" || rawSource === "user" || rawSource === "migration"
+        : rawSource === "model" || rawSource === "user" || rawSource === "migration" || rawSource === "host"
           ? rawSource
           : undefined;
       const previousRevision = next.todo.revision;
@@ -1069,7 +1113,16 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
         if (items.filter((item) => item.status === "active").length > 1) {
           throw new Error("only one root TODO may be active");
         }
-        if (items.some((item) => !todoTransitionAllowed(previousById.get(item.id), item))) {
+        const rawTrace = payload.transitionTrace;
+        if (Array.isArray(rawTrace)) {
+          validateTransitionTrace(
+            next.todo.items,
+            items,
+            rawTrace as TodoTransitionStep[],
+            previousRevision,
+            revision,
+          );
+        } else if (items.some((item) => !todoTransitionAllowed(previousById.get(item.id), item))) {
           throw new Error("TODO transition requires an explicit reopen or completion step");
         }
         // Only an explicit user repair may remove unfinished work. Missing or
