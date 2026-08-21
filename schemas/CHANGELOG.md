@@ -129,5 +129,7 @@ Canonical Thinking text is bounded at 4 KiB for provider summaries and 64 KiB fo
   the data rather than inferred from the code.
 # 1.1.0
 
+- Added hidden, journaled tool recovery lifecycle events for preflight repair, failed internal attempts, safe replay, reconciliation, and exhausted recovery.
+
 - Added durable `mode.changed` and `plan.approved` event kinds.
 - Added additive context usage and TODO revision payload fields.
