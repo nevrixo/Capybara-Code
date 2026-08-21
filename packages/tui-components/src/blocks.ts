@@ -260,6 +260,19 @@ export function renderThinking(
 ): StyledLine[] {
   const mode = options.mode ?? "collapsed";
   if (mode === "off" && item.state !== "streaming") return [];
+  const hasVisibleReasoning =
+    (item.title?.trim().length ?? 0) > 0 ||
+    (item.summaryText?.trim().length ?? 0) > 0 ||
+    (item.detailText?.trim().length ?? 0) > 0;
+  const transportOnlyTerminal =
+    (item.state === "failed" || item.state === "interrupted") &&
+    item.sources.length === 1 &&
+    item.sources[0] === "status_only" &&
+    !hasVisibleReasoning;
+  // A header-only terminal assembly means the provider request ended before it
+  // exposed any reasoning. Its retry/error notice is the truthful UI; showing
+  // this as a failed multi-minute Thought attributes network wait to the model.
+  if (transportOnlyTerminal) return [];
   const done = item.state !== "streaming";
   const label = done ? "Thought" : "Thinking";
   const title = item.title?.trim();

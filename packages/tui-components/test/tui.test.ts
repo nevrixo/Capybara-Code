@@ -528,6 +528,65 @@ describe("timeline blocks (§6.4, §6.7–§6.12, AC-06)", () => {
     expect(lineText(lines[1]!)).toContain("Exploring the registration flow.");
   });
 
+  test("a transport-only failure does not masquerade as a five-minute Thought during reconnect", () => {
+    const items: TimelineItem[] = [
+      {
+        type: "thinking",
+        id: "thinking-retry",
+        sequence: 1,
+        turnId: "turn-1",
+        agentId: "root",
+        requestId: "request-1",
+        segmentIndex: 0,
+        providerItemIds: [],
+        state: "failed",
+        sources: ["status_only"],
+        startedAtMs: 0,
+        endedAtMs: 322_000,
+        durationMs: 322_000,
+      },
+      {
+        type: "notice",
+        id: "retry-notice",
+        sequence: 2,
+        level: "info",
+        text: "Reconnecting after network (attempt 1)",
+        icon: "↻",
+      },
+    ];
+
+    const rendered = renderTimeline(items, context(120), { nowMs: 400_000 })
+      .map(lineText)
+      .join("\n");
+    expect(rendered).toContain("Reconnecting after network (attempt 1)");
+    expect(rendered).not.toContain("Thought");
+    expect(rendered).not.toContain("5m 22s");
+  });
+
+  test("a failed Thinking part with provider-visible reasoning remains visible", () => {
+    const item: TimelineItem = {
+      type: "thinking",
+      id: "thinking-visible-failure",
+      sequence: 1,
+      turnId: "turn-1",
+      agentId: "root",
+      requestId: "request-1",
+      segmentIndex: 0,
+      providerItemIds: ["reasoning-1"],
+      state: "failed",
+      sources: ["provider_summary"],
+      summaryText: "Checked the reconnect boundary.",
+      startedAtMs: 0,
+      endedAtMs: 2_500,
+      durationMs: 2_500,
+    };
+
+    const rendered = renderTimeline([item], context(120)).map(lineText).join("\n");
+    expect(rendered).toContain("Thought · failed");
+    expect(rendered).toContain("Checked the reconnect boundary.");
+    expect(rendered).toContain("2.5s");
+  });
+
   test("provider-visible Thinking follows full, preview, and hidden policy", () => {
     const item: TimelineItem = { type: "commentary", id: "raw-thinking", sequence: 1, variant: "reasoning", text: "first line\nsecond line\nthird line" };
     const full = renderTimeline([item], context(120), { thinkingVisibility: "full" }).map(lineText).join("\n");
