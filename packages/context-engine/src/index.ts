@@ -27,3 +27,5 @@ export * from "./optimizer.ts";
 export * from "./retrieval-controller.ts";
 export * from "./projection.ts";
 export * from "./verification-planner.ts";
+
+export * from "./scope.ts";

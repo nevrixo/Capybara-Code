@@ -32,11 +32,27 @@ export interface EvidenceRecord {
   readonly observedAt: string;
   readonly freshness: EvidenceFreshness;
   readonly summary: string;
+  /** Append-only provenance observations; never last-writer-wins. */
+  readonly provenance?: EvidenceProvenance;
   readonly metadata?: Readonly<Record<string, string | number | boolean>>;
   readonly invalidatedAt?: string;
   readonly invalidationReason?: string;
 }
 
+export interface EvidenceProvenanceObservation {
+  readonly agentId: string;
+  readonly taskId?: string;
+  readonly callId: string;
+  readonly observedAt: string;
+  readonly cacheHit: boolean;
+  readonly source: "local" | "handoff" | "capsule";
+}
+
+export interface EvidenceProvenance {
+  readonly firstObservedBy: string;
+  readonly observations: readonly EvidenceProvenanceObservation[];
+  readonly importedFromHandoffIds?: readonly string[];
+}
 export interface EvidenceInput {
   readonly id?: `evidence-${string}`;
   readonly kind: EvidenceKind;
@@ -46,6 +62,7 @@ export interface EvidenceInput {
   readonly externalProvenance?: EvidenceRecord["externalProvenance"];
   readonly observedAt?: string;
   readonly summary: string;
+  readonly provenance?: EvidenceProvenanceObservation;
   readonly metadata?: EvidenceRecord["metadata"];
 }
 
@@ -138,6 +155,23 @@ export class EvidenceLedger {
           ? previous.metadata.observationCount + 1
           : 1,
     };
+    const provenanceObservation = input.provenance === undefined
+      ? undefined
+      : { ...input.provenance, observedAt };
+    const priorObservations = previous?.provenance?.observations ?? [];
+    const observations = provenanceObservation === undefined
+      ? priorObservations
+      : [...priorObservations, provenanceObservation].slice(-64);
+    const importedFromHandoffIds = new Set([
+      ...(previous?.provenance?.importedFromHandoffIds ?? []),
+      ...(input.provenance?.source === "handoff"
+        ? [input.provenance.callId]
+        : []),
+    ]);
+    const firstObservedBy = previous?.provenance?.firstObservedBy
+      ?? (typeof previous?.metadata?.agentId === "string" ? previous.metadata.agentId : undefined)
+      ?? input.provenance?.agentId
+      ?? (typeof input.metadata?.agentId === "string" ? input.metadata.agentId : "root");
     const record: EvidenceRecord = {
       id,
       kind: input.kind,
@@ -148,11 +182,26 @@ export class EvidenceLedger {
       observedAt,
       freshness: this.isIdentityCompatible(workspaceIdentityDigest) ? "fresh" : "stale",
       summary: input.summary.slice(0, 2_000),
+      ...(observations.length > 0
+        ? {
+            provenance: {
+              firstObservedBy,
+              observations,
+              ...(importedFromHandoffIds.size > 0
+                ? { importedFromHandoffIds: [...importedFromHandoffIds].sort() }
+                : {}),
+            },
+          }
+        : {}),
       metadata,
     };
     this.#records.set(id, record);
     this.trim();
     return record;
+  }
+
+  clear(): void {
+    this.#records.clear();
   }
 
   get(id: `evidence-${string}`): EvidenceRecord | undefined {

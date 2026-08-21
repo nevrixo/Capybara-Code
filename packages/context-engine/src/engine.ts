@@ -1058,6 +1058,78 @@ export class ContextEngine {
     };
   }
 
+  /** Bind an evidence record to an exact excerpt imported into this scope. */
+  bindExcerptEvidence(excerptIdValue: string, record: EvidenceRecord): boolean {
+    const descriptor = this.exactExcerptDescriptor(excerptIdValue);
+    if (descriptor === undefined) return false;
+    const id = descriptor.id;
+    this.#excerptEvidence.set(id, record.id);
+    this.#excerptEvidenceRecords.set(id, record);
+    return true;
+  }
+
+  /** Stable digest of mutable semantic context, excluding provider history. */
+  contextDigest(): string {
+    return evidenceDigest({
+      evidence: this.evidence.all().map((record) => ({
+        id: record.id,
+        digest: record.digest,
+        freshness: record.freshness,
+        provenance: record.provenance,
+      })),
+      excerpts: this.#excerpts.excerpts().map((excerpt) => ({
+        id: excerptId(excerpt),
+        path: excerpt.path,
+        checksum: excerpt.checksum,
+        startLine: excerpt.startLine,
+        endLine: excerpt.endLine,
+        active: this.#activeExcerpts.has(excerptId(excerpt)),
+      })),
+      materialization: this.#lastMaterialization,
+      selection: this.#lastSelection?.selected.map((entry) => ({ path: entry.path, score: entry.score })),
+      recentToolPaths: this.#recentToolPaths,
+      searchMatches: [...this.#searchMatches.entries()],
+      reflections: this.#reflections.map((reflection) => ({
+        toolId: reflection.toolId,
+        category: reflection.category,
+        paths: reflection.paths,
+      })),
+      pendingPromotions: [...this.#pendingPromotions],
+      pendingPromotionOwners: [...this.#pendingPromotionOwners].map(([id, owners]) => [id, [...owners].sort()]),
+    });
+  }
+
+  /** Release exact bodies and semantic bookkeeping for a terminal scope. */
+  dispose(): void {
+    const paths = [...new Set(this.#excerpts.excerpts().map((excerpt) => excerpt.path))];
+    for (const path of paths) this.#excerpts.invalidate(path);
+    this.#activeExcerpts.deactivate(this.#activeExcerpts.excerptIds());
+    this.evidence.clear();
+    this.#excerptEvidence.clear();
+    this.#excerptEvidenceRecords.clear();
+    this.#pendingPromotions.clear();
+    this.#pendingPromotionOwners.clear();
+    this.#artifactHandles.clear();
+    this.#repositoryScanPaths.clear();
+    this.#repositoryIntelligence.clear();
+    this.#instructionTouchedPaths.clear();
+    this.#instructions = [];
+    this.#globalInstructions = [];
+    this.#projectInstructions = [];
+    this.#globalInstructionsSkipped = [];
+    this.#projectInstructionsSkipped = [];
+    this.#instructionsSkipped = [];
+    this.#recentToolPaths = [];
+    this.#searchMatches.clear();
+    this.#reflections = [];
+    this.#pendingEvictions = [];
+    this.#excludedOutputs = [];
+    this.#map = undefined;
+    this.#lastCompiledContextPack = undefined;
+    this.#lastSelection = undefined;
+    this.#lastMaterialization = { evidenceIds: [], excerptIds: [], rejected: [], estimatedTokens: 0, omitted: 0 };
+  }
+
   /** Exact body lookup used for duplicate-context telemetry (never rendered to the user). */
   exactExcerptText(id: string): string | undefined {
     return this.#excerpts.getById(id)?.text;
@@ -1167,9 +1239,10 @@ export class ContextEngine {
     }
     const observedAt = new Date(event.observedAtMs).toISOString();
     const provenance = observationMetadata(event);
+    const provenanceObservation = observationProvenance(event);
 
     const record = (input: Omit<EvidenceInput, "observedAt">): EvidenceRecord => {
-      const created = this.recordEvidence({ ...input, observedAt });
+      const created = this.recordEvidence({ ...input, observedAt, provenance: input.provenance ?? provenanceObservation });
       evidence.push(created);
       return created;
     };
@@ -2058,6 +2131,15 @@ function parseReadObservation(value: unknown): ParsedReadObservation | RejectedR
   };
 }
 
+function observationProvenance(event: ToolObservation): import("./evidence.ts").EvidenceProvenanceObservation {
+  return {
+    agentId: event.agentId ?? "root",
+    callId: event.action.callId,
+    observedAt: new Date(event.observedAtMs).toISOString(),
+    cacheHit: event.cacheHit,
+    source: "local",
+  };
+}
 function observationMetadata(event: ToolObservation): Record<string, string | number | boolean> {
   return {
     toolId: event.action.toolId,
