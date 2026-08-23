@@ -981,6 +981,17 @@ describe("prompt assembly (§10.9, §11.4, §18.1)", () => {
     expect(JSON.stringify(assembled.input)).toContain("Response language requirement: Korean");
   });
 
+  test("renders runner-observed executable capability fallbacks", () => {
+    const assembled = assemblePrompt({
+      ...base,
+      executableCapabilities: { go: true, rg: false, grep: true },
+    });
+    const rendered = JSON.stringify(assembled.input);
+    expect(rendered).toContain("Available programs: go, grep");
+    expect(rendered).toContain("Unavailable programs: rg");
+    expect(rendered).toContain("prefer fs.search");
+  });
+
   test("the tool protocol states the risk classes and approval rules", () => {
     const { stablePrefixText } = assemblePrompt(base);
     expect(stablePrefixText).toContain("R4, R5, and R6 actions are approved one operation at a time");

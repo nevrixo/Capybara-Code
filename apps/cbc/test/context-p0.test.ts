@@ -159,6 +159,13 @@ describe("Context P0 tool observation hook", () => {
     expect(execution.result.ok).toBe(false);
     expect(execution.result.error?.code).toBe("PATH_CHANGED");
     expect(execution.result.error?.message).toContain("read again");
+    expect(execution.result.error?.details).toMatchObject({
+      path: "src/a.ts",
+      generationBefore: 0,
+      generationAfter: 1,
+      source: "runtime_read",
+      activeJobCount: 0,
+    });
     expect(execution.text).toBeUndefined();
   });
 

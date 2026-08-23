@@ -65,6 +65,7 @@ import {
   type ToolObservationEnvelope,
   type ToolObservationResult,
 } from "./tools.ts";
+import { classifyVerificationCommand, type VerificationContract } from "./verification-contract.ts";
 
 export interface SubagentBridgeOptions {
   /** Runtime capability and process ownership identity shared by all children. */
@@ -103,7 +104,11 @@ export interface SubagentBridgeOptions {
   readonly readCache?: ReadCache;
   readonly onInvalidate?: (path: string) => void;
   readonly workspaceGeneration?: () => number;
-  readonly onWorkspacePotentiallyChanged?: (toolId: string, action?: ProposedAction) => void;
+  readonly onWorkspacePotentiallyChanged?: (
+    toolId: string,
+    action?: ProposedAction,
+    execution?: Execution,
+  ) => void;
   /** Fence workspace context while a child-owned background job may keep writing. */
   readonly onBackgroundJobStarted?: (jobId: string) => void;
   readonly onArtifactSpilled?: (artifact: ArtifactRef, action: ProposedAction, agentId?: string) => void;
@@ -133,6 +138,8 @@ export interface SubagentBridgeOptions {
   readonly testCommandFor?: (
     paths: readonly string[],
   ) => { command: string; reason: string } | undefined;
+  /** The root runner's authoritative verification surface also applies to children. */
+  readonly verificationContract?: VerificationContract;
   readonly now?: () => number;
 }
 
@@ -551,6 +558,9 @@ export class SubagentBridge {
       host: this.#options.host,
       sessionId: this.#options.sessionId,
       bridges: childBridges,
+      ...(this.#options.verificationContract !== undefined
+        ? { verificationContract: this.#options.verificationContract }
+        : {}),
       ...(this.#options.readCache !== undefined
         ? { readCache: this.#options.readCache }
         : {}),
@@ -849,6 +859,16 @@ export class SubagentBridge {
       },
       ...(this.#options.testCommandFor !== undefined
         ? { testCommandFor: this.#options.testCommandFor }
+        : {}),
+      ...(this.#options.verificationContract !== undefined
+        ? {
+            requiredVerificationCommands: this.#options.verificationContract.requiredCommands.map((command) => ({
+              command,
+              reason: `required by ${this.#options.verificationContract!.source} verification contract`,
+            })),
+            verificationCommandKind: (command: string) =>
+              classifyVerificationCommand(this.#options.verificationContract, command),
+          }
         : {}),
       ...(this.#options.now !== undefined ? { now: this.#options.now } : {}),
     });

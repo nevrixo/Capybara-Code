@@ -598,6 +598,10 @@ export interface KernelOptions {
 
   /** §11.8: the focused test command for a set of changed paths. */
   readonly testCommandFor?: (paths: readonly string[]) => { command: string; reason: string } | undefined;
+  /** Runner-owned commands that replace repository heuristics for final checks. */
+  readonly requiredVerificationCommands?: readonly { readonly command: string; readonly reason: string }[];
+  /** Optional host classifier for required, diagnostic, and forbidden commands. */
+  readonly verificationCommandKind?: (command: string) => "required" | "diagnostic" | "off_contract" | "not_verification";
   /** Require at least one turn-local test, diff, or review result after mutation. */
   readonly completionRequiresFreshEvidence?: boolean;
   /** Whether missing fresh evidence blocks completion or remains a visible warning. */
@@ -3011,7 +3015,23 @@ export class AgentKernel {
           maxParallel?: number;
           failFast?: boolean;
         };
-        const commands = input.commands.slice(0, 12);
+        const requestedCommands = input.commands.slice(0, 12);
+        const commands = requestedCommands.filter((command) => {
+          const kind = this.#options.verificationCommandKind?.(command);
+          return kind === undefined || kind === "required" || kind === "diagnostic";
+        });
+        const blockedCommands = requestedCommands.filter((command) => !commands.includes(command));
+        if (blockedCommands.length > 0) {
+          for (const command of blockedCommands) {
+            const record = {
+              command,
+              required: false,
+              status: "not_run" as const,
+              evidence: "blocked because the command is outside the authoritative verification contract",
+            };
+            this.#recordVerification(record);
+          }
+        }
         const requestedParallel = Math.max(1, Math.min(
           input.maxParallel ?? 2,
           this.#options.toolGraph?.maxParallelTests ?? 2,
@@ -3096,12 +3116,13 @@ export class AgentKernel {
         );
         emit("verification.completed", {
           source: "verification.run_many",
-          status: stableResults.every((record) => record.status === "passed") ? "passed" : "failed",
-          records: stableResults.length,
+          status: blockedCommands.length === 0 && stableResults.every((record) => record.status === "passed") ? "passed" : "failed",
+          records: stableResults.length + blockedCommands.length,
           durationMs: Math.max(0, this.#now() - startedAt),
         });
         this.#appendToolOutput(call, JSON.stringify({
           maxParallel,
+          blockedCommands,
           results: stableResults,
         }));
         machine.tryApply("result");
@@ -3301,11 +3322,16 @@ export class AgentKernel {
       }
 
       // Record process verification evidence (§11.8).
-      if (call.name === "process.run" || call.name === "shell.run") {
+      if (
+        (call.name === "process.run" || call.name === "shell.run") &&
+        (this.#options.verificationCommandKind === undefined ||
+          ["required", "diagnostic"].includes(this.#options.verificationCommandKind(action.display)))
+      ) {
         this.#recordVerification({
           command: action.display,
           status: execution.result.ok ? "passed" : "failed",
           evidence: observation.text.split("\n")[0] ?? execution.result.summary,
+          ...(this.#options.verificationCommandKind?.(action.display) === "diagnostic" ? { required: false } : {}),
         });
       }
 
@@ -3774,6 +3800,7 @@ export class AgentKernel {
       // silently skipping the plan.
       changedPaths: changedPaths.length > 0 ? changedPaths : ["<unresolved>"],
       ...(this.#options.testCommandFor ? { testCommandFor: this.#options.testCommandFor } : {}),
+      ...(this.#options.requiredVerificationCommands ? { requiredCommands: this.#options.requiredVerificationCommands } : {}),
       autoReview: this.#options.autoReview === true,
     });
 
@@ -3877,7 +3904,7 @@ export class AgentKernel {
     }
 
     const verificationStatus = this.#verification.some(
-      (record) => record.status === "failed" || record.status === "not_run",
+      (record) => record.required !== false && (record.status === "failed" || record.status === "not_run"),
     ) ? "failed" : "passed";
     emit("verification.completed", {
       status: verificationStatus,
@@ -3895,19 +3922,25 @@ export class AgentKernel {
    */
   #recordVerification(record: CompletionReport["verification"][number]): void {
     const command = record.command?.trim();
+    const classification = command === undefined
+      ? undefined
+      : this.#options.verificationCommandKind?.(command);
+    const normalizedRecord = classification === "diagnostic" && record.required !== false
+      ? { ...record, required: false }
+      : record;
     if (command === undefined || command.length === 0) {
-      this.#verification.push(record);
+      this.#verification.push(normalizedRecord);
       return;
     }
 
     const previousIndex = this.#verification.findIndex((existing) => existing.command?.trim() === command);
-    if (previousIndex === -1) this.#verification.push(record);
-    else this.#verification[previousIndex] = record;
+    if (previousIndex === -1) this.#verification.push(normalizedRecord);
+    else this.#verification[previousIndex] = normalizedRecord;
 
     const failureRisk = `verification failed: ${command}`;
-    if (record.status === "failed") {
+    if (normalizedRecord.required !== false && normalizedRecord.status === "failed") {
       if (!this.#risks.includes(failureRisk)) this.#risks.push(failureRisk);
-    } else if (record.status === "passed") {
+    } else if (normalizedRecord.status === "passed" || normalizedRecord.required === false) {
       this.#risks = this.#risks.filter((risk) => risk !== failureRisk);
     }
   }
@@ -4221,6 +4254,19 @@ export class AgentKernel {
     return lines.join("\n");
   }
 
+  /** Snapshot truthful run evidence when the outer command catches an exception. */
+  snapshotCompletionReport(summary?: string): CompletionReport {
+    const text = summary?.trim();
+    return {
+      status: "failed",
+      summary: text && text.length > 0 ? text : this.#lastFailureSummary ?? "The turn failed.",
+      changedFiles: this.#changedFileList(),
+      verification: this.#verification.map((record) => ({ ...record })),
+      delegatedTasks: this.#delegated.map((task) => ({ ...task })),
+      risks: [...this.#risks],
+    };
+  }
+
   #changedFileList(): CompletionReport["changedFiles"] {
     return [...this.#changedFiles.entries()].map(([path, info]) => ({
       path,
@@ -4254,19 +4300,6 @@ export function renderReflectionPrompt(analysis: ReflectionAnalysis): string {
     );
   }
   if (analysis.implicatedPaths.length > 0) {
-  /** Snapshot truthful run evidence when the outer command catches an exception. */
-  snapshotCompletionReport(summary?: string): CompletionReport {
-    const text = summary?.trim();
-    return {
-      status: "failed",
-      summary: text && text.length > 0 ? text : this.#lastFailureSummary ?? "The turn failed.",
-      changedFiles: this.#changedFileList(),
-      verification: this.#verification.map((record) => ({ ...record })),
-      delegatedTasks: this.#delegated.map((task) => ({ ...task })),
-      risks: [...this.#risks],
-    };
-  }
-
     lines.push(`- paths named by the failure: ${analysis.implicatedPaths.join(", ")}`);
   }
 

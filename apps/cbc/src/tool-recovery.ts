@@ -34,6 +34,14 @@ export interface ToolRecoveryRebaseInput {
   readonly signal: AbortSignal;
 }
 
+export interface ToolRecoveryStateFenceInput {
+  readonly action: ProposedAction;
+  readonly execution: ToolExecution;
+  readonly operationId: string;
+  readonly attempt: number;
+  readonly signal: AbortSignal;
+}
+
 export interface ToolRecoveryRunnerOptions {
   readonly mode?: "off" | "safe" | "full";
   readonly maxAttempts?: number;
@@ -41,6 +49,7 @@ export interface ToolRecoveryRunnerOptions {
   readonly emit?: <T>(kind: RecoveryEventKind, payload: T) => void;
   readonly reconcile?: (input: ToolRecoveryReconcileInput) => Promise<ToolExecution | undefined>;
   readonly rebase?: (input: ToolRecoveryRebaseInput) => Promise<ProposedAction | undefined> | ProposedAction | undefined;
+  readonly stateFence?: (input: ToolRecoveryStateFenceInput) => Promise<boolean | void>;
   readonly sleep?: (delayMs: number, signal: AbortSignal) => Promise<void>;
 }
 
@@ -91,6 +100,34 @@ function withRecoveryExhaustedSummary(execution: ToolExecution, summary: string 
   };
 }
 
+function pathChangedTransition(failure: ReturnType<typeof asFailure>): string | undefined {
+  if (failure.code.toUpperCase() !== "PATH_CHANGED") return undefined;
+  const details = failure.details;
+  if (details === undefined) return undefined;
+  const path = typeof details.path === "string" ? details.path : "<workspace>";
+  const before = details.generationBefore;
+  const after = details.generationAfter;
+  if ((typeof before !== "number" && before !== null) || (typeof after !== "number" && after !== null)) {
+    return undefined;
+  }
+  return `${path}:${String(before)}->${String(after)}`;
+}
+
+function quiescenceFailure(execution: ToolExecution): ToolExecution {
+  const details = execution.result.error?.details;
+  return {
+    ...execution,
+    result: errorResult(
+      "PATH_CHANGED",
+      "the workspace did not become quiescent after a stale read; stop concurrent writers and retry",
+      {
+        retryable: false,
+        details: { ...(details ?? {}), quiescence: "not_reached" },
+      },
+    ),
+  };
+}
+
 /**
  * Execute one logical tool call while keeping physical attempts internal.
  *
@@ -121,6 +158,7 @@ export async function executeWithRecovery(
   };
 
   let currentAction = action;
+  const fencedPathChangedTransitions = new Set<string>();
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const attemptId = `${operationId}:attempt-${attempt}`;
     if (signal.aborted) return cancellationExecution();
@@ -216,6 +254,55 @@ export async function executeWithRecovery(
           ? `after ${attempt} attempt${attempt === 1 ? "" : "s"} (${decision.recoveryClass}): ${decision.reason}`
           : undefined,
       );
+    }
+
+    if (decision.recoveryClass === "state_fence_wait") {
+      const transition = pathChangedTransition(failure);
+      if (transition !== undefined && fencedPathChangedTransitions.has(transition)) {
+        emit("tool.recovery_exhausted", {
+          operationId,
+          attemptId,
+          callId: currentAction.callId,
+          toolId: currentAction.toolId,
+          attempt,
+          code: failure.code,
+          recoveryClass: decision.recoveryClass,
+          reason: "the same workspace generation transition recurred after a quiescence fence",
+        });
+        return withRecoveryExhaustedSummary(
+          quiescenceFailure(execution),
+          "the same PATH_CHANGED generation transition recurred after one quiescence fence",
+        );
+      }
+      if (transition !== undefined) fencedPathChangedTransitions.add(transition);
+      let quiescent = true;
+      try {
+        quiescent = (await options.stateFence?.({
+          action: currentAction,
+          execution,
+          operationId,
+          attempt,
+          signal,
+        })) !== false;
+      } catch {
+        quiescent = false;
+      }
+      if (!quiescent || signal.aborted) {
+        emit("tool.recovery_exhausted", {
+          operationId,
+          attemptId,
+          callId: currentAction.callId,
+          toolId: currentAction.toolId,
+          attempt,
+          code: failure.code,
+          recoveryClass: decision.recoveryClass,
+          reason: "the workspace did not become quiescent before replay",
+        });
+        return withRecoveryExhaustedSummary(
+          quiescenceFailure(execution),
+          "state_fence_wait could not establish workspace quiescence",
+        );
+      }
     }
 
     if (decision.recoveryClass === "state_rebase") {

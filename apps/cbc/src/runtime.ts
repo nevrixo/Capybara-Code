@@ -390,6 +390,13 @@ export interface RuntimeSessionResolveResult {
   readonly session?: RuntimeSessionSummary;
   readonly candidates: RuntimeSessionSummary[];
 }
+export const EXECUTABLE_CAPABILITY_PROGRAMS = [
+  "go", "cargo", "npm", "pnpm", "bun", "rg", "grep", "sed", "cat",
+] as const;
+
+export type ExecutableCapabilityProgram = typeof EXECUTABLE_CAPABILITY_PROGRAMS[number];
+export type ExecutableCapabilities = Readonly<Partial<Record<ExecutableCapabilityProgram, boolean>>>;
+
 export interface ProcessOutcome {
   readonly jobId: string;
   readonly state: string;
@@ -404,6 +411,15 @@ export interface ProcessOutcome {
   readonly truncated: boolean;
   readonly warnings: string[];
   readonly taxonomy?: string | null;
+  /** Bounded runtime token captured immediately before foreground execution. */
+  readonly workspaceRevisionBefore?: string | null;
+  /** Bounded runtime token captured after foreground execution settles. */
+  readonly workspaceRevisionAfter?: string | null;
+  /**
+   * False only when the runtime could prove the workspace content was unchanged.
+   * Null/undefined means the scan was unavailable or intentionally bounded.
+   */
+  readonly workspaceChangeObserved?: boolean | null;
 }
 
 export interface GitStatusEntry {
@@ -540,6 +556,18 @@ export class Runtime {
 
   get capabilities(): RuntimeCapabilities | undefined {
     return this.#client.capabilities;
+  }
+
+  /** Runner-observed executable availability, with no PATH values or locations. */
+  async executableCapabilities(): Promise<ExecutableCapabilities | undefined> {
+    const response = objectRecord(await this.#client.request("runtime.capabilities", {}));
+    const values = objectRecord(response.executables);
+    const snapshot: Partial<Record<ExecutableCapabilityProgram, boolean>> = {};
+    for (const program of EXECUTABLE_CAPABILITY_PROGRAMS) {
+      const available = values[program];
+      if (typeof available === "boolean") snapshot[program] = available;
+    }
+    return Object.keys(snapshot).length === 0 ? undefined : Object.freeze(snapshot);
   }
 
   get runtimeVersion(): string | undefined {

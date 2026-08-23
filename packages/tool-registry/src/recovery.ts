@@ -3,6 +3,7 @@ import type { ToolDefinition, ToolExecutionMetadata, ToolIdempotency, ToolRecove
 export type RecoveryClass =
   | "input_repair"
   | "state_rebase"
+  | "state_fence_wait"
   | "transient_safe_replay"
   | "unknown_outcome_reconcile"
   | "terminal";
@@ -95,6 +96,9 @@ export function decideRecovery(input: {
     return { recoveryClass: "state_rebase", retry: true, reconcile: false, terminal: false, delayMs: 0, reason: "progress-only session state may be rebased once" };
   }
   const retryable = failure.retryable && (policy.retryableCodes.includes(code) || DEFAULT_RETRYABLE.has(code));
+  if (code === "PATH_CHANGED" && retryable && attempt < policy.maxAttempts && (tool.idempotency === "pure" || tool.idempotency === "idempotent") && policy.retrySafety !== "never") {
+    return { recoveryClass: "state_fence_wait", retry: true, reconcile: false, terminal: false, delayMs: 0, reason: "PATH_CHANGED requires a workspace quiescence fence before replay" };
+  }
   if (retryable && attempt < policy.maxAttempts && (tool.idempotency === "pure" || tool.idempotency === "idempotent") && policy.retrySafety !== "never") {
     return { recoveryClass: "transient_safe_replay", retry: true, reconcile: false, terminal: false, delayMs, reason: `${code} is safe to replay for ${tool.idempotency} operation` };
   }

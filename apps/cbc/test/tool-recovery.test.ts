@@ -151,4 +151,66 @@ describe("logical tool recovery runner", () => {
     expect(execution.text).toContain("Recovery exhausted after 2 attempts");
     expect(events).toContain("tool.recovery_exhausted");
   });
+
+  test("waits for workspace quiescence once before replaying PATH_CHANGED", async () => {
+    const tool = findTool("fs.read");
+    expect(tool).toBeDefined();
+    let attempts = 0;
+    let fences = 0;
+    const events: string[] = [];
+    const executor = {
+      execute: async () => {
+        attempts += 1;
+        return attempts === 1
+          ? {
+              result: errorResult("PATH_CHANGED", "stale", {
+                retryable: true,
+                details: { path: "src/a.ts", generationBefore: 10, generationAfter: 11 },
+              }),
+            }
+          : { result: okResult("fresh read") };
+      },
+    };
+
+    const execution = await executeWithRecovery(executor, tool!, action("fs.read"), signal, {
+      sleep: async () => {},
+      stateFence: async () => {
+        fences += 1;
+        return true;
+      },
+      emit: (kind) => events.push(kind),
+    });
+
+    expect(execution.result.ok).toBe(true);
+    expect(attempts).toBe(2);
+    expect(fences).toBe(1);
+    expect(events).toEqual(["tool.attempt_failed", "tool.recovery_applied"]);
+  });
+
+  test("returns one actionable failure when a workspace cannot become quiescent", async () => {
+    const tool = findTool("fs.read");
+    expect(tool).toBeDefined();
+    let attempts = 0;
+    const executor = {
+      execute: async () => {
+        attempts += 1;
+        return {
+          result: errorResult("PATH_CHANGED", "stale", {
+            retryable: true,
+            details: { path: "src/a.ts", generationBefore: 10, generationAfter: 11 },
+          }),
+        };
+      },
+    };
+
+    const execution = await executeWithRecovery(executor, tool!, action("fs.read"), signal, {
+      stateFence: async () => false,
+      sleep: async () => {},
+    });
+
+    expect(attempts).toBe(1);
+    expect(execution.result.error?.code).toBe("PATH_CHANGED");
+    expect(execution.result.error?.retryable).toBe(false);
+    expect(execution.text).toContain("state_fence_wait could not establish workspace quiescence");
+  });
 });

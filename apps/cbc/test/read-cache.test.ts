@@ -70,6 +70,23 @@ describe("ReadCache metadata and coalescing", () => {
     expect(cache.get(b)).toBeDefined();
   });
 
+  test("restores fenced reads only after a runtime no-change proof", () => {
+    let now = 10;
+    const cache = new ReadCache({ now: () => now });
+    const key = cache.key("fs.read", { path: "src/a.ts" });
+    cache.set(key, { result: okResult("read a.ts") }, { paths: ["src/a.ts"] });
+
+    const unchanged = cache.beginPotentialMutation();
+    expect(cache.get(key)).toBeUndefined();
+    cache.resolvePotentialMutation(unchanged, true);
+    expect(cache.get(key)?.result.summary).toBe("read a.ts");
+
+    now += 1;
+    const changed = cache.beginPotentialMutation();
+    cache.resolvePotentialMutation(changed, false);
+    expect(cache.get(key)).toBeUndefined();
+  });
+
   test("coalesces concurrent misses and removes the in-flight record after settlement", async () => {
     let release!: () => void;
     let calls = 0;

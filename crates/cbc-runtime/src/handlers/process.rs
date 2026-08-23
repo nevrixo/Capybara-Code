@@ -1,6 +1,10 @@
 //! `process.*` handlers — PRD §12.3, §12.7, §12.8, §14.5, §14.7, §20.3, AC-20.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::ffi::OsStr;
+use std::fs;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 use cbc_process::{
     is_executable_control_env, CancelToken, EnvPolicy, NetworkMode, ProcessError, ProcessSpec,
@@ -46,6 +50,161 @@ fn environment_binding(params: &Value) -> String {
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
     format!("env:sha256:{hex}")
+}
+
+const EXECUTABLE_CAPABILITY_PROGRAMS: &[&str] = &[
+    "go", "cargo", "npm", "pnpm", "bun", "rg", "grep", "sed", "cat",
+];
+
+fn executable_file_on_path(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn executable_available(program: &str) -> bool {
+    let Some(path_value) = std::env::var_os("PATH") else {
+        return false;
+    };
+    for directory in std::env::split_paths(&path_value) {
+        if executable_file_on_path(&directory.join(program)) {
+            return true;
+        }
+        #[cfg(windows)]
+        for extension in [".exe", ".cmd", ".bat"] {
+            if executable_file_on_path(&directory.join(format!("{program}{extension}"))) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Return only runner-observed availability, never paths or environment values.
+pub(crate) fn executable_capabilities() -> BTreeMap<String, bool> {
+    EXECUTABLE_CAPABILITY_PROGRAMS
+        .iter()
+        .map(|program| ((*program).to_string(), executable_available(program)))
+        .collect()
+}
+
+// A result token is deliberately bounded. A complete content hash is a safe
+// proof of no workspace-content change for small/medium trees; a large,
+// unreadable, or concurrently changing tree returns None, which keeps the
+// TypeScript caller on its existing whole-workspace invalidation path.
+const WORKSPACE_TOKEN_MAX_ENTRIES: usize = 4_096;
+const WORKSPACE_TOKEN_MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
+
+fn hash_workspace_token_part(hasher: &mut Sha256, label: &[u8], value: &[u8]) {
+    hasher.update((label.len() as u64).to_be_bytes());
+    hasher.update(label);
+    hasher.update((value.len() as u64).to_be_bytes());
+    hasher.update(value);
+}
+
+/// Return a content-addressed workspace token only when a bounded scan can
+/// prove what it observed. The .git directory is intentionally excluded: Git
+/// bookkeeping can change during a read-only command but cannot make a cached
+/// workspace file body stale.
+fn workspace_change_token(root: &Path) -> Option<String> {
+    let mut hasher = Sha256::new();
+    let mut pending = vec![PathBuf::new()];
+    let mut entry_count = 0usize;
+    let mut total_file_bytes = 0u64;
+
+    while let Some(relative_dir) = pending.pop() {
+        let directory = root.join(&relative_dir);
+        let before_directory = fs::metadata(&directory).ok()?;
+        if !before_directory.is_dir() {
+            return None;
+        }
+        let before_modified = before_directory.modified().ok()?;
+        let mut children = fs::read_dir(&directory)
+            .ok()?
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
+        children.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
+
+        for child in children {
+            let name = child.file_name();
+            if relative_dir.as_os_str().is_empty() && name == OsStr::new(".git") {
+                continue;
+            }
+            entry_count = entry_count.checked_add(1)?;
+            if entry_count > WORKSPACE_TOKEN_MAX_ENTRIES {
+                return None;
+            }
+            let relative = relative_dir.join(&name);
+            let relative_text = relative.to_str()?;
+            let path = child.path();
+            let before = fs::symlink_metadata(&path).ok()?;
+            let file_type = before.file_type();
+            hash_workspace_token_part(&mut hasher, b"path", relative_text.as_bytes());
+
+            if file_type.is_dir() {
+                hash_workspace_token_part(&mut hasher, b"type", b"directory");
+                pending.push(relative);
+                continue;
+            }
+            if file_type.is_symlink() {
+                hash_workspace_token_part(&mut hasher, b"type", b"symlink");
+                let target = fs::read_link(&path).ok()?;
+                hash_workspace_token_part(&mut hasher, b"target", target.to_str()?.as_bytes());
+                continue;
+            }
+            if !file_type.is_file() {
+                return None;
+            }
+
+            let len = before.len();
+            total_file_bytes = total_file_bytes.checked_add(len)?;
+            if total_file_bytes > WORKSPACE_TOKEN_MAX_FILE_BYTES {
+                return None;
+            }
+            hash_workspace_token_part(&mut hasher, b"type", b"file");
+            hash_workspace_token_part(&mut hasher, b"length", &len.to_be_bytes());
+            let before_modified = before.modified().ok()?;
+            let mut file = fs::File::open(&path).ok()?;
+            let mut buffer = [0_u8; 8 * 1024];
+            loop {
+                let read = file.read(&mut buffer).ok()?;
+                if read == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..read]);
+            }
+            let after = fs::metadata(&path).ok()?;
+            if !after.is_file() || after.len() != len || after.modified().ok()? != before_modified {
+                return None;
+            }
+        }
+
+        let after_directory = fs::metadata(&directory).ok()?;
+        if !after_directory.is_dir() || after_directory.modified().ok()? != before_modified {
+            return None;
+        }
+    }
+
+    let digest = hasher.finalize();
+    Some(format!(
+        "sha256:{}",
+        digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    ))
 }
 
 fn process_error(e: ProcessError) -> RpcError {
@@ -297,7 +456,16 @@ fn require_owned_job(state: &RuntimeState, params: &Value, job_id: &str) -> Resu
     }
 }
 
-fn outcome_value(state: &RuntimeState, outcome: &cbc_process::ProcessOutcome) -> Value {
+fn outcome_value(
+    state: &RuntimeState,
+    outcome: &cbc_process::ProcessOutcome,
+    workspace_revision_before: Option<&str>,
+    workspace_revision_after: Option<&str>,
+) -> Value {
+    let workspace_change_observed = match (workspace_revision_before, workspace_revision_after) {
+        (Some(before), Some(after)) => Some(before != after),
+        _ => None,
+    };
     json!({
         "jobId": outcome.job_id,
         "state": outcome.state,
@@ -314,6 +482,9 @@ fn outcome_value(state: &RuntimeState, outcome: &cbc_process::ProcessOutcome) ->
         "truncated": outcome.truncated,
         "warnings": outcome.warnings,
         "taxonomy": outcome.taxonomy(),
+        "workspaceRevisionBefore": workspace_revision_before,
+        "workspaceRevisionAfter": workspace_revision_after,
+        "workspaceChangeObserved": workspace_change_observed,
     })
 }
 
@@ -326,6 +497,8 @@ pub fn run(
     // land between validation and spawning. The guard covers the entire
     // foreground process lifetime.
     let _admission = state.acquire_write_admission()?;
+    let workspace_root = state.require_workspace()?.root().to_path_buf();
+    let workspace_revision_before = workspace_change_token(&workspace_root);
     state.require_process_allowed()?;
     let spec = build_spec(state, &params, "process.run")?;
     // P0-04: the dispatcher hands every request a cancel token keyed by its
@@ -351,7 +524,14 @@ pub fn run(
     if let Some(key) = &cancel_key {
         state.cancel_tokens.lock().expect("cancel lock").remove(key);
     }
-    Ok(outcome_value(state, &outcome?))
+    let outcome = outcome?;
+    let workspace_revision_after = workspace_change_token(&workspace_root);
+    Ok(outcome_value(
+        state,
+        &outcome,
+        workspace_revision_before.as_deref(),
+        workspace_revision_after.as_deref(),
+    ))
 }
 
 pub fn start(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
@@ -505,5 +685,32 @@ mod tests {
         });
         assert_eq!(error.code, error_codes::NOT_FOUND);
         assert!(error.message.contains("executable file not found"));
+    }
+
+    #[test]
+    fn workspace_change_token_tracks_content_but_not_git_bookkeeping() {
+        let temp = tempfile::tempdir().expect("temp workspace");
+        let root = temp.path();
+        fs::write(root.join("tracked.txt"), "before").expect("write fixture");
+        let first = workspace_change_token(root).expect("initial token");
+        assert_eq!(first, workspace_change_token(root).expect("stable token"));
+
+        fs::create_dir(root.join(".git")).expect("git directory");
+        fs::write(root.join(".git").join("index"), "bookkeeping").expect("git index");
+        assert_eq!(first, workspace_change_token(root).expect("git ignored"));
+
+        fs::write(root.join("tracked.txt"), "after").expect("mutate fixture");
+        assert_ne!(first, workspace_change_token(root).expect("changed token"));
+    }
+
+    #[test]
+    fn executable_capabilities_have_a_fixed_non_secret_surface() {
+        let capabilities = executable_capabilities();
+        let mut expected = EXECUTABLE_CAPABILITY_PROGRAMS.to_vec();
+        expected.sort_unstable();
+        assert_eq!(
+            capabilities.keys().map(String::as_str).collect::<Vec<_>>(),
+            expected
+        );
     }
 }

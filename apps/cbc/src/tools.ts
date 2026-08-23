@@ -23,6 +23,11 @@ import { errorResult, okResult, type ArtifactRef, type ToolResult } from "@cbc/t
 import { resolvePaths, type Host } from "./host.ts";
 import type { ProcessOutcome, Runtime } from "./runtime.ts";
 import { normalizePath } from "./normalizer.ts";
+import {
+  classifyVerificationAction,
+  commandForVerification,
+  type VerificationContract,
+} from "./verification-contract.ts";
 
 function environmentBinding(value: unknown): string {
   const entries = typeof value === "object" && value !== null && !Array.isArray(value)
@@ -73,6 +78,8 @@ export interface ToolObservationAck {
   readonly onGenerationMismatch?: () => void;
   /** read_many members whose exact bodies are guaranteed in this owner's L6. */
   readonly virtualizedPaths?: readonly string[];
+  /** Why a read was rejected after its provider-visible body became stale. */
+  readonly pathChangedSource?: "runtime_read" | "compiler" | "background_job" | "cache_epoch";
 }
 export type ToolObservationResult = void | boolean | ToolObservationDisposition | ToolObservationAck;
 
@@ -115,7 +122,20 @@ export interface ToolExecutorOptions {
   readonly onArtifactSpilled?: (artifact: ArtifactRef, action: ProposedAction) => void;
   readonly onPathsTouched?: (paths: readonly string[]) => void;
   /** Process/shell tools may mutate paths they cannot enumerate statically. */
-  readonly onWorkspacePotentiallyChanged?: (toolId: string, action?: ProposedAction) => void;
+  readonly onWorkspacePotentiallyChanged?: (
+    toolId: string,
+    action?: ProposedAction,
+    execution?: Execution,
+  ) => void;
+  /** Optional runner-owned command contract for authoritative verification. */
+  readonly verificationContract?: VerificationContract;
+  /**
+   * Runner-owned state that is safe to include in a stale-read diagnostic. No
+   * workspace body is exposed through this callback.
+   */
+  readonly workspaceState?: () => {
+    readonly activeJobCount?: number;
+  };
   /** Called for every logical hit/miss; failures are isolated from tool execution. */
   readonly onObservation?: (
     event: ToolObservationEnvelope,
@@ -298,6 +318,16 @@ export function renderProcessOutcome(outcome: ProcessOutcome): string {
   }
   for (const warning of outcome.warnings) parts.push(`warning: ${warning}`);
   return parts.join("\n");
+}
+
+/** Read the runtime's conservative no-change proof from either result branch. */
+export function workspaceChangeObserved(execution: Execution | undefined): boolean | undefined {
+  const source = execution?.result.ok
+    ? execution.result.data
+    : execution?.result.error?.details;
+  if (typeof source !== "object" || source === null || Array.isArray(source)) return undefined;
+  const value = (source as Record<string, unknown>).workspaceChangeObserved;
+  return typeof value === "boolean" ? value : undefined;
 }
 
 // Keep independently moderate outputs recoverable before accumulation compaction.
@@ -560,6 +590,32 @@ export class RuntimeToolExecutor implements ToolExecutor {
     const initialScope = this.#options.scope?.() ?? {};
     const cache = this.#options.readCache;
     const effectiveAction = actionWithReadPaths(action, this.#options.runtime.workspace);
+    const verificationKind = classifyVerificationAction(
+      this.#options.verificationContract,
+      effectiveAction,
+    );
+    if (verificationKind === "off_contract") {
+      return await this.#present(
+        effectiveAction,
+        {
+          result: errorResult(
+            "OFF_CONTRACT_VERIFICATION",
+            "this verification command is outside the runner's authoritative verification contract",
+            {
+              retryable: false,
+              details: {
+                command: commandForVerification(effectiveAction),
+                source: this.#options.verificationContract?.source ?? "unknown",
+              },
+            },
+          ),
+          durationMs: this.#options.host.now() - started,
+        },
+        false,
+        initialScope,
+        started,
+      );
+    }
     const canShareRead =
       cache !== undefined &&
       CACHEABLE_READ_TOOLS.has(effectiveAction.toolId) &&
@@ -636,11 +692,23 @@ export class RuntimeToolExecutor implements ToolExecutor {
           currentGeneration !== undefined &&
           currentGeneration !== initialScope.workspaceGeneration))
     ) {
+      const cacheChanged = cacheEpoch !== undefined && cache?.version(cacheKey) !== cacheEpoch;
       execution = {
         result: errorResult(
           "PATH_CHANGED",
           "the workspace changed while this read was in flight; read again",
-          { retryable: true },
+          {
+            retryable: true,
+            details: pathChangedDetails(
+              effectiveAction,
+              this.#options,
+              initialScope.workspaceGeneration,
+              currentGeneration,
+              cacheChanged ? "cache_epoch" : "runtime_read",
+              cacheEpoch,
+              cacheKey === undefined || cache === undefined ? undefined : cache.version(cacheKey),
+            ),
+          },
         ),
         durationMs: this.#options.host.now() - started,
       };
@@ -675,7 +743,7 @@ export class RuntimeToolExecutor implements ToolExecutor {
       effectiveAction.toolId === "process.stop"
     ) {
       try {
-        this.#options.onWorkspacePotentiallyChanged?.(effectiveAction.toolId, effectiveAction);
+        this.#options.onWorkspacePotentiallyChanged?.(effectiveAction.toolId, effectiveAction, execution);
       } catch {
         // Context invalidation is conservative bookkeeping; it cannot rewrite
         // the runtime's process result.
@@ -751,7 +819,20 @@ export class RuntimeToolExecutor implements ToolExecutor {
     if (generationChanged) {
       try { acknowledgement.onGenerationMismatch?.(); } catch { /* compiler cleanup is isolated */ }
       return {
-        result: errorResult("PATH_CHANGED", "the workspace changed while this read was being compiled; read again", { retryable: true }),
+        result: errorResult(
+          "PATH_CHANGED",
+          "the workspace changed while this read was being compiled; read again",
+          {
+            retryable: true,
+            details: pathChangedDetails(
+              action,
+              this.#options,
+              acknowledgement.workspaceGeneration ?? scope.workspaceGeneration,
+              settledGeneration,
+              acknowledgement.pathChangedSource ?? "compiler",
+            ),
+          },
+        ),
         durationMs: this.#options.host.now() - started,
       };
     }
@@ -1259,21 +1340,44 @@ export class RuntimeToolExecutor implements ToolExecutor {
       case "process.run":
       case "shell.run": {
         const capability = await this.#issueCapability(action);
-        // A process can write anywhere in the workspace, so cached reads die
-        // before it runs — a stale listing served after a build or a test run
-        // is exactly the staleness the cache must never introduce.
-        this.#options.readCache?.invalidateAll();
+        // Fence completed reads while the process is running. If the runtime can
+        // prove the workspace content stayed unchanged, the original entries are
+        // restored afterward; otherwise the existing whole-cache fallback wins.
+        const mutationFence = this.#options.readCache?.beginPotentialMutation();
         // P0-04: the turn's abort signal reaches the runtime, which cancels the
         // foreground process instead of letting it outlive the turn.
-        const outcome = await runtime.run(this.#processParams(action, capability.id), signal);
+        let outcome: ProcessOutcome;
+        try {
+          outcome = await runtime.run(this.#processParams(action, capability.id), signal);
+        } catch (error) {
+          this.#options.readCache?.resolvePotentialMutation(mutationFence, false);
+          throw error;
+        }
+        this.#options.readCache?.resolvePotentialMutation(
+          mutationFence,
+          outcome.workspaceChangeObserved === false,
+        );
         const failed = outcome.state !== "exited" || (outcome.exitCode ?? 0) !== 0;
         const text = renderProcessOutcome(outcome);
+        const verificationKind = classifyVerificationAction(this.#options.verificationContract, action);
+        const verificationTag = verificationKind === "required" || verificationKind === "diagnostic"
+          ? { verificationKind }
+          : {};
         if (failed) {
           return {
             result: errorResult(
               (outcome.taxonomy as ToolErrorCode | null | undefined) ?? "PROCESS_EXIT_NONZERO",
               `${outcome.display} exited with ${outcome.exitCode ?? outcome.state}`,
-              { details: { jobId: outcome.jobId }, summary: `${outcome.display} failed` },
+              {
+                details: {
+                  jobId: outcome.jobId,
+                  ...verificationTag,
+                  workspaceRevisionBefore: outcome.workspaceRevisionBefore ?? null,
+                  workspaceRevisionAfter: outcome.workspaceRevisionAfter ?? null,
+                  workspaceChangeObserved: outcome.workspaceChangeObserved ?? null,
+                },
+                summary: outcome.display + " failed",
+              },
             ),
             text,
             ...(outcome.exitCode !== null && outcome.exitCode !== undefined
@@ -1283,7 +1387,7 @@ export class RuntimeToolExecutor implements ToolExecutor {
           };
         }
         return {
-          result: okResult(`${outcome.display} succeeded`, outcome),
+          result: okResult(`${outcome.display} succeeded`, { ...outcome, ...verificationTag }),
           text,
           exitCode: 0,
           durationMs: outcome.durationMs,
@@ -1712,6 +1816,32 @@ function actionWithReadPaths(action: ProposedAction, workspace: string): Propose
   return paths.length > 0 ? { ...action, reads: paths } : action;
 }
 
+function pathChangedDetails(
+  action: ProposedAction,
+  options: ToolExecutorOptions,
+  before: number | undefined,
+  after: number | undefined,
+  source: "runtime_read" | "compiler" | "background_job" | "cache_epoch",
+  cacheEpochBefore?: string | number,
+  cacheEpochAfter?: string | number,
+): Record<string, unknown> {
+  let activeJobCount = 0;
+  try {
+    activeJobCount = Math.max(0, Math.floor(options.workspaceState?.().activeJobCount ?? 0));
+  } catch {
+    // Diagnostics must never make a fail-closed stale-read boundary fail open.
+  }
+  return {
+    path: readPathsForAction(action, options.runtime.workspace)[0] ?? "<workspace>",
+    generationBefore: before ?? null,
+    generationAfter: after ?? before ?? null,
+    source,
+    activeJobCount,
+    cacheEpochBefore: cacheEpochBefore ?? null,
+    cacheEpochAfter: cacheEpochAfter ?? cacheEpochBefore ?? null,
+  };
+}
+
 /** Extract a revision from either the v2 response or the legacy checksum field. */
 export function readRevisionToken(value: unknown): string | undefined {
   const record = typeof value === "object" && value !== null && !Array.isArray(value)
@@ -1808,6 +1938,11 @@ export interface ReadCacheInflightMetadata {
   readonly paths?: readonly string[];
 }
 
+/** Opaque cache fence created before a foreground process can mutate files. */
+export interface ReadCacheMutationFence {
+  readonly id: number;
+}
+
 function cachePath(path: string): string {
   const normalized = path.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
   return normalized.length === 0 ? "." : normalized;
@@ -1867,6 +2002,8 @@ function copyReadCacheMetadata(metadata: ReadCacheMetadata = {}): ReadCacheMetad
 export class ReadCache {
   readonly #entries = new Map<string, ReadCacheEntry>();
   readonly #inFlight = new Map<string, { promise: Promise<unknown>; paths?: readonly string[] }>();
+  readonly #pendingMutationFences = new Map<number, Map<string, ReadCacheEntry>>();
+  #nextMutationFence = 0;
   readonly #ttlMs: number;
   readonly #maxEntries: number;
   readonly #now: () => number;
@@ -1975,6 +2112,9 @@ export class ReadCache {
 
   /** Invalidate entries whose metadata binds them to `path`. */
   invalidatePath(path: string): number {
+    // A known mutation during a foreground process invalidates any deferred
+    // restoration; only a single isolated no-change process may restore entries.
+    this.#pendingMutationFences.clear();
     const target = cachePath(path);
     let removed = 0;
     for (const [key, entry] of this.#entries) {
@@ -1999,6 +2139,7 @@ export class ReadCache {
 
   invalidatePaths(paths: readonly string[]): number {
     if (paths.length === 0) return 0;
+    this.#pendingMutationFences.clear();
     const targets = paths.map(cachePath);
     let removed = 0;
     for (const [key, entry] of this.#entries) {
@@ -2034,7 +2175,51 @@ export class ReadCache {
       : this.invalidatePaths(pathOrPaths);
   }
 
+  /**
+   * Remove reusable reads while a foreground process runs, retaining a private
+   * snapshot that is eligible for restoration only after a runtime no-change
+   * proof. In-flight reads are never restored.
+   */
+  beginPotentialMutation(): ReadCacheMutationFence {
+    const entries = new Map<string, ReadCacheEntry>();
+    for (const [key, entry] of this.#entries) {
+      entries.set(key, {
+        execution: entry.execution,
+        at: entry.at,
+        metadata: copyReadCacheMetadata(entry.metadata),
+      });
+    }
+    this.invalidateAll();
+    const fence = { id: ++this.#nextMutationFence };
+    this.#pendingMutationFences.set(fence.id, entries);
+    return fence;
+  }
+
+  /**
+   * Restore a process fence only after a matching before/after workspace token.
+   * Later known invalidations clear the fence, so they always win over reuse.
+   */
+  resolvePotentialMutation(
+    fence: ReadCacheMutationFence | undefined,
+    unchanged: boolean,
+  ): void {
+    if (fence === undefined) return;
+    const entries = this.#pendingMutationFences.get(fence.id);
+    this.#pendingMutationFences.delete(fence.id);
+    if (!unchanged || entries === undefined) return;
+    for (const [key, entry] of entries) {
+      if (this.#entries.has(key) || this.#now() - entry.at >= this.#ttlMs) continue;
+      if (this.#entries.size >= this.#maxEntries) break;
+      this.#entries.set(key, {
+        execution: entry.execution,
+        at: entry.at,
+        metadata: copyReadCacheMetadata(entry.metadata),
+      });
+    }
+  }
+
   invalidateAll(): void {
+    this.#pendingMutationFences.clear();
     this.#entries.clear();
     this.#inFlight.clear();
     this.#epoch += 1;

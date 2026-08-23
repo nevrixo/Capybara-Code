@@ -104,10 +104,11 @@ import { ExtensionManager } from "./extensions.ts";
 import type { Host } from "./host.ts";
 import { SubagentBridge } from "./subagent-bridge.ts";
 import { HostActionNormalizer, type McpHintResolver } from "./normalizer.ts";
-import type { Runtime } from "./runtime.ts";
+import type { ExecutableCapabilities, Runtime } from "./runtime.ts";
 import {
   ReadCache,
   RuntimeToolExecutor,
+  workspaceChangeObserved,
   type Execution,
   type ToolBridges,
   type ToolObservationAck,
@@ -116,6 +117,7 @@ import {
 import { executeWithRecovery as runToolWithRecovery } from "./tool-recovery.ts";
 import { extractPathMentions, extractSymbolMentions } from "./path-mentions.ts";
 import { scanRepository, scanRepositoryDelta } from "./repository-map.ts";
+import { classifyVerificationCommand, type VerificationContract } from "./verification-contract.ts";
 
 const PERFORMANCE_EVENT_KINDS = new Set<CbcEventKind>([
   "run.trace_started",
@@ -161,6 +163,10 @@ export interface AgentSessionOptions {
   readonly autoRoute?: boolean;
   readonly readOnly?: boolean;
   readonly headlessPolicy?: "deny-on-ask" | "allow-listed" | "fail-on-ask";
+  /** Optional runner-owned command contract for authoritative verification. */
+  readonly verificationContract?: VerificationContract;
+  /** Runtime-observed executable availability captured at session bootstrap. */
+  readonly executableCapabilities?: ExecutableCapabilities;
   /** Config-supplied rules, merged with anything granted this session (짠13.3). */
   readonly configRules?: readonly StoredRule[];
   /** Drain external startup before installing the runtime Plan boundary. */
@@ -410,6 +416,22 @@ function isVerificationProcess(toolId: string, display: string): boolean {
   return verificationProcessClass(toolId, display) !== undefined;
 }
 
+async function waitForWorkspaceQuiescenceWindow(delayMs: number, signal: AbortSignal): Promise<boolean> {
+  if (signal.aborted) return false;
+  return await new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve(true);
+    }, delayMs);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      resolve(false);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 function normalizedWorkspacePath(path: string): string {
   return path.replace(/\\/g, "/").replace(/^\.\//, "");
 }
@@ -457,6 +479,7 @@ export class AgentSession {
   readonly recorder: SessionRecorder;
 
   readonly #options: AgentSessionOptions;
+  #executableCapabilities: ExecutableCapabilities | undefined;
   readonly #performanceTelemetryEnabled: boolean;
   readonly #loadedSkills = new Map<string, SkillDefinition>();
   #todoController!: TodoController;
@@ -511,6 +534,7 @@ export class AgentSession {
 
   constructor(options: AgentSessionOptions) {
     this.#options = options;
+    this.#executableCapabilities = options.executableCapabilities;
     const performanceSampleRate = Math.min(1, Math.max(0, options.config.perf.sampleRate));
     const performanceSampleBucket = Number.parseInt(stableDigest(options.sessionId).slice(0, 8), 16) /
       0xffff_ffff;
@@ -655,9 +679,10 @@ export class AgentSession {
         this.#invalidateContextPath(path, "sub-agent mutation committed");
       },
       workspaceGeneration: () => this.#workspaceGeneration,
-      onWorkspacePotentiallyChanged: (toolId, action) => {
+      onWorkspacePotentiallyChanged: (toolId, action, execution) => {
+        if (workspaceChangeObserved(execution) === false) return;
         readCache.invalidateAll();
-        this.#invalidateWholeWorkspace(`${toolId} may have changed the workspace`, {
+        this.#invalidateWholeWorkspace(toolId + " may have changed the workspace", {
           verificationNeutral: action !== undefined && isVerificationProcess(toolId, action.display),
         });
       },
@@ -689,6 +714,9 @@ export class AgentSession {
       },
       cacheKey: (prompt, route, agentId) => this.#cacheKeyForPrompt(prompt, route, agentId),
       testCommandFor: (paths) => testCommandFor(paths, options.config.perf.verificationPlannerV2 !== false),
+      ...(options.verificationContract !== undefined
+        ? { verificationContract: options.verificationContract }
+        : {}),
       ...(options.now !== undefined ? { now: options.now } : {}),
     });
     this.subagents = this.#subagentBridge.scheduler;
@@ -715,6 +743,10 @@ export class AgentSession {
       host: options.host,
       sessionId: options.sessionId,
       bridges,
+      ...(options.verificationContract !== undefined
+        ? { verificationContract: options.verificationContract }
+        : {}),
+      workspaceState: () => ({ activeJobCount: this.#activeBackgroundJobs.size }),
       readCache,
       scope: () => {
         const turnId = this.recorder.model.currentTurnId;
@@ -728,9 +760,10 @@ export class AgentSession {
           workspaceGeneration: this.#workspaceGeneration,
         };
       },
-      onWorkspacePotentiallyChanged: (toolId, action) => {
+      onWorkspacePotentiallyChanged: (toolId, action, execution) => {
+        if (workspaceChangeObserved(execution) === false) return;
         readCache.invalidateAll();
-        this.#invalidateWholeWorkspace(`${toolId} may have changed the workspace`, {
+        this.#invalidateWholeWorkspace(toolId + " may have changed the workspace", {
           verificationNeutral: action !== undefined && isVerificationProcess(toolId, action.display),
         });
       },
@@ -799,6 +832,9 @@ export class AgentSession {
           ...(options.config.agent.todo?.safeRebase === false ? {} : { rebase: ({ action: recoveryAction, execution }: { readonly action: ProposedAction; readonly execution: Execution }) => this.#rebaseRecoveryAction(recoveryAction, execution) }),
           reconcile: ({ action: recoveryAction, execution, operationId, attempt, signal: recoverySignal }) =>
             this.#reconcileToolOperation(recoveryAction, execution, operationId, attempt, recoverySignal),
+          ...(process.env.PATH_CHANGED_QUIESCENCE_RECOVERY === "0"
+            ? {}
+            : { stateFence: ({ signal: recoverySignal }) => this.#awaitWorkspaceQuiescence(recoverySignal) }),
         });
       },
       beforeToolExecute: async (action) => {
@@ -952,6 +988,16 @@ export class AgentSession {
         await this.#prepareContextPack();
       },
       testCommandFor: (paths) => testCommandFor(paths, options.config.perf.verificationPlannerV2 !== false),
+      ...(options.verificationContract !== undefined
+        ? {
+            requiredVerificationCommands: options.verificationContract.requiredCommands.map((command) => ({
+              command,
+              reason: `required by ${options.verificationContract!.source} verification contract`,
+            })),
+            verificationCommandKind: (command) =>
+              classifyVerificationCommand(options.verificationContract, command),
+          }
+        : {}),
       // 짠11.2: a reflection immediately biases context selection toward the files
       // the failure named, so the next sample re-reads them instead of guessing
       // again (짠18.4).
@@ -1136,6 +1182,17 @@ export class AgentSession {
     this.#compactState = text;
   }
 
+  async #refreshExecutableCapabilities(): Promise<void> {
+    if (typeof this.#options.runtime.executableCapabilities !== "function") return;
+    try {
+      const snapshot = await this.#options.runtime.executableCapabilities();
+      if (snapshot !== undefined) this.#executableCapabilities = snapshot;
+    } catch {
+      // A capability refresh is advisory. The process error remains the durable
+      // truth and the next prompt keeps the last known safe snapshot.
+    }
+  }
+
   async #ingestToolObservation(event: ToolObservationEnvelope): Promise<ToolObservationAck> {
     const scopeAgentId = event.agentId ?? "root";
     const targetContext = this.#contextForAgent(scopeAgentId);
@@ -1145,15 +1202,36 @@ export class AgentSession {
       if (typeof jobId === "string") this.#activeBackgroundJobs.delete(jobId);
     }
     const errorCode = event.execution.result.error?.code;
+    if (
+      !event.execution.result.ok &&
+      (errorCode === "NOT_FOUND" || errorCode === "COMMAND_NOT_FOUND") &&
+      (event.action.toolId === "process.run" || event.action.toolId === "shell.run")
+    ) {
+      await this.#refreshExecutableCapabilities();
+    }
     if (!event.execution.result.ok && (errorCode === "HASH_MISMATCH" || errorCode === "PATH_CHANGED")) {
+      const details = event.execution.result.error?.details;
+      const generationAfter = isRecord(details) && typeof details.generationAfter === "number"
+        ? details.generationAfter
+        : undefined;
+      // A PATH_CHANGED emitted by the executor already names the generation
+      // that made its bytes stale. Invalidate evidence at that generation, but
+      // do not manufacture a second transition solely from observing the error.
+      const alreadyFenced = errorCode === "PATH_CHANGED" && generationAfter === this.#workspaceGeneration;
       const affected = [...new Set([...(event.action.reads ?? []), ...(event.action.writes ?? [])])];
       if (affected.length === 0) {
         this.#readCache.invalidateAll();
-        this.#invalidateWholeWorkspace(`${event.action.toolId} reported ${errorCode}`);
+        if (!alreadyFenced) {
+          this.#invalidateWholeWorkspace(`${event.action.toolId} reported ${errorCode}`);
+        }
       } else {
         this.#readCache.invalidatePaths(affected.map((path) => this.#canonicalWorkspacePath(path)));
         for (const path of affected) {
-          this.#invalidateContextPath(path, `${event.action.toolId} reported ${errorCode}`);
+          this.#invalidateContextPath(
+            path,
+            `${event.action.toolId} reported ${errorCode}`,
+            alreadyFenced ? { preserveGeneration: true } : undefined,
+          );
         }
       }
     }
@@ -1341,13 +1419,17 @@ export class AgentSession {
       (event.action.toolId === "fs.read" || event.action.toolId === "fs.read_many")
     ) {
       cancelNewLeases();
-      return { disposition: "raw", workspaceGeneration: compilerGeneration - 1 };
+      return {
+        disposition: "raw",
+        workspaceGeneration: compilerGeneration - 1,
+        pathChangedSource: "background_job",
+      };
     }
     if (this.#workspaceGeneration !== compilerGeneration) {
       cancelNewLeases();
       // Return the generation this observation was compiled against so the
       // executor converts the now-stale read into PATH_CHANGED with no body.
-      return { disposition: "raw", workspaceGeneration: compilerGeneration };
+      return { disposition: "raw", workspaceGeneration: compilerGeneration, pathChangedSource: "compiler" };
     }
     if (event.action.toolId === "fs.read" || event.action.toolId === "fs.read_many") {
       if (!result.handled || !result.safeToVirtualize) {
@@ -1413,6 +1495,43 @@ export class AgentSession {
     this.#invalidateWholeWorkspace("background process reached a terminal state");
     if (this.#activeBackgroundJobs.size > 0) return;
     await this.#refreshRepositoryMap();
+  }
+
+  /**
+   * A stale read is retried only after foreground work has returned, background
+   * jobs are drained, and the repository map has settled for a short interval.
+   * The bounded loop is intentionally fail-closed: a continuous writer returns
+   * one actionable PATH_CHANGED instead of exposing stale bytes or looping.
+   */
+  async #awaitWorkspaceQuiescence(signal: AbortSignal): Promise<boolean> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (signal.aborted) return false;
+      await this.#reconcileBackgroundJobs();
+      if (!this.#backgroundJobsReconciled || this.#activeBackgroundJobs.size > 0) {
+        if (!await waitForWorkspaceQuiescenceWindow(20 * (attempt + 1), signal)) return false;
+        continue;
+      }
+      const generationBeforeRefresh = this.#workspaceGeneration;
+      await this.#ensureRepositoryMapFresh();
+      if (
+        signal.aborted ||
+        this.#activeBackgroundJobs.size > 0 ||
+        !this.#backgroundJobsReconciled ||
+        this.context.repositoryMapDirty ||
+        this.#workspaceGeneration !== generationBeforeRefresh
+      ) {
+        if (!await waitForWorkspaceQuiescenceWindow(20 * (attempt + 1), signal)) return false;
+        continue;
+      }
+      if (!await waitForWorkspaceQuiescenceWindow(20, signal)) return false;
+      if (
+        this.#workspaceGeneration === generationBeforeRefresh &&
+        this.#activeBackgroundJobs.size === 0 &&
+        this.#backgroundJobsReconciled &&
+        !this.context.repositoryMapDirty
+      ) return true;
+    }
+    return false;
   }
 
   #takeRepositoryDeltaPaths(): string[] {
@@ -1531,10 +1650,16 @@ export class AgentSession {
     }
   }
 
-  #invalidateContextPath(path: string, reason: string): void {
-    this.#workspaceGeneration += 1;
-    this.kernel.resetProviderContinuation(`workspace generation changed: ${reason}`);
-    this.#verificationInvalidatingGeneration = this.#workspaceGeneration;
+  #invalidateContextPath(
+    path: string,
+    reason: string,
+    options: { readonly preserveGeneration?: boolean } = {},
+  ): void {
+    if (options.preserveGeneration !== true) {
+      this.#workspaceGeneration += 1;
+      this.kernel.resetProviderContinuation(`workspace generation changed: ${reason}`);
+      this.#verificationInvalidatingGeneration = this.#workspaceGeneration;
+    }
     this.#recordPathMutation(path);
     this.#pendingRepositoryDeltaPaths.add(this.#canonicalWorkspacePath(path));
     // The exact path is known, so keep unrelated repository-map entries and let
@@ -3048,6 +3173,9 @@ export class AgentSession {
       skillCatalog: this.skills.promptCatalog(),
       loadedSkills: this.#skillBodiesForPrompt(),
       ...(tokenSavingDirective === undefined ? {} : { tokenSavingDirective }),
+      ...(this.#executableCapabilities !== undefined
+        ? { executableCapabilities: this.#executableCapabilities }
+        : {}),
       ...(this.#taskDescription !== undefined ? { taskDescription: this.#taskDescription } : {}),
       ...(this.recorder.model.todo.items.length > 0 ? { plan: this.recorder.model.todo.items } : {}),
       ...(this.recorder.model.todo.items.length > 0 ||
@@ -3148,6 +3276,11 @@ export class AgentSession {
       });
     }
     return opened;
+  }
+
+  /** Expose the kernel's durable change/verification snapshot to headless callers. */
+  snapshotCompletionReport(summary?: string) {
+    return this.kernel.snapshotCompletionReport(summary);
   }
 
   /** Record the user's message, then run a turn. */
@@ -3278,11 +3411,6 @@ export class AgentSession {
   /** The turn and agent an out-of-band event belongs to. */
   #currentScope(): { turnId?: string; agentId: string; callerId: string; taskEpochId?: string; workspaceIdentityDigest?: string } {
     const turnId = this.recorder.model.currentTurnId;
-  /** Expose the kernel's durable change/verification snapshot to headless callers. */
-  snapshotCompletionReport(summary?: string) {
-    return this.kernel.snapshotCompletionReport(summary);
-  }
-
     return {
       ...(turnId !== undefined ? { turnId } : {}),
       agentId: "root",

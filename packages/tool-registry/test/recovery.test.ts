@@ -36,4 +36,17 @@ describe("tool recovery decision matrix", () => {
     });
     expect(decision).toMatchObject({ recoveryClass: "state_rebase", retry: true });
   });
+
+  test("fences PATH_CHANGED before replaying a pure read", () => {
+    const decision = decideRecovery({
+      tool: findTool("fs.read")!,
+      failure: {
+        code: "PATH_CHANGED",
+        retryable: true,
+        details: { path: "src/a.ts", generationBefore: 10, generationAfter: 11 },
+      },
+      attempt: 1,
+    });
+    expect(decision).toMatchObject({ recoveryClass: "state_fence_wait", retry: true, terminal: false });
+  });
 });

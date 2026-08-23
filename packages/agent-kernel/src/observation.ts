@@ -443,15 +443,16 @@ export interface VerificationCoverage {
 export function buildVerificationCoverage(input: {
   readonly changedFiles: number;
   readonly changedSymbols?: number;
-  readonly verification: readonly { readonly status: "passed" | "failed" | "not_run" }[];
+  readonly verification: readonly { readonly status: "passed" | "failed" | "not_run"; readonly required?: boolean }[];
   readonly staleEvidence?: number;
   readonly unresolvedOperations?: number;
   readonly highRiskFindings?: number;
 }): VerificationCoverage {
-  const requiredChecks = input.verification.length;
-  const passedChecks = input.verification.filter((check) => check.status === "passed").length;
-  const failedChecks = input.verification.filter((check) => check.status === "failed").length;
-  const notRunChecks = input.verification.filter((check) => check.status === "not_run").length;
+  const required = input.verification.filter((check) => check.required !== false);
+  const requiredChecks = required.length;
+  const passedChecks = required.filter((check) => check.status === "passed").length;
+  const failedChecks = required.filter((check) => check.status === "failed").length;
+  const notRunChecks = required.filter((check) => check.status === "not_run").length;
   const staleEvidence = Math.max(0, Math.floor(input.staleEvidence ?? 0));
   const unresolvedOperations = Math.max(0, Math.floor(input.unresolvedOperations ?? 0));
   const highRiskFindings = Math.max(0, Math.floor(input.highRiskFindings ?? 0));
@@ -489,6 +490,8 @@ export interface CompletionReport {
   verification: Array<{
     kind?: "command" | "check";
     command?: string;
+    /** Diagnostic checks are reported, but do not decide completion status. */
+    required?: boolean;
     status: "passed" | "failed" | "not_run";
     evidence: string;
   }>;
@@ -546,9 +549,10 @@ export function enforceTruthfulness(report: CompletionReport): {
     risks: [...report.risks],
   };
 
-  const failed = corrected.verification.filter((v) => v.status === "failed");
-  const notRun = corrected.verification.filter((v) => v.status === "not_run");
-  const passed = corrected.verification.filter((v) => v.status === "passed");
+  const requiredVerification = corrected.verification.filter((v) => v.required !== false);
+  const failed = requiredVerification.filter((v) => v.status === "failed");
+  const notRun = requiredVerification.filter((v) => v.status === "not_run");
+  const passed = requiredVerification.filter((v) => v.status === "passed");
   const hasBlockingFailure = (text: string): boolean =>
     /PERMISSION_DENIED|permission denied|untrusted|denied by policy|denied by the user/i.test(text);
   const hasPermissionBlockedWrite = failed.some((v) => hasBlockingFailure(`${v.command ?? ""} ${v.evidence}`))
@@ -572,9 +576,10 @@ export function enforceTruthfulness(report: CompletionReport): {
     }
   }
 
-  const failedAfter = corrected.verification.filter((v) => v.status === "failed");
-  const notRunAfter = corrected.verification.filter((v) => v.status === "not_run");
-  const passedAfter = corrected.verification.filter((v) => v.status === "passed");
+  const requiredAfter = corrected.verification.filter((v) => v.required !== false);
+  const failedAfter = requiredAfter.filter((v) => v.status === "failed");
+  const notRunAfter = requiredAfter.filter((v) => v.status === "not_run");
+  const passedAfter = requiredAfter.filter((v) => v.status === "passed");
 
   if (corrected.status === "completed" && failedAfter.length > 0) {
     issues.push({
@@ -584,7 +589,7 @@ export function enforceTruthfulness(report: CompletionReport): {
     corrected.status = "partial";
   }
 
-  if (corrected.status === "completed" && corrected.changedFiles.length > 0 && corrected.verification.length === 0) {
+  if (corrected.status === "completed" && corrected.changedFiles.length > 0 && requiredAfter.length === 0) {
     issues.push({
       field: "verification",
       message: "files changed but no verification was recorded",
@@ -593,7 +598,7 @@ export function enforceTruthfulness(report: CompletionReport): {
     corrected.status = "partial";
   }
 
-  for (const step of corrected.verification.filter((v) => v.status === "not_run")) {
+  for (const step of requiredAfter.filter((v) => v.status === "not_run")) {
     if (step.evidence.trim().length === 0) {
       issues.push({
         field: "verification",
@@ -605,7 +610,7 @@ export function enforceTruthfulness(report: CompletionReport): {
   const claimsSuccess = /\b(all tests? pass|everything works|fully working|verified working)\b/i.test(
     corrected.summary,
   );
-  if (claimsSuccess && (failedAfter.length > 0 || corrected.verification.length === 0 || hasPermissionBlockedWrite)) {
+  if (claimsSuccess && (failedAfter.length > 0 || requiredAfter.length === 0 || hasPermissionBlockedWrite)) {
     issues.push({
       field: "summary",
       message: "the summary claims success that the recorded verification does not support",
@@ -674,7 +679,8 @@ export function renderReport(report: CompletionReport, answer?: string): string 
   if (report.verification.length > 0) {
     lines.push("Verification");
     for (const step of report.verification) {
-      lines.push(`- ${step.command ?? "check"}: ${step.status} — ${step.evidence}`);
+      const label = step.required === false ? "diagnostic" : "required";
+      lines.push(`- [${label}] ${step.command ?? "check"}: ${step.status} — ${step.evidence}`);
     }
     lines.push("");
   }
@@ -715,6 +721,8 @@ export type VerificationStep =
 export function planVerification(options: {
   readonly changedPaths: readonly string[];
   readonly testCommandFor?: (paths: readonly string[]) => { command: string; reason: string } | undefined;
+  /** Runner-provided commands override heuristics and are all authoritative. */
+  readonly requiredCommands?: readonly { readonly command: string; readonly reason: string }[];
   readonly broaderJustification?: string;
   readonly autoReview: boolean;
 }): VerificationStep[] {
@@ -723,9 +731,20 @@ export function planVerification(options: {
 
   steps.push({ kind: "parse_sanity", paths: [...options.changedPaths] });
 
-  const focused = options.testCommandFor?.(options.changedPaths);
-  if (focused) {
-    steps.push({ kind: "closest_tests", command: focused.command, reason: focused.reason });
+  // An explicitly empty runner contract means "record not_run; do not guess".
+  // Only an absent contract permits repository heuristics.
+  const planned = options.requiredCommands !== undefined
+    ? options.requiredCommands
+    : (() => {
+        const focused = options.testCommandFor?.(options.changedPaths);
+        return focused === undefined ? [] : [focused];
+      })();
+  const seen = new Set<string>();
+  for (const command of planned) {
+    const normalized = command.command.trim().replace(/\s+/g, " ");
+    if (normalized.length === 0 || seen.has(normalized)) continue;
+    seen.add(normalized);
+    steps.push({ kind: "closest_tests", command: command.command, reason: command.reason });
   }
   if (options.broaderJustification !== undefined && options.broaderJustification.length > 0) {
     steps.push({

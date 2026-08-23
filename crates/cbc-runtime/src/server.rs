@@ -1031,6 +1031,7 @@ fn capabilities_value(state: &RuntimeState) -> Value {
             "maxOutstandingRequests": cbc_protocol::MAX_OUTSTANDING_REQUESTS,
         },
         "uptimeMs": state.started_at.elapsed().as_millis() as u64,
+        "executables": handlers::process::executable_capabilities(),
     })
 }
 

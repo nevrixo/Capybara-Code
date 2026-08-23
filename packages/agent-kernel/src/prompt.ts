@@ -138,6 +138,8 @@ export interface PromptInputs {
   /** Bodies of Skills the model explicitly loaded (§16.4 stage 2). */
   readonly loadedSkills: readonly { name: string; body: string; source: string }[];
   readonly taskDescription?: string;
+  /** Runner-observed programs available to process.run in this session. */
+  readonly executableCapabilities?: Readonly<Record<string, boolean>>;
   /** Legacy flat TODO projection retained for provider compatibility. */
   readonly plan?: ReadonlyArray<{
     readonly id?: string;
@@ -619,6 +621,22 @@ export function assemblePrompt(inputs: PromptInputs, options: { readonly version
   const variableSections: string[] = [];
 
   let taskSize = 0;
+  if (inputs.executableCapabilities !== undefined) {
+    const entries = Object.entries(inputs.executableCapabilities)
+      .filter((entry): entry is [string, boolean] => typeof entry[1] === "boolean")
+      .sort(([left], [right]) => left.localeCompare(right));
+    const available = entries.filter(([, value]) => value).map(([program]) => program);
+    const unavailable = entries.filter(([, value]) => !value).map(([program]) => program);
+    const rendered = [
+      "Executable capability snapshot (captured at session bootstrap):",
+      "Available programs: " + (available.length > 0 ? available.join(", ") : "none confirmed"),
+      ...(unavailable.length > 0 ? ["Unavailable programs: " + unavailable.join(", ")] : []),
+      "Only invoke a program listed as available. If rg is unavailable, prefer fs.search; use grep only if it is listed as available. After process.run reports COMMAND_NOT_FOUND or NOT_FOUND, refresh this snapshot before choosing another executable.",
+    ].join("\n");
+    variableSections.push(rendered);
+    layerText.L4_task_and_plan.push(rendered);
+    taskSize += rendered.length;
+  }
   if (inputs.taskDescription !== undefined && inputs.taskDescription.length > 0) {
     const rendered = `Current task:\n${inputs.taskDescription}`;
     variableSections.push(rendered);

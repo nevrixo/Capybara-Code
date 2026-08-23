@@ -81,6 +81,7 @@ import {
   type SessionIndex,
 } from "./state.ts";
 import type { ToolBridges } from "./tools.ts";
+import { verificationContractFromEnvironment } from "./verification-contract.ts";
 
 export interface BootstrapOptions {
   readonly context: CommandContext;
@@ -210,8 +211,13 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
   const warnings: string[] = [];
 
   const runtime = await context.runtime();
+  const executableCapabilities = await runtime.executableCapabilities().catch(() => undefined);
   const loadedConfig = await context.config();
   const config = await context.requireConfig();
+  const verificationContract = verificationContractFromEnvironment(context.host.env);
+  if (context.host.env.CBC_VERIFICATION_CONTRACT !== undefined && verificationContract === undefined) {
+    warnings.push("ignored an invalid CBC_VERIFICATION_CONTRACT integration payload");
+  }
   const trust = await context.trust();
 
   // ---- §21.2: session overrides sit above config ----
@@ -487,6 +493,12 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
     approvals,
     granted,
     nonInteractive: context.nonInteractive,
+    ...(verificationContract !== undefined
+      ? { verificationContract }
+      : {}),
+    ...(executableCapabilities !== undefined
+      ? { executableCapabilities }
+      : {}),
     ...(options.bridges !== undefined ? { bridges: options.bridges } : {}),
     ...(mcpHost !== undefined
       ? {
