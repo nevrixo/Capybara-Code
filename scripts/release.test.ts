@@ -25,29 +25,29 @@ const launcher = require("./release-launcher.cjs") as {
   main(argv?: readonly string[], options?: Record<string, unknown>): number;
 };
 
-const VERSION = "0.1.0-alpha.2";
+const VERSION = "0.1.0-alpha.3";
 
 describe("Public Alpha release metadata", () => {
   test("accepts only alpha tags and requires every source to agree", () => {
-    expect(versionFromTag("v0.1.0-alpha.2")).toBe(VERSION);
-    expect(expectedVersionFromArgs(["--version", "v0.1.0-alpha.2"])).toBe(VERSION);
-    expect(expectedVersionFromArgs([], { GITHUB_REF_NAME: "v0.1.0-alpha.2" })).toBe(VERSION);
+    expect(versionFromTag("v0.1.0-alpha.3")).toBe(VERSION);
+    expect(expectedVersionFromArgs(["--version", "v0.1.0-alpha.3"])).toBe(VERSION);
+    expect(expectedVersionFromArgs([], { GITHUB_REF_NAME: "v0.1.0-alpha.3" })).toBe(VERSION);
     expect(() => assertAlphaVersion("0.1.0")).toThrow("alpha version");
-    expect(() => versionFromTag("0.1.0-alpha.2")).toThrow("must start with 'v'");
-    expect(() => assertReleaseVersions({ root: VERSION, app: VERSION, cargo: "0.1.0-alpha.3", cli: VERSION })).toThrow("disagree");
+    expect(() => versionFromTag("0.1.0-alpha.3")).toThrow("must start with 'v'");
+    expect(() => assertReleaseVersions({ root: VERSION, app: VERSION, cargo: "0.1.0-alpha.4", cli: VERSION })).toThrow("disagree");
   });
 
   test("maps exactly the supported platform packages", () => {
     expect(releaseTargetNames()).toEqual(["windows-x64", "darwin-x64", "darwin-arm64", "linux-x64"]);
     expect(releaseTarget("windows-x64")).toMatchObject({
-      npmPackage: "@nevrixo/capybara-code-win32-x64",
+      npmPackage: "@ilbie/capybara-code-win32-x64",
       npmDirectory: "capybara-code-win32-x64",
       platform: "win32",
       arch: "x64",
       executableExtension: ".exe",
     });
     expect(releaseTarget("linux-x64")).toMatchObject({
-      npmPackage: "@nevrixo/capybara-code-linux-x64",
+      npmPackage: "@ilbie/capybara-code-linux-x64",
       npmDirectory: "capybara-code-linux-x64",
       libc: "glibc",
     });
@@ -57,7 +57,7 @@ describe("Public Alpha release metadata", () => {
   test("creates constrained platform and launcher package manifests", () => {
     const platform = platformPackageManifest("linux-x64", VERSION);
     expect(platform).toMatchObject({
-      name: "@nevrixo/capybara-code-linux-x64",
+      name: "@ilbie/capybara-code-linux-x64",
       version: VERSION,
       os: ["linux"],
       cpu: ["x64"],
@@ -72,16 +72,16 @@ describe("Public Alpha release metadata", () => {
     expect(root.name).toBe(PRODUCT_PACKAGE);
     expect(root.bin).toEqual({ capy: "bin/capy.cjs" });
     expect(root.optionalDependencies).toEqual({
-      "@nevrixo/capybara-code-win32-x64": VERSION,
-      "@nevrixo/capybara-code-darwin-x64": VERSION,
-      "@nevrixo/capybara-code-darwin-arm64": VERSION,
-      "@nevrixo/capybara-code-linux-x64": VERSION,
+      "@ilbie/capybara-code-win32-x64": VERSION,
+      "@ilbie/capybara-code-darwin-x64": VERSION,
+      "@ilbie/capybara-code-darwin-arm64": VERSION,
+      "@ilbie/capybara-code-linux-x64": VERSION,
     });
   });
 
   test("uses native archive extensions on each host family", () => {
-    expect(archiveNameFor(VERSION, "windows-x64", "win32")).toBe("capybara-code-0.1.0-alpha.2-windows-x64.zip");
-    expect(archiveNameFor(VERSION, "linux-x64", "linux")).toBe("capybara-code-0.1.0-alpha.2-linux-x64.tar.gz");
+    expect(archiveNameFor(VERSION, "windows-x64", "win32")).toBe("capybara-code-0.1.0-alpha.3-windows-x64.zip");
+    expect(archiveNameFor(VERSION, "linux-x64", "linux")).toBe("capybara-code-0.1.0-alpha.3-linux-x64.tar.gz");
   });
 
   test("derives the sidecar strictly relative to the packaged bin directory", () => {
@@ -93,11 +93,11 @@ describe("Public Alpha release metadata", () => {
 describe("public capy launcher", () => {
   test("maps Node and Bun host platforms to their optional package", () => {
     expect(launcher.platformSpec("win32", "x64")).toEqual({
-      packageName: "@nevrixo/capybara-code-win32-x64",
+      packageName: "@ilbie/capybara-code-win32-x64",
       binary: "bin/capy.exe",
     });
     expect(launcher.platformSpec("darwin", "arm64")).toEqual({
-      packageName: "@nevrixo/capybara-code-darwin-arm64",
+      packageName: "@ilbie/capybara-code-darwin-arm64",
       binary: "bin/capy",
     });
     expect(launcher.platformSpec("linux", "arm64")).toBeUndefined();
@@ -109,7 +109,7 @@ describe("public capy launcher", () => {
       platform: "linux",
       arch: "x64",
       resolveModule: (specifier: string) => {
-        expect(specifier).toBe("@nevrixo/capybara-code-linux-x64/bin/capy");
+        expect(specifier).toBe("@ilbie/capybara-code-linux-x64/bin/capy");
         return "/tmp/capy";
       },
       spawn: (binary: string, argv: readonly string[]) => {

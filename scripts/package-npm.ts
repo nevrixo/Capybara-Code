@@ -168,7 +168,7 @@ export async function assemblePlatformPackage(
 
   const target = releaseTarget(targetName);
   // Keep artifact directories flat even though the published package is scoped.
-  // This avoids a shared @nevrixo directory when matrix artifacts are merged.
+  // This avoids a shared @ilbie directory when matrix artifacts are merged.
   const destination = join(outDirectory, "npm", target.npmDirectory);
   await prepareDirectory(destination);
   await Promise.all([

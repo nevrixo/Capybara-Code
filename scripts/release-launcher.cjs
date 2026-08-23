@@ -10,10 +10,10 @@
 const { spawnSync } = require("node:child_process");
 
 const PLATFORM_SPECS = Object.freeze({
-  "win32:x64": Object.freeze({ packageName: "@nevrixo/capybara-code-win32-x64", binary: "bin/capy.exe" }),
-  "darwin:x64": Object.freeze({ packageName: "@nevrixo/capybara-code-darwin-x64", binary: "bin/capy" }),
-  "darwin:arm64": Object.freeze({ packageName: "@nevrixo/capybara-code-darwin-arm64", binary: "bin/capy" }),
-  "linux:x64": Object.freeze({ packageName: "@nevrixo/capybara-code-linux-x64", binary: "bin/capy" }),
+  "win32:x64": Object.freeze({ packageName: "@ilbie/capybara-code-win32-x64", binary: "bin/capy.exe" }),
+  "darwin:x64": Object.freeze({ packageName: "@ilbie/capybara-code-darwin-x64", binary: "bin/capy" }),
+  "darwin:arm64": Object.freeze({ packageName: "@ilbie/capybara-code-darwin-arm64", binary: "bin/capy" }),
+  "linux:x64": Object.freeze({ packageName: "@ilbie/capybara-code-linux-x64", binary: "bin/capy" }),
 });
 
 function platformSpec(platform = process.platform, arch = process.arch) {

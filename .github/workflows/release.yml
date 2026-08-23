@@ -159,14 +159,14 @@ jobs:
             npm pack --dry-run "./dist/npm/${package_dir}"
           done
 
-      - name: Publish v0.1.0-alpha.2 with protected bootstrap token
-        if: github.ref_name == 'v0.1.0-alpha.2'
+      - name: Publish v0.1.0-alpha.3 with protected bootstrap token
+        if: github.ref_name == 'v0.1.0-alpha.3'
         shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
         run: |
           set -euo pipefail
-          test -n "${NODE_AUTH_TOKEN:-}" || { echo "NPM_BOOTSTRAP_TOKEN is required for alpha.2"; exit 1; }
+          test -n "${NODE_AUTH_TOKEN:-}" || { echo "NPM_BOOTSTRAP_TOKEN is required for alpha.3"; exit 1; }
           package_dirs=(
             capybara-code-win32-x64
             capybara-code-darwin-x64
@@ -179,7 +179,7 @@ jobs:
           done
 
       - name: Publish later alphas with npm trusted publishing
-        if: github.ref_name != 'v0.1.0-alpha.2'
+        if: github.ref_name != 'v0.1.0-alpha.3'
         shell: bash
         run: |
           set -euo pipefail

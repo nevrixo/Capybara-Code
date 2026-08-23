@@ -9,7 +9,7 @@ export const ROOT = new URL("..", import.meta.url).pathname
   .replace(/\/+$/, "");
 
 export const PRODUCT_PACKAGE = "capybara-code";
-export const NATIVE_PACKAGE_SCOPE = "@nevrixo";
+export const NATIVE_PACKAGE_SCOPE = "@ilbie";
 export const REPOSITORY_URL = "git+https://github.com/nevrixo/Capybara-Code.git";
 export const HOMEPAGE_URL = "https://github.com/nevrixo/Capybara-Code";
 
