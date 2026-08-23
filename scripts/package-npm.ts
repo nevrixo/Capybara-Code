@@ -14,6 +14,7 @@ import {
   releaseStageDirectory,
   releaseTarget,
   releaseTargetNames,
+  requireExecutableFile,
   type ReleaseTargetName,
   verifyReleaseVersion,
   walkFiles,
@@ -133,7 +134,11 @@ export function launcherPackageManifest(version: string): PackageManifest {
   };
 }
 
-function assertPackageDirectory(directory: string, launcher: boolean): Promise<void> {
+function assertPackageDirectory(
+  directory: string,
+  launcher: boolean,
+  targetName?: ReleaseTargetName,
+): Promise<void> {
   return assertArtifactSafety(directory).then(async () => {
     const files = await walkFiles(directory);
     const allowedFiles = launcher
@@ -143,6 +148,22 @@ function assertPackageDirectory(directory: string, launcher: boolean): Promise<v
     for (const file of files) {
       if (allowedFiles.has(file) || allowedPrefixes.some((prefix) => file.startsWith(prefix))) continue;
       throw new Error(`npm package contains an unexpected file: ${file}`);
+    }
+
+    if (launcher) {
+      if (process.platform !== "win32") {
+        await requireExecutableFile(join(directory, "bin", "capy.cjs"));
+      }
+      return;
+    }
+
+    if (targetName === undefined) throw new Error("native npm package validation requires a release target");
+    const target = releaseTarget(targetName);
+    if (target.executableExtension === "") {
+      await Promise.all([
+        requireExecutableFile(join(directory, "bin", "capy")),
+        requireExecutableFile(join(directory, "libexec", "cbc-runtime")),
+      ]);
     }
   });
 }
@@ -178,8 +199,14 @@ export async function assemblePlatformPackage(
     copyFile(join(stage, "manifest.json"), join(destination, "manifest.json")),
     copyFile(join(ROOT, "LICENSE"), join(destination, "LICENSE")),
   ]);
+  if (target.executableExtension === "") {
+    await Promise.all([
+      chmod(join(destination, "bin", "capy"), 0o755),
+      chmod(join(destination, "libexec", "cbc-runtime"), 0o755),
+    ]);
+  }
   await writeJson(join(destination, "package.json"), platformPackageManifest(targetName, version));
-  await assertPackageDirectory(destination, false);
+  await assertPackageDirectory(destination, false, targetName);
   return destination;
 }
 
@@ -192,7 +219,7 @@ export async function assembleLauncherPackage(outDirectory: string, version: str
     copyFile(join(ROOT, "README.md"), join(destination, "README.md")),
     copyFile(join(ROOT, "LICENSE"), join(destination, "LICENSE")),
   ]);
-  await chmod(join(destination, "bin", "capy.cjs"), 0o755).catch(() => undefined);
+  await chmod(join(destination, "bin", "capy.cjs"), 0o755);
   await writeJson(join(destination, "package.json"), launcherPackageManifest(version));
   await assertPackageDirectory(destination, true);
   return destination;

@@ -56,6 +56,8 @@ git push origin v0.1.0-alpha.4
 
 `.github/workflows/release.yml` validates version alignment, then builds and smoke-tests all four native targets on their corresponding GitHub-hosted runners. It rejects source maps, local checkout paths, and duplicate `share/share` directories while constructing package payloads.
 
+For macOS and Linux, `bin/capy` and `libexec/cbc-runtime` must both have mode `0755`. Each native runner creates the final npm `.tgz` before `actions/upload-artifact` runs, because artifact transport normalizes ordinary uploaded files to non-executable modes. The publish job transfers only those immutable tarballs, extracts the three POSIX packages, and fails unless both entry points are still executable.
+
 Once the native matrix passes, approval of the `npm-publish` Environment allows the workflow to:
 
 1. Publish the four platform tarballs with the `alpha` tag.

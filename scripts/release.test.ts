@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
@@ -14,6 +14,7 @@ import {
   assertAlphaVersion,
   assertArtifactSafety,
   assertReleaseVersions,
+  assertStandaloneArtifact,
   releaseTarget,
   releaseTargetNames,
   versionFromTag,
@@ -88,6 +89,20 @@ describe("Public Alpha release metadata", () => {
     expect(runtimePathFor("/tmp/capybara-code/bin/..", "linux-x64")).toBe("/tmp/capybara-code/libexec/cbc-runtime");
     expect(runtimePathFor("/tmp/capybara-code/bin/..", "windows-x64")).toBe("/tmp/capybara-code/libexec/cbc-runtime.exe");
   });
+
+  test("seals native npm packages before artifact transport can strip execute modes", async () => {
+    const workflow = await readFile(join(ROOT, ".github", "workflows", "release.yml"), "utf8");
+    const packStep = workflow.indexOf("Pack native npm tarball before artifact transfer");
+    const uploadStep = workflow.indexOf("Upload immutable npm tarball and native archive");
+
+    expect(packStep).toBeGreaterThan(-1);
+    expect(uploadStep).toBeGreaterThan(packStep);
+    expect(workflow).toContain("dist/npm-tarballs/");
+    expect(workflow).toContain('npm publish "${package_tarball}"');
+    expect(workflow).not.toContain('npm publish "./dist/npm/${package_dir}"');
+    expect(workflow).toContain('test -x "${verify_dir}/package/bin/capy"');
+    expect(workflow).toContain('test -x "${verify_dir}/package/libexec/cbc-runtime"');
+  });
 });
 
 describe("public capy launcher", () => {
@@ -142,6 +157,42 @@ describe("public capy launcher", () => {
 });
 
 describe("release artifact safety", () => {
+  test("requires both POSIX native entry points to be executable", async () => {
+    if (process.platform === "win32") return;
+
+    const directory = await mkdtemp(join(tmpdir(), "capy-release-modes-"));
+    const capy = join(directory, "bin", "capy");
+    const runtime = join(directory, "libexec", "cbc-runtime");
+    try {
+      await Promise.all([
+        mkdir(join(directory, "bin"), { recursive: true }),
+        mkdir(join(directory, "libexec"), { recursive: true }),
+        mkdir(join(directory, "share", "capybara"), { recursive: true }),
+      ]);
+      await Promise.all([
+        writeFile(capy, "capy", { mode: 0o644 }),
+        writeFile(runtime, "runtime", { mode: 0o644 }),
+        writeFile(
+          join(directory, "manifest.json"),
+          JSON.stringify({ productVersion: VERSION, target: "linux-x64", compiled: true }),
+          "utf8",
+        ),
+      ]);
+
+      await expect(assertStandaloneArtifact(directory, "linux-x64", VERSION)).rejects.toThrow(
+        "no execute permission",
+      );
+      await chmod(capy, 0o755);
+      await expect(assertStandaloneArtifact(directory, "linux-x64", VERSION)).rejects.toThrow(
+        "no execute permission",
+      );
+      await chmod(runtime, 0o755);
+      await expect(assertStandaloneArtifact(directory, "linux-x64", VERSION)).resolves.toBeUndefined();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test("rejects source maps, nested share/share, and local paths", async () => {
     const directory = await mkdtemp(join(tmpdir(), "capy-release-artifact-"));
     try {

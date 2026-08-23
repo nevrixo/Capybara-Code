@@ -189,6 +189,15 @@ async function main(argv: readonly string[]): Promise<number> {
     warnings.push("cbc-runtime is omitted: --no-runtime was passed, so normal workspace sessions cannot start");
   }
 
+  // POSIX executability is part of the artifact contract, not a property we can
+  // leave to whichever archiver or package transport happens to run later.
+  // Bun.write() does not promise to preserve the source mode when it copies the
+  // Rust sidecar, so normalize and verify both native entry points explicitly.
+  if (spec.exe === "") {
+    await makeExecutable(binPath);
+    if (options.includeRuntime) await makeExecutable(`${stage}/libexec/cbc-runtime`);
+  }
+
   // ---- share/capybara ----
   let skillCount = 0;
   for (const skill of builtinSkillFiles()) {
@@ -526,6 +535,15 @@ async function write(path: string, content: string): Promise<void> {
 
 async function copy(from: string, to: string): Promise<void> {
   await Bun.write(to, Bun.file(from));
+}
+
+async function makeExecutable(path: string): Promise<void> {
+  const { chmod, stat } = await import("node:fs/promises");
+  await chmod(path, 0o755);
+  const info = await stat(path);
+  if (process.platform !== "win32" && (info.mode & 0o111) === 0) {
+    throw new Error(`failed to make release executable: ${path}`);
+  }
 }
 
 async function mkdirp(path: string): Promise<void> {

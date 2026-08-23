@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-23T18:44:41.661Z",
+  "generatedAt": "2026-08-23T19:01:09.976Z",
   "git": {
-    "commit": "77df48fe7b29538ddf824cb13c9932547b05a5e7",
-    "dirty": false,
-    "dirtyHash": "ede5e540bccc136ec0456fddee7b7155a76d8d8f1513f7ecc47d0fe61793e84a"
+    "commit": "f1469491a2ab78aa2b89c7a34c689563adca24c3",
+    "dirty": true,
+    "dirtyHash": "ec522566c566641f06949053e82881afd52d78cbd695085088020bd7f7f05dc2"
   },
   "roots": [
     "apps",
@@ -2138,8 +2138,8 @@
     },
     {
       "path": "scripts/build-standalone.ts",
-      "bytes": 20176,
-      "sha256": "4241e6360ddbad0faf9b5bbc922f86a08f149bc8fac2607bc7f7d8ac2d4766d9"
+      "bytes": 20968,
+      "sha256": "2ecc6675a7510d56fdedb87451d457f455e11790e732082bd3257f530b4c5f65"
     },
     {
       "path": "scripts/check-no-codex-runtime.ts",
@@ -2173,13 +2173,13 @@
     },
     {
       "path": "scripts/package-npm.ts",
-      "bytes": 8134,
-      "sha256": "af7cab92623983551a6aa52e4f88a7b9e72728182a02d832eb8cf9875d3bb121"
+      "bytes": 8932,
+      "sha256": "4928e59be1fdefb8f3285d5120ef429aeb66a207a9f4f4f751c4736ce8a84f2c"
     },
     {
       "path": "scripts/release-common.ts",
-      "bytes": 8607,
-      "sha256": "a0ef0b5afeb903150d971f27d831d7542fdaa06c35db03a401be86531ebd1c02"
+      "bytes": 9145,
+      "sha256": "4d901e961428d1e4e27addadb66a8ea88cf98390dec3632e928bb36aed7dc8be"
     },
     {
       "path": "scripts/release-launcher.cjs",
@@ -2188,8 +2188,8 @@
     },
     {
       "path": "scripts/release.test.ts",
-      "bytes": 7604,
-      "sha256": "2029dbea8af7f696d98a44a5a78151bd75d67df40f46cb0cb6d51fdfa6e95264"
+      "bytes": 9914,
+      "sha256": "8cf1e0ba1d8740d81fc3d8614519b0b3e107b61c585923a30b0ff6bd24da714d"
     },
     {
       "path": "scripts/smoke-release.ts",
@@ -2212,5 +2212,5 @@
       "sha256": "c69dafb888ab2abc0a1a6bfe0602668806ec94b495ad4f228a4e0486f22ea7e4"
     }
   ],
-  "digest": "65990f7aca1a4e7bb9096a92f1f5f0ff07232cd4ca45f50540327e76e7218fc8"
+  "digest": "b56178b5bf2ca8bf9017a4ce941f56ff151a650f2e206fdefca8a158cf13260f"
 }

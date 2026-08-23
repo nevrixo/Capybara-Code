@@ -162,6 +162,14 @@ export async function requireFile(path: string): Promise<void> {
   if (info?.isFile() !== true) throw new Error(`required file is missing: ${path}`);
 }
 
+export async function requireExecutableFile(path: string): Promise<void> {
+  const info = await stat(path).catch(() => undefined);
+  if (info?.isFile() !== true) throw new Error(`required file is missing: ${path}`);
+  if ((info.mode & 0o111) === 0) {
+    throw new Error(`required executable has no execute permission: ${path}`);
+  }
+}
+
 export async function requireDirectory(path: string): Promise<void> {
   const info = await stat(path).catch(() => undefined);
   if (info?.isDirectory() !== true) throw new Error(`required directory is missing: ${path}`);
@@ -201,8 +209,13 @@ export async function assertStandaloneArtifact(
   version: string,
 ): Promise<void> {
   const target = releaseTarget(targetName);
-  await requireFile(join(directory, "bin", `capy${target.executableExtension}`));
-  await requireFile(join(directory, "libexec", `cbc-runtime${target.executableExtension}`));
+  const capy = join(directory, "bin", `capy${target.executableExtension}`);
+  const runtime = join(directory, "libexec", `cbc-runtime${target.executableExtension}`);
+  if (target.executableExtension === "") {
+    await Promise.all([requireExecutableFile(capy), requireExecutableFile(runtime)]);
+  } else {
+    await Promise.all([requireFile(capy), requireFile(runtime)]);
+  }
   await requireDirectory(join(directory, "share", "capybara"));
   await requireFile(join(directory, "manifest.json"));
 

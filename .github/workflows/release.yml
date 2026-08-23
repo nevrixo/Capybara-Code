@@ -55,12 +55,16 @@ jobs:
         include:
           - runner: windows-2025
             target: windows-x64
+            package_dir: capybara-code-win32-x64
           - runner: macos-15-intel
             target: darwin-x64
+            package_dir: capybara-code-darwin-x64
           - runner: macos-15
             target: darwin-arm64
+            package_dir: capybara-code-darwin-arm64
           - runner: ubuntu-24.04
             target: linux-x64
+            package_dir: capybara-code-linux-x64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
@@ -92,12 +96,19 @@ jobs:
       - name: Smoke test packaged binary and relative sidecar path
         run: bun run release:smoke -- --target ${{ matrix.target }}
 
-      - name: Upload native package and archive
+      - name: Pack native npm tarball before artifact transfer
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/npm-tarballs
+          npm pack "./dist/npm/${{ matrix.package_dir }}" --pack-destination dist/npm-tarballs
+
+      - name: Upload immutable npm tarball and native archive
         uses: actions/upload-artifact@v4
         with:
           name: native-${{ matrix.target }}
           path: |
-            dist/npm/
+            dist/npm-tarballs/
             dist/release/
           if-no-files-found: error
           retention-days: 7
@@ -141,22 +152,42 @@ jobs:
           merge-multiple: true
           path: dist
 
-      - name: Assemble root launcher package
-        run: bun run release:package -- --launcher --out dist
-
-      - name: Verify packed file lists
+      - name: Assemble and pack root launcher package
         shell: bash
         run: |
           set -euo pipefail
-          package_dirs=(
-            capybara-code-win32-x64
-            capybara-code-darwin-x64
-            capybara-code-darwin-arm64
-            capybara-code-linux-x64
-            capybara-code
+          bun run release:package -- --launcher --out dist
+          mkdir -p dist/npm-tarballs
+          npm pack ./dist/npm/capybara-code --pack-destination dist/npm-tarballs
+
+      - name: Verify npm tarballs and POSIX executable modes
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          package_tarballs=(
+            "./dist/npm-tarballs/ilbie-capybara-code-win32-x64-${version}.tgz"
+            "./dist/npm-tarballs/ilbie-capybara-code-darwin-x64-${version}.tgz"
+            "./dist/npm-tarballs/ilbie-capybara-code-darwin-arm64-${version}.tgz"
+            "./dist/npm-tarballs/ilbie-capybara-code-linux-x64-${version}.tgz"
+            "./dist/npm-tarballs/capybara-code-${version}.tgz"
           )
-          for package_dir in "${package_dirs[@]}"; do
-            npm pack --dry-run "./dist/npm/${package_dir}"
+          for package_tarball in "${package_tarballs[@]}"; do
+            test -f "${package_tarball}"
+            npm publish "${package_tarball}" --dry-run --tag alpha --access public
+          done
+
+          posix_tarballs=(
+            "./dist/npm-tarballs/ilbie-capybara-code-darwin-x64-${version}.tgz"
+            "./dist/npm-tarballs/ilbie-capybara-code-darwin-arm64-${version}.tgz"
+            "./dist/npm-tarballs/ilbie-capybara-code-linux-x64-${version}.tgz"
+          )
+          for package_tarball in "${posix_tarballs[@]}"; do
+            verify_dir="$(mktemp -d)"
+            tar -xzf "${package_tarball}" -C "${verify_dir}"
+            test -x "${verify_dir}/package/bin/capy"
+            test -x "${verify_dir}/package/libexec/cbc-runtime"
+            rm -rf "${verify_dir}"
           done
 
       - name: Publish v0.1.0-alpha.3 with protected bootstrap token
@@ -167,15 +198,16 @@ jobs:
         run: |
           set -euo pipefail
           test -n "${NODE_AUTH_TOKEN:-}" || { echo "NPM_BOOTSTRAP_TOKEN is required for alpha.3"; exit 1; }
-          package_dirs=(
-            capybara-code-win32-x64
-            capybara-code-darwin-x64
-            capybara-code-darwin-arm64
-            capybara-code-linux-x64
-            capybara-code
+          version="${GITHUB_REF_NAME#v}"
+          package_tarballs=(
+            "./dist/npm-tarballs/ilbie-capybara-code-win32-x64-${version}.tgz"
+            "./dist/npm-tarballs/ilbie-capybara-code-darwin-x64-${version}.tgz"
+            "./dist/npm-tarballs/ilbie-capybara-code-darwin-arm64-${version}.tgz"
+            "./dist/npm-tarballs/ilbie-capybara-code-linux-x64-${version}.tgz"
+            "./dist/npm-tarballs/capybara-code-${version}.tgz"
           )
-          for package_dir in "${package_dirs[@]}"; do
-            npm publish "./dist/npm/${package_dir}" --tag alpha --access public
+          for package_tarball in "${package_tarballs[@]}"; do
+            npm publish "${package_tarball}" --tag alpha --access public
           done
 
       - name: Publish later alphas with npm trusted publishing
@@ -183,15 +215,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          package_dirs=(
-            capybara-code-win32-x64
-            capybara-code-darwin-x64
-            capybara-code-darwin-arm64
-            capybara-code-linux-x64
-            capybara-code
+          version="${GITHUB_REF_NAME#v}"
+          package_tarballs=(
+            "./dist/npm-tarballs/ilbie-capybara-code-win32-x64-${version}.tgz"
+            "./dist/npm-tarballs/ilbie-capybara-code-darwin-x64-${version}.tgz"
+            "./dist/npm-tarballs/ilbie-capybara-code-darwin-arm64-${version}.tgz"
+            "./dist/npm-tarballs/ilbie-capybara-code-linux-x64-${version}.tgz"
+            "./dist/npm-tarballs/capybara-code-${version}.tgz"
           )
-          for package_dir in "${package_dirs[@]}"; do
-            npm publish "./dist/npm/${package_dir}" --tag alpha --access public --provenance
+          for package_tarball in "${package_tarballs[@]}"; do
+            npm publish "${package_tarball}" --tag alpha --access public --provenance
           done
 
       - name: Write GitHub Release SHA-256 manifest
