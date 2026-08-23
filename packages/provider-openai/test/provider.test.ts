@@ -121,6 +121,7 @@ describe("hosted capability profiles", () => {
       expect(snapshot.contextWindow).toBe(400_000);
       expect(snapshot.maxOutputTokens).toBe(128_000);
       expect(inputContextBudget(snapshotDescriptor(snapshot))).toBe(272_000);
+      expect(snapshot.reasoningModes).toEqual(["standard"]);
     }
 
     expect(provider.capabilitySnapshot("gpt-5.6")!.native.webSearch).toBe("supported");
@@ -148,6 +149,21 @@ describe("ChatGPT/Codex routing profile", () => {
       expect(inputContextBudget(snapshotDescriptor(decision.capability))).toBe(272_000);
       expect(decision.context.allowed).toBe(false);
     }
+  });
+
+  test("downgrades a pro child profile before it reaches the account backend", () => {
+    const decision = new InferenceUtilityController({
+      capabilityResolver: chatGptCodexCapability,
+    }).decide({
+      intent: "review",
+      explicitModel: "gpt-5.6-sol",
+      explicitMode: "pro",
+      explicitEffort: "high",
+      contextTokens: 1_000,
+    });
+
+    expect(decision.mode).toBe("standard");
+    expect(decision.effort).toBe("high");
   });
 });
 
@@ -1219,6 +1235,20 @@ describe("request body policy (§10.6, §10.14)", () => {
     expect(reasoning.context).toBe("all_turns");
     expect(reasoning.mode).toBe("pro");
     expect(reasoning.summary).toBe("auto");
+  });
+
+  test("omits pro mode for the ChatGPT account backend", async () => {
+    const body = await captureBody(
+      request({
+        model: "gpt-5.6-sol",
+        reasoning: { mode: "pro", effort: "high", summary: "auto", context: "current_turn" },
+      }),
+      { chatGpt: { accountId: "acct" } },
+    );
+
+    const reasoning = body.reasoning as Record<string, unknown>;
+    expect(reasoning.mode).toBeUndefined();
+    expect(reasoning.effort).toBe("high");
   });
 
   test("omits reasoning summary for a model that does not support it (§10.6)", async () => {

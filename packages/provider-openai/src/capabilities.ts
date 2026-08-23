@@ -289,8 +289,13 @@ export function bundledCapability(modelIdOrAlias: string): ModelCapabilitySnapsh
 /**
  * Resolve the capability envelope used by a ChatGPT/Codex account login.
  *
- * The model family keeps its Sol/Terra/Luna-specific reasoning features, while
- * all three variants share the account backend's 400K context window and 128K
+ * The account backend shares the public models' effort ladder, but it does not
+ * expose the Responses API's `reasoning.mode` switch. Keep that distinction in
+ * the capability snapshot so profiles such as `review` are downgraded before a
+ * child request is sent instead of failing once and succeeding only after the
+ * parent continues in standard mode.
+ *
+ * All three variants share the account backend's 400K context window and 128K
  * output ceiling. The explicit native copy matters: this is a context-profile
  * override, not an unverified provider capability observation.
  */
@@ -305,6 +310,7 @@ export function chatGptCodexCapability(
       snapshotVersion: [bundled.snapshotVersion, "chatgpt-codex"].join("-"),
       contextWindow: CHATGPT_CODEX_CONTEXT_WINDOW,
       maxOutputTokens: CHATGPT_CODEX_MAX_OUTPUT_TOKENS,
+      reasoningModes: ["standard"],
       native: bundled.native,
       provenanceSources: ["bundled", "chatgpt-codex-account"],
       observedAt: CHATGPT_CODEX_PROFILE_OBSERVED_AT,
@@ -533,4 +539,3 @@ function digestOf(value: unknown): string {
   });
   return createHash("sha256").update(text).digest("hex");
 }
-

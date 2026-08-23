@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-23T20:27:09.480Z",
+  "generatedAt": "2026-08-23T21:23:18.227Z",
   "git": {
-    "commit": "b481a8f5d31bf8312ee996706f466d27f12c4668",
+    "commit": "a21b030d18b5baf052bc3ed08d3ad008eb361c9e",
     "dirty": true,
-    "dirtyHash": "ca563215623e80ebca424153285ba339c23d934cc0f144f2bb1825e1e5404b32"
+    "dirtyHash": "69072c3cf4b0023c7dd45d58f4b81829cac96b0d176d5c1eaf9ef384e1c0fb13"
   },
   "roots": [
     "apps",
@@ -1628,8 +1628,8 @@
     },
     {
       "path": "packages/provider-openai/src/capabilities.ts",
-      "bytes": 22702,
-      "sha256": "0cd29483f7f554d8605dcf7ce69c50a47267549fa13c44682cc16ce2a71369d1"
+      "bytes": 23017,
+      "sha256": "1871c018b4d86df6916eedcf13d1d81204948993eaa52845a6f412f633ce1bd4"
     },
     {
       "path": "packages/provider-openai/src/capability-refresh.ts",
@@ -1658,8 +1658,8 @@
     },
     {
       "path": "packages/provider-openai/src/openai.ts",
-      "bytes": 60961,
-      "sha256": "f18b6a989cab0bbc2975dba8d646ffdbf51acd83c8b49bd3b0ac390a6268d84c"
+      "bytes": 61138,
+      "sha256": "4444ce5ac153454a4938bbe12bb4c62140d8931e602d91e101e8d8fbc996b5a7"
     },
     {
       "path": "packages/provider-openai/src/policy.ts",
@@ -1693,8 +1693,8 @@
     },
     {
       "path": "packages/provider-openai/test/provider.test.ts",
-      "bytes": 70850,
-      "sha256": "daedff3346112f80ee0e901e69488f498b219288270e8da142a96c237c8e3b7d"
+      "bytes": 71831,
+      "sha256": "3d9308d201778ec0379b9736235a6b3bf3b1c0399efc737d280187baa18acc6f"
     },
     {
       "path": "packages/provider-openai/test/service-tier.test.ts",
@@ -2217,5 +2217,5 @@
       "sha256": "c69dafb888ab2abc0a1a6bfe0602668806ec94b495ad4f228a4e0486f22ea7e4"
     }
   ],
-  "digest": "2267f4bddc48b2f0fb575108e1c1b02e713fd7122ce65c058d72ed9cab1d594f"
+  "digest": "5f80e6d04a7c1011ea2d4fc4707dee68e07f38cdc58ddddec6d6eadd049fda43"
 }

@@ -446,7 +446,10 @@ export class OpenAiResponsesProvider implements ModelProvider {
       effort: request.reasoning.effort,
       context: request.reasoning.context,
     };
-    if (request.reasoning.mode === "pro" && (model === undefined || supportsField(model, "proMode"))) reasoning.mode = "pro";
+    const proModeSupported = this.#options.chatGpt === undefined
+      ? model === undefined || supportsField(model, "proMode")
+      : this.capabilitySnapshot(request.model)?.reasoningModes.includes("pro") === true;
+    if (request.reasoning.mode === "pro" && proModeSupported) reasoning.mode = "pro";
     // `none` is our provider-neutral sentinel for not requesting a reasoning
     // summary. The Responses API accepts only summary detail levels, so forward
     // it by omitting the field rather than sending an invalid literal.
