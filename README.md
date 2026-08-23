@@ -1,129 +1,102 @@
 <p align="center">
-  <img src="logo.png" alt="Capybara Code Logo" width="600"/>
+  <img src="logo.png" alt="Capybara Code logo" width="360" />
 </p>
 
 <h1 align="center">Capybara Code</h1>
 
 <p align="center">
-  <b>High-performance AI coding agent & harness optimized for GPT models.</b>
+  An AI coding agent and harness optimized for GPT models.
 </p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/capybara-code"><img src="https://img.shields.io/npm/v/capybara-code/alpha.svg" alt="npm version"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Status-Public%20Alpha-orange.svg" alt="Status"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Runtime-Node%20%7C%20Bun%20%7C%20Rust-black.svg" alt="Runtime"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="Apache 2.0 license"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Status-Public%20Alpha-orange.svg" alt="Public alpha"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Runtime-Node%20%7C%20Bun%20%7C%20Rust-black.svg" alt="Node, Bun, and Rust"></a>
 </p>
 
----
-
 > [!WARNING]
-> **Public Alpha**: Capybara Code is currently in public alpha (`v0.1.0-alpha.1`). It is usable but under active development and not yet dependable for mission-critical production workflows.
+> Capybara Code is in public alpha. It is actively developed and may not yet be suitable for mission-critical production workflows.
 
 > [!NOTE]
-> **A Note from the Developer**:
-> Thank you so much for visiting this repository!
-> 
-> Capybara Code is actively being built by a solo developer (assisted by AI coding tools). While I originally planned to polish the project further before opening it up, I decided to release an early **Public Alpha** so people who wanted to try it out could do so, and to continue developing openly with feedback.
-> 
-> Because this is a one-person effort, there are natural limits to how fast features and fixes can be shipped. **Issues, feedback, and pull requests are always warmly welcome!** Your support and contributions make a huge difference.
+> This is a solo-maintained project. Issues, feedback, and pull requests are very welcome.
 
----
+## What it does
 
-## Overview
+Capybara Code pairs GPT models with a purpose-built coding harness to improve reliability, execution precision, and development speed.
 
-Capybara Code is an AI coding agent designed to provide an optimal harness and toolset engineered specifically for GPT models.
+- Terminal UI for interactive agent work
+- Isolated Rust execution sidecar
+- Transactional file mutations
+- Sub-agent orchestration
+- Model Context Protocol (MCP) integrations
 
-While base model capabilities are essential, Capybara Code maximizes agent reliability, execution precision, and developer speed through harness engineering—combining a rich Terminal UI, an isolated Rust execution sidecar, transactional file mutations, sub-agent orchestration, and Model Context Protocol (MCP) integrations.
+## Install
 
----
-
-## Installation
-
-Capybara Code is distributed as a standalone binary package via npm and bun.
+Install the global `capy` command with either npm or Bun:
 
 ```bash
-# Using npm
+# npm
 npm install -g capybara-code@alpha
 
-# Using bun
+# Bun
 bun install -g capybara-code@alpha
 ```
 
-### Supported Platforms
+### Supported platforms
 
 - Windows x64
 - macOS x64 and Apple Silicon (ARM64)
 - Ubuntu and WSL Linux x64 with glibc
 
-Linux ARM64 and musl-based distributions are outside this first Public Alpha.
+Linux ARM64 and musl-based distributions are not supported in this public alpha.
 
 ### Installation notes
 
-Use one global package manager for `capy` at a time so npm and Bun do not install competing shims. Upgrade with that same package manager. GitHub Release archives include `SHA256SUMS.txt` for manual checksum verification.
+- Use either npm or Bun globally for `capy`, not both, so their shims do not conflict.
+- Upgrade with the same package manager used for installation.
+- GitHub Release archives include `SHA256SUMS.txt` for manual checksum verification.
+- In WSL, install and run with native Linux `node`, `npm`, and `bun` rather than Windows executables under `/mnt/c/...`.
 
-Inside WSL, use native Linux `node`, `npm`, and `bun` for installation and testing. They must resolve to Linux paths rather than `/mnt/c/...` Windows executables.
+## Get started
 
----
-
-## Quick Start
-
-Once installed globally, launch Capybara Code in your workspace:
+Open a terminal in your workspace and run:
 
 ```bash
 capy
 ```
 
-## CLI and settings
-
-The public CLI intentionally stays small:
-
-```text
-capy [prompt...]
-capy run [prompt...]
-capy auth login [--device]
-capy auth api [--stdin]
-capy auth status
-capy auth logout [--all]
-capy model refresh
-capy config set <path> <value>
-capy version
-capy help [topic]
-```
-
-Use `/setting` inside the TUI for supported interactive settings. For scripting,
-`capy config set <path> <value>` writes one user setting. Capybara Code creates its
-single global `config.toml` on first use and never reads project-local Capybara
-configuration files. MCP and LSP service definitions remain visible in that global
-file; missing external executables are reported but never installed automatically.
-
-Root agent turns have no configurable maximum step, tool-call, or wall-time ceiling;
-they continue until completion or explicit cancellation. Subagent budgets and
-process/protocol resource limits remain safety boundaries.
-
-## Developing from source
-
-Keep the published `capy` command separate from the checked-out source tree. Register the source CLI as `capy-dev` with native Bun on each operating system where you develop:
+You can also start with a prompt:
 
 ```bash
-bun install
-bun run dev:link
-capy-dev version
+capy "Explain the structure of this project"
 ```
 
-Remove that development registration when needed:
+## Common commands
 
-```bash
-bun run dev:unlink
-```
+| Task | Command |
+| --- | --- |
+| Start the interactive UI | `capy` |
+| Start with a prompt | `capy [prompt...]` |
+| Run non-interactively | `capy run [prompt...]` |
+| Sign in | `capy auth login [--device]` |
+| Authenticate with an API key | `capy auth api [--stdin]` |
+| Check or end a session | `capy auth status` · `capy auth logout [--all]` |
+| Refresh available models | `capy model refresh` |
+| Update a setting | `capy config set <path> <value>` |
+| Show help or version | `capy help [topic]` · `capy version` |
 
-On WSL, run the same commands from the Linux checkout and Linux Bun installation, not through Windows Bun or a Windows-mounted source launcher.
+## Settings and runtime behavior
 
----
+Use `/setting` in the TUI to update interactive settings, or use `capy config set <path> <value>` in scripts.
 
-## Engineering Verification
+- Capybara Code creates a single global `config.toml` on first use; it does not read project-local Capybara configuration files.
+- MCP and LSP service definitions stay visible in that file. Missing external executables are reported but never installed automatically.
+- Root agent turns run until completion or cancellation. Sub-agent budgets and process/protocol resource limits remain in place as safety boundaries.
 
-The repository includes a versioned performance and quality program for validating harness changes without lowering model, permission, sandbox, or verification guarantees.
+## Verification
+
+If you are contributing to the repository, run the verification suite before submitting changes:
 
 ```bash
 bun run typecheck
@@ -132,27 +105,13 @@ bun run test:rust
 bun run build
 ```
 
----
+## Benchmarks
 
-## Performance program
-
-The performance work is measured and released through a fixed, capability-bound
-CBC Bench cohort. The [benchmarks/cbc-bench/README.md](benchmarks/cbc-bench/README.md)
-documents commands, paired artifacts, and the statistical gate.
-
-Design notes and release runbooks are optional documentation. They are not part
-of the runtime or verification dependency graph, so they may be removed from a
-checkout without changing `bun run verify` or release artifact identity.
+Performance work is measured through the capability-bound CBC Bench cohort. See the [CBC Bench guide](benchmarks/cbc-bench/README.md) for commands, artifacts, and the statistical release gate.
 
 ## Contributing
 
-We warmly welcome community feedback and contributions! As a solo-maintained project, community input is invaluable:
-
-- **Issues & Bug Reports**: Found a bug or edge case? Open an issue with reproduction details.
-- **Pull Requests**: Bug fixes, performance improvements, and documentation enhancements are greatly appreciated.
-- **Feature Requests & Ideas**: Share your thoughts on harness design, tools, or workflow improvements.
-
----
+Contributions are welcome. Please open an issue for bugs or feature ideas, and submit pull requests for fixes, performance improvements, or documentation updates.
 
 ## License
 
