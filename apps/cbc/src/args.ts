@@ -11,7 +11,7 @@ import { usageError } from "./exit.ts";
 
 export type Command =
   | { readonly kind: "interactive"; readonly prompt?: string }
-  | { readonly kind: "run"; readonly prompt?: string }
+  | { readonly kind: "run"; readonly prompt?: string; readonly resultFile?: string }
   | { readonly kind: "auth"; readonly sub: "login"; readonly device: boolean }
   | { readonly kind: "auth"; readonly sub: "api"; readonly fromStdin: boolean }
   | { readonly kind: "auth"; readonly sub: "status" }
@@ -169,12 +169,19 @@ export function parseArgs(argv: readonly string[]): ParseResult {
     return { command: buildSubcommand(spec.name, sub.name, operands, flags) };
   }
 
-  validateFlags(tokens.rawFlags, spec.flags ?? [], contextLabel);
+  const flags = validateFlags(tokens.rawFlags, spec.flags ?? [], contextLabel);
   validatePositionals(rest, spec, contextLabel);
   switch (spec.name) {
     case "run": {
       const prompt = rest.join(" ").trim();
-      return { command: { kind: "run", ...(prompt.length > 0 ? { prompt } : {}) } };
+      const resultFile = flags.get("--result-file")?.value;
+      return {
+        command: {
+          kind: "run",
+          ...(prompt.length > 0 ? { prompt } : {}),
+          ...(typeof resultFile === "string" && resultFile.trim().length > 0 ? { resultFile } : {}),
+        },
+      };
     }
     case "version":
       return { command: { kind: "version" } };

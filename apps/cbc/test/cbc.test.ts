@@ -284,10 +284,15 @@ describe("parseArgs", () => {
     });
   });
 
-  test("run accepts only a positional prompt", () => {
+  test("run accepts a positional prompt and the integration result sink", () => {
     expect(parseArgs(["run", "Review", "the", "diff"]).command).toEqual({
       kind: "run",
       prompt: "Review the diff",
+    });
+    expect(parseArgs(["run", "--result-file", "/logs/agent/result.json", "Review", "the", "diff"]).command).toEqual({
+      kind: "run",
+      prompt: "Review the diff",
+      resultFile: "/logs/agent/result.json",
     });
   });
 

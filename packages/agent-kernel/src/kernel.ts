@@ -4254,6 +4254,19 @@ export function renderReflectionPrompt(analysis: ReflectionAnalysis): string {
     );
   }
   if (analysis.implicatedPaths.length > 0) {
+  /** Snapshot truthful run evidence when the outer command catches an exception. */
+  snapshotCompletionReport(summary?: string): CompletionReport {
+    const text = summary?.trim();
+    return {
+      status: "failed",
+      summary: text && text.length > 0 ? text : this.#lastFailureSummary ?? "The turn failed.",
+      changedFiles: this.#changedFileList(),
+      verification: this.#verification.map((record) => ({ ...record })),
+      delegatedTasks: this.#delegated.map((task) => ({ ...task })),
+      risks: [...this.#risks],
+    };
+  }
+
     lines.push(`- paths named by the failure: ${analysis.implicatedPaths.join(", ")}`);
   }
 

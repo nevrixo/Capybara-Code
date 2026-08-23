@@ -43,6 +43,7 @@ async function dispatch(context: CommandContext, command: Command): Promise<Comm
     case "run":
       return await run(context, {
         ...(command.prompt !== undefined ? { prompt: command.prompt } : {}),
+        ...(command.resultFile !== undefined ? { resultFile: command.resultFile } : {}),
       });
 
     case "auth":

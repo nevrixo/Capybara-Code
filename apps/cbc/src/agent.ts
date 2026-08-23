@@ -3278,6 +3278,11 @@ export class AgentSession {
   /** The turn and agent an out-of-band event belongs to. */
   #currentScope(): { turnId?: string; agentId: string; callerId: string; taskEpochId?: string; workspaceIdentityDigest?: string } {
     const turnId = this.recorder.model.currentTurnId;
+  /** Expose the kernel's durable change/verification snapshot to headless callers. */
+  snapshotCompletionReport(summary?: string) {
+    return this.kernel.snapshotCompletionReport(summary);
+  }
+
     return {
       ...(turnId !== undefined ? { turnId } : {}),
       agentId: "root",

@@ -37,6 +37,7 @@ export const COMMAND_REGISTRY: readonly CommandSpec[] = [
   {
     name: "run",
     summary: "run headlessly",
+    flags: [{ name: "--result-file", kind: "value", summary: "write a machine-readable integration result" }],
     positionals: [{ label: "[prompt...]", required: false, variadic: true }],
   },
   {
