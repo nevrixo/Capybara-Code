@@ -167,7 +167,6 @@ export class SubagentBridge {
       parentContextTokens: options.config.model.softContextTokens,
       parentDepth: 0,
       parentAgentId: "root",
-      maxChildrenPerTurn: options.config.subagents.maxPerTurn,
       maxConcurrent: options.config.subagents.maxConcurrent,
       enableContextReservations: options.config.perf.subagentContextReservations !== false,
       ...(options.now !== undefined ? { now: options.now } : {}),

@@ -193,7 +193,6 @@ export interface PerformanceConfig {
 export interface SubagentsConfig {
   maxConcurrent: number;
   maxDepth: number;
-  maxPerTurn: number;
   writerPolicy: "single-lease";
 }
 
@@ -405,7 +404,6 @@ export function defaultConfig(): CbcConfig {
     subagents: {
       maxConcurrent: 3,
       maxDepth: 1,
-      maxPerTurn: 3,
       writerPolicy: "single-lease",
     },
     tools: {
@@ -634,11 +632,12 @@ export function configEnumValues(key: string): readonly string[] | undefined {
 }
 
 /** Deprecated keys and their replacements (§21.7 migration message). */
-const REMOVED = new Set([
-  "agent.maxSteps",
-  "agent.maxToolCalls",
-  "agent.maxWallTimeMinutes",
-]);
+const REMOVED: Readonly<Record<string, string>> = {
+  "agent.maxSteps": "root turns now run until completion or cancellation",
+  "agent.maxToolCalls": "root turns now run until completion or cancellation",
+  "agent.maxWallTimeMinutes": "root turns now run until completion or cancellation",
+  "subagents.maxPerTurn": "child registration is now unbounded per turn and excess parallel work is queued",
+};
 
 const DEPRECATED: Record<string, string> = {
   "agent.mode": "agent.permissionMode",
@@ -708,12 +707,13 @@ export function mergeConfig(
         continue;
       }
 
-      if (REMOVED.has(path)) {
+      const removedReason = REMOVED[path];
+      if (removedReason !== undefined) {
         issues.push({
           severity: "warning",
           path,
           source: layer.source,
-          message: `'${path}' was removed; root turns now run until completion or cancellation`,
+          message: `'${path}' was removed; ${removedReason}`,
         });
         continue;
       }
@@ -1085,7 +1085,6 @@ const INTEGER_CONSTRAINTS: Readonly<Record<string, IntegerConstraint>> = {
   "agent.toolRecovery.maxAttempts": { minimum: 1, maximum: 5 },
   "subagents.maxConcurrent": { minimum: 1, maximum: 8 },
   "subagents.maxDepth": { minimum: 0, maximum: 1 },
-  "subagents.maxPerTurn": { minimum: 1, maximum: 3 },
   "tools.activationLimit": { minimum: 1 },
   "tools.inlineOutputBytes": { minimum: 1_024 },
   "tools.inlineOutputLines": { minimum: 10 },
@@ -1150,9 +1149,7 @@ function validateSemantics(
         severity: "error",
         path,
         source: sourceOf(path),
-        message: path === "subagents.maxPerTurn"
-          ? "subagents must allow a finite integer from one to three children per turn"
-          : `'${path}' must be a finite integer ${expectedRange}`,
+        message: `'${path}' must be a finite integer ${expectedRange}`,
       });
     }
   }
@@ -1253,14 +1250,6 @@ function validateSemantics(
       path: "subagents.maxDepth",
       source: sourceOf("subagents.maxDepth"),
       message: "delegation depth is capped at 1",
-    });
-  }
-  if (config.subagents.maxPerTurn > 3) {
-    issues.push({
-      severity: "error",
-      path: "subagents.maxPerTurn",
-      source: sourceOf("subagents.maxPerTurn"),
-      message: "subagents are capped at three children per turn",
     });
   }
   if (config.subagents.maxConcurrent < 1) {

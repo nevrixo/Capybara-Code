@@ -590,11 +590,11 @@
       "required": [
         "maxConcurrent",
         "maxDepth",
-        "maxPerTurn",
         "writerPolicy"
       ],
       "properties": {
         "maxConcurrent": {
+          "description": "Maximum provider-running children. Additional children wait in a FIFO queue.",
           "type": "integer",
           "minimum": 1,
           "maximum": 8,
@@ -606,12 +606,6 @@
           "minimum": 0,
           "maximum": 1,
           "default": 1
-        },
-        "maxPerTurn": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 3,
-          "default": 3
         },
         "writerPolicy": {
           "description": "P6 and 15.8: one writer at a time. No other value is supported.",

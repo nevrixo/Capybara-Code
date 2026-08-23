@@ -196,8 +196,7 @@ describe("defaults (§21.4)", () => {
 
     expect(config.subagents.maxConcurrent).toBe(3);
     expect(config.subagents.maxDepth).toBe(1);
-    // §15.7: three children per turn (P1-04 resolved the old 5-vs-3 mismatch).
-    expect(config.subagents.maxPerTurn).toBe(3);
+    expect("maxPerTurn" in config.subagents).toBe(false);
     expect(config.tools.activationLimit).toBe(10);
     // §23.5 / D-014: telemetry is off by default.
     expect(config.privacy.telemetry).toBe(false);
@@ -630,7 +629,8 @@ describe("config key status (P1-04)", () => {
 
   test("a wired key names its consumer", () => {
     expect(configKeyInfo("sandbox.level")?.consumer).toContain("runtime");
-    expect(configKeyInfo("subagents.maxPerTurn")?.consumer).toContain("scheduler");
+    expect(configKeyInfo("subagents.maxConcurrent")?.consumer).toContain("scheduler");
+    expect(configKeyInfo("subagents.maxPerTurn")?.status).toBe("deprecated");
   });
 
   test("setting an experimental key warns that it is not applied", () => {
@@ -647,11 +647,12 @@ describe("config key status (P1-04)", () => {
     expect(merged.issues.some((i) => i.path === "model.default")).toBe(false);
   });
 
-  test("§15.7 caps subagents.maxPerTurn at three", () => {
-    const merged = mergeConfig([{ source: "user", values: { "subagents.maxPerTurn": 5 } }]);
+  test("removed subagents.maxPerTurn warns and is ignored", () => {
+    const merged = mergeConfig([{ source: "user", values: { "subagents.maxPerTurn": 3 } }]);
     const issue = merged.issues.find((i) => i.path === "subagents.maxPerTurn");
-    expect(issue?.severity).toBe("error");
-    expect(issue?.message).toContain("three children per turn");
+    expect(issue?.severity).toBe("warning");
+    expect(issue?.message).toContain("was removed");
+    expect("maxPerTurn" in merged.config.subagents).toBe(false);
   });
 });
 

@@ -268,57 +268,132 @@ describe("scheduler limits (§15.7)", () => {
     }
   });
 
-  test("the per-turn allowance is enforced and resets on the next turn", async () => {
+  test("child registration is not capped per turn, including for legacy options", async () => {
     const { scheduler: s } = scheduler(okRunner, { maxChildrenPerTurn: 2 });
     s.beginTurn();
-    s.spawn({ role: "explore", task: exploreTask() });
-    s.spawn({ role: "planner", task: buildTask({ title: "P", goal: "Plan the migration in ordered steps." }, "planner") });
-    expect(() => s.spawn({ role: "reviewer", task: exploreTask() })).toThrow(SpawnRejected);
+    for (let index = 0; index < 6; index += 1) {
+      expect(() => s.spawn({ role: "explore", task: exploreTask() })).not.toThrow();
+    }
 
     await s.settleAll();
+    expect(s.list()).toHaveLength(6);
     s.beginTurn();
     expect(() => s.spawn({ role: "reviewer", task: exploreTask() })).not.toThrow();
+    await s.settleAll();
   });
 
-  test("concurrency is capped while children are live", async () => {
-    let release: (() => void) | undefined;
-    const blocked = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const slowRunner: ChildRunner = async () => {
-      await blocked;
+  test("concurrency overflow waits in FIFO order instead of rejecting spawns", async () => {
+    const started: string[] = [];
+    const releases = new Map<string, () => void>();
+    let active = 0;
+    let peak = 0;
+    const slowRunner: ChildRunner = async ({ instance }) => {
+      started.push(instance.id);
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise<void>((resolve) => releases.set(instance.id, resolve));
+      active -= 1;
       return emptyChildResult("completed", "done");
     };
 
-    const { scheduler: s } = scheduler(slowRunner, { maxConcurrent: 1 });
-    s.spawn({ role: "explore", task: exploreTask() });
-    expect(() => s.spawn({ role: "reviewer", task: exploreTask() })).toThrow(SpawnRejected);
+    const { scheduler: s, events } = scheduler(slowRunner, { maxConcurrent: 1 });
+    const first = s.spawn({ role: "explore", task: exploreTask() });
+    const second = s.spawn({ role: "reviewer", task: exploreTask() });
+    const third = s.spawn({ role: "test", task: exploreTask() });
+    await Promise.resolve();
 
-    release?.();
+    expect(started).toEqual([first.id]);
+    expect(s.runningCount()).toBe(1);
+    expect(second.instance.state).toBe("queued");
+    expect(third.instance.state).toBe("queued");
+    expect(events.some((event) => JSON.stringify(event.payload).includes("provider slot"))).toBe(true);
+
+    releases.get(first.id)?.();
+    await s.await(first.id);
+    await Promise.resolve();
+    expect(started).toEqual([first.id, second.id]);
+
+    releases.get(second.id)?.();
+    await s.await(second.id);
+    await Promise.resolve();
+    expect(started).toEqual([first.id, second.id, third.id]);
+
+    releases.get(third.id)?.();
     await s.settleAll();
-    // Once the first child is terminal the slot frees up.
-    expect(() => s.spawn({ role: "reviewer", task: exploreTask() })).not.toThrow();
+    expect(peak).toBe(1);
+    expect(s.runningCount()).toBe(0);
   });
 
-  test("children share half the parent's context budget (§15.7)", async () => {
+  test("cancelling a queued child removes it without leaking a provider slot", async () => {
+    const started: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const runner: ChildRunner = async ({ instance }) => {
+      started.push(instance.id);
+      if (started.length === 1) {
+        await new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
+      }
+      return emptyChildResult("completed", "done");
+    };
+
+    const { scheduler: s } = scheduler(runner, { maxConcurrent: 1 });
+    const first = s.spawn({ role: "explore", task: exploreTask() });
+    const queued = s.spawn({ role: "reviewer", task: exploreTask() });
+    expect(queued.instance.state).toBe("queued");
+
+    expect((await s.cancel(queued.id, "no longer needed"))?.status).toBe("cancelled");
+    expect(started).toEqual([first.id]);
+    expect(s.runningCount()).toBe(1);
+
+    releaseFirst?.();
+    await s.await(first.id);
+    const replacement = s.spawn({ role: "test", task: exploreTask() });
+    expect((await s.await(replacement.id))?.status).toBe("completed");
+    expect(started).toEqual([first.id, replacement.id]);
+    expect(s.runningCount()).toBe(0);
+  });
+
+  test("direct embedders cannot exceed the eight-runner safety ceiling", async () => {
+    const releases = new Map<string, () => void>();
+    const runner: ChildRunner = async ({ instance }) => {
+      await new Promise<void>((resolve) => releases.set(instance.id, resolve));
+      return emptyChildResult("completed", "done");
+    };
+    const { scheduler: s } = scheduler(runner, { maxConcurrent: 99 });
+    const handles = Array.from({ length: 9 }, () =>
+      s.spawn({ role: "explore", task: exploreTask() })
+    );
+
+    expect(s.runningCount()).toBe(SUBAGENT_LIMITS.maxConcurrent);
+    expect(handles[8]?.instance.state).toBe("queued");
+    for (const handle of handles.slice(0, 8)) releases.get(handle.id)?.();
+    await Promise.all(handles.slice(0, 8).map((handle) => s.await(handle.id)));
+    await Promise.resolve();
+
+    const ninth = handles[8];
+    expect(ninth).toBeDefined();
+    if (ninth !== undefined) {
+      releases.get(ninth.id)?.();
+      expect((await s.await(ninth.id))?.status).toBe("completed");
+    }
+    expect(s.runningCount()).toBe(0);
+  });
+
+  test("aggregate context is telemetry and does not reject additional children", async () => {
     const { scheduler: s } = scheduler(okRunner, { parentContextTokens: 96_000 });
     expect(s.aggregateContextBudget()).toBe(48_000);
 
-    // An unspent budget admits children — the ceiling is per-child, not a
-    // reservation, so §15.7's three concurrent children stays reachable.
     const first = s.spawn({ role: "explore", task: exploreTask() });
-    expect(() => s.spawn({ role: "planner", task: buildTask({ title: "P", goal: "Plan the migration in ordered steps." }, "planner") })).not.toThrow();
     await s.settleAll();
-
-    // Once the shared purse is spent, no further child is admitted.
     s.recordChildUsage(first.id, 48_000);
     expect(s.consumedContextTokens).toBe(48_000);
-    try {
-      s.spawn({ role: "reviewer", task: exploreTask() });
-      throw new Error("expected a context budget rejection");
-    } catch (error) {
-      expect((error as SpawnRejected).code).toBe("CONTEXT_BUDGET");
+    expect(s.availableContextTokens).toBe(0);
+
+    for (let index = 0; index < 6; index += 1) {
+      expect(() => s.spawn({ role: "reviewer", task: exploreTask() })).not.toThrow();
     }
+    await s.settleAll();
   });
 
   test("usage from an unknown agent is ignored", () => {
@@ -1023,16 +1098,14 @@ describe("task dependencies (Plan-and-Execute)", () => {
     expect((await s.await(handle.id))?.status).toBe("completed");
   });
 
-  test("a duplicated or overlong dependency list is refused", () => {
+  test("duplicate dependencies are refused but fan-in is not capped", () => {
     const duplicated = exploreTask({ dependencies: ["agent_1", "agent_1"] });
     expect(
       validateTask(duplicated, "explore").issues.some((i) => i.field === "dependencies"),
     ).toBe(true);
 
-    const tooMany = exploreTask({ dependencies: ["a", "b", "c"] });
-    expect(validateTask(tooMany, "explore").issues.some((i) => i.field === "dependencies")).toBe(
-      true,
-    );
+    const fanIn = exploreTask({ dependencies: ["agent_1", "agent_2", "agent_3", "agent_4"] });
+    expect(validateTask(fanIn, "explore").issues.some((i) => i.field === "dependencies")).toBe(false);
   });
 
   test("a dependency the scheduler never created is refused, not awaited forever", () => {

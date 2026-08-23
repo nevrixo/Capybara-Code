@@ -91,11 +91,8 @@ export interface SpawnOptions {
 export type SpawnRejectionCode =
   | "INVALID_TASK"
   | "DEPTH_EXCEEDED"
-  | "TOO_MANY_PER_TURN"
-  | "TOO_MANY_CONCURRENT"
   | "WRITER_BUSY"
   | "LEASE_OVERLAP"
-  | "CONTEXT_BUDGET"
   | "UNKNOWN_DEPENDENCY";
 
 export class SpawnRejected extends Error {
@@ -123,12 +120,21 @@ export interface SchedulerOptions {
   /** Depth of the *parent*. A root is 0, so its children are depth 1. */
   readonly parentDepth?: number;
   readonly parentAgentId?: string;
+  /** @deprecated Child registration is no longer capped per turn. */
   readonly maxChildrenPerTurn?: number;
+  /** Maximum provider-running children. Overflow waits in a FIFO queue. */
   readonly maxConcurrent?: number;
-  /** Disable predictive p75 reservations while retaining actual usage accounting. */
+  /** Disable predictive p75 estimates while retaining actual usage accounting. */
   readonly enableContextReservations?: boolean;
   readonly leaseTtlMs?: number;
   readonly now?: () => number;
+}
+
+interface RunSlotWaiter {
+  readonly agentId: string;
+  readonly signal: AbortSignal;
+  readonly onAbort: () => void;
+  readonly resolve: (acquired: boolean) => void;
 }
 
 /**
@@ -144,8 +150,9 @@ export class SubagentScheduler {
   readonly #instances = new Map<string, AgentInstance>();
   readonly #controllers = new Map<string, AbortController>();
   readonly #running = new Map<string, Promise<ChildAgentResult>>();
+  readonly #slotWaiters: RunSlotWaiter[] = [];
 
-  #spawnedThisTurn = 0;
+  #activeRunners = 0;
   #counter = 0;
   #writerLease: WriterLease | undefined;
   #consumedContextTokens = 0;
@@ -170,16 +177,21 @@ export class SubagentScheduler {
     return this.list().filter((instance) => !isTerminalAgentState(instance.state)).length;
   }
 
+  /** Children currently inside the provider runner; queued work is excluded. */
+  runningCount(): number {
+    return this.#activeRunners;
+  }
+
   get writerLease(): WriterLease | undefined {
     return this.#writerLease;
   }
 
-  /** Reset the per-turn spawn allowance (§15.7: three children per turn). */
+  /** @deprecated Child registration is no longer capped per turn. */
   beginTurn(): void {
-    this.#spawnedThisTurn = 0;
+    // Retained as a no-op so older embedders do not need a lockstep upgrade.
   }
 
-  /** Aggregate context tokens children may consume (§15.7). */
+  /** Historical aggregate context target retained for telemetry (§15.7). */
   aggregateContextBudget(): number {
     return Math.floor(
       Math.max(0, this.#options.parentContextTokens) *
@@ -197,7 +209,7 @@ export class SubagentScheduler {
     return this.#reservedContextTokens;
   }
 
-  /** Remaining aggregate capacity after both spent and active reservations. */
+  /** Remaining historical aggregate target; this is telemetry, not admission. */
   get availableContextTokens(): number {
     return Math.max(
       0,
@@ -208,13 +220,11 @@ export class SubagentScheduler {
   }
 
   /**
-   * Record a child's actual input-token usage against the §15.7 aggregate budget.
+   * Record a child's actual input-token usage for aggregate telemetry.
    *
-   * The budget is tracked as tokens *spent*, not as each child's ceiling reserved
-   * up front. Reserving ceilings would contradict §15.7's own concurrency limit:
-   * with a 96K root budget the aggregate is 48K, and two explorers at their 32K
-   * ceilings would already exceed it, making the documented three concurrent
-   * children unreachable. A ceiling is a per-child cap; this is the shared purse.
+   * Per-child context ceilings remain enforced by each child kernel. Aggregate
+   * estimates are reconciled here so operators can observe delegation cost, but
+   * they no longer reject otherwise valid child registrations.
    */
   recordChildUsage(agentId: string, inputTokens: number): void {
     const instance = this.#instances.get(agentId);
@@ -240,8 +250,11 @@ export class SubagentScheduler {
   }
 
   /**
-   * Create a child and start it running. Rejects rather than degrading when a
-   * §15.7 limit or a §15.8 lease rule would be violated.
+   * Register a child and start it when a provider slot is available.
+   *
+   * Registration itself is intentionally unbounded: excess work queues instead
+   * of failing a tool call. Permission, delegation-depth, and writer-lease rules
+   * remain hard admission boundaries.
    */
   spawn(options: SpawnOptions): AgentHandle {
     const definition = roleDefinition(options.role);
@@ -280,54 +293,16 @@ export class SubagentScheduler {
       }
     }
 
-    const perTurn = Math.max(0, Math.min(
-      this.#options.maxChildrenPerTurn ?? SUBAGENT_HARD_LIMITS.maxChildrenPerTurn,
-      SUBAGENT_HARD_LIMITS.maxChildrenPerTurn,
-    ));
-    if (this.#spawnedThisTurn >= perTurn) {
-      throw new SpawnRejected(
-        "TOO_MANY_PER_TURN",
-        `already spawned ${perTurn} child agent(s) this turn (§15.7)`,
-      );
-    }
-
-    const maxConcurrent = Math.max(0, Math.min(
-      this.#options.maxConcurrent ?? SUBAGENT_HARD_LIMITS.maxConcurrent,
-      SUBAGENT_HARD_LIMITS.maxConcurrent,
-    ));
-    if (this.activeCount() >= maxConcurrent) {
-      throw new SpawnRejected(
-        "TOO_MANY_CONCURRENT",
-        `${maxConcurrent} child agent(s) are already running (§15.7)`,
-      );
-    }
-
-    // ---- §15.7: children together may use half the parent's budget ----
-    // Reserve a conservative p75 estimate at admission. Without a reservation,
-    // concurrent children can all pass the check and oversubscribe the shared
-    // purse before their provider usage arrives.
-    const aggregate = this.aggregateContextBudget();
+    // Predictive context estimates remain useful for telemetry, but they do not
+    // reject additional children. Every child still has its own soft context
+    // ceiling; an aggregate quota should not turn successful delegation into a
+    // later, surprising spawn failure.
     const reservationTokens = this.#options.enableContextReservations === false
       ? 0
       : contextReservationForRole(
           options.role,
           this.#options.parentContextTokens,
         );
-    if (
-      this.#consumedContextTokens +
-        this.#reservedContextTokens +
-        reservationTokens >
-      aggregate
-    ) {
-      throw new SpawnRejected(
-        "CONTEXT_BUDGET",
-        "admitting this child would use " +
-          (this.#consumedContextTokens + this.#reservedContextTokens + reservationTokens) +
-          " of the " +
-          aggregate +
-          "-token aggregate context budget (§15.7)",
-      );
-    }
 
     // ---- §15.8 / SUB-003 / P6: one writer, non-overlapping scope ----
     // Checked before the id is allocated so a rejected spawn leaves no gap in the
@@ -375,7 +350,6 @@ export class SubagentScheduler {
 
     this.#counter += 1;
     const id = `agent_${this.#counter}`;
-    this.#spawnedThisTurn += 1;
 
     const lease: WriterLease | undefined = definition.canWrite
       ? createLease({
@@ -478,22 +452,50 @@ export class SubagentScheduler {
     controller: AbortController,
   ): Promise<ChildAgentResult> {
     const dependencies = instance.task.dependencies;
-    if (dependencies.length === 0) return await this.#run(instance, controller, []);
+    let upstream: readonly UpstreamResult[] = [];
+    if (dependencies.length > 0) {
+      this.#emit(
+        "task.progress",
+        {
+          taskId: instance.id,
+          role: instance.role,
+          state: "waiting",
+          message: `waiting for ${dependencies.join(", ")} before starting`,
+        },
+        instance.id,
+      );
 
-    this.#emit(
-      "task.progress",
-      {
-        taskId: instance.id,
-        role: instance.role,
-        state: "waiting",
-        message: `waiting for ${dependencies.join(", ")} before starting`,
-      },
-      instance.id,
-    );
+      const gate = await this.#awaitDependencies(dependencies, controller.signal);
 
-    const gate = await this.#awaitDependencies(dependencies, controller.signal);
+      if (gate.cancelled) {
+        this.#controllers.delete(instance.id);
+        return this.#settle(
+          instance,
+          emptyChildResult("cancelled", "the subagent was cancelled before it started"),
+          this.#now(),
+        );
+      }
 
-    if (gate.cancelled) {
+      if (gate.blockedBy.length > 0) {
+        // §15.12: a dependency that did not complete produces a structured
+        // `blocked` result. Running an executor whose input never arrived is worse
+        // than not running it: it would invent the input.
+        this.#controllers.delete(instance.id);
+        return this.#settle(
+          instance,
+          emptyChildResult(
+            "blocked",
+            `did not start because ${gate.blockedBy.join(", ")} did not complete successfully`,
+          ),
+          this.#now(),
+        );
+      }
+      upstream = gate.upstream;
+    }
+
+    const slot = this.#acquireRunSlot(instance, controller.signal);
+    const acquired = typeof slot === "boolean" ? slot : await slot;
+    if (!acquired) {
       this.#controllers.delete(instance.id);
       return this.#settle(
         instance,
@@ -502,22 +504,67 @@ export class SubagentScheduler {
       );
     }
 
-    if (gate.blockedBy.length > 0) {
-      // §15.12: a dependency that did not complete produces a structured
-      // `blocked` result. Running an executor whose input never arrived is worse
-      // than not running it: it would invent the input.
-      this.#controllers.delete(instance.id);
-      return this.#settle(
-        instance,
-        emptyChildResult(
-          "blocked",
-          `did not start because ${gate.blockedBy.join(", ")} did not complete successfully`,
-        ),
-        this.#now(),
-      );
+    try {
+      return await this.#run(instance, controller, upstream);
+    } finally {
+      this.#releaseRunSlot();
+    }
+  }
+
+  /** Wait for provider capacity without rejecting the registered child. */
+  #acquireRunSlot(instance: AgentInstance, signal: AbortSignal): boolean | Promise<boolean> {
+    if (signal.aborted) return false;
+    if (this.#activeRunners < this.#maxConcurrent()) {
+      this.#activeRunners += 1;
+      return true;
     }
 
-    return await this.#run(instance, controller, gate.upstream);
+    instance.state = "queued";
+    this.#emit(
+      "task.progress",
+      {
+        taskId: instance.id,
+        role: instance.role,
+        state: "queued",
+        message: `queued until one of ${this.#maxConcurrent()} provider slot(s) is available`,
+      },
+      instance.id,
+    );
+
+    return new Promise<boolean>((resolve) => {
+      const onAbort = () => {
+        const index = this.#slotWaiters.findIndex((waiter) => waiter.agentId === instance.id);
+        if (index >= 0) this.#slotWaiters.splice(index, 1);
+        resolve(false);
+      };
+      this.#slotWaiters.push({ agentId: instance.id, signal, onAbort, resolve });
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+
+  /** Hand the released provider slot to the oldest live waiter. */
+  #releaseRunSlot(): void {
+    this.#activeRunners = Math.max(0, this.#activeRunners - 1);
+    while (this.#slotWaiters.length > 0) {
+      const waiter = this.#slotWaiters.shift();
+      if (waiter === undefined) return;
+      waiter.signal.removeEventListener("abort", waiter.onAbort);
+      if (waiter.signal.aborted) {
+        waiter.resolve(false);
+        continue;
+      }
+      this.#activeRunners += 1;
+      waiter.resolve(true);
+      return;
+    }
+  }
+
+  /** Clamp direct embedders to the same safe provider-parallelism ceiling as config. */
+  #maxConcurrent(): number {
+    const configured = this.#options.maxConcurrent ?? SUBAGENT_HARD_LIMITS.maxConcurrent;
+    return Number.isFinite(configured) && configured >= 1
+      ? Math.min(Math.floor(configured), SUBAGENT_HARD_LIMITS.maxConcurrent)
+      : SUBAGENT_HARD_LIMITS.maxConcurrent;
   }
 
   /**

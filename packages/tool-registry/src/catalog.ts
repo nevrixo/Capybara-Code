@@ -686,7 +686,6 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
         dependencies: {
           type: "array",
           items: { type: "string", minLength: 1, maxLength: 80 },
-          maxItems: 2,
           default: [],
         },
         // §15.7 caps every child at five minutes; buildTask clamps anything

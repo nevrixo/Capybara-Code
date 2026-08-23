@@ -53,14 +53,6 @@ export interface TaskValidation {
 /** Minimum goal length. Shorter than this cannot express a scoped objective. */
 export const MIN_GOAL_LENGTH = 20;
 
-/**
- * Upper bound on dependencies per task.
- *
- * §15.7 allows three children per turn, so a task can depend on at most the two
- * that preceded it. A longer list means the plan is not a plan.
- */
-export const MAX_TASK_DEPENDENCIES = 2;
-
 /** Titles that carry no scope, taken from §15.4's "Invalid task" example. */
 const VAGUE_GOAL_PATTERNS: readonly RegExp[] = [
   /^\s*fix\s+(the\s+)?(repo|repository|project|codebase|everything|it|bugs?)\s*\.?\s*$/i,
@@ -183,13 +175,6 @@ export function validateTask(task: AgentTask, role: SubagentRole): TaskValidatio
     }
     seenDependencies.add(dependency);
   }
-  if (task.dependencies.length > MAX_TASK_DEPENDENCIES) {
-    issues.push({
-      field: "dependencies",
-      message: `a task may depend on at most ${MAX_TASK_DEPENDENCIES} sibling task(s); ${task.dependencies.length} were given`,
-    });
-  }
-
   for (const glob of task.allowedPaths) {
     if (glob.includes("..")) {
       issues.push({

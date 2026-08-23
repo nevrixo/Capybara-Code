@@ -281,24 +281,22 @@ export function roleDefinition(role: SubagentRole): RoleDefinition {
   return ROLE_DEFINITIONS[role];
 }
 
-/**
- * §15.7 aggregate limits — one shared hard contract for every scheduler embedder.
- */
+/** Scheduler defaults plus the permission-safety boundaries shared by embedders. */
 export const SUBAGENT_LIMITS = {
-  maxChildrenPerTurn: 3,
+  /** Provider parallelism only. Additional registered children wait in FIFO order. */
   maxConcurrent: 8,
   maxDepth: 1,
   /** §15.7 / P6: exactly one writer. */
   maxWriterAgents: 1,
-  /** §15.7: children together may use half the parent's context budget. */
+  /** Historical aggregate target used for context telemetry, not admission. */
   aggregateContextFraction: 0.5,
 } as const;
 
-/** Descriptive alias used by rollout and admission code. */
+/** Backward-compatible alias used by rollout and scheduler code. */
 export const SUBAGENT_HARD_LIMITS = SUBAGENT_LIMITS;
 
 /**
- * Conservative p75-style admission estimates. These are reservations, not
+ * Conservative p75-style telemetry estimates. These are reservations, not
  * per-child ceilings: actual provider usage reconciles them on completion.
  */
 export const SUBAGENT_CONTEXT_RESERVATIONS: Readonly<Record<SubagentRole, number>> = {

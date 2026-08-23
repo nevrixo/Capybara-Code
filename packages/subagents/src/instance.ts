@@ -77,7 +77,7 @@ export interface AgentInstance {
   readonly modelProfile: string;
   readonly permissions: AgentPermissionScope;
   readonly budget: AgentBudget;
-  /** Aggregate parent-context admission record, reconciled on terminal state. */
+  /** Aggregate parent-context telemetry record, reconciled on terminal state. */
   contextReservation?: ChildContextReservation;
   writerLease?: WriterLease;
   readonly createdAt: string;

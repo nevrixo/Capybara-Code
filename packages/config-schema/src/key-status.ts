@@ -100,7 +100,7 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
   // ---- subagents ----
   ["subagents.maxConcurrent", { status: "wired", consumer: "subagent-bridge → scheduler" }],
   ["subagents.maxDepth", { status: "wired", consumer: "agent.ts / scheduler depth check" }],
-  ["subagents.maxPerTurn", { status: "wired", consumer: "subagent-bridge → scheduler (§15.7 caps it at 3)" }],
+  ["subagents.maxPerTurn", { status: "deprecated", note: "removed; child registration is unbounded and overflow queues" }],
   ["subagents.writerPolicy", { status: "experimental", note: "exactly one writer is enforced by the scheduler constant" }],
 
   // ---- tools ----
@@ -117,7 +117,7 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
   ["perf.longSessionFastPath", { status: "wired", consumer: "AgentSession bounded resume path" }],
   ["perf.contextPackProjection", { status: "wired", consumer: "AgentSession ContextPack → provider projection" }],
   ["perf.subagentProfileResolutionV2", { status: "wired", consumer: "SubagentBridge child profile resolver" }],
-  ["perf.subagentContextReservations", { status: "wired", consumer: "SubagentScheduler p75 context admission" }],
+  ["perf.subagentContextReservations", { status: "wired", consumer: "SubagentScheduler p75 context telemetry" }],
   ["perf.phaseRouting", { status: "wired", consumer: "AgentKernel phase-aware route epochs" }],
   ["perf.budgetEnforcement", { status: "wired", consumer: "AgentKernel turn budget controller" }],
   ["perf.retrievalControllerV2", { status: "wired", consumer: "ContextEngine retrieval rollout" }],

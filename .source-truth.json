@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-23T21:23:18.227Z",
+  "generatedAt": "2026-08-23T21:35:06.509Z",
   "git": {
-    "commit": "a21b030d18b5baf052bc3ed08d3ad008eb361c9e",
+    "commit": "4b29b6997116624426247d4dcfc68145d4328f2a",
     "dirty": true,
-    "dirtyHash": "69072c3cf4b0023c7dd45d58f4b81829cac96b0d176d5c1eaf9ef384e1c0fb13"
+    "dirtyHash": "62072fa7d8c8fd22b23e33146e107f3b48b012adbaa0df535d60fcf8c7c95da5"
   },
   "roots": [
     "apps",
@@ -278,8 +278,8 @@
     },
     {
       "path": "apps/cbc/src/subagent-bridge.ts",
-      "bytes": 45386,
-      "sha256": "706c46db97bb8747eeb317e9cc7a149a07bd30d3f807a943652c14acbb5e64fb"
+      "bytes": 45323,
+      "sha256": "8ea6fbe37b22347d25e2ab4e3b71d091e728ae2b7b5114fa7d26484e6da157a9"
     },
     {
       "path": "apps/cbc/src/terminal-writer.ts",
@@ -1223,8 +1223,8 @@
     },
     {
       "path": "packages/config-schema/src/key-status.ts",
-      "bytes": 12050,
-      "sha256": "a52a2adf69b59347bc32f66048ae595f91899b7dac3ddf5878647978f1872e3c"
+      "bytes": 12060,
+      "sha256": "b6a4a865a4fecbd6ea31ca50b6de637c91f81c6af8813050d28fa6af42c06fbb"
     },
     {
       "path": "packages/config-schema/src/performance-rollbacks.ts",
@@ -1233,8 +1233,8 @@
     },
     {
       "path": "packages/config-schema/src/schema.ts",
-      "bytes": 50282,
-      "sha256": "fc42c995683b6da9d8586cbc5f8dcc93113e2ac1e5da21674fd6237806f5505c"
+      "bytes": 50124,
+      "sha256": "956c670e7e53624855517ff3f074607b891438ef61286c505d3825d3d220eaf8"
     },
     {
       "path": "packages/config-schema/src/toml.ts",
@@ -1243,8 +1243,8 @@
     },
     {
       "path": "packages/config-schema/test/config.test.ts",
-      "bytes": 32268,
-      "sha256": "7be077bb441d92a8d6d20f55bb0c71de1989c89d41065a1cb8cae8e696536ae5"
+      "bytes": 32340,
+      "sha256": "01329488bc4e8289b0c1c11e47801fe9a3e4b713256e3871c9d485a9a44861ab"
     },
     {
       "path": "packages/config-schema/test/performance-config.test.ts",
@@ -1854,17 +1854,17 @@
     {
       "path": "packages/subagents/src/instance.ts",
       "bytes": 6781,
-      "sha256": "a610967c6793e3c2f462daacf04d2d7b095dbbcf5e1fa3636ddba54f63c49efa"
+      "sha256": "ffd34c3035f967ca3333ddd429661b0f9b1a0d499911af8584b350a21025728b"
     },
     {
       "path": "packages/subagents/src/roles.ts",
-      "bytes": 13113,
-      "sha256": "b29854ac62c609a89a2416473d6d7e2282655912dce041c5448343b2cde58053"
+      "bytes": 13177,
+      "sha256": "8856ed9f33d0c92532ef84a00fa202e37d7c51c72400cf3b79620aa790fa21cf"
     },
     {
       "path": "packages/subagents/src/scheduler.ts",
-      "bytes": 33819,
-      "sha256": "f482fb2ec2144152a46b2e181af42652d9b6ec75d312e4255c197c8f1911a5d5"
+      "bytes": 35470,
+      "sha256": "29e19fa486493df55717fe2fbe105bd209646b4e53f27da8d1e058e7944b8b3e"
     },
     {
       "path": "packages/subagents/src/synthesis.ts",
@@ -1873,13 +1873,13 @@
     },
     {
       "path": "packages/subagents/src/task.ts",
-      "bytes": 12003,
-      "sha256": "cc8a0a5907519f13dfc5d0c909bed967e24f2192c371e298a7af7918c1966b7a"
+      "bytes": 11517,
+      "sha256": "c5dfce684aeac8720f3f154e2127c27bec611f979d603e464bf54af9accd3790"
     },
     {
       "path": "packages/subagents/test/subagents.test.ts",
-      "bytes": 49109,
-      "sha256": "d769e02adaf104ea4ab985bc5900e323f26c773e1d7c71cc84da4089a70d17af"
+      "bytes": 51766,
+      "sha256": "c1f62b388c150a664bd3edab8a72332d4afde71f6cb5c754a129b4075a68d5bd"
     },
     {
       "path": "packages/tool-registry/package.json",
@@ -1888,8 +1888,8 @@
     },
     {
       "path": "packages/tool-registry/src/catalog.ts",
-      "bytes": 37716,
-      "sha256": "37588aafa2f98439be0254298e2d5d1ebbbb7f4198846b8bcdeaa5a744fafa34"
+      "bytes": 37693,
+      "sha256": "f9f7052459479083a680c8d7d972bd4dca41739c006012ae8b45e7eaea8b407e"
     },
     {
       "path": "packages/tool-registry/src/discovery.ts",
@@ -2103,8 +2103,8 @@
     },
     {
       "path": "schemas/config/config.schema.json",
-      "bytes": 31372,
-      "sha256": "73bba410be46df29b65878c133ddeaa0099578e191cc99949ad83b6e64905d0f"
+      "bytes": 31320,
+      "sha256": "4e207900db37d7b56f8b2eef24f9ff1802174c02f4ea5689afebe02580f2ba25"
     },
     {
       "path": "schemas/events/event.schema.json",
@@ -2217,5 +2217,5 @@
       "sha256": "c69dafb888ab2abc0a1a6bfe0602668806ec94b495ad4f228a4e0486f22ea7e4"
     }
   ],
-  "digest": "5f80e6d04a7c1011ea2d4fc4707dee68e07f38cdc58ddddec6d6eadd049fda43"
+  "digest": "65b2e1eeaa952d31c91d5478a6bdb172735f4ab7cccd04faf4575f62fb6d6614"
 }
