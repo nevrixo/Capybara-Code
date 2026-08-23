@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-23T20:08:44.183Z",
+  "generatedAt": "2026-08-23T20:27:09.480Z",
   "git": {
-    "commit": "3697de0e51b835ceb722ee7290e40b8ff6485b7a",
+    "commit": "b481a8f5d31bf8312ee996706f466d27f12c4668",
     "dirty": true,
-    "dirtyHash": "df73f1edf337fec7262ae104a942e6f32aebaaae89f74ad5ed12252805371f14"
+    "dirtyHash": "ca563215623e80ebca424153285ba339c23d934cc0f144f2bb1825e1e5404b32"
   },
   "roots": [
     "apps",
@@ -59,7 +59,7 @@
     {
       "path": "apps/cbc/package.json",
       "bytes": 301,
-      "sha256": "3cc08558cf82e6ac17ef23eaa8bfae25094a73eccf3c92d12ec69d30ce9ae71c"
+      "sha256": "2b0c31d10c010ac782f3a72e4367ea72e4a553c78580ffdc9e9e0ed1d2e2fdfb"
     },
     {
       "path": "apps/cbc/src/account-login.ts",
@@ -194,7 +194,7 @@
     {
       "path": "apps/cbc/src/main.ts",
       "bytes": 999,
-      "sha256": "2d7e72bbc67d91b751f40a896e7d130d56ef7f7115e708e4b960bf4e7006afae"
+      "sha256": "fc3d1805da5a971640b921eaece2cf2521095302a9a8def04a1b4ce1ddb02188"
     },
     {
       "path": "apps/cbc/src/mcp-credentials.ts",
@@ -348,8 +348,8 @@
     },
     {
       "path": "apps/cbc/test/cbc.test.ts",
-      "bytes": 232260,
-      "sha256": "c111509bb553411e82564e2028fa97e20a1a997968b31a29ec9ac1a206e2f44e"
+      "bytes": 232494,
+      "sha256": "1c4de1430baccffcb2cf7aedb91a45aeba18cc9cb29091102c813a2752909eae"
     },
     {
       "path": "apps/cbc/test/config-template.test.ts",
@@ -634,17 +634,17 @@
     {
       "path": "bun.lock",
       "bytes": 18286,
-      "sha256": "5abdb91e9121001804e8d838e0c72e851eaef2a1119d3e36ca87064984e102c4"
+      "sha256": "bdfeddb3ab2d3f8a1883d01663767de10e22fd36e842d84e30ffb9ffdafb5858"
     },
     {
       "path": "Cargo.lock",
       "bytes": 22010,
-      "sha256": "68748660a805e8350522975a5bb08e5b223e9d919f653055e7db3e73c852aec9"
+      "sha256": "b714de927940042a10cf54d1ff8de815b634fce56836887fc18030b54ffad015"
     },
     {
       "path": "Cargo.toml",
       "bytes": 1654,
-      "sha256": "50b273dc06a5d1e7d8aca2a944ca5122692352c7f3a035a83e29be0734851079"
+      "sha256": "c406af2c38c1dbcc9d50b37b9e277c70989f9c692a76a17cf7638f9f7da46ce2"
     },
     {
       "path": "crates/cbc-artifacts/Cargo.toml",
@@ -1139,7 +1139,7 @@
     {
       "path": "package.json",
       "bytes": 2537,
-      "sha256": "fdec810ebebc60b6973acf73bb28854247d2c72a8ff6f5f47e530ae631bbc5d7"
+      "sha256": "65a94f53e6e782397df55d38d9c5421b0d7ab20c0d242ed6426e8b972738b709"
     },
     {
       "path": "packages/agent-kernel/package.json",
@@ -2013,8 +2013,8 @@
     },
     {
       "path": "packages/tui-components/src/theme.ts",
-      "bytes": 22969,
-      "sha256": "4a707b04f7942d844da232b6e842096fbdccbbb021db751fd268c210901b3569"
+      "bytes": 22989,
+      "sha256": "8c5e553041c1a0255214d9b300621f76a3ef812d9e5d29a36073204606b0a258"
     },
     {
       "path": "packages/tui-components/src/timeline-store.ts",
@@ -2078,8 +2078,8 @@
     },
     {
       "path": "packages/tui-components/test/tui.test.ts",
-      "bytes": 121161,
-      "sha256": "c8adb857ff259799712a7d405c274229874d60dc55a8f8ee6da931864c1fa383"
+      "bytes": 121374,
+      "sha256": "4a84545356207b0fa2577513eb7c4ed6d9c569c46928fc65f7b79084ba945cdd"
     },
     {
       "path": "pnpm-workspace.yaml",
@@ -2194,7 +2194,7 @@
     {
       "path": "scripts/release.test.ts",
       "bytes": 10478,
-      "sha256": "d51d5c69099015c287935cb18ef0a57706549c13b5160068bf9273b4d10c31c3"
+      "sha256": "39128ef5492877031b1b155ad9b26a9199c6be5ca30dfa1f2cb869b939f0b9f9"
     },
     {
       "path": "scripts/smoke-release.ts",
@@ -2217,5 +2217,5 @@
       "sha256": "c69dafb888ab2abc0a1a6bfe0602668806ec94b495ad4f228a4e0486f22ea7e4"
     }
   ],
-  "digest": "6dc7817f6c0874070c4d28b74939c6da45381627515314d4bbe5af67f109b634"
+  "digest": "2267f4bddc48b2f0fb575108e1c1b02e713fd7122ce65c058d72ed9cab1d594f"
 }

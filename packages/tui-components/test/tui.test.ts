@@ -295,8 +295,10 @@ describe("theme and colour fallbacks (§6.5, AC-45)", () => {
 
   test("recognizes native Windows TTYs without terminal-specific environment variables", () => {
     const capabilities = detectCapabilities({}, { platform: "win32", isTty: true });
-    expect(capabilities.colorDepth).toBe("none");
+    expect(capabilities.colorDepth).toBe("truecolor");
     expect(capabilities.unicode).toBe(true);
+    expect(detectCapabilities({ NO_COLOR: "1" }, { platform: "win32", isTty: true }).colorDepth).toBe("none");
+    expect(detectCapabilities({}, { platform: "win32", isTty: false }).colorDepth).toBe("none");
     expect(detectCapabilities({}, { platform: "win32", isTty: false }).unicode).toBe(false);
   });
 

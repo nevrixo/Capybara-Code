@@ -194,7 +194,7 @@ export function detectCapabilities(
     colorDepth = "none";
   } else if ((env.COLORTERM ?? "").includes("truecolor") || (env.COLORTERM ?? "").includes("24bit")) {
     colorDepth = "truecolor";
-  } else if (modernTerminal || windowsTerminal) {
+  } else if (modernTerminal || windowsTerminal || nativeWindowsTty) {
     colorDepth = "truecolor";
   } else if (term.includes("256")) {
     colorDepth = "256";

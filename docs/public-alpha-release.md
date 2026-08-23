@@ -4,7 +4,7 @@ This runbook publishes the first usable-but-not-dependable public build of Capyb
 
 ## Release contract
 
-- Published versions: `v0.1.0-alpha.3` and `v0.1.0-alpha.5`. The `v0.1.0-alpha.4` workflow failed before publishing any package; no release tag may be moved. The next release is `v0.1.0-alpha.6`.
+- Published versions: `v0.1.0-alpha.3`, `v0.1.0-alpha.5`, and `v0.1.0-alpha.6`. The `v0.1.0-alpha.4` workflow failed before publishing any package; no release tag may be moved. The next release is `v0.1.0-alpha.7`.
 - npm dist-tag: `alpha`.
 - npm packages: `capybara-code`, `@ilbie/capybara-code-win32-x64`, `@ilbie/capybara-code-darwin-x64`, `@ilbie/capybara-code-darwin-arm64`, and `@ilbie/capybara-code-linux-x64`.
 - Public command: `capy`.
@@ -37,7 +37,7 @@ npm install --global capybara-code@alpha
 4. Verify every version source agrees with the planned tag:
 
    ```bash
-   bun run release:check -- --version v0.1.0-alpha.6
+   bun run release:check -- --version v0.1.0-alpha.7
    bun install --frozen-lockfile
    bun run typecheck
    bun run test:release
@@ -50,8 +50,8 @@ npm install --global capybara-code@alpha
 The release workflow starts only for an alpha tag. After the reviewed release commit is pushed:
 
 ```bash
-git tag -a v0.1.0-alpha.6 -m "Capybara Code v0.1.0-alpha.6"
-git push origin v0.1.0-alpha.6
+git tag -a v0.1.0-alpha.7 -m "Capybara Code v0.1.0-alpha.7"
+git push origin v0.1.0-alpha.7
 ```
 
 `.github/workflows/release.yml` validates version alignment, then builds and smoke-tests all four native targets on their corresponding GitHub-hosted runners. It rejects source maps, local checkout paths, and duplicate `share/share` directories while constructing package payloads.

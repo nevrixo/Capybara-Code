@@ -564,11 +564,14 @@ describe("render mode", () => {
     expect(decideRenderMode({ host, rendererAvailable: true }).mode).toBe("opentui");
   });
 
-  test("passes the native Windows platform through to Unicode capability detection", () => {
-    const host = createFakeHost({ isTty: true, platform: "win32", env: { NO_COLOR: "1" } });
+  test("passes the native Windows platform through to Unicode and colour capability detection", () => {
+    const host = createFakeHost({ isTty: true, platform: "win32" });
     const decision = decideRenderMode({ host, rendererAvailable: true });
     expect(decision.capabilities.unicode).toBe(true);
-    expect(decision.capabilities.colorDepth).toBe("none");
+    expect(decision.capabilities.colorDepth).toBe("truecolor");
+
+    const noColorHost = createFakeHost({ isTty: true, platform: "win32", env: { NO_COLOR: "1" } });
+    expect(decideRenderMode({ host: noColorHost, rendererAvailable: true }).capabilities.colorDepth).toBe("none");
   });
 
   test("the OpenTUI charcoal palette is the default a session paints with (§6.5)", () => {
@@ -2017,12 +2020,11 @@ describe("interactive UI (§6.2, §6.21)", () => {
     instance.restore();
   });
 
-  test("a native Windows TTY paints the Unicode home banner without locale hints", () => {
+  test("a native Windows TTY paints the colour Unicode home banner without environment hints", () => {
     const host = createFakeHost({
       isTty: true,
       columns: 160,
       platform: "win32",
-      env: { NO_COLOR: "1" },
     });
     const decision = decideRenderMode({ host, rendererAvailable: true });
     const instance = new InteractiveUi({
@@ -2040,6 +2042,7 @@ describe("interactive UI (§6.2, §6.21)", () => {
     expect(home).toContain("██████");
     expect(home).toContain("┌");
     expect(home).toContain("┐");
+    expect(home).toContain("\u001B[38;2;");
     instance.restore();
   });
 
