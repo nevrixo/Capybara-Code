@@ -25,16 +25,16 @@ const launcher = require("./release-launcher.cjs") as {
   main(argv?: readonly string[], options?: Record<string, unknown>): number;
 };
 
-const VERSION = "0.1.0-alpha.3";
+const VERSION = "0.1.0-alpha.4";
 
 describe("Public Alpha release metadata", () => {
   test("accepts only alpha tags and requires every source to agree", () => {
-    expect(versionFromTag("v0.1.0-alpha.3")).toBe(VERSION);
-    expect(expectedVersionFromArgs(["--version", "v0.1.0-alpha.3"])).toBe(VERSION);
-    expect(expectedVersionFromArgs([], { GITHUB_REF_NAME: "v0.1.0-alpha.3" })).toBe(VERSION);
+    expect(versionFromTag("v0.1.0-alpha.4")).toBe(VERSION);
+    expect(expectedVersionFromArgs(["--version", "v0.1.0-alpha.4"])).toBe(VERSION);
+    expect(expectedVersionFromArgs([], { GITHUB_REF_NAME: "v0.1.0-alpha.4" })).toBe(VERSION);
     expect(() => assertAlphaVersion("0.1.0")).toThrow("alpha version");
-    expect(() => versionFromTag("0.1.0-alpha.3")).toThrow("must start with 'v'");
-    expect(() => assertReleaseVersions({ root: VERSION, app: VERSION, cargo: "0.1.0-alpha.4", cli: VERSION })).toThrow("disagree");
+    expect(() => versionFromTag("0.1.0-alpha.4")).toThrow("must start with 'v'");
+    expect(() => assertReleaseVersions({ root: VERSION, app: VERSION, cargo: "0.1.0-alpha.5", cli: VERSION })).toThrow("disagree");
   });
 
   test("maps exactly the supported platform packages", () => {
@@ -80,8 +80,8 @@ describe("Public Alpha release metadata", () => {
   });
 
   test("uses native archive extensions on each host family", () => {
-    expect(archiveNameFor(VERSION, "windows-x64", "win32")).toBe("capybara-code-0.1.0-alpha.3-windows-x64.zip");
-    expect(archiveNameFor(VERSION, "linux-x64", "linux")).toBe("capybara-code-0.1.0-alpha.3-linux-x64.tar.gz");
+    expect(archiveNameFor(VERSION, "windows-x64", "win32")).toBe("capybara-code-0.1.0-alpha.4-windows-x64.zip");
+    expect(archiveNameFor(VERSION, "linux-x64", "linux")).toBe("capybara-code-0.1.0-alpha.4-linux-x64.tar.gz");
   });
 
   test("derives the sidecar strictly relative to the packaged bin directory", () => {
