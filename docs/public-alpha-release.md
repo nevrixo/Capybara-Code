@@ -4,14 +4,20 @@ This runbook publishes the first usable-but-not-dependable public build of Capyb
 
 ## Release contract
 
-- First version and Git tag: `v0.1.0-alpha.1`.
+- Bootstrap version and Git tag: `v0.1.0-alpha.2`. The failed, unpublished `alpha.1` tag must not be moved.
 - npm dist-tag: `alpha`.
-- npm packages: `capybara-code`, `capybara-code-win32-x64`, `capybara-code-darwin-x64`, `capybara-code-darwin-arm64`, and `capybara-code-linux-x64`.
+- npm packages: `capybara-code`, `@nevrixo/capybara-code-win32-x64`, `@nevrixo/capybara-code-darwin-x64`, `@nevrixo/capybara-code-darwin-arm64`, and `@nevrixo/capybara-code-linux-x64`.
 - Public command: `capy`.
 - Checkout-only command: `capy-dev`.
 - Supported targets: Windows x64, macOS x64, macOS ARM64, and glibc Ubuntu/WSL Linux x64. Linux ARM64 and musl are deliberately out of scope for this alpha.
 
 The root package contains only the CommonJS launcher. It chooses an OS/CPU-constrained optional platform package; it has no download hook or installer. Each platform package contains only `bin/`, `libexec/`, `share/`, `manifest.json`, and `LICENSE`.
+
+Users install only the unscoped launcher. npm resolves the matching public `@nevrixo` optional dependency automatically:
+
+```bash
+npm install --global capybara-code@alpha
+```
 
 ## Preflight
 
@@ -21,31 +27,31 @@ The root package contains only the CommonJS launcher. It chooses an OS/CPU-const
 
    ```bash
    npm view capybara-code version
-   npm view capybara-code-win32-x64 version
-   npm view capybara-code-darwin-x64 version
-   npm view capybara-code-darwin-arm64 version
-   npm view capybara-code-linux-x64 version
+   npm view @nevrixo/capybara-code-win32-x64 version
+   npm view @nevrixo/capybara-code-darwin-x64 version
+   npm view @nevrixo/capybara-code-darwin-arm64 version
+   npm view @nevrixo/capybara-code-linux-x64 version
    ```
 
    A registry `E404` is expected for an unclaimed name. Stop if any name belongs to another publisher.
 4. Verify every version source agrees with the planned tag:
 
    ```bash
-   bun run release:check -- --version v0.1.0-alpha.1
+   bun run release:check -- --version v0.1.0-alpha.2
    bun install --frozen-lockfile
    bun run typecheck
    bun run test:release
    ```
 
-5. For the first alpha only, add a short-lived `NPM_BOOTSTRAP_TOKEN` secret to the protected `npm-publish` Environment. It must be able to publish all five packages. Do not add it as a repository-wide secret.
+5. For the bootstrap alpha only, add a short-lived `NPM_BOOTSTRAP_TOKEN` secret to the protected `npm-publish` Environment. It must be able to create public packages in the `@nevrixo` scope and publish the unscoped launcher. Do not add it as a repository-wide secret.
 
 ## Build and tag
 
 The release workflow starts only for an alpha tag. After the reviewed release commit is pushed:
 
 ```bash
-git tag -a v0.1.0-alpha.1 -m "Capybara Code v0.1.0-alpha.1"
-git push origin v0.1.0-alpha.1
+git tag -a v0.1.0-alpha.2 -m "Capybara Code v0.1.0-alpha.2"
+git push origin v0.1.0-alpha.2
 ```
 
 `.github/workflows/release.yml` validates version alignment, then builds and smoke-tests all four native targets on their corresponding GitHub-hosted runners. It rejects source maps, local checkout paths, and duplicate `share/share` directories while constructing package payloads.
@@ -59,7 +65,7 @@ Once the native matrix passes, approval of the `npm-publish` Environment allows 
 
 The alpha manifest must describe the artifacts as unsigned. SHA-256 is an integrity check, not a signature scheme.
 
-## Set up npm Trusted Publishing after alpha.1
+## Set up npm Trusted Publishing after alpha.2
 
 npm can configure a GitHub trusted publisher only after the corresponding package exists. After the bootstrap publish succeeds, use an npm owner account to connect every package to this repository, workflow, and Environment:
 
@@ -69,10 +75,10 @@ npm can configure a GitHub trusted publisher only after the corresponding packag
 ```bash
 for package in \
   capybara-code \
-  capybara-code-win32-x64 \
-  capybara-code-darwin-x64 \
-  capybara-code-darwin-arm64 \
-  capybara-code-linux-x64
+  @nevrixo/capybara-code-win32-x64 \
+  @nevrixo/capybara-code-darwin-x64 \
+  @nevrixo/capybara-code-darwin-arm64 \
+  @nevrixo/capybara-code-linux-x64
 do
   npm trust github "$package" \
     --repository nevrixo/Capybara-Code \

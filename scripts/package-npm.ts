@@ -167,7 +167,9 @@ export async function assemblePlatformPackage(
   await assertStandaloneArtifact(stage, targetName, version);
 
   const target = releaseTarget(targetName);
-  const destination = join(outDirectory, "npm", target.npmPackage);
+  // Keep artifact directories flat even though the published package is scoped.
+  // This avoids a shared @nevrixo directory when matrix artifacts are merged.
+  const destination = join(outDirectory, "npm", target.npmDirectory);
   await prepareDirectory(destination);
   await Promise.all([
     cp(join(stage, "bin"), join(destination, "bin"), { recursive: true }),

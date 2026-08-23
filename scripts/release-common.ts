@@ -9,11 +9,13 @@ export const ROOT = new URL("..", import.meta.url).pathname
   .replace(/\/+$/, "");
 
 export const PRODUCT_PACKAGE = "capybara-code";
+export const NATIVE_PACKAGE_SCOPE = "@nevrixo";
 export const REPOSITORY_URL = "git+https://github.com/nevrixo/Capybara-Code.git";
 export const HOMEPAGE_URL = "https://github.com/nevrixo/Capybara-Code";
 
 export interface ReleaseTarget {
   readonly npmPackage: string;
+  readonly npmDirectory: string;
   readonly platform: string;
   readonly arch: string;
   readonly executableExtension: "" | ".exe";
@@ -22,25 +24,29 @@ export interface ReleaseTarget {
 
 export const RELEASE_TARGETS = {
   "windows-x64": {
-    npmPackage: "capybara-code-win32-x64",
+    npmPackage: `${NATIVE_PACKAGE_SCOPE}/capybara-code-win32-x64`,
+    npmDirectory: "capybara-code-win32-x64",
     platform: "win32",
     arch: "x64",
     executableExtension: ".exe",
   },
   "darwin-x64": {
-    npmPackage: "capybara-code-darwin-x64",
+    npmPackage: `${NATIVE_PACKAGE_SCOPE}/capybara-code-darwin-x64`,
+    npmDirectory: "capybara-code-darwin-x64",
     platform: "darwin",
     arch: "x64",
     executableExtension: "",
   },
   "darwin-arm64": {
-    npmPackage: "capybara-code-darwin-arm64",
+    npmPackage: `${NATIVE_PACKAGE_SCOPE}/capybara-code-darwin-arm64`,
+    npmDirectory: "capybara-code-darwin-arm64",
     platform: "darwin",
     arch: "arm64",
     executableExtension: "",
   },
   "linux-x64": {
-    npmPackage: "capybara-code-linux-x64",
+    npmPackage: `${NATIVE_PACKAGE_SCOPE}/capybara-code-linux-x64`,
+    npmDirectory: "capybara-code-linux-x64",
     platform: "linux",
     arch: "x64",
     executableExtension: "",

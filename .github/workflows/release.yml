@@ -148,50 +148,50 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          packages=(
+          package_dirs=(
             capybara-code-win32-x64
             capybara-code-darwin-x64
             capybara-code-darwin-arm64
             capybara-code-linux-x64
             capybara-code
           )
-          for package in "${packages[@]}"; do
-            npm pack --dry-run "./dist/npm/${package}"
+          for package_dir in "${package_dirs[@]}"; do
+            npm pack --dry-run "./dist/npm/${package_dir}"
           done
 
-      - name: Publish v0.1.0-alpha.1 with protected bootstrap token
-        if: github.ref_name == 'v0.1.0-alpha.1'
+      - name: Publish v0.1.0-alpha.2 with protected bootstrap token
+        if: github.ref_name == 'v0.1.0-alpha.2'
         shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
         run: |
           set -euo pipefail
-          test -n "${NODE_AUTH_TOKEN:-}" || { echo "NPM_BOOTSTRAP_TOKEN is required for alpha.1"; exit 1; }
-          packages=(
+          test -n "${NODE_AUTH_TOKEN:-}" || { echo "NPM_BOOTSTRAP_TOKEN is required for alpha.2"; exit 1; }
+          package_dirs=(
             capybara-code-win32-x64
             capybara-code-darwin-x64
             capybara-code-darwin-arm64
             capybara-code-linux-x64
             capybara-code
           )
-          for package in "${packages[@]}"; do
-            npm publish "./dist/npm/${package}" --tag alpha --access public
+          for package_dir in "${package_dirs[@]}"; do
+            npm publish "./dist/npm/${package_dir}" --tag alpha --access public
           done
 
       - name: Publish later alphas with npm trusted publishing
-        if: github.ref_name != 'v0.1.0-alpha.1'
+        if: github.ref_name != 'v0.1.0-alpha.2'
         shell: bash
         run: |
           set -euo pipefail
-          packages=(
+          package_dirs=(
             capybara-code-win32-x64
             capybara-code-darwin-x64
             capybara-code-darwin-arm64
             capybara-code-linux-x64
             capybara-code
           )
-          for package in "${packages[@]}"; do
-            npm publish "./dist/npm/${package}" --tag alpha --access public --provenance
+          for package_dir in "${package_dirs[@]}"; do
+            npm publish "./dist/npm/${package_dir}" --tag alpha --access public --provenance
           done
 
       - name: Write GitHub Release SHA-256 manifest

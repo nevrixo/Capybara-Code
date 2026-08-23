@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-23T08:56:11.734Z",
+  "generatedAt": "2026-08-23T17:20:30.020Z",
   "git": {
-    "commit": "8ced3005115e6863380a5c1b6decdf853fc0f166",
-    "dirty": false,
-    "dirtyHash": "dc10be9dfb500675d19c08d5028337a03ddefac7a10116a81fa72ae84ee3889c"
+    "commit": "75ad00d6919716aee3f57d44eebaa416d366c10c",
+    "dirty": true,
+    "dirtyHash": "5bbe6a851d137f712b92973509322a708a9e12d5a1083d7dc639cad465592e9f"
   },
   "roots": [
     "apps",
@@ -59,7 +59,7 @@
     {
       "path": "apps/cbc/package.json",
       "bytes": 301,
-      "sha256": "97c7a77d91e3a28c202064f8608a807eb8659e1db51128c3ed376de170685cfe"
+      "sha256": "fce90844d2d0c307205cde5cc8aac6b1b14cd9ac5751d16a382acf9291fd1a77"
     },
     {
       "path": "apps/cbc/src/account-login.ts",
@@ -193,8 +193,8 @@
     },
     {
       "path": "apps/cbc/src/main.ts",
-      "bytes": 998,
-      "sha256": "6e2fe46e89bef4a43585341db2b2de796b53d706150b1b038580b420c29a069b"
+      "bytes": 999,
+      "sha256": "5b26c86acba1c9597b15b40574442edb720bdd9771f04ed38788a97dd5d7db63"
     },
     {
       "path": "apps/cbc/src/mcp-credentials.ts",
@@ -629,17 +629,17 @@
     {
       "path": "bun.lock",
       "bytes": 18286,
-      "sha256": "b02ff99efd84bbed80bd955863cd52d51e6fc3d0baf73c53d4bbfe7a11bf86ee"
+      "sha256": "ac4f65f6a7b4f25a5e57f3236541be45235f495fa8860ec70c6f8cb0557b22d9"
     },
     {
       "path": "Cargo.lock",
       "bytes": 22010,
-      "sha256": "aeca2b0e551cda5ef21cea16b74f4a0d8bbd8a1d4f7d1a7d7ff62daff209ff9b"
+      "sha256": "e47f477c053db6b07a074cf304d70e5b29e5c9cd699b7ad37f6364fca5bba1d6"
     },
     {
       "path": "Cargo.toml",
       "bytes": 1654,
-      "sha256": "1876a0fe02cccab26ef34e4b2e8a4dccb7d14cb729d567c73589757ea3d0840a"
+      "sha256": "2109d77c9a3309b033ffa17b3f229b6c9e81da7c70b8a00bba30b90de50f593c"
     },
     {
       "path": "crates/cbc-artifacts/Cargo.toml",
@@ -1134,7 +1134,7 @@
     {
       "path": "package.json",
       "bytes": 2537,
-      "sha256": "5a53019d9f87c7ff0abe355dfc7b63bbb973be6379d4ce8c7c78552d96448e32"
+      "sha256": "664a813525405286c0ca0155be14cbf0620086037e7ab0bd34f3a98bb2eb84a9"
     },
     {
       "path": "packages/agent-kernel/package.json",
@@ -2083,8 +2083,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 5684,
-      "sha256": "49e5e581bb2026d259e97b1660115ec1e59e2f1e418689f4633ef8e3fdab3e05"
+      "bytes": 3982,
+      "sha256": "1d815c5b5b5673dac84082f07ad786d96db8839881da5887a3bb39c65280fa47"
     },
     {
       "path": "rust-toolchain.toml",
@@ -2173,23 +2173,23 @@
     },
     {
       "path": "scripts/package-npm.ts",
-      "bytes": 7974,
-      "sha256": "c8fd35829aa84e0cca2c33a82ba7cd683f9bb170319fc3d3f55dc26effff789d"
+      "bytes": 8136,
+      "sha256": "b3c3c38e9478d765c56975e2d34fa0702b1954732d13fa1e3396c2b0e2488cf4"
     },
     {
       "path": "scripts/release-common.ts",
-      "bytes": 8248,
-      "sha256": "daf368bea9c2c83f32d6e4260f8d777c625dcb972c0ea6f1bf00d47cac46ce42"
+      "bytes": 8609,
+      "sha256": "d8de06ece9b2139c3105056815cc705e9605fbb03dcf36495872dafd38c01e3a"
     },
     {
       "path": "scripts/release-launcher.cjs",
-      "bytes": 3200,
-      "sha256": "7cc069b06b78ad80130ce2090ea6fe61ae689709f2527440325a7f572ec92751"
+      "bytes": 3236,
+      "sha256": "12816bc7a276c89d17d3ce08c53f24b2e06edecae5a892f4aef02b0caa6e8d0e"
     },
     {
       "path": "scripts/release.test.ts",
-      "bytes": 7389,
-      "sha256": "7d04b775a85a300ed8a8c7ab821167792ff40ab2f270a1f4ae872d306d1566c8"
+      "bytes": 7624,
+      "sha256": "af8e7dbee7c67dfc9ed96beaa514189481521e47568c3d3b7024ba4dff86fa64"
     },
     {
       "path": "scripts/smoke-release.ts",
@@ -2212,5 +2212,5 @@
       "sha256": "c69dafb888ab2abc0a1a6bfe0602668806ec94b495ad4f228a4e0486f22ea7e4"
     }
   ],
-  "digest": "7b8cee60e164304a6d5bdfc1fccbf9193a3005ee23e2a3c96c9c6d920a419c32"
+  "digest": "8592130e1f7f32fb11d30477f46ff43581681d00e7e700f04fa3845126c17455"
 }
