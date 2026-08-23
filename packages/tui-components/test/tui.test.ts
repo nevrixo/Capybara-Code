@@ -287,6 +287,12 @@ describe("theme and colour fallbacks (§6.5, AC-45)", () => {
     expect(detectCapabilities({ TERM: "xterm" }, { isTty: false }).colorDepth).toBe("none");
   });
 
+  test("recognizes Windows Terminal without POSIX locale variables", () => {
+    const capabilities = detectCapabilities({ WT_SESSION: "session-id" });
+    expect(capabilities.colorDepth).toBe("truecolor");
+    expect(capabilities.unicode).toBe(true);
+  });
+
   test("italic is avoided under tmux and screen (§6.6)", () => {
     expect(detectCapabilities({ TERM: "screen-256color" }).italic).toBe(false);
     expect(detectCapabilities({ TERM: "xterm-256color" }).italic).toBe(true);

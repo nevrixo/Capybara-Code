@@ -286,4 +286,12 @@ describe("revision home frame", () => {
     expect(exact).toContain("tab completion");
     expect(exact).not.toContain("switch agent");
   });
+
+  test("gives the landing composer enough width on spacious terminals", () => {
+    const border = homeFrame(240, 40, "")
+      .map(lineText)
+      .find((value) => value.includes("┌"));
+    expect(border).toBeDefined();
+    expect(stringWidth(border!.trim())).toBe(132);
+  });
 });

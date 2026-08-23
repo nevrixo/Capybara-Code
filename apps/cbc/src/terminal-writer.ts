@@ -122,7 +122,10 @@ export class TerminalFrameWriter {
     const prior = frame.full || this.#diffEnabled === false ? undefined : this.#previousRows;
     const chunks: string[] = [];
     if (prior === undefined) {
-      return `${ESC}2J${ESC}H${frame.rows.join("\r\n")}\r\n${frame.cursor}`;
+      // The frame already contains the terminal's final row. Advancing once
+      // more scrolls the alternate screen and duplicates the pinned status row.
+      // The absolute cursor sequence does not need a preceding newline.
+      return `${ESC}2J${ESC}H${frame.rows.join("\r\n")}${frame.cursor}`;
     }
 
     const rows = frame.rows;

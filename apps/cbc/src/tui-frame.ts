@@ -274,7 +274,9 @@ export function renderHomeFrame(input: HomeFrameOptions): StyledLine[] {
   if (input.rows < 16 && input.columns >= 56) return renderLegacyHomeFrame(input);
   const lines = Array.from({ length: input.rows }, () => line("blank", []));
   const maxPanelWidth = Math.max(1, input.columns - (input.columns < 40 ? 0 : 4));
-  const desiredPanelWidth = Math.min(96, Math.max(1, Math.floor(input.columns * 0.70)));
+  // Keep the primary interaction surface substantial on large desktop
+  // terminals while retaining a two-column gutter on narrow viewports.
+  const desiredPanelWidth = Math.min(132, Math.max(52, Math.floor(input.columns * 0.70)));
   const panelWidth = Math.min(maxPanelWidth, desiredPanelWidth);
   const hasText = input.composer.text.length > 0;
   const minimumComposerRows = 1;

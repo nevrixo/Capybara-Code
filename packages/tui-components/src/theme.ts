@@ -161,6 +161,8 @@ export interface CapabilityEnv {
   readonly TERM?: string | undefined;
   readonly COLORTERM?: string | undefined;
   readonly TERM_PROGRAM?: string | undefined;
+  /** Set by Windows Terminal even though POSIX locale variables are usually absent. */
+  readonly WT_SESSION?: string | undefined;
   readonly CI?: string | undefined;
   readonly LANG?: string | undefined;
   readonly LC_ALL?: string | undefined;
@@ -179,6 +181,10 @@ export function detectCapabilities(
 ): TerminalCapabilities {
   const term = env.TERM ?? "";
   const isTty = options.isTty ?? true;
+  const terminalProgram = env.TERM_PROGRAM ?? "";
+  const modernTerminal =
+    terminalProgram === "iTerm.app" || terminalProgram === "vscode" || terminalProgram === "WezTerm";
+  const windowsTerminal = env.WT_SESSION !== undefined && env.WT_SESSION !== "";
 
   let colorDepth: ColorDepth;
   if (env.NO_COLOR !== undefined && env.NO_COLOR !== "") {
@@ -187,7 +193,7 @@ export function detectCapabilities(
     colorDepth = "none";
   } else if ((env.COLORTERM ?? "").includes("truecolor") || (env.COLORTERM ?? "").includes("24bit")) {
     colorDepth = "truecolor";
-  } else if (env.TERM_PROGRAM === "iTerm.app" || env.TERM_PROGRAM === "vscode" || env.TERM_PROGRAM === "WezTerm") {
+  } else if (modernTerminal || windowsTerminal) {
     colorDepth = "truecolor";
   } else if (term.includes("256")) {
     colorDepth = "256";
@@ -202,7 +208,10 @@ export function detectCapabilities(
   }
 
   const locale = `${env.LC_ALL ?? ""}${env.LANG ?? ""}`.toLowerCase();
-  const unicode = locale.includes("utf") || locale.includes("utf8") || locale.includes("utf-8");
+  // Windows Terminal does not normally expose LANG/LC_ALL, but its VT output is
+  // UTF-8 capable. TERM_PROGRAM is the equivalent signal for other modern hosts.
+  const unicode =
+    locale.includes("utf") || locale.includes("utf8") || locale.includes("utf-8") || modernTerminal || windowsTerminal;
 
   return {
     colorDepth,
