@@ -190,28 +190,7 @@ jobs:
             rm -rf "${verify_dir}"
           done
 
-      - name: Publish v0.1.0-alpha.3 with protected bootstrap token
-        if: github.ref_name == 'v0.1.0-alpha.3'
-        shell: bash
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
-        run: |
-          set -euo pipefail
-          test -n "${NODE_AUTH_TOKEN:-}" || { echo "NPM_BOOTSTRAP_TOKEN is required for alpha.3"; exit 1; }
-          version="${GITHUB_REF_NAME#v}"
-          package_tarballs=(
-            "./dist/npm-tarballs/ilbie-capybara-code-win32-x64-${version}.tgz"
-            "./dist/npm-tarballs/ilbie-capybara-code-darwin-x64-${version}.tgz"
-            "./dist/npm-tarballs/ilbie-capybara-code-darwin-arm64-${version}.tgz"
-            "./dist/npm-tarballs/ilbie-capybara-code-linux-x64-${version}.tgz"
-            "./dist/npm-tarballs/capybara-code-${version}.tgz"
-          )
-          for package_tarball in "${package_tarballs[@]}"; do
-            npm publish "${package_tarball}" --tag alpha --access public
-          done
-
-      - name: Publish later alphas with npm trusted publishing
-        if: github.ref_name != 'v0.1.0-alpha.3'
+      - name: Publish npm packages with npm trusted publishing
         shell: bash
         run: |
           set -euo pipefail

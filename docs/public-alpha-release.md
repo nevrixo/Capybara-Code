@@ -4,7 +4,7 @@ This runbook publishes the first usable-but-not-dependable public build of Capyb
 
 ## Release contract
 
-- Bootstrap version and Git tag: `v0.1.0-alpha.4`. The failed, unpublished `alpha.1`, `alpha.2`, and `alpha.3` tags must not be moved.
+- Published bootstrap version: `v0.1.0-alpha.3`. The `v0.1.0-alpha.4` workflow failed before publishing any package; neither tag may be moved. The next release is `v0.1.0-alpha.5`.
 - npm dist-tag: `alpha`.
 - npm packages: `capybara-code`, `@ilbie/capybara-code-win32-x64`, `@ilbie/capybara-code-darwin-x64`, `@ilbie/capybara-code-darwin-arm64`, and `@ilbie/capybara-code-linux-x64`.
 - Public command: `capy`.
@@ -37,21 +37,21 @@ npm install --global capybara-code@alpha
 4. Verify every version source agrees with the planned tag:
 
    ```bash
-   bun run release:check -- --version v0.1.0-alpha.4
+   bun run release:check -- --version v0.1.0-alpha.5
    bun install --frozen-lockfile
    bun run typecheck
    bun run test:release
    ```
 
-5. For the bootstrap alpha only, add a short-lived `NPM_BOOTSTRAP_TOKEN` secret for the npm user `ilbie` to the protected `npm-publish` Environment. It must be able to create public packages in the `@ilbie` scope and publish the unscoped launcher. Do not add it as a repository-wide secret.
+5. Confirm that all five existing packages have the exact Trusted Publisher configuration documented below. The release workflow deliberately has no npm token fallback.
 
 ## Build and tag
 
 The release workflow starts only for an alpha tag. After the reviewed release commit is pushed:
 
 ```bash
-git tag -a v0.1.0-alpha.4 -m "Capybara Code v0.1.0-alpha.4"
-git push origin v0.1.0-alpha.4
+git tag -a v0.1.0-alpha.5 -m "Capybara Code v0.1.0-alpha.5"
+git push origin v0.1.0-alpha.5
 ```
 
 `.github/workflows/release.yml` validates version alignment, then builds and smoke-tests all four native targets on their corresponding GitHub-hosted runners. It rejects source maps, local checkout paths, and duplicate `share/share` directories while constructing package payloads.
@@ -67,9 +67,9 @@ Once the native matrix passes, approval of the `npm-publish` Environment allows 
 
 The alpha manifest must describe the artifacts as unsigned. SHA-256 is an integrity check, not a signature scheme.
 
-## Set up npm Trusted Publishing after alpha.3
+## npm Trusted Publishing
 
-npm can configure a GitHub trusted publisher only after the corresponding package exists. After the bootstrap publish succeeds, use an npm owner account to connect every package to this repository, workflow, and Environment:
+The `alpha.3` bootstrap created all five packages. Before any later release, use an npm owner account to connect every package to this repository, workflow, and Environment:
 
 `npm trust` requires npm 11.15.0 or newer, package write access, and account-level two-factor authentication. Each package must already exist on the public npm registry.
 
@@ -92,7 +92,7 @@ do
 done
 ```
 
-Verify each package in npm's access settings, then delete `NPM_BOOTSTRAP_TOKEN` from the Environment. Later alpha tags use the workflow's `id-token: write` permission with `npm publish --provenance`; they must not reintroduce a long-lived npm token.
+Verify each package in npm's access settings and remove any obsolete `NPM_BOOTSTRAP_TOKEN` from the Environment. Every later alpha tag uses the workflow's `id-token: write` permission with `npm publish --provenance`; a long-lived npm token must not be reintroduced.
 
 If the `@nevrixo` scope becomes available later, publish the native packages under that scope in a new version and update the launcher dependencies. Deprecate the old `@ilbie` packages only after the new release is live; do not unpublish them, because older launcher versions still depend on them.
 
