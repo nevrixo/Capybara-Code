@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-23T19:42:08.667Z",
+  "generatedAt": "2026-08-23T20:08:44.183Z",
   "git": {
-    "commit": "8db9e3154c494e1ba5dee4af713fe3dab22f0989",
+    "commit": "3697de0e51b835ceb722ee7290e40b8ff6485b7a",
     "dirty": true,
-    "dirtyHash": "4a9231cd5bd779cbe7b98e7e77548a0226ce7b4bd72d10c0bdb7fca0cfb771ad"
+    "dirtyHash": "df73f1edf337fec7262ae104a942e6f32aebaaae89f74ad5ed12252805371f14"
   },
   "roots": [
     "apps",
@@ -59,7 +59,7 @@
     {
       "path": "apps/cbc/package.json",
       "bytes": 301,
-      "sha256": "d5992d9fb9afcdf4b14e4d27e8297a5556455ba63b715a012abdbace9d6e9af1"
+      "sha256": "3cc08558cf82e6ac17ef23eaa8bfae25094a73eccf3c92d12ec69d30ce9ae71c"
     },
     {
       "path": "apps/cbc/src/account-login.ts",
@@ -194,7 +194,7 @@
     {
       "path": "apps/cbc/src/main.ts",
       "bytes": 999,
-      "sha256": "82fefce11407cb91f5d0b519830b7d3ccf45edf2a3091b9bfa6c5e8ec3e114af"
+      "sha256": "2d7e72bbc67d91b751f40a896e7d130d56ef7f7115e708e4b960bf4e7006afae"
     },
     {
       "path": "apps/cbc/src/mcp-credentials.ts",
@@ -228,8 +228,8 @@
     },
     {
       "path": "apps/cbc/src/output.ts",
-      "bytes": 2470,
-      "sha256": "43db136e1a9b2792d4cfec9489c0ab56fe93e7061101a3c438c21f427b1b7387"
+      "bytes": 2500,
+      "sha256": "16ab02f7cad48033dd0d2684068e9903fc399b17cb2f0a9d71a02f5986845455"
     },
     {
       "path": "apps/cbc/src/path-mentions.ts",
@@ -348,8 +348,8 @@
     },
     {
       "path": "apps/cbc/test/cbc.test.ts",
-      "bytes": 231134,
-      "sha256": "3f5a6e4e618722b8231d83314aa3eccb645df25c520122199b8e3223839cad70"
+      "bytes": 232260,
+      "sha256": "c111509bb553411e82564e2028fa97e20a1a997968b31a29ec9ac1a206e2f44e"
     },
     {
       "path": "apps/cbc/test/config-template.test.ts",
@@ -634,17 +634,17 @@
     {
       "path": "bun.lock",
       "bytes": 18286,
-      "sha256": "62fd097939135d4f12c8ba08471a5284b8b32c2ddf39fd56e5ef49aecced65b4"
+      "sha256": "5abdb91e9121001804e8d838e0c72e851eaef2a1119d3e36ca87064984e102c4"
     },
     {
       "path": "Cargo.lock",
       "bytes": 22010,
-      "sha256": "f86184ac329782f15f389fbed60032fb1004a0e6c01ae7c38ba8228d2a4029ed"
+      "sha256": "68748660a805e8350522975a5bb08e5b223e9d919f653055e7db3e73c852aec9"
     },
     {
       "path": "Cargo.toml",
       "bytes": 1654,
-      "sha256": "044cec030ba794bf08bc28243db63252e1dfc73d057dc73ab24217a3fe44a718"
+      "sha256": "50b273dc06a5d1e7d8aca2a944ca5122692352c7f3a035a83e29be0734851079"
     },
     {
       "path": "crates/cbc-artifacts/Cargo.toml",
@@ -1139,7 +1139,7 @@
     {
       "path": "package.json",
       "bytes": 2537,
-      "sha256": "527ce36dde5d9c16f05b02de543ba8e8174f6f54492a17e31922ae8c6f55be11"
+      "sha256": "fdec810ebebc60b6973acf73bb28854247d2c72a8ff6f5f47e530ae631bbc5d7"
     },
     {
       "path": "packages/agent-kernel/package.json",
@@ -2013,8 +2013,8 @@
     },
     {
       "path": "packages/tui-components/src/theme.ts",
-      "bytes": 22771,
-      "sha256": "4ead3bd471ab5bf4323be5977f4926fd874058e514145854b19b4e3027afef8e"
+      "bytes": 22969,
+      "sha256": "4a707b04f7942d844da232b6e842096fbdccbbb021db751fd268c210901b3569"
     },
     {
       "path": "packages/tui-components/src/timeline-store.ts",
@@ -2078,8 +2078,8 @@
     },
     {
       "path": "packages/tui-components/test/tui.test.ts",
-      "bytes": 120784,
-      "sha256": "5f9304b38c38d7fb1ea5a7a0a37e2c5fb325a08be5f6525702623957deb722f5"
+      "bytes": 121161,
+      "sha256": "c8adb857ff259799712a7d405c274229874d60dc55a8f8ee6da931864c1fa383"
     },
     {
       "path": "pnpm-workspace.yaml",
@@ -2194,7 +2194,7 @@
     {
       "path": "scripts/release.test.ts",
       "bytes": 10478,
-      "sha256": "e0e6b1bde384202ba489c8584187a6028bb56a03a4a3fc19f5325cfea2f78dda"
+      "sha256": "d51d5c69099015c287935cb18ef0a57706549c13b5160068bf9273b4d10c31c3"
     },
     {
       "path": "scripts/smoke-release.ts",
@@ -2217,5 +2217,5 @@
       "sha256": "c69dafb888ab2abc0a1a6bfe0602668806ec94b495ad4f228a4e0486f22ea7e4"
     }
   ],
-  "digest": "b54ec0fa7c6b55ebf409a240f2e85a8efd791296225b9861e51368eed29f77bb"
+  "digest": "6dc7817f6c0874070c4d28b74939c6da45381627515314d4bbe5af67f109b634"
 }

@@ -177,7 +177,7 @@ export interface CapabilityEnv {
  */
 export function detectCapabilities(
   env: CapabilityEnv,
-  options: { columns?: number; rows?: number; isTty?: boolean } = {},
+  options: { columns?: number; rows?: number; isTty?: boolean; platform?: string } = {},
 ): TerminalCapabilities {
   const term = env.TERM ?? "";
   const isTty = options.isTty ?? true;
@@ -185,6 +185,7 @@ export function detectCapabilities(
   const modernTerminal =
     terminalProgram === "iTerm.app" || terminalProgram === "vscode" || terminalProgram === "WezTerm";
   const windowsTerminal = env.WT_SESSION !== undefined && env.WT_SESSION !== "";
+  const nativeWindowsTty = options.platform === "win32" && isTty;
 
   let colorDepth: ColorDepth;
   if (env.NO_COLOR !== undefined && env.NO_COLOR !== "") {
@@ -208,10 +209,16 @@ export function detectCapabilities(
   }
 
   const locale = `${env.LC_ALL ?? ""}${env.LANG ?? ""}`.toLowerCase();
-  // Windows Terminal does not normally expose LANG/LC_ALL, but its VT output is
-  // UTF-8 capable. TERM_PROGRAM is the equivalent signal for other modern hosts.
+  // Native Windows terminals do not normally expose LANG/LC_ALL (and hosts other
+  // than Windows Terminal may omit WT_SESSION), but Bun writes Unicode to their
+  // TTYs. TERM_PROGRAM is the equivalent signal for other modern hosts.
   const unicode =
-    locale.includes("utf") || locale.includes("utf8") || locale.includes("utf-8") || modernTerminal || windowsTerminal;
+    locale.includes("utf") ||
+    locale.includes("utf8") ||
+    locale.includes("utf-8") ||
+    modernTerminal ||
+    windowsTerminal ||
+    nativeWindowsTty;
 
   return {
     colorDepth,

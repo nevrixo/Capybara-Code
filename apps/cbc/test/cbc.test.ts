@@ -564,6 +564,13 @@ describe("render mode", () => {
     expect(decideRenderMode({ host, rendererAvailable: true }).mode).toBe("opentui");
   });
 
+  test("passes the native Windows platform through to Unicode capability detection", () => {
+    const host = createFakeHost({ isTty: true, platform: "win32", env: { NO_COLOR: "1" } });
+    const decision = decideRenderMode({ host, rendererAvailable: true });
+    expect(decision.capabilities.unicode).toBe(true);
+    expect(decision.capabilities.colorDepth).toBe("none");
+  });
+
   test("the OpenTUI charcoal palette is the default a session paints with (§6.5)", () => {
     const host = createFakeHost({ isTty: true, env: { COLORTERM: "truecolor" } });
     const decision = decideRenderMode({ host, rendererAvailable: true });
@@ -2007,6 +2014,32 @@ describe("interactive UI (§6.2, §6.21)", () => {
       instance.closeOverlay();
     }
 
+    instance.restore();
+  });
+
+  test("a native Windows TTY paints the Unicode home banner without locale hints", () => {
+    const host = createFakeHost({
+      isTty: true,
+      columns: 160,
+      platform: "win32",
+      env: { NO_COLOR: "1" },
+    });
+    const decision = decideRenderMode({ host, rendererAvailable: true });
+    const instance = new InteractiveUi({
+      host,
+      decision,
+      writer: new LineWriter(host, decision),
+      workspacePath: "C:/work/project",
+      version: "0.1.0-test",
+      mcpServers: [],
+      lspServers: [],
+    });
+
+    instance.open();
+    const home = host.out.join("");
+    expect(home).toContain("██████");
+    expect(home).toContain("┌");
+    expect(home).toContain("┐");
     instance.restore();
   });
 

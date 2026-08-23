@@ -33,6 +33,7 @@ export function decideRenderMode(input: RenderModeInput): RenderDecision {
     columns: host.io.columns,
     rows: host.io.rows,
     isTty: host.io.isTty,
+    platform: host.platform,
   });
   const theme = new Theme({ depth: capabilities.colorDepth });
 
