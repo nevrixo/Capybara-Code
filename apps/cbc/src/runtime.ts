@@ -17,11 +17,14 @@ import {
   RuntimeRpcError,
   JSONRPC_ERROR_CODES,
   type CapabilityReceipt,
+  type EditApplyRequest,
+  type EditPreviewRequest,
   type InitializeResult,
   type RuntimeCapabilities,
   type RuntimeHealth,
   type RuntimeProcess,
   type RuntimeSpawner,
+  type StructuredEditResponse,
 } from "@cbc/protocol";
 import type { CredentialLease } from "@cbc/provider-openai";
 
@@ -808,6 +811,11 @@ export class Runtime {
     return response.revisionToken;
   }
 
+  /** Preflight a structured edit plan without opening a write transaction. */
+  async previewEdit(params: EditPreviewRequest): Promise<StructuredEditResponse> {
+    return (await this.#client.request("fs.edit.preview", params)) as StructuredEditResponse;
+  }
+
   // ---- transactions ----
 
   async beginTransaction(options: {
@@ -827,6 +835,11 @@ export class Runtime {
 
   async patch(params: Record<string, unknown>): Promise<unknown> {
     return await this.#client.request("fs.patch", params);
+  }
+
+  /** Re-preflight and atomically stage a structured edit in an open transaction. */
+  async applyEdit(params: EditApplyRequest): Promise<StructuredEditResponse> {
+    return (await this.#client.request("fs.edit", params)) as StructuredEditResponse;
   }
 
   async write(params: Record<string, unknown>): Promise<unknown> {

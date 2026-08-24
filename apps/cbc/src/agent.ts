@@ -97,7 +97,7 @@ import {
   type SkillFile,
 } from "@cbc/skills";
 import type { ChildRunContext, SubagentScheduler } from "@cbc/subagents";
-import { errorResult, NATIVE_TOOLS, okResult, ToolRegistry, globMatch, type ToolDefinition } from "@cbc/tool-registry";
+import { errorResult, nativeToolsForFeatures, okResult, ToolRegistry, globMatch, type ToolDefinition } from "@cbc/tool-registry";
 
 import type { GrantedRules } from "./approvals.ts";
 import { ExtensionManager } from "./extensions.ts";
@@ -547,6 +547,12 @@ export class AgentSession {
     this.#backgroundJobsReconciled = typeof options.runtime.jobStatus !== "function";
     this.#permissionPreset = options.config.permissions.preset;
     this.#tokenSaving = new TokenSavingController(options.config.agent.tokenSaving);
+    const sessionTools = nativeToolsForFeatures({
+      editEngineV2: options.config.experimental.editEngineV2,
+    }).filter((tool) =>
+      options.config.agent.compoundTools ||
+      (tool.id !== "repo.investigate" && tool.id !== "verification.run_many"),
+    );
     this.taskEpoch = new TaskEpochManager({
       initial: {
         goalDigest: "unassigned-goal",
@@ -558,7 +564,7 @@ export class AgentSession {
           compoundTools: options.config.agent.compoundTools,
         }),
         workspaceIdentityDigest: options.workspaceIdentityDigest ?? stableDigest(options.workspacePath),
-        toolsetDigest: stableDigest(NATIVE_TOOLS.filter((tool) => options.config.agent.compoundTools || (tool.id !== "repo.investigate" && tool.id !== "verification.run_many")).map((tool) => tool.id)),
+        toolsetDigest: stableDigest(sessionTools.map((tool) => tool.id)),
         modelId: options.config.model.default,
       },
     });
@@ -615,7 +621,7 @@ export class AgentSession {
       },
     });
 
-    this.registry = new ToolRegistry(NATIVE_TOOLS.filter((tool) => options.config.agent.compoundTools || (tool.id !== "repo.investigate" && tool.id !== "verification.run_many")));
+    this.registry = new ToolRegistry(sessionTools);
     this.#todoController = new TodoController({
       mode: () => this.recorder.model.modeState.selected,
       now: () => new Date(options.now?.() ?? options.host.now()).toISOString(),
@@ -742,6 +748,7 @@ export class AgentSession {
       runtime: options.runtime,
       host: options.host,
       sessionId: options.sessionId,
+      editEngineV2: options.config.experimental.editEngineV2,
       bridges,
       ...(options.verificationContract !== undefined
         ? { verificationContract: options.verificationContract }

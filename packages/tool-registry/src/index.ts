@@ -10,7 +10,7 @@ export * from "./scheduler.ts";
 export * from "./graph.ts";
 export * from "./recovery.ts";
 
-import { isPlanSafeTool, NATIVE_TOOLS, withExecutionMetadata, type ToolDefinition } from "./catalog.ts";
+import { isPlanSafeTool, nativeToolsForFeatures, withExecutionMetadata, type ToolDefinition } from "./catalog.ts";
 import { discover, type DiscoveryOptions, type ToolDiscoveryResult } from "./discovery.ts";
 import { parseAndValidate, type ValidationResult } from "./validate.ts";
 
@@ -42,7 +42,7 @@ export class ToolRegistry {
   readonly #active = new Set<string>();
   #interactionMode: "build" | "plan" = "build";
 
-  constructor(initial: readonly ToolDefinition[] = NATIVE_TOOLS) {
+  constructor(initial: readonly ToolDefinition[] = nativeToolsForFeatures()) {
     for (const tool of initial) this.#tools.set(tool.id, withExecutionMetadata(tool));
     for (const tool of initial) {
       if (tool.alwaysActive) this.#active.add(tool.id);

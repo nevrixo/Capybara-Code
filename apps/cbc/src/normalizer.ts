@@ -27,6 +27,7 @@ const WRITE_TOOLS = new Set([
   "fs.write",
   "fs.move",
   "fs.delete",
+  "fs.edit",
 ]);
 
 const READ_PATH_KEYS = ["path", "file", "target"] as const;
@@ -84,7 +85,50 @@ function collectPaths(args: Record<string, unknown>): string[] {
   if (to !== undefined) found.push(to);
   return dedupe(found.map(normalizePath));
 }
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
 
+/** Extract every file resource a structured edit can mutate or relocate. */
+export function pathsFromEditPlan(value: unknown): string[] {
+  const plan = record(value);
+  const operations = plan?.operations;
+  if (!Array.isArray(operations)) return [];
+  const paths: string[] = [];
+  for (const operation of operations) {
+    const item = record(operation);
+    if (item === undefined) continue;
+    for (const key of ["path", "toPath"] as const) {
+      const path = item[key];
+      if (typeof path === "string" && path.length > 0) paths.push(normalizePath(path));
+    }
+  }
+  return dedupe(paths);
+}
+
+/** Normalize only path-bearing operation fields; all validation remains in Rust. */
+function normalizeEditPlan(value: unknown): unknown {
+  const plan = record(value);
+  if (plan === undefined) return value;
+  const operations = plan.operations;
+  if (!Array.isArray(operations)) return { ...plan };
+  return {
+    ...plan,
+    operations: operations.map((operation) => {
+      const item = record(operation);
+      if (item === undefined) return operation;
+      const normalized = { ...item };
+      for (const key of ["path", "toPath"] as const) {
+        const path = normalized[key];
+        if (typeof path === "string") normalized[key] = normalizePath(path);
+      }
+
+      return normalized;
+    }),
+  };
+}
 /** Paths mentioned in a unified diff, so a patch declares what it touches. */
 export function pathsFromDiff(diff: string): string[] {
   const paths: string[] = [];
@@ -106,7 +150,7 @@ function dedupe(values: readonly string[]): string[] {
   return [...new Set(values)].sort();
 }
 
-function normalizeArguments(args: Record<string, unknown>): Record<string, unknown> {
+function normalizeArguments(toolId: string, args: Record<string, unknown>): Record<string, unknown> {
   const normalized: Record<string, unknown> = { ...args };
   for (const key of READ_PATH_KEYS) {
     const value = normalized[key];
@@ -120,6 +164,9 @@ function normalizeArguments(args: Record<string, unknown>): Record<string, unkno
   for (const key of ["from", "to", "cwd"] as const) {
     const value = normalized[key];
     if (typeof value === "string") normalized[key] = normalizePath(value);
+  }
+  if ((toolId === "fs.edit" || toolId === "fs.edit.preview") && normalized.plan !== undefined) {
+    normalized.plan = normalizeEditPlan(normalized.plan);
   }
   return normalized;
 }
@@ -231,6 +278,13 @@ export function displayFor(toolId: string, args: Record<string, unknown>): strin
       const paths = pathsFromDiff(stringField(args, "diff") ?? "");
       return paths.length > 0 ? `patch ${paths.join(", ")}` : "patch (no files)";
     }
+    case "fs.edit":
+    case "fs.edit.preview": {
+      const paths = pathsFromEditPlan(args.plan);
+      const verb = toolId === "fs.edit.preview" ? "preview edit" : "edit";
+      return paths.length > 0 ? `${verb} ${paths.join(", ")}` : `${verb} (no files)`;
+    }
+
     case "fs.write":
       return `write ${stringField(args, "path") ?? "?"}`;
     case "fs.move":
@@ -280,13 +334,16 @@ export class HostActionNormalizer implements ActionNormalizer {
 
   normalize(callId: string, toolId: string, args: Record<string, unknown>): ProposedAction {
     const defaultCwd = this.#options.defaultCwd ?? ".";
-    const normalizedArgs = normalizeArguments(args);
+    const normalizedArgs = normalizeArguments(toolId, args);
     const command = commandFor(toolId, normalizedArgs, defaultCwd);
 
     const declaredPaths = collectPaths(normalizedArgs);
     const patchPaths =
       toolId === "fs.apply_patch" ? pathsFromDiff(stringField(normalizedArgs, "diff") ?? "") : [];
-    const paths = dedupe([...declaredPaths, ...patchPaths]);
+    const editPaths = toolId === "fs.edit" || toolId === "fs.edit.preview"
+      ? pathsFromEditPlan(normalizedArgs.plan)
+      : [];
+    const paths = dedupe([...declaredPaths, ...patchPaths, ...editPaths]);
 
     const writes = WRITE_TOOLS.has(toolId) ? paths : [];
     const reads = WRITE_TOOLS.has(toolId) ? [] : paths;

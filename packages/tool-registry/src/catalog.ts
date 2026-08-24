@@ -131,6 +131,57 @@ const readRangeProperties = {
 };
 
 const readManyItem = objectSchema(readRangeProperties, ["path"]);
+const structuredEditOperation = {
+  type: "object",
+  properties: {
+    operationId: { type: "string", minLength: 1, maxLength: 256 },
+    kind: {
+      type: "string",
+      enum: [
+        "replace_anchor",
+        "replace_range",
+        "insert_before",
+        "insert_after",
+        "delete_anchor",
+        "create_file",
+        "move_file",
+        "delete_file",
+      ],
+    },
+    path: relativePath,
+    toPath: relativePath,
+  },
+  required: ["operationId", "kind", "path"],
+  // Rust owns operation-specific and anchor/range validation.
+  additionalProperties: true,
+};
+
+const structuredEditPlan = {
+  type: "object",
+  properties: {
+    schemaVersion: { type: "string", enum: ["1.0"] },
+    id: { type: "string", minLength: 1, maxLength: 256 },
+    source: { type: "string", enum: ["model", "lsp", "plugin", "merge", "user"] },
+    workspaceIdentityDigest: { type: "string", minLength: 1, maxLength: 512 },
+    sessionId: { type: "string", minLength: 1, maxLength: 256 },
+    operations: { type: "array", items: structuredEditOperation, minItems: 1, maxItems: 100 },
+    conflictPolicy: { type: "string", enum: ["fail", "safe_rebase"] },
+    createdAt: { type: "string", minLength: 1, maxLength: 128 },
+  },
+  required: [
+    "schemaVersion",
+    "id",
+    "source",
+    "workspaceIdentityDigest",
+    "sessionId",
+    "operations",
+    "conflictPolicy",
+    "createdAt",
+  ],
+  // The versioned plan has anchor-specific fields Rust validates authoritatively.
+  additionalProperties: true,
+};
+
 
 /** The P0 native catalog from §12.2. */
 export const NATIVE_TOOLS: readonly ToolDefinition[] = [
@@ -273,6 +324,38 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
         },
       },
       ["diff"],
+    ),
+  },
+  {
+    id: "fs.edit.preview",
+    title: "PreviewEdit",
+    description: "Resolve an anchor/range edit plan against the current workspace without writing files.",
+    source: "native",
+    defaultRisk: "R0",
+    maxRisk: "R5",
+    alwaysActive: true,
+    mutates: false,
+    network: false,
+    keywords: ["edit", "preview", "anchor", "range", "replace", "refactor"],
+    parameters: objectSchema(
+      { plan: structuredEditPlan },
+      ["plan"],
+    ),
+  },
+  {
+    id: "fs.edit",
+    title: "Edit",
+    description: "Re-preflight and atomically apply an anchor/range edit plan in one transaction.",
+    source: "native",
+    defaultRisk: "R2",
+    maxRisk: "R2",
+    alwaysActive: true,
+    mutates: true,
+    network: false,
+    keywords: ["edit", "anchor", "range", "replace", "refactor", "move", "delete"],
+    parameters: objectSchema(
+      { plan: structuredEditPlan },
+      ["plan"],
     ),
   },
   {
@@ -963,6 +1046,19 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
     ),
   },
 ] as const;
+/** Experimental tools are absent from the default model catalog until enabled. */
+const EXPERIMENTAL_NATIVE_TOOL_IDS = new Set(["fs.edit.preview", "fs.edit"]);
+
+export interface NativeToolFeatures {
+  readonly editEngineV2?: boolean;
+}
+
+export function nativeToolsForFeatures(features: NativeToolFeatures = {}): ToolDefinition[] {
+  return NATIVE_TOOLS.filter((tool) =>
+    !EXPERIMENTAL_NATIVE_TOOL_IDS.has(tool.id) || features.editEngineV2 === true,
+  );
+}
+
 
 export function withExecutionMetadata(tool: ToolDefinition): ToolDefinition {
   const authority: ToolExecutionMetadata["authority"] = tool.authority ?? (tool.mutates
@@ -1027,8 +1123,8 @@ export function findTool(id: string): ToolDefinition | undefined {
   return tool === undefined ? undefined : withExecutionMetadata(tool);
 }
 
-export function alwaysActiveTools(): ToolDefinition[] {
-  return NATIVE_TOOLS.filter((t) => t.alwaysActive).map(withExecutionMetadata);
+export function alwaysActiveTools(features: NativeToolFeatures = {}): ToolDefinition[] {
+  return nativeToolsForFeatures(features).filter((t) => t.alwaysActive).map(withExecutionMetadata);
 }
 
 /** §12.4 common result envelope. */

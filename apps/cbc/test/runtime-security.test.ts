@@ -63,6 +63,102 @@ describe("runtime sidecar environment", () => {
     }
   });
 
+  test("feature-gated fs.edit re-normalizes every capability resource before staging", async () => {
+    const issued: Record<string, unknown>[] = [];
+    const applied: Record<string, unknown>[] = [];
+    const runtime = {
+      workspace: "/work/project",
+      async issueCapability(params: Record<string, unknown>) {
+        issued.push(params);
+        return {
+          id: "cap-edit",
+          sessionId: "session-edit",
+          callId: "edit-1",
+          actionHash: "hash-edit",
+          workspaceId: "workspace-edit",
+          operation: "fs.transaction",
+          resources: ["src/a.ts", "src/b.ts"],
+          network: "deny" as const,
+          expiresAtMs: Number.MAX_SAFE_INTEGER,
+          singleUse: true,
+        };
+      },
+      beginTransaction: async () => ({ transactionId: "tx-edit" }),
+      async applyEdit(params: Record<string, unknown>) {
+        applied.push(params);
+        return {
+          status: "previewed" as const,
+          planId: "edp_1",
+          planDigest: "sha256:plan",
+          resolvedOperations: [],
+          files: [{
+            kind: "move" as const,
+            path: "src/b.ts",
+            previousPath: "src/a.ts",
+            operationIds: ["edo_1"],
+            additions: 0,
+            deletions: 0,
+          }],
+          diffPreview: [],
+          stagedPaths: ["src/a.ts", "src/b.ts"],
+        };
+      },
+      commitTransaction: async () => ({
+        operations: [{ path: "src/b.ts", additions: 0, deletions: 0 }],
+        totalAdditions: 0,
+        totalDeletions: 0,
+      }),
+      rollbackTransaction: async () => undefined,
+    };
+    const action = {
+      callId: "edit-1",
+      toolId: "fs.edit",
+      arguments: {
+        plan: {
+          schemaVersion: "1.0",
+          id: "edp_1",
+          source: "model",
+          workspaceIdentityDigest: "workspace-edit",
+          sessionId: "session-edit",
+          operations: [{
+            operationId: "edo_1",
+            kind: "move_file",
+            path: "/work/project/src/a.ts",
+            toPath: "/work/project/src/b.ts",
+          }],
+          conflictPolicy: "fail",
+          createdAt: "2026-08-25T00:00:00.000Z",
+        },
+      },
+      display: "edit src/a.ts",
+    };
+    const disabled = new RuntimeToolExecutor({
+      runtime: runtime as never,
+      host: { now: () => 1 } as never,
+      sessionId: "session-edit",
+    });
+    const denied = await disabled.execute(action, new AbortController().signal);
+    expect(denied.result.error?.code).toBe("NOT_FOUND");
+    expect(issued).toHaveLength(0);
+
+    const executor = new RuntimeToolExecutor({
+      runtime: runtime as never,
+      host: { now: () => 1 } as never,
+      sessionId: "session-edit",
+      editEngineV2: true,
+    });
+    const result = await executor.execute(action, new AbortController().signal);
+    expect(result.result.ok).toBe(true);
+    expect(issued[0]?.resources).toEqual(["src/a.ts", "src/b.ts"]);
+    const plan = applied[0]?.plan as { operations: Array<{ operationId: string; kind: string; path: string; toPath?: string }> };
+    expect(plan.operations[0]).toEqual({
+      operationId: "edo_1",
+      kind: "move_file",
+      path: "src/a.ts",
+      toPath: "src/b.ts",
+    });
+  });
+
   test("does not inherit provider secrets or executable-control variables", () => {
     const filtered = runtimeSidecarEnvironment({
       PATH: "C:\\bin",

@@ -34,7 +34,7 @@ import type {
   ModelProvider,
 } from "@cbc/provider-openai";
 import {
-  NATIVE_TOOLS,
+  nativeToolsForFeatures,
   ToolRegistry,
   errorResult,
   type ArtifactRef,
@@ -515,9 +515,15 @@ export class SubagentBridge {
 
   async #runChild(context: ChildRunContext): Promise<ChildAgentResult> {
     const instance = context.instance;
-    const childRegistry = new ToolRegistry(
-      NATIVE_TOOLS.filter((tool) => !tool.id.startsWith("task.") && tool.id !== "todo.write" && (this.#options.config.agent.compoundTools || (tool.id !== "repo.investigate" && tool.id !== "verification.run_many"))),
+    const childTools = nativeToolsForFeatures({
+      editEngineV2: this.#options.config.experimental.editEngineV2,
+    }).filter((tool) =>
+      !tool.id.startsWith("task.") &&
+      tool.id !== "todo.write" &&
+      (this.#options.config.agent.compoundTools ||
+        (tool.id !== "repo.investigate" && tool.id !== "verification.run_many")),
     );
+    const childRegistry = new ToolRegistry(childTools);
     const rootPermission = this.#options.permissionContext();
     const childInteractionMode = rootPermission.interactionMode ?? "build";
     childRegistry.setInteractionMode(childInteractionMode);
@@ -556,6 +562,7 @@ export class SubagentBridge {
       runtime: this.#options.runtime,
       host: this.#options.host,
       sessionId: this.#options.sessionId,
+      editEngineV2: this.#options.config.experimental.editEngineV2,
       bridges: childBridges,
       ...(this.#options.verificationContract !== undefined
         ? { verificationContract: this.#options.verificationContract }

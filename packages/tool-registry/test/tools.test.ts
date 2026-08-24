@@ -8,6 +8,7 @@ import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_SCHEDULER_LIMITS,
   NATIVE_TOOLS,
+  nativeToolsForFeatures,
   ToolRegistry,
   allowsBroadRule,
   createLease,
@@ -160,10 +161,49 @@ describe("catalog completeness (§12.2)", () => {
     expect(always).not.toContain("mcp.call");
     expect(always).not.toContain("shell.run");
   });
+
+  test("structured edit is opt-in through editEngineV2", () => {
+    const disabled = nativeToolsForFeatures().map((tool) => tool.id);
+    const enabled = nativeToolsForFeatures({ editEngineV2: true }).map((tool) => tool.id);
+    expect(NATIVE_TOOLS.map((tool) => tool.id)).toEqual(
+      expect.arrayContaining(["fs.edit.preview", "fs.edit"]),
+    );
+    expect(disabled).not.toEqual(expect.arrayContaining(["fs.edit.preview", "fs.edit"]));
+    expect(enabled).toEqual(expect.arrayContaining(["fs.edit.preview", "fs.edit"]));
+    expect(new ToolRegistry().has("fs.edit")).toBe(false);
+    expect(new ToolRegistry(nativeToolsForFeatures({ editEngineV2: true })).activeIds()).toEqual(
+      expect.arrayContaining(["fs.edit.preview", "fs.edit"]),
+    );
+  });
 });
 
 describe("argument validation (§12.4, AC-10)", () => {
   const schema = findTool("fs.read")!.parameters;
+
+  test("structured edit requires scope identity and path-bearing operations", () => {
+    const editSchema = findTool("fs.edit")!.parameters;
+    const plan = {
+      schemaVersion: "1.0",
+      id: "edp_1",
+      source: "model",
+      workspaceIdentityDigest: "ws_1",
+      sessionId: "ses_1",
+      operations: [{ operationId: "edo_1", kind: "replace_range", path: "src/a.ts" }],
+      conflictPolicy: "fail",
+      createdAt: "2026-08-25T00:00:00.000Z",
+    };
+    // Anchor/range-specific fields are checked again by the Rust authority.
+    expect(parseAndValidate(JSON.stringify({ plan }), editSchema).ok).toBe(true);
+    expect(parseAndValidate(JSON.stringify({
+      plan: { ...plan, workspaceIdentityDigest: "" },
+    }), editSchema).ok).toBe(false);
+    expect(parseAndValidate(JSON.stringify({
+      plan: {
+        ...plan,
+        operations: [{ operationId: "edo_1", kind: "replace_range", path: "" }],
+      },
+    }), editSchema).ok).toBe(false);
+  });
 
   test("artifact.read accepts digests and displayed handles but rejects mixed junk", () => {
     const artifactSchema = findTool("artifact.read")!.parameters;

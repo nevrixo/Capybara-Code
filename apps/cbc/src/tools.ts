@@ -17,7 +17,7 @@ import type { ToolExecutor } from "@cbc/agent-kernel";
 import { isSensitivePath } from "@cbc/context-engine";
 import { actionHash, classifyCommand, type ProposedAction } from "@cbc/permissions";
 import type { GeneratedImageOutput } from "@cbc/provider-openai";
-import { RuntimeRpcError, type CapabilityReceipt, type ToolErrorCode } from "@cbc/protocol";
+import { RuntimeRpcError, type CapabilityReceipt, type StructuredEditResponse, type ToolErrorCode } from "@cbc/protocol";
 import { errorResult, okResult, type ArtifactRef, type ToolResult } from "@cbc/tool-registry";
 
 import { resolvePaths, type Host } from "./host.ts";
@@ -101,6 +101,8 @@ export interface ToolExecutorOptions {
   readonly runtime: Runtime;
   readonly host: Host;
   readonly bridges?: ToolBridges;
+  /** Enables the Rust-authoritative anchor/range edit tool surface. */
+  readonly editEngineV2?: boolean;
   /** Turn and agent identity recorded on each transaction (§18.15). */
   readonly scope?: () => {
     turnId?: string;
@@ -268,6 +270,67 @@ function normalizeExpectedHashes(
     ]),
   );
 }
+function objectValue(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+/** Normalize plan-owned paths again at the execution boundary. */
+function normalizeStructuredEditPlan(
+  value: unknown,
+  workspace: string,
+): Record<string, unknown> | undefined {
+  const plan = objectValue(value);
+  const operations = plan?.operations;
+  if (!Array.isArray(operations) || operations.length === 0) return undefined;
+
+  const normalizedOperations: unknown[] = [];
+  for (const operation of operations) {
+    const item = objectValue(operation);
+    if (item === undefined || typeof item.path !== "string" || item.path.trim().length === 0) {
+      return undefined;
+    }
+    const normalized: Record<string, unknown> = {
+      ...item,
+      path: workspacePath(item.path, workspace),
+    };
+    if (typeof item.toPath === "string") {
+      normalized.toPath = workspacePath(item.toPath, workspace);
+    }
+    if (item.kind === "move_file" && typeof normalized.toPath !== "string") return undefined;
+    normalizedOperations.push(normalized);
+  }
+  return { ...plan, operations: normalizedOperations };
+}
+
+function structuredEditPaths(plan: Record<string, unknown>): string[] {
+  const operations = plan.operations;
+  if (!Array.isArray(operations)) return [];
+  const paths = new Set<string>();
+  for (const operation of operations) {
+    const item = objectValue(operation);
+    if (item === undefined) continue;
+    for (const key of ["path", "toPath"] as const) {
+      const path = item[key];
+      if (typeof path === "string" && path.length > 0) paths.add(path);
+    }
+  }
+  return [...paths].sort();
+}
+function renderStructuredEditResponse(response: StructuredEditResponse): string {
+  const paths = response.files.map((file) => file.path);
+  const header = `${response.status} ${response.planId}: ${paths.length} file(s)${
+    paths.length > 0 ? ` (${paths.join(", ")})` : ""
+  }`;
+  const preview = response.diffPreview.slice(0, 300).map((line) => {
+    const marker = line.kind === "addition" ? "+" : line.kind === "deletion" ? "-" : " ";
+    return `${marker} ${line.path}: ${line.text}`.slice(0, 2_048);
+  });
+  return preview.length > 0 ? `${header}\n${preview.join("\n")}` : header;
+}
+
+
 export function toolErrorFrom(error: unknown): ToolResult {
   if (error instanceof RuntimeRpcError) {
     return errorResult(error.taxonomy, error.message, {
@@ -1240,7 +1303,59 @@ export class RuntimeToolExecutor implements ToolExecutor {
         };
       }
 
+      case "fs.edit.preview": {
+        if (this.#options.editEngineV2 !== true) {
+          return {
+            result: errorResult(
+              "NOT_FOUND",
+              "structured edit is disabled; enable experimental.editEngineV2 to use it",
+              { retryable: false },
+            ),
+          };
+        }
+        const plan = normalizeStructuredEditPlan(args(action).plan, workspace);
+        if (plan === undefined) {
+          return {
+            result: errorResult("INVALID_ARGUMENT", "fs.edit.preview requires a non-empty structured edit plan"),
+          };
+        }
+        const preview = await runtime.previewEdit({ plan });
+        return {
+          result: okResult(`previewed structured edit ${preview.planId}`, preview),
+          text: renderStructuredEditResponse(preview),
+        };
+      }
+
       // ---- mutations (§12.5, §12.6) ----
+      case "fs.edit": {
+        if (this.#options.editEngineV2 !== true) {
+          return {
+            result: errorResult(
+              "NOT_FOUND",
+              "structured edit is disabled; enable experimental.editEngineV2 to use it",
+              { retryable: false },
+            ),
+          };
+        }
+        const plan = normalizeStructuredEditPlan(args(action).plan, workspace);
+        if (plan === undefined) {
+          return {
+            result: errorResult("INVALID_ARGUMENT", "fs.edit requires a non-empty structured edit plan"),
+          };
+        }
+        const capability = await this.#issueCapability(action);
+        return await this.#mutate(action, capability.id, async (transactionId) => {
+          const staged = await runtime.applyEdit({
+            transactionId,
+            plan,
+            capabilityReceipt: capability.id,
+            capabilitySessionId: capability.sessionId,
+            capabilityActionHash: capability.actionHash,
+          });
+          return { ...staged } as Record<string, unknown>;
+        });
+      }
+
       case "fs.apply_patch": {
         const capability = await this.#issueCapability(action);
         return await this.#mutate(action, capability.id, async (transactionId) => {
@@ -1811,6 +1926,16 @@ function readPathsForAction(action: ProposedAction, workspace: string): string[]
 }
 
 function actionWithReadPaths(action: ProposedAction, workspace: string): ProposedAction {
+  if (action.toolId === "fs.edit" || action.toolId === "fs.edit.preview") {
+    const plan = normalizeStructuredEditPlan(args(action).plan, workspace);
+    if (plan === undefined) return action;
+    const paths = structuredEditPaths(plan);
+    const normalized = { ...action, arguments: { ...args(action), plan } };
+    if (action.toolId === "fs.edit") {
+      return paths.length > 0 ? { ...normalized, writes: paths } : normalized;
+    }
+    return paths.length > 0 ? { ...normalized, reads: paths } : normalized;
+  }
   if (action.toolId !== "fs.read" && action.toolId !== "fs.read_many") return action;
   const paths = readPathsForAction(action, workspace);
   return paths.length > 0 ? { ...action, reads: paths } : action;

@@ -1209,8 +1209,8 @@ describe("tool action labels (§6.4, §12.2)", () => {
   });
 
   test("a mutating tool never reads as a query, and vice versa", () => {
-    const queries = new Set(["Read", "List", "Find", "Search", "Git", "Discover", "Ask"]);
-    const mutations = new Set(["Write", "Patch", "Move", "Delete"]);
+    const queries = new Set(["Preview", "Read", "List", "Find", "Search", "Git", "Discover", "Ask"]);
+    const mutations = new Set(["Edit", "Write", "Patch", "Move", "Delete"]);
 
     for (const tool of NATIVE_TOOLS) {
       const label = toolActionLabel(tool.id);
@@ -2839,6 +2839,25 @@ describe("action normalization", () => {
     const action = normalizer.normalize("c1", "fs.move", { from: "a.ts", to: "b.ts" });
     expect(action.writes).toEqual(["a.ts", "b.ts"]);
     expect(action.display).toContain("a.ts");
+  });
+
+  test("structured edit declares normalized source and destination paths", () => {
+    const plan = {
+      operations: [
+        { operationId: "edo_1", kind: "replace_range", path: "./src/a.ts" },
+        { operationId: "edo_2", kind: "move_file", path: "src/a.ts", toPath: "./src/b.ts" },
+      ],
+    };
+    const edit = normalizer.normalize("c1", "fs.edit", { plan });
+    const preview = normalizer.normalize("c2", "fs.edit.preview", { plan });
+    expect(edit.writes).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(edit.reads).toBeUndefined();
+    expect(preview.reads).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(preview.writes).toBeUndefined();
+    expect(edit.display).toContain("src/b.ts");
+    const normalizedPlan = edit.arguments.plan as { operations: Array<{ path: string; toPath?: string }> };
+    expect(normalizedPlan.operations[0]?.path).toBe("src/a.ts");
+    expect(normalizedPlan.operations[1]?.toPath).toBe("src/b.ts");
   });
 });
 

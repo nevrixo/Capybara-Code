@@ -589,6 +589,8 @@ const TOOL_ACTIONS: Readonly<Record<string, string>> = {
   "fs.glob": "Find",
   "fs.search": "Search",
   "fs.apply_patch": "Patch",
+  "fs.edit.preview": "Preview",
+  "fs.edit": "Edit",
   "fs.write": "Write",
   "fs.move": "Move",
   "fs.delete": "Delete",
@@ -659,6 +661,7 @@ export function hasExplicitToolAction(toolId: string): boolean {
 /** The icon that goes with a `toolActionLabel`. */
 export function toolActionIcon(toolId: string): IconName {
   switch (toolActionLabel(toolId)) {
+    case "Preview":
     case "Read":
     case "List":
       return "read";
@@ -667,6 +670,7 @@ export function toolActionIcon(toolId: string): IconName {
     case "Discover":
       return "search";
     case "Write":
+    case "Edit":
     case "Patch":
     case "File":
       return "write";
