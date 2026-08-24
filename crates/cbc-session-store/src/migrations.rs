@@ -459,9 +459,142 @@ CREATE INDEX idx_memory_transitions_record
     ON memory_transitions(memory_id, sequence);
 "#,
     },
+    Migration {
+        // W0 / AGG-013: graph scheduling state is event-replayable and survives
+        // daemon restarts. Attempt results remain claims until separately verified.
+        version: 10,
+        name: "persistent-agent-graph",
+        destructive: false,
+        sql: r#"
+CREATE TABLE agent_graphs (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    workspace_identity_digest TEXT NOT NULL,
+    root_node_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    max_depth INTEGER NOT NULL,
+    budget_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_agent_graphs_session
+    ON agent_graphs(session_id, updated_at DESC);
+
+CREATE TABLE agent_nodes (
+    id TEXT PRIMARY KEY,
+    graph_id TEXT NOT NULL REFERENCES agent_graphs(id) ON DELETE CASCADE,
+    parent_node_id TEXT REFERENCES agent_nodes(id) ON DELETE SET NULL,
+    depth INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    name TEXT,
+    title TEXT NOT NULL,
+    task_json TEXT NOT NULL,
+    state TEXT NOT NULL,
+    model_profile TEXT NOT NULL,
+    permission_scope_json TEXT NOT NULL,
+    worktree_id TEXT,
+    active_attempt_id TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL,
+    priority INTEGER NOT NULL DEFAULT 0,
+    result_json TEXT,
+    blocked_reason_json TEXT,
+    revision INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    terminal_at TEXT
+);
+CREATE INDEX idx_agent_nodes_graph_state
+    ON agent_nodes(graph_id, state, priority DESC, created_at);
+
+CREATE TABLE agent_edges (
+    id TEXT PRIMARY KEY,
+    graph_id TEXT NOT NULL REFERENCES agent_graphs(id) ON DELETE CASCADE,
+    from_node_id TEXT NOT NULL REFERENCES agent_nodes(id) ON DELETE CASCADE,
+    to_node_id TEXT NOT NULL REFERENCES agent_nodes(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    required INTEGER NOT NULL,
+    condition_json TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(graph_id, from_node_id, to_node_id, kind)
+);
+CREATE INDEX idx_agent_edges_to
+    ON agent_edges(graph_id, to_node_id, kind);
+
+CREATE TABLE agent_attempts (
+    id TEXT PRIMARY KEY,
+    node_id TEXT NOT NULL REFERENCES agent_nodes(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL,
+    state TEXT NOT NULL,
+    daemon_id TEXT,
+    owner_epoch INTEGER,
+    worker_lease_id TEXT,
+    model_profile TEXT NOT NULL,
+    provider_route TEXT,
+    worktree_id TEXT,
+    turn_id TEXT,
+    context_pack_id TEXT,
+    result_claim_json TEXT,
+    verified_result_json TEXT,
+    error_json TEXT,
+    usage_json TEXT,
+    started_at TEXT,
+    heartbeat_at TEXT,
+    finished_at TEXT,
+    UNIQUE(node_id, ordinal)
+);
+CREATE INDEX idx_agent_attempts_state
+    ON agent_attempts(state, heartbeat_at);
+
+CREATE TABLE agent_messages (
+    id TEXT PRIMARY KEY,
+    graph_id TEXT NOT NULL REFERENCES agent_graphs(id) ON DELETE CASCADE,
+    from_node_id TEXT,
+    to_node_id TEXT NOT NULL REFERENCES agent_nodes(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    body_json TEXT NOT NULL,
+    evidence_ids_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    delivered_at TEXT,
+    acknowledged_at TEXT
+);
+CREATE INDEX idx_agent_messages_pending
+    ON agent_messages(to_node_id, delivered_at, created_at);
+
+CREATE TABLE agent_checkpoints (
+    id TEXT PRIMARY KEY,
+    node_id TEXT NOT NULL REFERENCES agent_nodes(id) ON DELETE CASCADE,
+    attempt_id TEXT REFERENCES agent_attempts(id) ON DELETE SET NULL,
+    graph_revision INTEGER NOT NULL,
+    state_json TEXT NOT NULL,
+    context_pack_id TEXT,
+    worktree_revision TEXT,
+    evidence_ids_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX idx_agent_checkpoints_node
+    ON agent_checkpoints(node_id, created_at DESC);
+
+CREATE TABLE agent_budget_reservations (
+    id TEXT PRIMARY KEY,
+    graph_id TEXT NOT NULL REFERENCES agent_graphs(id) ON DELETE CASCADE,
+    node_id TEXT NOT NULL REFERENCES agent_nodes(id) ON DELETE CASCADE,
+    attempt_id TEXT REFERENCES agent_attempts(id) ON DELETE SET NULL,
+    resource TEXT NOT NULL,
+    reserved REAL NOT NULL,
+    consumed REAL NOT NULL DEFAULT 0,
+    state TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    settled_at TEXT
+);
+CREATE INDEX idx_agent_budget_reservations_graph
+    ON agent_budget_reservations(graph_id, state);
+"#,
+    },
 ];
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 9;
+pub const CURRENT_SCHEMA_VERSION: i64 = 10;
 
 pub fn checksum(sql: &str) -> String {
     format!("{:x}", Sha256::digest(sql.as_bytes()))
@@ -541,7 +674,7 @@ mod tests {
     fn applies_and_is_idempotent() {
         let mut conn = Connection::open_in_memory().unwrap();
         let first = apply_migrations(&mut conn).unwrap();
-        assert_eq!(first, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(first, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let second = apply_migrations(&mut conn).unwrap();
         assert!(second.is_empty(), "re-running must be a no-op");
     }
@@ -580,6 +713,13 @@ mod tests {
             "memory_evidence_links",
             "memory_relations",
             "memory_transitions",
+            "agent_graphs",
+            "agent_nodes",
+            "agent_edges",
+            "agent_attempts",
+            "agent_messages",
+            "agent_checkpoints",
+            "agent_budget_reservations",
         ] {
             assert!(table_exists(&conn, table).unwrap(), "missing table {table}");
         }
