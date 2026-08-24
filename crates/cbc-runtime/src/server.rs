@@ -2485,38 +2485,54 @@ mod tests {
             .to_string();
         let workspace_identity = state.require_workspace().unwrap().fingerprint();
 
-        let remembered = dispatch(
+        let proposal = json!({
+            "scope": "workspace",
+            "key": "memory.runtime",
+            "value": "memory.txt was observed by an exact runtime read",
+            "confidence": 0.9,
+            "paths": ["memory.txt"],
+            "evidenceIds": [evidence_id.clone()],
+            "reason": "runtime exact observation",
+        });
+        let remembered = dispatch(&state, &request("memory.remember", proposal.clone()))
+            .expect("remember dispatched")
+            .expect("fresh exact evidence permits workspace memory");
+        let memory_id = remembered["memory"]["id"]
+            .as_str()
+            .expect("runtime derives memory id")
+            .to_string();
+        assert!(memory_id.starts_with("memory-"));
+        assert_eq!(
+            remembered["memory"]["workspaceIdentityDigest"],
+            workspace_identity
+        );
+        assert_eq!(
+            remembered["memory"]["validFor"]["paths"],
+            json!(["memory.txt"])
+        );
+        assert_eq!(remembered["idempotent"], false);
+
+        let replay = dispatch(&state, &request("memory.remember", proposal))
+            .expect("repeat remember dispatched")
+            .expect("repeat proposal returns the original record");
+        assert_eq!(replay["memory"]["id"], memory_id);
+        assert_eq!(replay["idempotent"], true);
+
+        let injected = dispatch(
             &state,
             &request(
                 "memory.remember",
                 json!({
-                    "memory": {
-                        "id": "memory-runtime",
-                        "workspaceIdentityDigest": workspace_identity,
-                        "scope": "workspace",
-                        "key": "memory.runtime",
-                        "value": "memory.txt was observed by an exact runtime read",
-                        "status": "active",
-                        "confidence": 0.9,
-                        "validFor": {
-                            "workspaceIdentity": workspace_identity.clone(),
-                            "paths": ["memory.txt"],
-                        },
-                        "createdAt": "2026-08-25T00:00:00Z",
-                        "lastValidatedAt": "2026-08-25T00:00:00Z",
-                        "evidenceObservedAt": "2026-08-25T00:00:00Z",
-                        "exactEvidenceObservedAt": "2026-08-25T00:00:00Z",
-                        "createdBy": "test",
-                        "evidenceIds": [evidence_id],
-                        "reason": "runtime exact observation",
-                        "at": "2026-08-25T00:00:00Z",
-                    }
+                    "key": "memory.injected",
+                    "value": "client-controlled workspace identity is refused",
+                    "evidenceIds": [evidence_id],
+                    "workspaceIdentityDigest": workspace_identity,
                 }),
             ),
         )
-        .expect("remember dispatched")
-        .expect("fresh exact evidence permits workspace memory");
-        assert_eq!(remembered["memory"]["id"], "memory-runtime");
+        .expect("injected proposal dispatched")
+        .expect_err("authority fields are not accepted from callers");
+        assert_eq!(injected.code, error_codes::INVALID_PARAMS);
 
         let search = dispatch(
             &state,
