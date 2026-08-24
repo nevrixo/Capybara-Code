@@ -192,9 +192,10 @@ async function main(): Promise<number> {
     // `session.{list,resolve,set_status,export,fork,delete}` are the 44th–49th (P0-05); and
     // `runtime.cancel`, `runtime.capability.issue`, `fs.fingerprint`, and
     // `workspace.mode.write` add cancellation, action-bound receipts, preview
-    // revision validation, and live plan-mode enforcement.
-    REQUEST_METHODS.length === 53,
-    `§20.3 plus checkpoint rollback, trust, session, cancel, capability receipts, fingerprint, and live mode is 53 request methods; found ${REQUEST_METHODS.length}`,
+    // revision validation, live plan-mode enforcement, and Rust-authoritative
+    // structured edit preview/application.
+    REQUEST_METHODS.length === 55,
+    `§20.3 plus checkpoint rollback, trust, session, cancel, capability receipts, fingerprint, live mode, and structured edits is 55 request methods; found ${REQUEST_METHODS.length}`,
   );
 
   // ---- §20.3 notifications ----

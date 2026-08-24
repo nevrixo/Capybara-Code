@@ -711,6 +711,8 @@ pub fn dispatch(state: &RuntimeState, request: &RpcRequest) -> Option<Result<Val
         "fs.read" => handlers::fs::read(state, params),
         "fs.read_many" => handlers::fs::read_many(state, params),
         "fs.fingerprint" => handlers::fs::fingerprint(state, params),
+        "fs.edit.preview" => handlers::edit::preview(state, params),
+        "fs.edit" => handlers::edit::apply(state, params),
         "fs.transaction.begin" => handlers::transaction::begin(state, params),
         "fs.patch" => handlers::transaction::patch(state, params),
         "fs.write" => handlers::transaction::write(state, params),
@@ -2519,4 +2521,86 @@ mod tests {
             cbc_fs::hash_bytes(b"fingerprint\n")
         );
     }
+
+
+    #[test]
+    fn fs_edit_repreflights_then_stages_and_commits_through_transaction() {
+        let (dir, state) = initialized();
+        set_trust(&state, "trusted-always");
+        let workspace = dir.path().join("ws");
+        let path = workspace.join("edit.txt");
+        std::fs::write(&path, "old\n").unwrap();
+        let revision = cbc_fs::hash_bytes(b"old\n");
+        let workspace_identity = state.workspace_id.lock().expect("workspace id").clone();
+        let plan = json!({
+            "schemaVersion": "1.0",
+            "id": "edp_runtime",
+            "source": "user",
+            "workspaceIdentityDigest": workspace_identity,
+            "sessionId": "test-session",
+            "operations": [{
+                "kind": "replace_range",
+                "operationId": "edo_runtime",
+                "path": "edit.txt",
+                "baseRevision": revision,
+                "range": {
+                    "start": { "line": 1, "column": 1 },
+                    "end": { "line": 1, "column": 4 },
+                    "encoding": "utf16"
+                },
+                "replacement": "new"
+            }],
+            "conflictPolicy": "fail",
+            "createdAt": "2026-08-24T00:00:00Z"
+        });
+
+        let preview = dispatch(
+            &state,
+            &request("fs.edit.preview", json!({ "plan": plan })),
+        )
+        .expect("edit preview dispatched")
+        .expect("edit preview succeeds");
+        assert_eq!(preview["status"], "previewed");
+        assert_eq!(preview["files"][0]["path"], "edit.txt");
+        assert!(preview["files"][0].get("text").is_none());
+
+        let begin = begin_transaction(&state).expect("transaction begins");
+        let transaction_id = begin["transactionId"].as_str().expect("transaction id");
+        let receipt = begin["capabilityReceipt"].as_str().expect("capability receipt");
+        let staged = dispatch(
+            &state,
+            &request(
+                "fs.edit",
+                json!({
+                    "transactionId": transaction_id,
+                    "plan": plan,
+                    "capabilityReceipt": receipt,
+                    "capabilitySessionId": "test-session",
+                    "capabilityActionHash": "test-action",
+                }),
+            ),
+        )
+        .expect("edit dispatched")
+        .expect("edit stages");
+        assert_eq!(staged["status"], "previewed");
+        assert_eq!(staged["stagedPaths"], json!(["edit.txt"]));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "old\n");
+
+        dispatch(
+            &state,
+            &request(
+                "fs.transaction.commit",
+                json!({
+                    "transactionId": transaction_id,
+                    "capabilityReceipt": receipt,
+                    "capabilitySessionId": "test-session",
+                    "capabilityActionHash": "test-action",
+                }),
+            ),
+        )
+        .expect("commit dispatched")
+        .expect("commit succeeds");
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "new\n");
+    }
+
 }

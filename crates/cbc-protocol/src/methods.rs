@@ -24,6 +24,8 @@ pub const REQUEST_METHODS: &[&str] = &[
     "fs.read",
     "fs.read_many",
     "fs.fingerprint",
+    "fs.edit.preview",
+    "fs.edit",
     "fs.transaction.begin",
     "fs.patch",
     "fs.write",
@@ -98,6 +100,7 @@ pub const MUTATING_METHODS: &[&str] = &[
     "fs.write",
     "fs.move",
     "fs.delete",
+    "fs.edit",
     // A checkpoint rollback rewrites files, so it is revalidated like any other
     // write. It restores content rather than authoring it, but the path guard has
     // the same reason to care either way.
@@ -122,8 +125,9 @@ mod tests {
         // the five `session.{list,set_status,export,fork,delete}` methods (P0-05)
         // make the SQLite store the single session authority, and `runtime.cancel`
         // (P0-04) lets a client cancel an in-flight request. `fs.fingerprint`
-        // validates a preview revision without promoting it to write authority.
-        assert_eq!(REQUEST_METHODS.len(), 53);
+        // validates a preview revision without promoting it to write authority;
+        // fs.edit.preview and fs.edit add the Rust-authoritative structured edit path.
+        assert_eq!(REQUEST_METHODS.len(), 55);
         for m in [
             "runtime.initialize",
             "workspace.mode.write",
@@ -132,6 +136,8 @@ mod tests {
             "fs.transaction.rollback",
             "fs.transaction.rollback_to_checkpoint",
             "fs.fingerprint",
+            "fs.edit.preview",
+            "fs.edit",
             "process.run",
             "git.checkpoint",
             "credential.lease",
@@ -175,6 +181,7 @@ mod tests {
     fn mutating_set_matches_write_surface() {
         assert!(is_mutating("fs.write"));
         assert!(is_mutating("fs.delete"));
+        assert!(is_mutating("fs.edit"));
         assert!(is_mutating("fs.transaction.rollback_to_checkpoint"));
         assert!(!is_mutating("fs.read"));
         assert!(!is_mutating("fs.transaction.rollback"));

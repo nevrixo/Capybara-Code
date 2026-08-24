@@ -301,12 +301,14 @@ describe("method registry drift (§20.11)", () => {
     // `session.{list,resolve,set_status,export,fork,delete}` are the 44th–49th (P0-05); and
     // `runtime.cancel`, `runtime.capability.issue`, `fs.fingerprint`, and
     // `workspace.mode.write` are additions to the original PRD list.
-    expect(REQUEST_METHODS.length).toBe(53);
+    expect(REQUEST_METHODS.length).toBe(55);
     expect(REQUEST_METHODS).toContain("fs.transaction.rollback_to_checkpoint");
     expect(REQUEST_METHODS).toContain("workspace.trust.set");
     expect(REQUEST_METHODS).toContain("session.fork");
     expect(REQUEST_METHODS).toContain("runtime.cancel");
     expect(REQUEST_METHODS).toContain("fs.fingerprint");
+    expect(REQUEST_METHODS).toContain("fs.edit.preview");
+    expect(REQUEST_METHODS).toContain("fs.edit");
     expect(new Set(REQUEST_METHODS).size).toBe(REQUEST_METHODS.length);
   });
 

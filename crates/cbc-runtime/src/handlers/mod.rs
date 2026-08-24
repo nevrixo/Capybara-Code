@@ -2,6 +2,7 @@
 
 pub mod artifact;
 pub mod credential;
+pub mod edit;
 pub mod fs;
 pub mod git;
 pub mod process;

@@ -18,7 +18,7 @@ use crate::server::{
     RuntimeState,
 };
 
-fn lease_for(state: &RuntimeState, transaction_id: &str) -> Option<Vec<String>> {
+pub(crate) fn lease_for(state: &RuntimeState, transaction_id: &str) -> Option<Vec<String>> {
     state
         .leases
         .lock()
@@ -27,7 +27,7 @@ fn lease_for(state: &RuntimeState, transaction_id: &str) -> Option<Vec<String>> 
         .cloned()
 }
 
-fn write_options(lease: Option<Vec<String>>, params: &Value) -> ResolveOptions {
+pub(crate) fn write_options(lease: Option<Vec<String>>, params: &Value) -> ResolveOptions {
     ResolveOptions {
         allow_absolute: optional_bool(params, "allowAbsolute", false),
         allow_missing: true,
@@ -37,7 +37,7 @@ fn write_options(lease: Option<Vec<String>>, params: &Value) -> ResolveOptions {
     }
 }
 
-fn resolve_write(
+pub(crate) fn resolve_write(
     ws: &Workspace,
     path: &str,
     lease: Option<Vec<String>>,
@@ -53,7 +53,7 @@ fn resolve_write(
 /// either spelling only when both resolve to the exact same canonical workspace
 /// path.  Comparing the raw strings made an otherwise valid `fs.write` appear to
 /// succeed through staging and then fail before persistence at the redaction gate.
-fn receipt_covers_path(
+pub(crate) fn receipt_covers_path(
     ws: &Workspace,
     resources: &[String],
     resolved: &cbc_workspace::ResolvedPath,
@@ -82,6 +82,48 @@ fn receipt_covers_path(
         )
         .is_ok_and(|candidate| candidate.absolute == resolved.absolute)
     })
+}
+
+/// Enforce the same secret-write policy for every structured mutation path.
+pub(crate) fn authorize_secret_write(
+    state: &RuntimeState,
+    ws: &Workspace,
+    params: &Value,
+    resolved: &cbc_workspace::ResolvedPath,
+    content: &str,
+) -> Result<(), RpcError> {
+    let scan = cbc_redaction::redact_patterns_only(content);
+    if !scan.report.redacted() {
+        return Ok(());
+    }
+    let receipt_id = required_str(params, "capabilityReceipt")?;
+    let receipt = state
+        .capabilities
+        .lock()
+        .expect("capability lock")
+        .get(&receipt_id)
+        .cloned()
+        .ok_or_else(|| {
+            RpcError::taxonomy(
+                error_codes::PERMISSION_DENIED,
+                "PERMISSION_DENIED",
+                "secret write requires a capability receipt",
+            )
+        })?;
+    if !receipt_covers_path(ws, &receipt.resources, resolved) {
+        return Err(RpcError::with_data(
+            error_codes::PERMISSION_DENIED,
+            format!(
+                "refusing to write {} because the capability receipt does not cover this sensitive path",
+                resolved.relative
+            ),
+            json!({
+                "taxonomy": "PERMISSION_DENIED",
+                "detectedKinds": scan.report.kinds.iter().copied().collect::<Vec<_>>()
+            }),
+        ));
+    }
+    Ok(())
 }
 
 fn missing_transaction(id: &str) -> RpcError {
@@ -252,32 +294,8 @@ pub fn write(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
     let lease = lease_for(state, &transaction_id);
     let resolved = resolve_write(&ws, &path, lease, &params)?;
 
-    // §12.6: scan model-generated content for credentials before writing.
-    let scan = cbc_redaction::redact_patterns_only(&content);
-    if scan.report.redacted() {
-        let receipt_id = required_str(&params, "capabilityReceipt")?;
-        let receipt = state
-            .capabilities
-            .lock()
-            .expect("capability lock")
-            .get(&receipt_id)
-            .cloned()
-            .ok_or_else(|| {
-                RpcError::taxonomy(
-                    error_codes::PERMISSION_DENIED,
-                    "PERMISSION_DENIED",
-                    "secret write requires a capability receipt",
-                )
-            })?;
-        if !receipt_covers_path(&ws, &receipt.resources, &resolved) {
-            return Err(RpcError::with_data(
-                error_codes::PERMISSION_DENIED,
-                format!("refusing to write {} because the capability receipt does not cover this sensitive path", resolved.relative),
-                json!({ "taxonomy": "PERMISSION_DENIED", "detectedKinds": scan.report.kinds.iter().copied().collect::<Vec<_>>() }),
-            ));
-        }
-    }
-
+    // §12.6: every mutation path scans generated content before staging.
+    authorize_secret_write(state, &ws, &params, &resolved, &content)?;
     let mut guard = state.transactions.lock().expect("tx lock");
     let transaction = guard
         .get_mut(&transaction_id)

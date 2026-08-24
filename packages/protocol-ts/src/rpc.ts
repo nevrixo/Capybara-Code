@@ -138,6 +138,60 @@ export interface FingerprintResponse {
   readonly authoritativeForWrite: boolean;
 }
 
+
+/**
+ * Structured edit requests carry the versioned edit-domain wire object without
+ * making the protocol package depend on a specific client-side preflight
+ * implementation. Rust parses and validates this shape independently.
+ */
+export interface EditPreviewRequest {
+  readonly plan: Readonly<Record<string, unknown>>;
+  readonly allowAbsolute?: boolean;
+}
+
+export interface EditApplyRequest extends EditPreviewRequest {
+  readonly transactionId: string;
+  readonly capabilityReceipt: string;
+  readonly capabilitySessionId: string;
+  readonly capabilityActionHash: string;
+}
+
+export interface StructuredEditResolution {
+  readonly operationId: string;
+  readonly path: string;
+  readonly byteRange: { readonly start: number; readonly end: number };
+  readonly resolution: Readonly<Record<string, unknown>>;
+}
+
+export interface StructuredEditFile {
+  readonly kind: "modify" | "create" | "delete" | "move";
+  readonly path: string;
+  readonly previousPath?: string;
+  readonly revisionBefore?: string;
+  readonly revisionAfter?: string;
+  readonly operationIds: readonly string[];
+  readonly additions: number;
+  readonly deletions: number;
+}
+
+export interface StructuredEditPreviewLine {
+  readonly path: string;
+  readonly kind: "addition" | "deletion" | "context";
+  readonly text: string;
+}
+
+export interface StructuredEditResponse {
+  readonly status: "previewed" | "no_change";
+  readonly planId: string;
+  readonly planDigest: string;
+  readonly resolvedOperations: readonly StructuredEditResolution[];
+  readonly files: readonly StructuredEditFile[];
+  readonly diffPreview: readonly StructuredEditPreviewLine[];
+  readonly transactionId?: string;
+  readonly stagedPaths?: readonly string[];
+}
+
+
 /** Live interaction mode enforced by the Rust runtime. */
 export type InteractionMode = "build" | "plan";
 
@@ -174,6 +228,8 @@ export const REQUEST_METHODS = [
   "fs.read",
   "fs.read_many",
   "fs.fingerprint",
+  "fs.edit.preview",
+  "fs.edit",
   "fs.transaction.begin",
   "fs.patch",
   "fs.write",

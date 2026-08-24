@@ -337,6 +337,8 @@
         "fs.read",
         "fs.read_many",
         "fs.fingerprint",
+        "fs.edit.preview",
+        "fs.edit",
         "fs.transaction.begin",
         "fs.patch",
         "fs.write",
@@ -407,6 +409,7 @@
         "fs.write",
         "fs.move",
         "fs.delete",
+        "fs.edit",
         "fs.transaction.rollback_to_checkpoint",
         "git.checkpoint"
       ]
