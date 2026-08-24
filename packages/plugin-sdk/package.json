@@ -1,0 +1,12 @@
+{
+  "name": "@cbc/plugin-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Capybara Code plugin manifest and hook safety contracts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts"
+}
