@@ -718,3 +718,5 @@ function byteLength(value: string): number {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+export * from "./runtime-backend.ts";

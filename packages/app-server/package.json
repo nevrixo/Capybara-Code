@@ -10,6 +10,7 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "dependencies": {
-    "@cbc/app-protocol": "workspace:*"
+    "@cbc/app-protocol": "workspace:*",
+    "@cbc/protocol": "workspace:*"
   }
 }
