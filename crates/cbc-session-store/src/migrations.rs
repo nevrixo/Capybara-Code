@@ -760,9 +760,39 @@ CREATE TABLE plugin_state (
 );
 "#,
     },
+    Migration {
+        // W0 / APP-029: durable client identities and acknowledged journal cursors
+        // allow a trusted local app client to resume without replay ambiguity.
+        version: 13,
+        name: "app-server-cursors",
+        destructive: false,
+        sql: r#"
+CREATE TABLE app_clients (
+    client_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    version TEXT NOT NULL,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL
+);
+
+CREATE TABLE event_subscriptions (
+    id TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL REFERENCES app_clients(client_id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    state TEXT NOT NULL,
+    filter_json TEXT NOT NULL,
+    last_acked_sequence INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_event_subscriptions_session
+    ON event_subscriptions(session_id, state);
+"#,
+    },
 ];
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 12;
+pub const CURRENT_SCHEMA_VERSION: i64 = 13;
 
 pub fn checksum(sql: &str) -> String {
     format!("{:x}", Sha256::digest(sql.as_bytes()))
@@ -842,7 +872,7 @@ mod tests {
     fn applies_and_is_idempotent() {
         let mut conn = Connection::open_in_memory().unwrap();
         let first = apply_migrations(&mut conn).unwrap();
-        assert_eq!(first, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+        assert_eq!(first, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
         let second = apply_migrations(&mut conn).unwrap();
         assert!(second.is_empty(), "re-running must be a no-op");
     }
@@ -898,6 +928,8 @@ mod tests {
             "plugin_instances",
             "plugin_invocations",
             "plugin_state",
+            "app_clients",
+            "event_subscriptions",
         ] {
             assert!(table_exists(&conn, table).unwrap(), "missing table {table}");
         }
