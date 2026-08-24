@@ -592,9 +592,101 @@ CREATE INDEX idx_agent_budget_reservations_graph
     ON agent_budget_reservations(graph_id, state);
 "#,
     },
+    Migration {
+        // W0 / WT-022: one mutable tree has one lease; proposals and merge
+        // conflicts stay durable so a restart never silently changes the base tree.
+        version: 11,
+        name: "worktree-multi-agent",
+        destructive: false,
+        sql: r#"
+CREATE TABLE worktrees (
+    id TEXT PRIMARY KEY,
+    workspace_identity_digest TEXT NOT NULL,
+    graph_id TEXT REFERENCES agent_graphs(id) ON DELETE SET NULL,
+    node_id TEXT REFERENCES agent_nodes(id) ON DELETE SET NULL,
+    path TEXT NOT NULL UNIQUE,
+    state TEXT NOT NULL,
+    base_commit TEXT NOT NULL,
+    base_workspace_revision TEXT NOT NULL,
+    head_commit TEXT,
+    dirty_digest TEXT,
+    owner_node_id TEXT,
+    writer_lease_id TEXT,
+    revision INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    expires_at TEXT
+);
+CREATE INDEX idx_worktrees_workspace_state
+    ON worktrees(workspace_identity_digest, state);
+
+CREATE TABLE worktree_leases (
+    id TEXT PRIMARY KEY,
+    worktree_id TEXT NOT NULL REFERENCES worktrees(id) ON DELETE CASCADE,
+    node_id TEXT NOT NULL REFERENCES agent_nodes(id) ON DELETE CASCADE,
+    owner_epoch INTEGER NOT NULL,
+    allowed_paths_json TEXT NOT NULL,
+    baseline_revisions_json TEXT NOT NULL,
+    state TEXT NOT NULL,
+    acquired_at TEXT NOT NULL,
+    heartbeat_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX idx_worktree_active_writer
+    ON worktree_leases(worktree_id) WHERE state = 'active';
+
+CREATE TABLE worktree_proposals (
+    id TEXT PRIMARY KEY,
+    worktree_id TEXT NOT NULL REFERENCES worktrees(id) ON DELETE CASCADE,
+    graph_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    attempt_id TEXT NOT NULL,
+    base_commit TEXT NOT NULL,
+    base_workspace_revision TEXT NOT NULL,
+    worktree_revision TEXT NOT NULL,
+    proposal_digest TEXT NOT NULL,
+    proposal_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX idx_worktree_proposals_worktree
+    ON worktree_proposals(worktree_id, created_at DESC);
+
+CREATE TABLE merge_attempts (
+    id TEXT PRIMARY KEY,
+    workspace_identity_digest TEXT NOT NULL,
+    graph_id TEXT,
+    proposal_ids_json TEXT NOT NULL,
+    base_revision_before TEXT NOT NULL,
+    base_revision_after TEXT,
+    transaction_id TEXT,
+    state TEXT NOT NULL,
+    conflict_policy TEXT NOT NULL,
+    error_json TEXT,
+    created_at TEXT NOT NULL,
+    completed_at TEXT
+);
+CREATE INDEX idx_merge_attempts_workspace
+    ON merge_attempts(workspace_identity_digest, created_at DESC);
+
+CREATE TABLE merge_conflicts (
+    id TEXT PRIMARY KEY,
+    merge_attempt_id TEXT NOT NULL REFERENCES merge_attempts(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    conflict_json TEXT NOT NULL,
+    state TEXT NOT NULL,
+    resolution_plan_id TEXT,
+    created_at TEXT NOT NULL,
+    resolved_at TEXT
+);
+CREATE INDEX idx_merge_conflicts_attempt
+    ON merge_conflicts(merge_attempt_id, state);
+"#,
+    },
 ];
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 10;
+pub const CURRENT_SCHEMA_VERSION: i64 = 11;
 
 pub fn checksum(sql: &str) -> String {
     format!("{:x}", Sha256::digest(sql.as_bytes()))
@@ -674,7 +766,7 @@ mod tests {
     fn applies_and_is_idempotent() {
         let mut conn = Connection::open_in_memory().unwrap();
         let first = apply_migrations(&mut conn).unwrap();
-        assert_eq!(first, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(first, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
         let second = apply_migrations(&mut conn).unwrap();
         assert!(second.is_empty(), "re-running must be a no-op");
     }
@@ -720,6 +812,11 @@ mod tests {
             "agent_messages",
             "agent_checkpoints",
             "agent_budget_reservations",
+            "worktrees",
+            "worktree_leases",
+            "worktree_proposals",
+            "merge_attempts",
+            "merge_conflicts",
         ] {
             assert!(table_exists(&conn, table).unwrap(), "missing table {table}");
         }
