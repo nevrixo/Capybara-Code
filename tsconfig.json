@@ -26,6 +26,7 @@
 
     "baseUrl": ".",
     "paths": {
+      "@cbc/lsp-domain": ["packages/lsp-domain/src/index.ts"],
       "@cbc/protocol": ["packages/protocol-ts/src/index.ts"],
       "@cbc/app-protocol": ["packages/app-protocol/src/index.ts"],
       "@cbc/edit-domain": ["packages/edit-domain/src/index.ts"],

@@ -1,0 +1,13 @@
+{
+  "name": "@cbc/lsp-domain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Typed, bounded conversion of LSP workspace edits into authoritative edit plans",
+  "exports": { ".": "./src/index.ts" },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@cbc/edit-domain": "workspace:*"
+  }
+}

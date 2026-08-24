@@ -1,0 +1,3 @@
+/** Safe LSP-to-EditPlan conversion. No filesystem or process authority lives here. */
+export * from "./types.ts";
+export * from "./workspace-edit.ts";
