@@ -691,10 +691,7 @@ fn validate_plan(
         snapshot_workspace_identity_digest,
         "snapshot workspaceIdentityDigest",
     )?;
-    if !digest_matches(
-        &plan.workspace_identity_digest,
-        snapshot_workspace_identity_digest,
-    ) {
+    if plan.workspace_identity_digest != snapshot_workspace_identity_digest {
         return Err(EditError::ScopeViolation {
             path: None,
             operation_id: None,
@@ -2131,6 +2128,21 @@ mod tests {
         let error = preflight_edit_plan(&plan, "workspace-identity", &[document("x", "rev")])
             .expect_err("chained moves are ambiguous in one plan");
         assert_eq!(error.code(), "EDIT_PATH_CONFLICT");
+    }
+
+    #[test]
+    fn requires_an_exact_workspace_identity_match() {
+        let mut plan = plan(vec![EditOperation::CreateFile {
+            operation_id: "edo_create".to_owned(),
+            path: "new.txt".to_owned(),
+            content: "new".to_owned(),
+        }]);
+        // Content revisions may accept an intentional short hash, but workspace
+        // identities are authority boundaries and must never use that rule.
+        plan.workspace_identity_digest = "ws_1234".to_owned();
+        let error = preflight_edit_plan(&plan, "ws_1234_actual", &[])
+            .expect_err("a workspace-id prefix must not authorize a different workspace");
+        assert_eq!(error.code(), "EDIT_SCOPE_VIOLATION");
     }
 
     #[test]
