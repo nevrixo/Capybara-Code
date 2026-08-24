@@ -301,7 +301,7 @@ describe("method registry drift (§20.11)", () => {
     // `session.{list,resolve,set_status,export,fork,delete}` are the 44th–49th (P0-05); and
     // `runtime.cancel`, `runtime.capability.issue`, `fs.fingerprint`, and
     // `workspace.mode.write` are additions to the original PRD list.
-    expect(REQUEST_METHODS.length).toBe(61);
+    expect(REQUEST_METHODS.length).toBe(62);
     expect(REQUEST_METHODS).toContain("fs.transaction.rollback_to_checkpoint");
     expect(REQUEST_METHODS).toContain("workspace.trust.set");
     expect(REQUEST_METHODS).toContain("session.fork");
@@ -313,6 +313,7 @@ describe("method registry drift (§20.11)", () => {
     expect(REQUEST_METHODS).toContain("memory.search");
     expect(REQUEST_METHODS).toContain("memory.remember");
     expect(REQUEST_METHODS).toContain("app.subscription.ack");
+    expect(REQUEST_METHODS).toContain("app.subscription.replay");
   });
 
   test("filesystem read defaults are shared across the protocol", () => {

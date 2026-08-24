@@ -267,6 +267,7 @@ export const REQUEST_METHODS = [
   "app.subscription.create",
   "app.subscription.ack",
   "app.subscription.state",
+  "app.subscription.replay",
   "artifact.create",
   "artifact.read",
   "artifact.delete",

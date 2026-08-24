@@ -701,6 +701,7 @@ pub fn dispatch(state: &RuntimeState, request: &RpcRequest) -> Option<Result<Val
         "app.subscription.create" => handlers::app::subscription_create(state, params),
         "app.subscription.ack" => handlers::app::subscription_ack(state, params),
         "app.subscription.state" => handlers::app::subscription_state(state, params),
+        "app.subscription.replay" => handlers::app::subscription_replay(state, params),
 
         "workspace.inspect" => handlers::workspace::inspect(state),
         "workspace.mode.write" => handlers::workspace::mode_write(state, params),

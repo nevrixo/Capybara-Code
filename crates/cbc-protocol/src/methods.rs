@@ -63,6 +63,7 @@ pub const REQUEST_METHODS: &[&str] = &[
     "app.subscription.create",
     "app.subscription.ack",
     "app.subscription.state",
+    "app.subscription.replay",
     "artifact.create",
     "artifact.read",
     "artifact.delete",
@@ -133,7 +134,7 @@ mod tests {
         // (P0-04) lets a client cancel an in-flight request. `fs.fingerprint`
         // validates a preview revision without promoting it to write authority;
         // fs.edit.preview and fs.edit add the Rust-authoritative structured edit path.
-        assert_eq!(REQUEST_METHODS.len(), 61);
+        assert_eq!(REQUEST_METHODS.len(), 62);
         for m in [
             "runtime.initialize",
             "workspace.mode.write",
@@ -152,6 +153,7 @@ mod tests {
             "memory.search",
             "memory.remember",
             "app.subscription.ack",
+            "app.subscription.replay",
             "update.verify",
         ] {
             assert!(is_known_request(m), "missing request method {m}");

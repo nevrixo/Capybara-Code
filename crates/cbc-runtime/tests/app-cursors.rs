@@ -72,6 +72,30 @@ fn open_session_with_event(state: &RuntimeState, session_id: &str) {
     .expect("append journal event");
 }
 
+fn append_event(
+    state: &RuntimeState,
+    session_id: &str,
+    id: &str,
+    visibility: &str,
+    timestamp: &str,
+) {
+    call(
+        state,
+        "session.append",
+        json!({
+            "sessionId": session_id,
+            "event": {
+                "id": id,
+                "kind": "user.message",
+                "timestamp": timestamp,
+                "visibility": visibility,
+                "payload": { "text": id },
+            },
+        }),
+    )
+    .expect("append replay journal event");
+}
+
 #[test]
 fn app_cursor_bridge_enforces_session_owner_and_monotonic_cursor_rules() {
     let (_dir, _workspace, state) = initialized();
@@ -222,4 +246,114 @@ fn app_cursor_bridge_hides_sessions_from_another_workspace() {
     )
     .expect_err("a client cannot subscribe to a foreign workspace session");
     assert_eq!(error.code, error_codes::NOT_FOUND);
+}
+
+#[test]
+fn app_cursor_replay_filters_rows_and_advances_the_raw_cursor() {
+    let (_dir, _workspace, state) = initialized();
+    open_session_with_event(&state, "ses_replay");
+    append_event(
+        &state,
+        "ses_replay",
+        "evt_hidden",
+        "hidden",
+        "2026-08-25T00:00:02Z",
+    );
+    append_event(
+        &state,
+        "ses_replay",
+        "evt_visible",
+        "timeline",
+        "2026-08-25T00:00:03Z",
+    );
+    register_client(&state, "client_replay", "sdk");
+    call(
+        &state,
+        "app.subscription.create",
+        json!({
+            "id": "sub_replay",
+            "clientId": "client_replay",
+            "sessionId": "ses_replay",
+            "filter": {
+                "kinds": ["user.message"],
+                "visibility": ["timeline"],
+                "includeEphemeral": false,
+            },
+            "initialAckedSequence": 0,
+            "createdAt": "2026-08-25T00:00:04.000Z",
+        }),
+    )
+    .expect("create replay subscription");
+
+    let first = call(
+        &state,
+        "app.subscription.replay",
+        json!({
+            "subscriptionId": "sub_replay",
+            "clientId": "client_replay",
+            "maxEvents": 2,
+            "maxBytes": 2048,
+        }),
+    )
+    .expect("replay first raw page");
+    assert_eq!(first["events"].as_array().expect("events array").len(), 1);
+    assert_eq!(first["events"][0]["id"], "evt_app_cursor");
+    assert_eq!(first["events"][0]["durability"], "journaled");
+    assert!(first["events"][0].get("eventHash").is_none());
+    assert_eq!(first["cursor"]["sessionId"], "ses_replay");
+    assert_eq!(first["cursor"]["journalSequence"], 2);
+    assert_eq!(first["hasMore"], true);
+
+    let acknowledged = call(
+        &state,
+        "app.subscription.ack",
+        json!({
+            "subscriptionId": "sub_replay",
+            "clientId": "client_replay",
+            "sequence": 2,
+            "at": "2026-08-25T00:00:05.000Z",
+        }),
+    )
+    .expect("ack raw replay cursor");
+    assert_eq!(acknowledged["subscription"]["lastAckedSequence"], 2);
+
+    let stale = call(
+        &state,
+        "app.subscription.replay",
+        json!({
+            "subscriptionId": "sub_replay",
+            "clientId": "client_replay",
+            "afterSequence": 1,
+        }),
+    )
+    .expect_err("replay cannot move before the durable cursor");
+    assert_eq!(stale.code, error_codes::INVALID_PARAMS);
+
+    let second = call(
+        &state,
+        "app.subscription.replay",
+        json!({
+            "subscriptionId": "sub_replay",
+            "clientId": "client_replay",
+            "maxEvents": 2,
+            "maxBytes": 2048,
+        }),
+    )
+    .expect("replay after durable cursor");
+    assert_eq!(second["events"].as_array().expect("events array").len(), 1);
+    assert_eq!(second["events"][0]["id"], "evt_visible");
+    assert_eq!(second["cursor"]["journalSequence"], 3);
+    assert_eq!(second["hasMore"], false);
+
+    register_client(&state, "client_replay_other", "ide");
+    let foreign = call(
+        &state,
+        "app.subscription.replay",
+        json!({
+            "subscriptionId": "sub_replay",
+            "clientId": "client_replay_other",
+        }),
+    )
+    .expect_err("another client cannot replay an owner-bound cursor");
+    assert_eq!(foreign.code, error_codes::NOT_FOUND);
 }
