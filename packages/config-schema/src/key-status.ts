@@ -142,6 +142,17 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
   ["perf.", { status: "wired", consumer: "AgentSession performance event sampling" }],
 
   // ---- maps ----
+  // ---- durable runtime feature gates (implemented incrementally) ----
+  ["experimental.", { status: "experimental", note: "new runtime surfaces remain disabled until their feature gate is explicitly enabled" }],
+  ["edit.", { status: "experimental", note: "Anchor/Range Edit Engine rollout is feature-gated" }],
+  ["lsp.", { status: "experimental", note: "Full LSP service rollout is feature-gated" }],
+  ["memory.", { status: "experimental", note: "durable memory is feature-gated" }],
+  ["daemon.", { status: "experimental", note: "session daemon is feature-gated" }],
+  ["agentGraph.", { status: "experimental", note: "persistent agent graph is feature-gated" }],
+  ["worktrees.", { status: "experimental", note: "multi-worktree orchestration is feature-gated" }],
+  ["plugins.", { status: "experimental", note: "isolated plugin runtime is feature-gated" }],
+  ["appServer.", { status: "experimental", note: "App Server is feature-gated" }],
+  ["sdk.", { status: "experimental", note: "SDK reconnect policy is reserved for the App Server rollout" }],
   ["mcpServers.", { status: "wired", consumer: "mcp commands / extension host" }],
   ["lspServers.", { status: "wired", consumer: "lsp commands / trusted workspace LSP host" }],
   ["keymap.", { status: "experimental", note: "key bindings are fixed in tui-components today" }],

@@ -18,6 +18,16 @@
     "updates",
     "provider",
     "perf",
+    "experimental",
+    "edit",
+    "lsp",
+    "memory",
+    "daemon",
+    "agentGraph",
+    "worktrees",
+    "plugins",
+    "appServer",
+    "sdk",
     "mcpServers",
     "lspServers",
     "keymap"
@@ -1049,6 +1059,287 @@
           "maximum": 1,
           "default": 1
         }
+      }
+    },
+    "experimental": {
+      "description": "Feature gates. All default to false so unsupported runtime paths remain inert.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["editEngineV2", "fullLsp", "sessionDaemon", "durableMemory", "persistentAgentGraph", "worktreeMultiAgent", "pluginRuntime", "appServer"],
+      "properties": {
+        "editEngineV2": { "type": "boolean", "default": false },
+        "fullLsp": { "type": "boolean", "default": false },
+        "sessionDaemon": { "type": "boolean", "default": false },
+        "durableMemory": { "type": "boolean", "default": false },
+        "persistentAgentGraph": { "type": "boolean", "default": false },
+        "worktreeMultiAgent": { "type": "boolean", "default": false },
+        "pluginRuntime": { "type": "boolean", "default": false },
+        "appServer": { "type": "boolean", "default": false }
+      }
+    },
+    "edit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["engine", "maxOperationsPerPlan", "maxFileBytes", "maxAnchorTextBytes", "maxAnchorCandidates", "safeRebase", "previewBeforeLspMutation", "recordResolutionEvidence", "limits"],
+      "properties": {
+        "engine": { "const": "anchor-range-v2" },
+        "maxOperationsPerPlan": { "type": "integer", "minimum": 1, "maximum": 100, "default": 100 },
+        "maxFileBytes": { "type": "integer", "minimum": 1, "default": 8388608 },
+        "maxAnchorTextBytes": { "type": "integer", "minimum": 1, "default": 65536 },
+        "maxAnchorCandidates": { "type": "integer", "minimum": 1, "default": 32 },
+        "safeRebase": { "type": "boolean", "default": true },
+        "previewBeforeLspMutation": { "type": "boolean", "default": true },
+        "recordResolutionEvidence": { "type": "boolean", "default": true },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maxTotalChangedBytes", "maxTotalFiles", "maxDiffPreviewLines"],
+          "properties": {
+            "maxTotalChangedBytes": { "type": "integer", "minimum": 1, "default": 16777216 },
+            "maxTotalFiles": { "type": "integer", "minimum": 1, "maximum": 100, "default": 100 },
+            "maxDiffPreviewLines": { "type": "integer", "minimum": 1, "default": 300 }
+          }
+        }
+      }
+    },
+    "lsp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "planMode", "maxOpenDocumentsPerServer", "maxPendingRequestsPerServer", "maxDiagnosticsPerFile", "maxWorkspaceSymbols", "restartLimit", "restartWindowSeconds", "recordQueryEvidence", "mutations", "commands"],
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "planMode": { "type": "string", "enum": ["disabled", "read-only-certified"], "default": "disabled" },
+        "maxOpenDocumentsPerServer": { "type": "integer", "minimum": 1, "default": 128 },
+        "maxPendingRequestsPerServer": { "type": "integer", "minimum": 1, "default": 64 },
+        "maxDiagnosticsPerFile": { "type": "integer", "minimum": 1, "default": 1000 },
+        "maxWorkspaceSymbols": { "type": "integer", "minimum": 1, "default": 5000 },
+        "restartLimit": { "type": "integer", "minimum": 0, "default": 3 },
+        "restartWindowSeconds": { "type": "integer", "minimum": 1, "default": 300 },
+        "recordQueryEvidence": { "type": "boolean", "default": true },
+        "mutations": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rename", "codeActions", "formatting", "previewRequired", "maxFiles", "maxChangedBytes"],
+          "properties": {
+            "rename": { "type": "boolean", "default": true },
+            "codeActions": { "type": "boolean", "default": true },
+            "formatting": { "type": "boolean", "default": true },
+            "previewRequired": { "type": "boolean", "default": true },
+            "maxFiles": { "type": "integer", "minimum": 1, "maximum": 100, "default": 100 },
+            "maxChangedBytes": { "type": "integer", "minimum": 1, "default": 16777216 }
+          }
+        },
+        "commands": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["allow"],
+          "properties": { "allow": { "type": "array", "default": [], "items": { "type": "string" } } }
+        }
+      }
+    },
+    "memory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "workspaceEnabled", "sessionEnabled", "taskEnabled", "autoCandidates", "requireExactEvidenceForWorkspace", "allowSessionFallback", "maxRecordsPerWorkspace", "maxValueBytes", "recallLimit", "recallTokenBudget", "retentionDays", "confidence", "privacy"],
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "workspaceEnabled": { "type": "boolean", "default": true },
+        "sessionEnabled": { "type": "boolean", "default": true },
+        "taskEnabled": { "type": "boolean", "default": true },
+        "autoCandidates": { "type": "boolean", "default": true },
+        "requireExactEvidenceForWorkspace": { "type": "boolean", "default": true },
+        "allowSessionFallback": { "type": "boolean", "default": true },
+        "maxRecordsPerWorkspace": { "type": "integer", "minimum": 1, "default": 10000 },
+        "maxValueBytes": { "type": "integer", "minimum": 1, "default": 16384 },
+        "recallLimit": { "type": "integer", "minimum": 1, "default": 32 },
+        "recallTokenBudget": { "type": "integer", "minimum": 1, "default": 4096 },
+        "retentionDays": { "type": "integer", "minimum": 0, "default": 180 },
+        "confidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["workspace", "session", "task"],
+          "properties": {
+            "workspace": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.8 },
+            "session": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 },
+            "task": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 }
+          }
+        },
+        "privacy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["storeRawTranscript", "storeSensitivePaths", "allowPluginProposals"],
+          "properties": {
+            "storeRawTranscript": { "const": false },
+            "storeSensitivePaths": { "type": "boolean", "default": false },
+            "allowPluginProposals": { "type": "boolean", "default": true }
+          }
+        }
+      }
+    },
+    "daemon": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "autostart", "idleShutdownMinutes", "workspaceIdleMinutes", "heartbeatSeconds", "ownerLeaseSeconds", "gracefulShutdownSeconds", "logLevel", "transport", "clients"],
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "autostart": { "type": "boolean", "default": true },
+        "idleShutdownMinutes": { "type": "integer", "minimum": 0, "default": 30 },
+        "workspaceIdleMinutes": { "type": "integer", "minimum": 0, "default": 10 },
+        "heartbeatSeconds": { "type": "integer", "minimum": 1, "default": 5 },
+        "ownerLeaseSeconds": { "type": "integer", "minimum": 1, "default": 20 },
+        "gracefulShutdownSeconds": { "type": "integer", "minimum": 1, "default": 10 },
+        "logLevel": { "type": "string", "enum": ["debug", "info", "warn", "error"], "default": "info" },
+        "transport": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "allowTcp", "socketPath", "maxConnections", "maxFrameBytes"],
+          "properties": {
+            "mode": { "const": "local" },
+            "allowTcp": { "const": false },
+            "socketPath": { "const": "auto" },
+            "maxConnections": { "type": "integer", "minimum": 1, "default": 32 },
+            "maxFrameBytes": { "type": "integer", "minimum": 1024, "default": 8388608 }
+          }
+        },
+        "clients": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["controlLeaseSeconds", "detachGraceSeconds", "maxEventQueueItems", "maxEventQueueBytes"],
+          "properties": {
+            "controlLeaseSeconds": { "type": "integer", "minimum": 1, "default": 30 },
+            "detachGraceSeconds": { "type": "integer", "minimum": 0, "default": 5 },
+            "maxEventQueueItems": { "type": "integer", "minimum": 1, "default": 1000 },
+            "maxEventQueueBytes": { "type": "integer", "minimum": 1024, "default": 8388608 }
+          }
+        }
+      }
+    },
+    "agentGraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "maxDepth", "maxNodes", "maxConcurrentNodes", "maxConcurrentReaders", "maxConcurrentWriters", "maxAttemptsPerNode", "checkpointEvents", "messageBytes", "recoveryPolicy", "budget"],
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "maxDepth": { "type": "integer", "minimum": 0, "default": 3 },
+        "maxNodes": { "type": "integer", "minimum": 1, "default": 1000 },
+        "maxConcurrentNodes": { "type": "integer", "minimum": 1, "default": 8 },
+        "maxConcurrentReaders": { "type": "integer", "minimum": 1, "default": 8 },
+        "maxConcurrentWriters": { "type": "integer", "minimum": 1, "default": 4 },
+        "maxAttemptsPerNode": { "type": "integer", "minimum": 1, "default": 3 },
+        "checkpointEvents": { "type": "integer", "minimum": 1, "default": 25 },
+        "messageBytes": { "type": "integer", "minimum": 1024, "default": 65536 },
+        "recoveryPolicy": { "type": "string", "enum": ["safe-retry", "manual"], "default": "safe-retry" },
+        "budget": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "maxCostUsd", "maxToolCalls", "maxWallClockMinutes"],
+          "properties": {
+            "mode": { "type": "string", "enum": ["hard", "advisory"], "default": "hard" },
+            "maxCostUsd": { "type": "number", "minimum": 0, "default": 20 },
+            "maxToolCalls": { "type": "integer", "minimum": 0, "default": 1000 },
+            "maxWallClockMinutes": { "type": "integer", "minimum": 1, "default": 120 }
+          }
+        }
+      }
+    },
+    "worktrees": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "root", "maxActive", "maxActiveWriters", "requireCleanBase", "retentionHours", "runtimePerWorktree", "lspPerWorktree", "merge"],
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "root": { "const": "auto" },
+        "maxActive": { "type": "integer", "minimum": 1, "default": 8 },
+        "maxActiveWriters": { "type": "integer", "minimum": 1, "default": 4 },
+        "requireCleanBase": { "type": "boolean", "default": true },
+        "retentionHours": { "type": "integer", "minimum": 0, "default": 24 },
+        "runtimePerWorktree": { "type": "boolean", "default": true },
+        "lspPerWorktree": { "type": "boolean", "default": true },
+        "merge": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["previewRequired", "independentReview", "verifyOnBase", "autoMergeDisjoint", "conflictPolicy"],
+          "properties": {
+            "previewRequired": { "type": "boolean", "default": true },
+            "independentReview": { "type": "boolean", "default": true },
+            "verifyOnBase": { "type": "boolean", "default": true },
+            "autoMergeDisjoint": { "type": "boolean", "default": true },
+            "conflictPolicy": { "const": "block" }
+          }
+        }
+      }
+    },
+    "plugins": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "allowProjectWasi", "allowProjectStdio", "allowUnsafeLocal", "requireSignatureForRegistry", "maxActivePerWorkspace", "limits", "failure"],
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "allowProjectWasi": { "type": "boolean", "default": true },
+        "allowProjectStdio": { "const": false },
+        "allowUnsafeLocal": { "const": false },
+        "requireSignatureForRegistry": { "type": "boolean", "default": true },
+        "maxActivePerWorkspace": { "type": "integer", "minimum": 1, "default": 16 },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["beforeHookMs", "afterHookMs", "aggregateBeforeHookMs", "maxOutputBytes", "maxStateBytes", "maxReentrancyDepth", "maxNestedToolCalls"],
+          "properties": {
+            "beforeHookMs": { "type": "integer", "minimum": 1, "default": 2000 },
+            "afterHookMs": { "type": "integer", "minimum": 1, "default": 5000 },
+            "aggregateBeforeHookMs": { "type": "integer", "minimum": 1, "default": 5000 },
+            "maxOutputBytes": { "type": "integer", "minimum": 1024, "default": 1048576 },
+            "maxStateBytes": { "type": "integer", "minimum": 1024, "default": 1048576 },
+            "maxReentrancyDepth": { "type": "integer", "minimum": 0, "default": 2 },
+            "maxNestedToolCalls": { "type": "integer", "minimum": 0, "default": 8 }
+          }
+        },
+        "failure": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["criticalBefore", "ordinaryBefore", "after", "circuitFailures"],
+          "properties": {
+            "criticalBefore": { "const": "closed" },
+            "ordinaryBefore": { "type": "string", "enum": ["open-with-warning", "closed"], "default": "open-with-warning" },
+            "after": { "const": "open" },
+            "circuitFailures": { "type": "integer", "minimum": 1, "default": 3 }
+          }
+        }
+      }
+    },
+    "appServer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "transport", "allowLoopbackWebsocket", "maxConnections", "maxRequestBytes", "maxResponseBytes", "maxSubscriptionsPerClient", "maxSessionsPerSubscription", "events"],
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "transport": { "const": "local" },
+        "allowLoopbackWebsocket": { "const": false },
+        "maxConnections": { "type": "integer", "minimum": 1, "default": 32 },
+        "maxRequestBytes": { "type": "integer", "minimum": 1024, "default": 8388608 },
+        "maxResponseBytes": { "type": "integer", "minimum": 1024, "default": 8388608 },
+        "maxSubscriptionsPerClient": { "type": "integer", "minimum": 1, "default": 16 },
+        "maxSessionsPerSubscription": { "type": "integer", "minimum": 1, "default": 32 },
+        "events": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maxBatchEvents", "maxBatchBytes", "ackTimeoutSeconds", "slowClientPolicy"],
+          "properties": {
+            "maxBatchEvents": { "type": "integer", "minimum": 1, "default": 100 },
+            "maxBatchBytes": { "type": "integer", "minimum": 1024, "default": 1048576 },
+            "ackTimeoutSeconds": { "type": "integer", "minimum": 1, "default": 30 },
+            "slowClientPolicy": { "type": "string", "enum": ["replay", "disconnect"], "default": "replay" }
+          }
+        }
+      }
+    },
+    "sdk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reconnect", "reconnectMaxAttempts"],
+      "properties": {
+        "reconnect": { "type": "boolean", "default": true },
+        "reconnectMaxAttempts": { "type": "integer", "minimum": 0, "default": 8 }
       }
     },
     "mcpServers": {

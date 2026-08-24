@@ -281,6 +281,126 @@ export interface LspServerConfig {
   timeoutMs?: number;
 }
 
+export interface ExperimentalConfig {
+  editEngineV2: boolean;
+  fullLsp: boolean;
+  sessionDaemon: boolean;
+  durableMemory: boolean;
+  persistentAgentGraph: boolean;
+  worktreeMultiAgent: boolean;
+  pluginRuntime: boolean;
+  appServer: boolean;
+}
+
+export interface EditConfig {
+  engine: "anchor-range-v2";
+  maxOperationsPerPlan: number;
+  maxFileBytes: number;
+  maxAnchorTextBytes: number;
+  maxAnchorCandidates: number;
+  safeRebase: boolean;
+  previewBeforeLspMutation: boolean;
+  recordResolutionEvidence: boolean;
+  limits: { maxTotalChangedBytes: number; maxTotalFiles: number; maxDiffPreviewLines: number };
+}
+
+export interface LspConfig {
+  enabled: boolean;
+  planMode: "disabled" | "read-only-certified";
+  maxOpenDocumentsPerServer: number;
+  maxPendingRequestsPerServer: number;
+  maxDiagnosticsPerFile: number;
+  maxWorkspaceSymbols: number;
+  restartLimit: number;
+  restartWindowSeconds: number;
+  recordQueryEvidence: boolean;
+  mutations: { rename: boolean; codeActions: boolean; formatting: boolean; previewRequired: boolean; maxFiles: number; maxChangedBytes: number };
+  commands: { allow: string[] };
+}
+
+export interface MemoryConfig {
+  enabled: boolean;
+  workspaceEnabled: boolean;
+  sessionEnabled: boolean;
+  taskEnabled: boolean;
+  autoCandidates: boolean;
+  requireExactEvidenceForWorkspace: boolean;
+  allowSessionFallback: boolean;
+  maxRecordsPerWorkspace: number;
+  maxValueBytes: number;
+  recallLimit: number;
+  recallTokenBudget: number;
+  retentionDays: number;
+  confidence: { workspace: number; session: number; task: number };
+  privacy: { storeRawTranscript: false; storeSensitivePaths: boolean; allowPluginProposals: boolean };
+}
+
+export interface DaemonConfig {
+  enabled: boolean;
+  autostart: boolean;
+  idleShutdownMinutes: number;
+  workspaceIdleMinutes: number;
+  heartbeatSeconds: number;
+  ownerLeaseSeconds: number;
+  gracefulShutdownSeconds: number;
+  logLevel: "debug" | "info" | "warn" | "error";
+  transport: { mode: "local"; allowTcp: false; socketPath: "auto"; maxConnections: number; maxFrameBytes: number };
+  clients: { controlLeaseSeconds: number; detachGraceSeconds: number; maxEventQueueItems: number; maxEventQueueBytes: number };
+}
+
+export interface AgentGraphConfig {
+  enabled: boolean;
+  maxDepth: number;
+  maxNodes: number;
+  maxConcurrentNodes: number;
+  maxConcurrentReaders: number;
+  maxConcurrentWriters: number;
+  maxAttemptsPerNode: number;
+  checkpointEvents: number;
+  messageBytes: number;
+  recoveryPolicy: "safe-retry" | "manual";
+  budget: { mode: "hard" | "advisory"; maxCostUsd: number; maxToolCalls: number; maxWallClockMinutes: number };
+}
+
+export interface WorktreesConfig {
+  enabled: boolean;
+  root: "auto";
+  maxActive: number;
+  maxActiveWriters: number;
+  requireCleanBase: boolean;
+  retentionHours: number;
+  runtimePerWorktree: boolean;
+  lspPerWorktree: boolean;
+  merge: { previewRequired: boolean; independentReview: boolean; verifyOnBase: boolean; autoMergeDisjoint: boolean; conflictPolicy: "block" };
+}
+
+export interface PluginsConfig {
+  enabled: boolean;
+  allowProjectWasi: boolean;
+  allowProjectStdio: false;
+  allowUnsafeLocal: false;
+  requireSignatureForRegistry: boolean;
+  maxActivePerWorkspace: number;
+  limits: { beforeHookMs: number; afterHookMs: number; aggregateBeforeHookMs: number; maxOutputBytes: number; maxStateBytes: number; maxReentrancyDepth: number; maxNestedToolCalls: number };
+  failure: { criticalBefore: "closed"; ordinaryBefore: "open-with-warning" | "closed"; after: "open"; circuitFailures: number };
+}
+
+export interface AppServerConfig {
+  enabled: boolean;
+  transport: "local";
+  allowLoopbackWebsocket: false;
+  maxConnections: number;
+  maxRequestBytes: number;
+  maxResponseBytes: number;
+  maxSubscriptionsPerClient: number;
+  maxSessionsPerSubscription: number;
+  events: { maxBatchEvents: number; maxBatchBytes: number; ackTimeoutSeconds: number; slowClientPolicy: "replay" | "disconnect" };
+}
+
+export interface SdkConfig {
+  reconnect: boolean;
+  reconnectMaxAttempts: number;
+}
 export interface CbcConfig {
   ui: UiConfig;
   model: ModelConfig;
@@ -294,6 +414,16 @@ export interface CbcConfig {
   updates: UpdatesConfig;
   provider: ProviderConfig;
   perf: PerformanceConfig;
+  experimental: ExperimentalConfig;
+  edit: EditConfig;
+  lsp: LspConfig;
+  memory: MemoryConfig;
+  daemon: DaemonConfig;
+  agentGraph: AgentGraphConfig;
+  worktrees: WorktreesConfig;
+  plugins: PluginsConfig;
+  appServer: AppServerConfig;
+  sdk: SdkConfig;
   mcpServers: Record<string, McpServerConfig>;
   lspServers: Record<string, LspServerConfig>;
   keymap: Record<string, string>;
@@ -468,6 +598,117 @@ export function defaultConfig(): CbcConfig {
       verificationPlannerV2: true,
       commentaryPolicyV2: true,
     },
+    // Every new runtime surface is opt-in at the common gate. The detailed
+    // limits are still materialized so enabling a feature never requires an
+    // unsafe, partially specified configuration.
+    experimental: {
+      editEngineV2: false,
+      fullLsp: false,
+      sessionDaemon: false,
+      durableMemory: false,
+      persistentAgentGraph: false,
+      worktreeMultiAgent: false,
+      pluginRuntime: false,
+      appServer: false,
+    },
+    edit: {
+      engine: "anchor-range-v2",
+      maxOperationsPerPlan: 100,
+      maxFileBytes: 8_388_608,
+      maxAnchorTextBytes: 65_536,
+      maxAnchorCandidates: 32,
+      safeRebase: true,
+      previewBeforeLspMutation: true,
+      recordResolutionEvidence: true,
+      limits: { maxTotalChangedBytes: 16_777_216, maxTotalFiles: 100, maxDiffPreviewLines: 300 },
+    },
+    lsp: {
+      enabled: true,
+      planMode: "disabled",
+      maxOpenDocumentsPerServer: 128,
+      maxPendingRequestsPerServer: 64,
+      maxDiagnosticsPerFile: 1_000,
+      maxWorkspaceSymbols: 5_000,
+      restartLimit: 3,
+      restartWindowSeconds: 300,
+      recordQueryEvidence: true,
+      mutations: { rename: true, codeActions: true, formatting: true, previewRequired: true, maxFiles: 100, maxChangedBytes: 16_777_216 },
+      commands: { allow: [] },
+    },
+    memory: {
+      enabled: true,
+      workspaceEnabled: true,
+      sessionEnabled: true,
+      taskEnabled: true,
+      autoCandidates: true,
+      requireExactEvidenceForWorkspace: true,
+      allowSessionFallback: true,
+      maxRecordsPerWorkspace: 10_000,
+      maxValueBytes: 16_384,
+      recallLimit: 32,
+      recallTokenBudget: 4_096,
+      retentionDays: 180,
+      confidence: { workspace: 0.8, session: 0.5, task: 0.5 },
+      privacy: { storeRawTranscript: false, storeSensitivePaths: false, allowPluginProposals: true },
+    },
+    daemon: {
+      enabled: true,
+      autostart: true,
+      idleShutdownMinutes: 30,
+      workspaceIdleMinutes: 10,
+      heartbeatSeconds: 5,
+      ownerLeaseSeconds: 20,
+      gracefulShutdownSeconds: 10,
+      logLevel: "info",
+      transport: { mode: "local", allowTcp: false, socketPath: "auto", maxConnections: 32, maxFrameBytes: 8_388_608 },
+      clients: { controlLeaseSeconds: 30, detachGraceSeconds: 5, maxEventQueueItems: 1_000, maxEventQueueBytes: 8_388_608 },
+    },
+    agentGraph: {
+      enabled: true,
+      maxDepth: 3,
+      maxNodes: 1_000,
+      maxConcurrentNodes: 8,
+      maxConcurrentReaders: 8,
+      maxConcurrentWriters: 4,
+      maxAttemptsPerNode: 3,
+      checkpointEvents: 25,
+      messageBytes: 65_536,
+      recoveryPolicy: "safe-retry",
+      budget: { mode: "hard", maxCostUsd: 20, maxToolCalls: 1_000, maxWallClockMinutes: 120 },
+    },
+    worktrees: {
+      enabled: true,
+      root: "auto",
+      maxActive: 8,
+      maxActiveWriters: 4,
+      requireCleanBase: true,
+      retentionHours: 24,
+      runtimePerWorktree: true,
+      lspPerWorktree: true,
+      merge: { previewRequired: true, independentReview: true, verifyOnBase: true, autoMergeDisjoint: true, conflictPolicy: "block" },
+    },
+    plugins: {
+      enabled: true,
+      allowProjectWasi: true,
+      allowProjectStdio: false,
+      allowUnsafeLocal: false,
+      requireSignatureForRegistry: true,
+      maxActivePerWorkspace: 16,
+      limits: { beforeHookMs: 2_000, afterHookMs: 5_000, aggregateBeforeHookMs: 5_000, maxOutputBytes: 1_048_576, maxStateBytes: 1_048_576, maxReentrancyDepth: 2, maxNestedToolCalls: 8 },
+      failure: { criticalBefore: "closed", ordinaryBefore: "open-with-warning", after: "open", circuitFailures: 3 },
+    },
+    appServer: {
+      enabled: true,
+      transport: "local",
+      allowLoopbackWebsocket: false,
+      maxConnections: 32,
+      maxRequestBytes: 8_388_608,
+      maxResponseBytes: 8_388_608,
+      maxSubscriptionsPerClient: 16,
+      maxSessionsPerSubscription: 32,
+      events: { maxBatchEvents: 100, maxBatchBytes: 1_048_576, ackTimeoutSeconds: 30, slowClientPolicy: "replay" },
+    },
+    sdk: { reconnect: true, reconnectMaxAttempts: 8 },
 
     // Executable integrations live in the generated global TOML. Keeping these
     // maps empty makes that file the only source of service definitions.
@@ -537,6 +778,14 @@ const USER_ONLY_PROJECT_PREFIXES = [
   "updates.",
   "provider.openai.",
   "perf.",
+  "daemon.",
+  "appServer.",
+  "sdk.",
+  "plugins.allowProjectStdio",
+  "plugins.allowUnsafeLocal",
+  "plugins.requireSignatureForRegistry",
+  "worktrees.root",
+  "memory.privacy.",
 ] as const;
 
 /**
@@ -574,6 +823,20 @@ const MONOTONIC_PROJECT_BOOLEAN_STRICT_VALUE: Readonly<Record<string, boolean>> 
   "privacy.telemetry": false,
   "privacy.providerStore": false,
   "agent.verification.completionRequiresFreshEvidence": true,
+  "experimental.editEngineV2": false,
+  "experimental.fullLsp": false,
+  "experimental.sessionDaemon": false,
+  "experimental.durableMemory": false,
+  "experimental.persistentAgentGraph": false,
+  "experimental.worktreeMultiAgent": false,
+  "experimental.pluginRuntime": false,
+  "experimental.appServer": false,
+  "edit.safeRebase": false,
+  "lsp.mutations.rename": false,
+  "lsp.mutations.codeActions": false,
+  "lsp.mutations.formatting": false,
+  "memory.workspaceEnabled": false,
+  "worktrees.enabled": false,
 };
 
 const ENUMS: Record<string, readonly string[]> = {
@@ -617,6 +880,20 @@ const ENUMS: Record<string, readonly string[]> = {
   "sandbox.networkForShell": ["deny", "ask", "allow"],
   "privacy.crashReports": ["off", "ask", "on"],
   "updates.channel": ["stable", "beta", "nightly"],
+  "edit.engine": ["anchor-range-v2"],
+  "lsp.planMode": ["disabled", "read-only-certified"],
+  "daemon.logLevel": ["debug", "info", "warn", "error"],
+  "daemon.transport.mode": ["local"],
+  "daemon.transport.socketPath": ["auto"],
+  "agentGraph.recoveryPolicy": ["safe-retry", "manual"],
+  "agentGraph.budget.mode": ["hard", "advisory"],
+  "worktrees.root": ["auto"],
+  "worktrees.merge.conflictPolicy": ["block"],
+  "plugins.failure.criticalBefore": ["closed"],
+  "plugins.failure.ordinaryBefore": ["open-with-warning", "closed"],
+  "plugins.failure.after": ["open"],
+  "appServer.transport": ["local"],
+  "appServer.events.slowClientPolicy": ["replay", "disconnect"],
 };
 
 /**
@@ -966,7 +1243,20 @@ function hasUnsafePathSegment(path: string): boolean {
   return segments.some((segment) => segment.length === 0 || UNSAFE_PATH_SEGMENTS.has(segment));
 }
 
+const CONSTANT_FALSE_CONFIG_PATHS = new Set([
+  "memory.privacy.storeRawTranscript",
+  "daemon.transport.allowTcp",
+  "plugins.allowProjectStdio",
+  "plugins.allowUnsafeLocal",
+  "appServer.allowLoopbackWebsocket",
+]);
 function validateDynamicValue(path: string, value: unknown): string | undefined {
+  if (CONSTANT_FALSE_CONFIG_PATHS.has(path)) {
+    return value === false ? undefined : `'${path}' is a fixed false safety boundary`;
+  }
+  if (path === "lsp.commands.allow") {
+    return isStringArray(value) ? undefined : "expected an array of command names";
+  }
   if (path === "model.context.bands") {
     return Array.isArray(value) && value.every((entry) => typeof entry === "number" && Number.isFinite(entry))
       ? undefined
@@ -1094,6 +1384,68 @@ const INTEGER_CONSTRAINTS: Readonly<Record<string, IntegerConstraint>> = {
   "provider.openai.native.maxHostedAgents": { minimum: 0 },
   "provider.openai.native.maxProgramToolCalls": { minimum: 0 },
   "provider.openai.native.maxProgramParallelCalls": { minimum: 1 },
+  "edit.maxOperationsPerPlan": { minimum: 1, maximum: 100 },
+  "edit.maxFileBytes": { minimum: 1 },
+  "edit.maxAnchorTextBytes": { minimum: 1 },
+  "edit.maxAnchorCandidates": { minimum: 1 },
+  "edit.limits.maxTotalChangedBytes": { minimum: 1 },
+  "edit.limits.maxTotalFiles": { minimum: 1, maximum: 100 },
+  "edit.limits.maxDiffPreviewLines": { minimum: 1 },
+  "lsp.maxOpenDocumentsPerServer": { minimum: 1 },
+  "lsp.maxPendingRequestsPerServer": { minimum: 1 },
+  "lsp.maxDiagnosticsPerFile": { minimum: 1 },
+  "lsp.maxWorkspaceSymbols": { minimum: 1 },
+  "lsp.restartLimit": { minimum: 0 },
+  "lsp.restartWindowSeconds": { minimum: 1 },
+  "lsp.mutations.maxFiles": { minimum: 1, maximum: 100 },
+  "lsp.mutations.maxChangedBytes": { minimum: 1 },
+  "memory.maxRecordsPerWorkspace": { minimum: 1 },
+  "memory.maxValueBytes": { minimum: 1 },
+  "memory.recallLimit": { minimum: 1 },
+  "memory.recallTokenBudget": { minimum: 1 },
+  "memory.retentionDays": { minimum: 0 },
+  "daemon.idleShutdownMinutes": { minimum: 0 },
+  "daemon.workspaceIdleMinutes": { minimum: 0 },
+  "daemon.heartbeatSeconds": { minimum: 1 },
+  "daemon.ownerLeaseSeconds": { minimum: 1 },
+  "daemon.gracefulShutdownSeconds": { minimum: 1 },
+  "daemon.transport.maxConnections": { minimum: 1 },
+  "daemon.transport.maxFrameBytes": { minimum: 1_024 },
+  "daemon.clients.controlLeaseSeconds": { minimum: 1 },
+  "daemon.clients.detachGraceSeconds": { minimum: 0 },
+  "daemon.clients.maxEventQueueItems": { minimum: 1 },
+  "daemon.clients.maxEventQueueBytes": { minimum: 1_024 },
+  "agentGraph.maxDepth": { minimum: 0 },
+  "agentGraph.maxNodes": { minimum: 1 },
+  "agentGraph.maxConcurrentNodes": { minimum: 1 },
+  "agentGraph.maxConcurrentReaders": { minimum: 1 },
+  "agentGraph.maxConcurrentWriters": { minimum: 1 },
+  "agentGraph.maxAttemptsPerNode": { minimum: 1 },
+  "agentGraph.checkpointEvents": { minimum: 1 },
+  "agentGraph.messageBytes": { minimum: 1_024 },
+  "agentGraph.budget.maxToolCalls": { minimum: 0 },
+  "agentGraph.budget.maxWallClockMinutes": { minimum: 1 },
+  "worktrees.maxActive": { minimum: 1 },
+  "worktrees.maxActiveWriters": { minimum: 1 },
+  "worktrees.retentionHours": { minimum: 0 },
+  "plugins.maxActivePerWorkspace": { minimum: 1 },
+  "plugins.limits.beforeHookMs": { minimum: 1 },
+  "plugins.limits.afterHookMs": { minimum: 1 },
+  "plugins.limits.aggregateBeforeHookMs": { minimum: 1 },
+  "plugins.limits.maxOutputBytes": { minimum: 1_024 },
+  "plugins.limits.maxStateBytes": { minimum: 1_024 },
+  "plugins.limits.maxReentrancyDepth": { minimum: 0 },
+  "plugins.limits.maxNestedToolCalls": { minimum: 0 },
+  "plugins.failure.circuitFailures": { minimum: 1 },
+  "appServer.maxConnections": { minimum: 1 },
+  "appServer.maxRequestBytes": { minimum: 1_024 },
+  "appServer.maxResponseBytes": { minimum: 1_024 },
+  "appServer.maxSubscriptionsPerClient": { minimum: 1 },
+  "appServer.maxSessionsPerSubscription": { minimum: 1 },
+  "appServer.events.maxBatchEvents": { minimum: 1 },
+  "appServer.events.maxBatchBytes": { minimum: 1_024 },
+  "appServer.events.ackTimeoutSeconds": { minimum: 1 },
+  "sdk.reconnectMaxAttempts": { minimum: 0 },
 };
 
 

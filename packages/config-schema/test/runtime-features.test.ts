@@ -1,0 +1,70 @@
+import { describe, expect, test } from "bun:test";
+
+import { configKeyInfo, defaultConfig, mergeConfig } from "../src/index.ts";
+
+describe("durable runtime configuration gates", () => {
+  test("ships every new surface disabled behind an explicit common gate", () => {
+    const config = defaultConfig();
+    expect(config.experimental).toEqual({
+      editEngineV2: false,
+      fullLsp: false,
+      sessionDaemon: false,
+      durableMemory: false,
+      persistentAgentGraph: false,
+      worktreeMultiAgent: false,
+      pluginRuntime: false,
+      appServer: false,
+    });
+    expect(config.edit.maxOperationsPerPlan).toBe(100);
+    expect(config.memory.privacy.storeRawTranscript).toBe(false);
+    expect(config.daemon.transport.allowTcp).toBe(false);
+    expect(config.plugins.allowProjectStdio).toBe(false);
+    expect(config.appServer.allowLoopbackWebsocket).toBe(false);
+  });
+
+  test("accepts a user-owned feature gate while making its rollout state visible", () => {
+    const merged = mergeConfig([{ source: "user", values: { "experimental.editEngineV2": true } }]);
+    expect(merged.config.experimental.editEngineV2).toBe(true);
+    expect(merged.issues).toContainEqual(expect.objectContaining({
+      path: "experimental.editEngineV2",
+      severity: "warning",
+    }));
+    expect(configKeyInfo("experimental.editEngineV2")?.status).toBe("experimental");
+  });
+
+  test("rejects invalid constrained settings and fixed safety-boundary values", () => {
+    const merged = mergeConfig([{
+      source: "user",
+      values: {
+        "lsp.planMode": "unsafe",
+        "memory.privacy.storeRawTranscript": true,
+        "lsp.commands.allow": "not-an-array",
+      },
+    }]);
+    expect(merged.config.lsp.planMode).toBe("disabled");
+    expect(merged.config.memory.privacy.storeRawTranscript).toBe(false);
+    expect(merged.issues.filter((issue) => issue.severity === "error")).toHaveLength(3);
+  });
+
+  test("does not let a project activate a gated runtime feature", () => {
+    const merged = mergeConfig([{ source: "project", values: { "experimental.fullLsp": true } }]);
+    expect(merged.config.experimental.fullLsp).toBe(false);
+    expect(merged.issues).toContainEqual(expect.objectContaining({
+      path: "experimental.fullLsp",
+      severity: "error",
+    }));
+  });
+
+  test("allows a project to narrow an LSP mutation while reserving daemon ownership to the user", () => {
+    const narrowed = mergeConfig([{ source: "project", values: { "lsp.mutations.rename": false } }]);
+    expect(narrowed.config.lsp.mutations.rename).toBe(false);
+    expect(narrowed.issues.some((issue) => issue.severity === "error")).toBe(false);
+
+    const daemon = mergeConfig([{ source: "project", values: { "daemon.autostart": false } }]);
+    expect(daemon.config.daemon.autostart).toBe(true);
+    expect(daemon.issues).toContainEqual(expect.objectContaining({
+      path: "daemon.autostart",
+      severity: "error",
+    }));
+  });
+});
