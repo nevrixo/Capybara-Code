@@ -1,0 +1,263 @@
+use cbc_session_store::{
+    new_manifest, PluginGrantInput, PluginInstallScope, PluginInstallationInput,
+    PluginPermissionSet, PluginRuntimeKind, PluginStateScope, PluginStateWrite, SessionStore,
+    StoreError, MAX_PLUGIN_STATE_BYTES,
+};
+use serde_json::json;
+
+const T0: &str = "2026-08-25T00:00:00.000Z";
+const T1: &str = "2026-08-25T00:00:01.000Z";
+const T2: &str = "2026-08-25T00:00:02.000Z";
+
+fn seeded_store() -> SessionStore {
+    let store = SessionStore::open_in_memory().expect("open store");
+    store
+        .create_session(&new_manifest(
+            "ses_plugin",
+            "/work",
+            "workspace-fingerprint",
+            "plugin test",
+            "auto",
+            "auto-review",
+        ))
+        .expect("create session");
+    store
+}
+
+fn requested_permissions() -> PluginPermissionSet {
+    PluginPermissionSet {
+        events: vec!["after.tool".into()],
+        workspace_read: vec!["src".into()],
+        session_state: vec!["read".into()],
+        ..PluginPermissionSet::default()
+    }
+}
+
+fn installation(
+    id: &str,
+    runtime_kind: PluginRuntimeKind,
+    scope: PluginInstallScope,
+    requested_permissions: PluginPermissionSet,
+) -> PluginInstallationInput {
+    PluginInstallationInput {
+        id: id.into(),
+        plugin_id: "acme/example".into(),
+        version: "1.0.0".into(),
+        source: "registry".into(),
+        package_digest: format!("sha256:{}", "a".repeat(64)),
+        manifest_digest: format!("sha256:{}", "b".repeat(64)),
+        signature: None,
+        runtime_kind,
+        scope,
+        requested_permissions,
+        manifest: json!({ "schemaVersion": "1.0", "runtime": "wasi" }),
+        installed_at: T0.into(),
+    }
+}
+
+#[test]
+fn installations_start_disabled_and_project_stdio_is_rejected() {
+    let mut store = seeded_store();
+    let input = installation(
+        "plg_example",
+        PluginRuntimeKind::Wasi,
+        PluginInstallScope::Project,
+        requested_permissions(),
+    );
+
+    let installed = store.install_plugin(&input).expect("install declaration");
+    assert!(!installed.enabled, "a declaration cannot start a plugin");
+    assert_eq!(
+        store
+            .plugin_installation("plg_example")
+            .expect("read installation"),
+        Some(installed.clone())
+    );
+    assert_eq!(
+        store.install_plugin(&input).expect("idempotent install"),
+        installed
+    );
+
+    let rejected = store
+        .install_plugin(&installation(
+            "plg_stdio",
+            PluginRuntimeKind::Stdio,
+            PluginInstallScope::Project,
+            PluginPermissionSet::default(),
+        ))
+        .expect_err("project configuration cannot choose an executable runtime");
+    assert!(matches!(rejected, StoreError::InvalidPlugin { .. }));
+}
+
+#[test]
+fn grants_are_workspace_bound_and_cannot_widen_requested_authority() {
+    let mut store = seeded_store();
+    store
+        .install_plugin(&installation(
+            "plg_grants",
+            PluginRuntimeKind::Wasi,
+            PluginInstallScope::Project,
+            requested_permissions(),
+        ))
+        .expect("install declaration");
+
+    let widened = PluginGrantInput {
+        id: "pgr_widened".into(),
+        installation_id: "plg_grants".into(),
+        workspace_identity_digest: Some("workspace-fingerprint".into()),
+        permissions: PluginPermissionSet {
+            workspace_write: vec!["src".into()],
+            ..PluginPermissionSet::default()
+        },
+        granted_by: "user".into(),
+        granted_at: T1.into(),
+    };
+    let rejected = store
+        .grant_plugin(&widened)
+        .expect_err("grant must be a subset of the verified request");
+    assert!(matches!(rejected, StoreError::InvalidPlugin { .. }));
+
+    let narrowed = PluginGrantInput {
+        id: "pgr_narrowed".into(),
+        installation_id: "plg_grants".into(),
+        workspace_identity_digest: Some("workspace-fingerprint".into()),
+        permissions: PluginPermissionSet {
+            workspace_read: vec!["src".into()],
+            ..PluginPermissionSet::default()
+        },
+        granted_by: "user".into(),
+        granted_at: T1.into(),
+    };
+    let grant = store.grant_plugin(&narrowed).expect("narrowing grant");
+    assert_eq!(
+        store
+            .grant_plugin(&narrowed)
+            .expect("idempotent grant replay"),
+        grant
+    );
+
+    let revoked = store
+        .revoke_plugin_grant("pgr_narrowed", T2)
+        .expect("revoke grant");
+    assert_eq!(revoked.revoked_at.as_deref(), Some(T2));
+    assert_eq!(
+        store
+            .revoke_plugin_grant("pgr_narrowed", T1)
+            .expect("revoke replay"),
+        revoked
+    );
+}
+
+#[test]
+fn plugin_state_is_scoped_bounded_and_compare_and_swap_fenced() {
+    let mut store = seeded_store();
+    store
+        .install_plugin(&installation(
+            "plg_state",
+            PluginRuntimeKind::Wasi,
+            PluginInstallScope::User,
+            PluginPermissionSet::default(),
+        ))
+        .expect("install declaration");
+
+    let first_write = PluginStateWrite {
+        installation_id: "plg_state".into(),
+        scope: PluginStateScope::Global,
+        workspace_identity_digest: None,
+        session_id: None,
+        key: "settings".into(),
+        value: json!({ "level": 1 }),
+        expected_revision: None,
+        at: T0.into(),
+    };
+    let first = store
+        .put_plugin_state(&first_write)
+        .expect("create global state");
+    assert_eq!(first.revision, 1);
+
+    let mut stale = first_write.clone();
+    stale.value = json!({ "level": 2 });
+    stale.expected_revision = Some(2);
+    stale.at = T1.into();
+    let conflict = store
+        .put_plugin_state(&stale)
+        .expect_err("wrong revision must not overwrite state");
+    assert!(matches!(
+        conflict,
+        StoreError::PluginStateRevisionConflict {
+            expected: 2,
+            actual: Some(1),
+            ..
+        }
+    ));
+
+    let mut update = stale;
+    update.expected_revision = Some(1);
+    let updated = store
+        .put_plugin_state(&update)
+        .expect("compare-and-swap update");
+    assert_eq!(updated.revision, 2);
+    assert_eq!(
+        store
+            .plugin_state(
+                "plg_state",
+                PluginStateScope::Global,
+                None,
+                None,
+                "settings",
+            )
+            .expect("read state")
+            .expect("stored state")
+            .value,
+        json!({ "level": 2 })
+    );
+
+    let workspace = PluginStateWrite {
+        installation_id: "plg_state".into(),
+        scope: PluginStateScope::Workspace,
+        workspace_identity_digest: Some("workspace-fingerprint".into()),
+        session_id: None,
+        key: "workspace-settings".into(),
+        value: json!({ "enabled": true }),
+        expected_revision: None,
+        at: T1.into(),
+    };
+    assert_eq!(
+        store
+            .put_plugin_state(&workspace)
+            .expect("workspace state")
+            .revision,
+        1
+    );
+
+    let oversized = PluginStateWrite {
+        installation_id: "plg_state".into(),
+        scope: PluginStateScope::Global,
+        workspace_identity_digest: None,
+        session_id: None,
+        key: "oversized".into(),
+        value: json!("x".repeat(MAX_PLUGIN_STATE_BYTES)),
+        expected_revision: None,
+        at: T2.into(),
+    };
+    let rejected = store
+        .put_plugin_state(&oversized)
+        .expect_err("state size is bounded before persistence");
+    assert!(matches!(rejected, StoreError::InvalidPlugin { .. }));
+}
+
+#[test]
+fn installation_rejects_invalid_calendar_timestamp() {
+    let mut store = seeded_store();
+    let mut input = installation(
+        "plg_calendar",
+        PluginRuntimeKind::Wasi,
+        PluginInstallScope::User,
+        PluginPermissionSet::default(),
+    );
+    input.installed_at = "2026-02-30T00:00:00.000Z".into();
+    assert!(matches!(
+        store.install_plugin(&input),
+        Err(StoreError::InvalidPlugin { .. })
+    ));
+}

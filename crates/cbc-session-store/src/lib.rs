@@ -24,6 +24,7 @@ pub mod daemon;
 pub mod graph;
 pub mod memory;
 pub mod migrations;
+pub mod plugin;
 pub mod worktree;
 
 pub use daemon::{
@@ -44,6 +45,12 @@ pub use memory::{
     MAX_DURABLE_MEMORY_REFERENCES, MAX_DURABLE_MEMORY_VALIDITY_BYTES,
     MAX_DURABLE_MEMORY_VALUE_BYTES, MAX_MEMORY_RECALL_LIMIT,
 };
+pub use plugin::{
+    PluginGrantInput, PluginGrantRecord, PluginInstallScope, PluginInstallationInput,
+    PluginInstallationRecord, PluginPermissionSet, PluginRuntimeKind, PluginStateRecord,
+    PluginStateScope, PluginStateWrite, MAX_PLUGIN_PERMISSION_ENTRIES, MAX_PLUGIN_STATE_BYTES,
+};
+
 pub use worktree::{
     MergeAttemptCreate, MergeAttemptRecord, MergeAttemptState, MergeConflictPolicy,
     WorktreeChangeKind, WorktreeChangedFile, WorktreeCreate, WorktreeMutation,
@@ -205,6 +212,18 @@ pub enum StoreError {
     InvalidWorktree {
         detail: String,
     },
+    /// Plugin state uses compare-and-swap revisions so a stale sandbox instance
+    /// cannot overwrite state written by a newer instance.
+    PluginStateRevisionConflict {
+        installation_id: String,
+        key: String,
+        expected: i64,
+        actual: Option<i64>,
+    },
+    /// Plugin declarations, grants, and scoped state violated durable authority rules.
+    InvalidPlugin {
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for StoreError {
@@ -356,6 +375,17 @@ impl std::fmt::Display for StoreError {
             StoreError::InvalidWorktree { detail } => {
                 write!(f, "invalid worktree: {detail}")
             }
+            StoreError::PluginStateRevisionConflict {
+                installation_id,
+                key,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "plugin state revision conflict for {installation_id}/{key}: expected {expected}, current {:?}",
+                actual
+            ),
+            StoreError::InvalidPlugin { detail } => write!(f, "invalid plugin record: {detail}"),
         }
     }
 }

@@ -790,9 +790,31 @@ CREATE INDEX idx_event_subscriptions_session
     ON event_subscriptions(session_id, state);
 "#,
     },
+    Migration {
+        // PLG-024: preserve a verified declaration so grants can be proven to
+        // narrow, rather than merely asserted to narrow by a caller.
+        version: 14,
+        name: "plugin-authority-metadata",
+        destructive: false,
+        sql: r#"
+CREATE TABLE plugin_installation_metadata (
+    installation_id TEXT PRIMARY KEY REFERENCES plugin_installations(id) ON DELETE CASCADE,
+    scope TEXT NOT NULL,
+    requested_permissions_json TEXT NOT NULL,
+    manifest_json TEXT NOT NULL
+);
+CREATE UNIQUE INDEX idx_plugin_state_logical_scope
+    ON plugin_state(
+        installation_id,
+        COALESCE(workspace_identity_digest, ''),
+        COALESCE(session_id, ''),
+        key
+    );
+"#,
+    },
 ];
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 13;
+pub const CURRENT_SCHEMA_VERSION: i64 = 14;
 
 pub fn checksum(sql: &str) -> String {
     format!("{:x}", Sha256::digest(sql.as_bytes()))
@@ -872,7 +894,7 @@ mod tests {
     fn applies_and_is_idempotent() {
         let mut conn = Connection::open_in_memory().unwrap();
         let first = apply_migrations(&mut conn).unwrap();
-        assert_eq!(first, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+        assert_eq!(first, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
         let second = apply_migrations(&mut conn).unwrap();
         assert!(second.is_empty(), "re-running must be a no-op");
     }
@@ -924,6 +946,7 @@ mod tests {
             "merge_attempts",
             "merge_conflicts",
             "plugin_installations",
+            "plugin_installation_metadata",
             "plugin_grants",
             "plugin_instances",
             "plugin_invocations",
