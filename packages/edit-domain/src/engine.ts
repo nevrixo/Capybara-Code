@@ -224,7 +224,12 @@ function validateFileOperationConflicts(operations: readonly EditOperation[]): v
         deletes.add(operation.path);
         break;
       case "move_file":
-        if (moveSources.has(operation.path) || moveDestinations.has(operation.toPath)) {
+        if (
+          moveSources.has(operation.path)
+          || moveDestinations.has(operation.toPath)
+          || moveDestinations.has(operation.path)
+          || moveSources.has(operation.toPath)
+        ) {
           duplicatePathOperation(operation);
         }
         if (operation.path === operation.toPath) {

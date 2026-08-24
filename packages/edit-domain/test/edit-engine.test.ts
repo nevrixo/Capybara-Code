@@ -191,6 +191,8 @@ describe("edit-domain preflight", () => {
     try {
       preflightEditPlan(
         plan([{
+
+
           kind: "create_file",
           operationId: "edo_create",
           path: "src/a.ts",
@@ -203,4 +205,30 @@ describe("edit-domain preflight", () => {
       expect(error).toMatchObject({ code: "EDIT_PATH_CONFLICT" });
     }
   });
+
+  test("rejects chained move operations before staging either move", () => {
+    try {
+      preflightEditPlan(
+        plan([
+          {
+            kind: "move_file",
+            operationId: "edo_move_first",
+            path: "src/a.ts",
+            toPath: "src/b.ts",
+          },
+          {
+            kind: "move_file",
+            operationId: "edo_move_second",
+            path: "src/b.ts",
+            toPath: "src/c.ts",
+          },
+        ]),
+        snapshot(document("src/a.ts", "existing")),
+      );
+      throw new Error("expected chained move conflict");
+    } catch (error) {
+      expect(error).toMatchObject({ code: "EDIT_PATH_CONFLICT" });
+    }
+  });
+
 });
