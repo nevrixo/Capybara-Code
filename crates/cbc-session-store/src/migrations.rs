@@ -238,9 +238,62 @@ ALTER TABLE snapshots ADD COLUMN envelope_version INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE snapshots ADD COLUMN journal_hash TEXT;
 "#,
     },
+    Migration {
+        // W0 / EDT-018: retain canonical edit intent and the committed receipt so
+        // preview, retry, undo, and session replay use one durable source of truth.
+        version: 7,
+        name: "edit-receipts",
+        destructive: false,
+        sql: r#"
+CREATE TABLE edit_plans (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    turn_id TEXT,
+    agent_id TEXT,
+    source TEXT NOT NULL,
+    workspace_identity_digest TEXT NOT NULL,
+    worktree_id TEXT,
+    base_workspace_revision TEXT,
+    plan_digest TEXT NOT NULL,
+    conflict_policy TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    completed_at TEXT
+);
+CREATE INDEX idx_edit_plans_session_created
+    ON edit_plans(session_id, created_at DESC);
+
+CREATE TABLE edit_operations (
+    id TEXT PRIMARY KEY,
+    plan_id TEXT NOT NULL REFERENCES edit_plans(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    path TEXT NOT NULL,
+    base_revision TEXT,
+    operation_json TEXT NOT NULL,
+    resolved_range_json TEXT,
+    resolution_evidence_json TEXT,
+    status TEXT NOT NULL,
+    error_code TEXT,
+    UNIQUE(plan_id, ordinal)
+);
+CREATE INDEX idx_edit_operations_plan
+    ON edit_operations(plan_id, ordinal);
+
+CREATE TABLE edit_receipts (
+    id TEXT PRIMARY KEY,
+    plan_id TEXT NOT NULL REFERENCES edit_plans(id) ON DELETE CASCADE,
+    transaction_id TEXT,
+    receipt_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX idx_edit_receipts_plan
+    ON edit_receipts(plan_id, created_at DESC);
+"#,
+    },
 ];
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 6;
+pub const CURRENT_SCHEMA_VERSION: i64 = 7;
 
 pub fn checksum(sql: &str) -> String {
     format!("{:x}", Sha256::digest(sql.as_bytes()))
@@ -320,7 +373,7 @@ mod tests {
     fn applies_and_is_idempotent() {
         let mut conn = Connection::open_in_memory().unwrap();
         let first = apply_migrations(&mut conn).unwrap();
-        assert_eq!(first, vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(first, vec![1, 2, 3, 4, 5, 6, 7]);
         let second = apply_migrations(&mut conn).unwrap();
         assert!(second.is_empty(), "re-running must be a no-op");
     }
@@ -344,6 +397,9 @@ mod tests {
             "jobs",
             "artifacts",
             "usage",
+            "edit_plans",
+            "edit_operations",
+            "edit_receipts",
         ] {
             assert!(table_exists(&conn, table).unwrap(), "missing table {table}");
         }
