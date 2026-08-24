@@ -697,6 +697,11 @@ pub fn dispatch(state: &RuntimeState, request: &RpcRequest) -> Option<Result<Val
         "runtime.cancel" => cancel_request(state, params),
         "runtime.capability.issue" => state.issue_capability(&params),
 
+        "app.client.upsert" => handlers::app::client_upsert(state, params),
+        "app.subscription.create" => handlers::app::subscription_create(state, params),
+        "app.subscription.ack" => handlers::app::subscription_ack(state, params),
+        "app.subscription.state" => handlers::app::subscription_state(state, params),
+
         "workspace.inspect" => handlers::workspace::inspect(state),
         "workspace.mode.write" => handlers::workspace::mode_write(state, params),
         "workspace.trust.read" => handlers::workspace::trust_read(state),
