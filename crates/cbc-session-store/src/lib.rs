@@ -20,7 +20,16 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+pub mod memory;
 pub mod migrations;
+
+pub use memory::{
+    DurableEvidenceInput, DurableEvidenceRecord, DurableMemoryWrite, EvidenceFreshness,
+    EvidencePathBinding, MemoryRecallQuery, MemoryScope, MemoryStatus, MemoryTransition,
+    StoredMemoryRecord, DEFAULT_MEMORY_RECALL_LIMIT, MAX_DURABLE_EVIDENCE_SUMMARY_BYTES,
+    MAX_DURABLE_MEMORY_REFERENCES, MAX_DURABLE_MEMORY_VALIDITY_BYTES,
+    MAX_DURABLE_MEMORY_VALUE_BYTES, MAX_MEMORY_RECALL_LIMIT,
+};
 
 pub use migrations::{apply_migrations, CURRENT_SCHEMA_VERSION, MIGRATIONS};
 
@@ -101,6 +110,19 @@ pub enum StoreError {
     InvalidCommandReceipt {
         detail: String,
     },
+    /// Evidence or memory data violated the durable context boundary. These
+    /// errors are explicit so callers cannot downgrade a failed freshness or
+    /// workspace-identity check into a best-effort write.
+    InvalidDurableMemory {
+        detail: String,
+    },
+    /// Memory updates use compare-and-swap revisions so stale agents cannot
+    /// overwrite a newer evidence-backed claim.
+    MemoryRevisionConflict {
+        id: String,
+        expected: Option<i64>,
+        actual: Option<i64>,
+    },
 }
 
 impl std::fmt::Display for StoreError {
@@ -170,6 +192,18 @@ impl std::fmt::Display for StoreError {
             StoreError::InvalidCommandReceipt { detail } => {
                 write!(f, "invalid command receipt: {detail}")
             }
+            StoreError::InvalidDurableMemory { detail } => {
+                write!(f, "invalid durable memory: {detail}")
+            }
+            StoreError::MemoryRevisionConflict {
+                id,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "memory revision conflict for {id}: expected {:?}, current {:?}",
+                expected, actual
+            ),
         }
     }
 }
