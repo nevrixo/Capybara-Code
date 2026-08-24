@@ -360,9 +360,108 @@ CREATE INDEX idx_session_commands_session
     ON session_commands(session_id, created_at DESC);
 "#,
     },
+    Migration {
+        // W0 / MEM-005: evidence and memory are workspace-bound facts/claims.
+        // Raw transcripts are intentionally absent; callers store only bounded,
+        // redacted summaries and artifact references.
+        version: 9,
+        name: "durable-memory",
+        destructive: false,
+        sql: r#"
+CREATE TABLE evidence_records (
+    id TEXT PRIMARY KEY,
+    workspace_identity_digest TEXT NOT NULL,
+    session_id TEXT,
+    turn_id TEXT,
+    agent_id TEXT,
+    task_id TEXT,
+    worktree_id TEXT,
+    kind TEXT NOT NULL,
+    source TEXT NOT NULL,
+    digest TEXT NOT NULL,
+    exact INTEGER NOT NULL,
+    freshness TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    expires_at TEXT,
+    summary TEXT NOT NULL,
+    invalidated_at TEXT,
+    invalidation_reason TEXT
+);
+CREATE INDEX idx_evidence_workspace_freshness
+    ON evidence_records(workspace_identity_digest, freshness, observed_at DESC);
+
+CREATE TABLE evidence_path_bindings (
+    evidence_id TEXT NOT NULL REFERENCES evidence_records(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    revision_token TEXT,
+    PRIMARY KEY (evidence_id, path)
+);
+CREATE INDEX idx_evidence_path
+    ON evidence_path_bindings(path, revision_token);
+
+CREATE TABLE evidence_artifacts (
+    evidence_id TEXT NOT NULL REFERENCES evidence_records(id) ON DELETE CASCADE,
+    artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+    PRIMARY KEY (evidence_id, artifact_id)
+);
+
+CREATE TABLE memory_records (
+    id TEXT PRIMARY KEY,
+    workspace_identity_digest TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    session_id TEXT,
+    task_id TEXT,
+    worktree_id TEXT,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    status TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    valid_for_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_validated_at TEXT NOT NULL,
+    evidence_observed_at TEXT NOT NULL,
+    exact_evidence_observed_at TEXT,
+    expires_at TEXT,
+    revision INTEGER NOT NULL,
+    created_by TEXT NOT NULL,
+    created_by_agent_id TEXT,
+    last_accessed_at TEXT,
+    access_count INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_memory_workspace_key
+    ON memory_records(workspace_identity_digest, key, status);
+CREATE INDEX idx_memory_scope_owner
+    ON memory_records(scope, session_id, task_id);
+
+CREATE TABLE memory_evidence_links (
+    memory_id TEXT NOT NULL REFERENCES memory_records(id) ON DELETE CASCADE,
+    evidence_id TEXT NOT NULL REFERENCES evidence_records(id) ON DELETE RESTRICT,
+    PRIMARY KEY (memory_id, evidence_id)
+);
+
+CREATE TABLE memory_relations (
+    memory_id TEXT NOT NULL REFERENCES memory_records(id) ON DELETE CASCADE,
+    related_memory_id TEXT NOT NULL REFERENCES memory_records(id) ON DELETE CASCADE,
+    relation TEXT NOT NULL,
+    PRIMARY KEY (memory_id, related_memory_id, relation)
+);
+
+CREATE TABLE memory_transitions (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    memory_id TEXT NOT NULL REFERENCES memory_records(id) ON DELETE CASCADE,
+    from_status TEXT NOT NULL,
+    to_status TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    evidence_ids_json TEXT NOT NULL,
+    at TEXT NOT NULL
+);
+CREATE INDEX idx_memory_transitions_record
+    ON memory_transitions(memory_id, sequence);
+"#,
+    },
 ];
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 8;
+pub const CURRENT_SCHEMA_VERSION: i64 = 9;
 
 pub fn checksum(sql: &str) -> String {
     format!("{:x}", Sha256::digest(sql.as_bytes()))
@@ -442,7 +541,7 @@ mod tests {
     fn applies_and_is_idempotent() {
         let mut conn = Connection::open_in_memory().unwrap();
         let first = apply_migrations(&mut conn).unwrap();
-        assert_eq!(first, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(first, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
         let second = apply_migrations(&mut conn).unwrap();
         assert!(second.is_empty(), "re-running must be a no-op");
     }
@@ -474,6 +573,13 @@ mod tests {
             "client_attachments",
             "command_receipts",
             "session_commands",
+            "evidence_records",
+            "evidence_path_bindings",
+            "evidence_artifacts",
+            "memory_records",
+            "memory_evidence_links",
+            "memory_relations",
+            "memory_transitions",
         ] {
             assert!(table_exists(&conn, table).unwrap(), "missing table {table}");
         }
