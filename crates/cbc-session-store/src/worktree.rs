@@ -320,6 +320,95 @@ pub struct WorktreeProposalRecord {
     pub state: WorktreeProposalState,
     pub created_at: String,
 }
+
+pub const MAX_MERGE_PROPOSALS: usize = 64;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeConflictPolicy {
+    Fail,
+    Manual,
+}
+
+impl MergeConflictPolicy {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Fail => "fail",
+            Self::Manual => "manual",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeAttemptState {
+    Prepared,
+    Applying,
+    Merged,
+    Conflicted,
+    Failed,
+    Cancelled,
+}
+
+impl MergeAttemptState {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Prepared => "prepared",
+            Self::Applying => "applying",
+            Self::Merged => "merged",
+            Self::Conflicted => "conflicted",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    fn parse(raw: &str) -> Result<Self, StoreError> {
+        match raw {
+            "prepared" => Ok(Self::Prepared),
+            "applying" => Ok(Self::Applying),
+            "merged" => Ok(Self::Merged),
+            "conflicted" => Ok(Self::Conflicted),
+            "failed" => Ok(Self::Failed),
+            "cancelled" => Ok(Self::Cancelled),
+            _ => Err(invalid(format!("unsupported merge attempt state: {raw}"))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeAttemptCreate {
+    pub id: String,
+    pub workspace_identity_digest: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph_id: Option<String>,
+    pub proposal_ids: Vec<String>,
+    pub base_workspace_revision: String,
+    pub conflict_policy: MergeConflictPolicy,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeAttemptRecord {
+    pub id: String,
+    pub workspace_identity_digest: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph_id: Option<String>,
+    pub proposal_ids: Vec<String>,
+    pub base_workspace_revision: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_workspace_revision_after: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transaction_id: Option<String>,
+    pub state: MergeAttemptState,
+    pub conflict_policy: MergeConflictPolicy,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<serde_json::Value>,
+    pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<String>,
+}
 impl SessionStore {
     /// Register a generated worktree record. Filesystem creation is deliberately
     /// separate, so a crash between registration and Git worktree add can be
@@ -1975,5 +2064,234 @@ fn read_worktree_proposal(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorktreeP
         payload,
         state,
         created_at: row.get(11)?,
+    })
+}
+
+impl SessionStore {
+    /// Select compatible ready proposals into a durable merge attempt. This does
+    /// not mutate the base workspace; the runtime merge adapter must later move
+    /// the attempt through applying and a receipt-backed terminal state.
+    pub fn begin_merge_attempt(
+        &mut self,
+        input: &MergeAttemptCreate,
+    ) -> Result<MergeAttemptRecord, StoreError> {
+        validate_merge_attempt_create(input)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(existing) = merge_attempt_in_tx(&tx, &input.id)? {
+            ensure_merge_attempt_replay(&existing, input)?;
+            tx.commit()?;
+            return Ok(existing);
+        }
+
+        let proposal_ids = input.proposal_ids.clone();
+        let mut worktrees = Vec::with_capacity(proposal_ids.len());
+        for proposal_id in &proposal_ids {
+            let proposal =
+                worktree_proposal_in_tx(&tx, proposal_id)?.ok_or_else(|| StoreError::NotFound {
+                    what: format!("worktree proposal {proposal_id}"),
+                })?;
+            if proposal.state != WorktreeProposalState::Ready {
+                return Err(invalid(
+                    "only ready worktree proposals can enter a merge attempt",
+                ));
+            }
+            if proposal.base_workspace_revision != input.base_workspace_revision {
+                return Err(invalid(
+                    "proposal baseWorkspaceRevision does not match the merge base fence",
+                ));
+            }
+            if input.graph_id.as_deref() != Some(proposal.graph_id.as_str()) {
+                return Err(invalid(
+                    "merge graphId must match every selected worktree proposal",
+                ));
+            }
+            let worktree = require_worktree(&tx, &proposal.worktree_id)?;
+            if worktree.workspace_identity_digest != input.workspace_identity_digest
+                || worktree.state != WorktreeState::ProposalReady
+                || worktree.writer_lease_id.is_some()
+            {
+                return Err(invalid(
+                    "selected proposal worktree is not a merge-ready tree in this workspace",
+                ));
+            }
+            worktrees.push((proposal, worktree));
+        }
+
+        for (proposal, worktree) in &worktrees {
+            let selected = tx.execute(
+                "UPDATE worktree_proposals SET status = 'selected'
+                 WHERE id = ?1 AND status = 'ready'",
+                params![&proposal.id],
+            )?;
+            if selected != 1 {
+                return Err(invalid("worktree proposal changed while preparing merge"));
+            }
+            let revision = next_worktree_revision(worktree)?;
+            let changed = tx.execute(
+                "UPDATE worktrees SET state = 'merging', revision = ?2, updated_at = ?3
+                 WHERE id = ?1 AND revision = ?4 AND state = 'proposal_ready'
+                   AND writer_lease_id IS NULL",
+                params![&worktree.id, revision, &input.created_at, worktree.revision],
+            )?;
+            if changed != 1 {
+                return Err(StoreError::WorktreeRevisionConflict {
+                    worktree_id: worktree.id.clone(),
+                    expected: worktree.revision,
+                    actual: worktree_revision(&tx, &worktree.id)?,
+                });
+            }
+        }
+        tx.execute(
+            "INSERT INTO merge_attempts (
+                id, workspace_identity_digest, graph_id, proposal_ids_json,
+                base_revision_before, base_revision_after, transaction_id, state,
+                conflict_policy, error_json, created_at, completed_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, 'prepared', ?6, NULL, ?7, NULL)",
+            params![
+                &input.id,
+                &input.workspace_identity_digest,
+                &input.graph_id,
+                serde_json::to_string(&proposal_ids)?,
+                &input.base_workspace_revision,
+                input.conflict_policy.label(),
+                &input.created_at,
+            ],
+        )?;
+        let record = MergeAttemptRecord {
+            id: input.id.clone(),
+            workspace_identity_digest: input.workspace_identity_digest.clone(),
+            graph_id: input.graph_id.clone(),
+            proposal_ids,
+            base_workspace_revision: input.base_workspace_revision.clone(),
+            base_workspace_revision_after: None,
+            transaction_id: None,
+            state: MergeAttemptState::Prepared,
+            conflict_policy: input.conflict_policy,
+            error: None,
+            created_at: input.created_at.clone(),
+            completed_at: None,
+        };
+        tx.commit()?;
+        Ok(record)
+    }
+
+    pub fn merge_attempt(
+        &self,
+        merge_attempt_id: &str,
+    ) -> Result<Option<MergeAttemptRecord>, StoreError> {
+        validate_identifier("mergeAttemptId", merge_attempt_id, "mrg_")?;
+        self.conn
+            .query_row(
+                "SELECT id, workspace_identity_digest, graph_id, proposal_ids_json,
+                        base_revision_before, base_revision_after, transaction_id, state,
+                        conflict_policy, error_json, created_at, completed_at
+                 FROM merge_attempts WHERE id = ?1",
+                params![merge_attempt_id],
+                read_merge_attempt,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+}
+
+fn validate_merge_attempt_create(input: &MergeAttemptCreate) -> Result<(), StoreError> {
+    validate_identifier("mergeAttemptId", &input.id, "mrg_")?;
+    validate_workspace_identity(&input.workspace_identity_digest)?;
+    let graph_id = input
+        .graph_id
+        .as_deref()
+        .ok_or_else(|| invalid("merge graphId is required for worktree proposals"))?;
+    validate_identifier("graphId", graph_id, "grf_")?;
+    if input.proposal_ids.is_empty() || input.proposal_ids.len() > MAX_MERGE_PROPOSALS {
+        return Err(invalid(format!(
+            "proposalIds must contain 1..={MAX_MERGE_PROPOSALS} entries"
+        )));
+    }
+    let mut unique = BTreeSet::new();
+    for proposal_id in &input.proposal_ids {
+        validate_identifier("proposalId", proposal_id, "prp_")?;
+        if !unique.insert(proposal_id.as_str()) {
+            return Err(invalid("proposalIds must not contain duplicates"));
+        }
+    }
+    validate_bounded_text(
+        "baseWorkspaceRevision",
+        &input.base_workspace_revision,
+        MAX_WORKTREE_IDENTIFIER_BYTES,
+    )?;
+    validate_timestamp("createdAt", &input.created_at)
+}
+
+fn merge_attempt_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    merge_attempt_id: &str,
+) -> Result<Option<MergeAttemptRecord>, StoreError> {
+    tx.query_row(
+        "SELECT id, workspace_identity_digest, graph_id, proposal_ids_json,
+                base_revision_before, base_revision_after, transaction_id, state,
+                conflict_policy, error_json, created_at, completed_at
+         FROM merge_attempts WHERE id = ?1",
+        params![merge_attempt_id],
+        read_merge_attempt,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn ensure_merge_attempt_replay(
+    existing: &MergeAttemptRecord,
+    input: &MergeAttemptCreate,
+) -> Result<(), StoreError> {
+    if existing.workspace_identity_digest != input.workspace_identity_digest
+        || existing.graph_id != input.graph_id
+        || existing.proposal_ids != input.proposal_ids
+        || existing.base_workspace_revision != input.base_workspace_revision
+        || existing.conflict_policy != input.conflict_policy
+        || existing.created_at != input.created_at
+    {
+        return Err(invalid(
+            "merge attempt ID is already bound to different immutable input",
+        ));
+    }
+    Ok(())
+}
+
+fn read_merge_attempt(row: &rusqlite::Row<'_>) -> rusqlite::Result<MergeAttemptRecord> {
+    let raw_proposal_ids: String = row.get(3)?;
+    let proposal_ids: Vec<String> = serde_json::from_str(&raw_proposal_ids).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(error))
+    })?;
+    let raw_state: String = row.get(7)?;
+    let state = MergeAttemptState::parse(&raw_state).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, Box::new(error))
+    })?;
+    let raw_policy: String = row.get(8)?;
+    let conflict_policy = match raw_policy.as_str() {
+        "fail" => MergeConflictPolicy::Fail,
+        "manual" => MergeConflictPolicy::Manual,
+        _ => {
+            return Err(invalid_sql_column(
+                8,
+                "stored merge attempt has unsupported conflict policy",
+            ))
+        }
+    };
+    let raw_error: Option<String> = row.get(9)?;
+    let error = raw_error.map(|value| json_column(value, 9)).transpose()?;
+    Ok(MergeAttemptRecord {
+        id: row.get(0)?,
+        workspace_identity_digest: row.get(1)?,
+        graph_id: row.get(2)?,
+        proposal_ids,
+        base_workspace_revision: row.get(4)?,
+        base_workspace_revision_after: row.get(5)?,
+        transaction_id: row.get(6)?,
+        state,
+        conflict_policy,
+        error,
+        created_at: row.get(10)?,
+        completed_at: row.get(11)?,
     })
 }

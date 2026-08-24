@@ -45,6 +45,7 @@ pub use memory::{
     MAX_DURABLE_MEMORY_VALUE_BYTES, MAX_MEMORY_RECALL_LIMIT,
 };
 pub use worktree::{
+    MergeAttemptCreate, MergeAttemptRecord, MergeAttemptState, MergeConflictPolicy,
     WorktreeChangeKind, WorktreeChangedFile, WorktreeCreate, WorktreeMutation,
     WorktreeProposalCreate, WorktreeProposalPayload, WorktreeProposalRecord, WorktreeProposalState,
     WorktreeRecord, WorktreeState, WorktreeTransition, WorktreeWriterLeaseInput,

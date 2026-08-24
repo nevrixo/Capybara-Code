@@ -1,9 +1,10 @@
 use cbc_session_store::{
     new_manifest, AgentAttemptCreate, AgentAttemptState, AgentAttemptTransition, AgentGraphCreate,
     AgentNodeCreate, AgentNodeState, AgentNodeTransition, DurableEvidenceInput, EvidenceFreshness,
-    EvidencePathBinding, SessionStore, StoreError, WorktreeChangeKind, WorktreeChangedFile,
-    WorktreeCreate, WorktreeProposalCreate, WorktreeProposalPayload, WorktreeState,
-    WorktreeTransition, WorktreeWriterLeaseInput, WorktreeWriterLeaseState,
+    EvidencePathBinding, MergeAttemptCreate, MergeAttemptState, MergeConflictPolicy, SessionStore,
+    StoreError, WorktreeChangeKind, WorktreeChangedFile, WorktreeCreate, WorktreeProposalCreate,
+    WorktreeProposalPayload, WorktreeState, WorktreeTransition, WorktreeWriterLeaseInput,
+    WorktreeWriterLeaseState,
 };
 use serde_json::json;
 
@@ -461,4 +462,37 @@ fn completed_writer_attempt_publishes_an_evidence_backed_proposal_atomically() {
             .len(),
         1
     );
+    let merge = store
+        .begin_merge_attempt(&MergeAttemptCreate {
+            id: "mrg_one".into(),
+            workspace_identity_digest: "workspace-fingerprint".into(),
+            graph_id: Some("grf_worktree".into()),
+            proposal_ids: vec!["prp_valid".into()],
+            base_workspace_revision: "base-r1".into(),
+            conflict_policy: MergeConflictPolicy::Manual,
+            created_at: T4.into(),
+        })
+        .expect("select proposal for a fenced merge");
+    assert_eq!(merge.state, MergeAttemptState::Prepared);
+    assert_eq!(merge.proposal_ids, vec!["prp_valid"]);
+    assert_eq!(
+        store
+            .worktree("wt_isolated")
+            .expect("read worktree")
+            .expect("worktree")
+            .state,
+        WorktreeState::Merging
+    );
+    let merge_replay = store
+        .begin_merge_attempt(&MergeAttemptCreate {
+            id: "mrg_one".into(),
+            workspace_identity_digest: "workspace-fingerprint".into(),
+            graph_id: Some("grf_worktree".into()),
+            proposal_ids: vec!["prp_valid".into()],
+            base_workspace_revision: "base-r1".into(),
+            conflict_policy: MergeConflictPolicy::Manual,
+            created_at: T4.into(),
+        })
+        .expect("same merge request is idempotent");
+    assert_eq!(merge_replay, merge);
 }
