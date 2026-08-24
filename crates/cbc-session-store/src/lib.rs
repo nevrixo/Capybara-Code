@@ -20,12 +20,19 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+pub mod app;
 pub mod daemon;
 pub mod graph;
 pub mod memory;
 pub mod migrations;
 pub mod plugin;
 pub mod worktree;
+
+pub use app::{
+    AppClientKind, AppClientRecord, AppClientUpsert, AppEventFilter, AppSubscriptionAck,
+    AppSubscriptionCreate, AppSubscriptionRecord, AppSubscriptionState, MAX_APP_FILTER_ENTRIES,
+    MAX_APP_SUBSCRIPTIONS_PER_CLIENT,
+};
 
 pub use daemon::{
     AttachmentMode, ClientAttachmentInput, ClientAttachmentRecord, DaemonInstanceInput,
@@ -224,6 +231,16 @@ pub enum StoreError {
     InvalidPlugin {
         detail: String,
     },
+    /// A client tried to acknowledge a cursor beyond the immutable session journal.
+    AppSubscriptionCursorAhead {
+        subscription_id: String,
+        requested: i64,
+        head: i64,
+    },
+    /// App client identity, subscription lifecycle, or bounded cursor input is invalid.
+    InvalidAppServer {
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for StoreError {
@@ -386,6 +403,15 @@ impl std::fmt::Display for StoreError {
                 actual
             ),
             StoreError::InvalidPlugin { detail } => write!(f, "invalid plugin record: {detail}"),
+            StoreError::AppSubscriptionCursorAhead {
+                subscription_id,
+                requested,
+                head,
+            } => write!(
+                f,
+                "app subscription {subscription_id} acknowledged sequence {requested}, beyond journal head {head}"
+            ),
+            StoreError::InvalidAppServer { detail } => write!(f, "invalid app server record: {detail}"),
         }
     }
 }
