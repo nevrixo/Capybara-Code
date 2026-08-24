@@ -30,6 +30,8 @@
       "@cbc/protocol": ["packages/protocol-ts/src/index.ts"],
       "@cbc/app-protocol": ["packages/app-protocol/src/index.ts"],
       "@cbc/edit-domain": ["packages/edit-domain/src/index.ts"],
+      "@cbc/plugin-sdk": ["packages/plugin-sdk/src/index.ts"],
+      "@cbc/plugin-sdk/testing": ["packages/plugin-sdk/src/testing.ts"],
       "@cbc/config-schema": ["packages/config-schema/src/index.ts"],
       "@cbc/inference-domain": ["packages/inference-domain/src/index.ts"],
       "@cbc/session-domain": ["packages/session-domain/src/index.ts"],
