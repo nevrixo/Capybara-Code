@@ -812,9 +812,25 @@ CREATE UNIQUE INDEX idx_plugin_state_logical_scope
     );
 "#,
     },
+    Migration {
+        // PLG-025: circuit state must survive supervisor restarts so a failed
+        // plugin cannot bypass its cooldown by being relaunched.
+        version: 15,
+        name: "plugin-instance-circuit-health",
+        destructive: false,
+        sql: r#"
+ALTER TABLE plugin_instances ADD COLUMN circuit_state TEXT NOT NULL DEFAULT 'closed';
+ALTER TABLE plugin_instances ADD COLUMN circuit_generation INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE plugin_instances ADD COLUMN last_failure_at TEXT;
+ALTER TABLE plugin_instances ADD COLUMN circuit_opened_at TEXT;
+ALTER TABLE plugin_instances ADD COLUMN circuit_retry_at TEXT;
+CREATE INDEX idx_plugin_instances_circuit
+    ON plugin_instances(circuit_state, circuit_retry_at);
+"#,
+    },
 ];
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 14;
+pub const CURRENT_SCHEMA_VERSION: i64 = 15;
 
 pub fn checksum(sql: &str) -> String {
     format!("{:x}", Sha256::digest(sql.as_bytes()))
@@ -894,7 +910,10 @@ mod tests {
     fn applies_and_is_idempotent() {
         let mut conn = Connection::open_in_memory().unwrap();
         let first = apply_migrations(&mut conn).unwrap();
-        assert_eq!(first, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+        assert_eq!(
+            first,
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        );
         let second = apply_migrations(&mut conn).unwrap();
         assert!(second.is_empty(), "re-running must be a no-op");
     }
