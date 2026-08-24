@@ -291,9 +291,78 @@ CREATE INDEX idx_edit_receipts_plan
     ON edit_receipts(plan_id, created_at DESC);
 "#,
     },
+    Migration {
+        // W0 / DAE-013: durable local-daemon ownership, attachment recovery, and
+        // idempotent command state. No network transport authority is stored here.
+        version: 8,
+        name: "daemon-ownership",
+        destructive: false,
+        sql: r#"
+CREATE TABLE daemon_instances (
+    id TEXT PRIMARY KEY,
+    pid INTEGER NOT NULL,
+    executable_digest TEXT NOT NULL,
+    protocol_version TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    heartbeat_at TEXT NOT NULL,
+    stopped_at TEXT,
+    state TEXT NOT NULL
+);
+
+CREATE TABLE session_owners (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    daemon_id TEXT NOT NULL,
+    owner_epoch INTEGER NOT NULL,
+    lease_expires_at TEXT NOT NULL,
+    acquired_at TEXT NOT NULL,
+    heartbeat_at TEXT NOT NULL
+);
+CREATE INDEX idx_session_owners_expiry
+    ON session_owners(lease_expires_at);
+
+CREATE TABLE client_attachments (
+    connection_id TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL,
+    session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+    mode TEXT NOT NULL,
+    attached_at TEXT NOT NULL,
+    detached_at TEXT,
+    last_event_sequence INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_client_attachments_session
+    ON client_attachments(session_id, detached_at);
+
+CREATE TABLE command_receipts (
+    idempotency_key TEXT PRIMARY KEY,
+    command_id TEXT NOT NULL,
+    canonical_payload_hash TEXT NOT NULL,
+    status TEXT NOT NULL,
+    result_json TEXT,
+    error_json TEXT,
+    created_at TEXT NOT NULL,
+    completed_at TEXT
+);
+CREATE INDEX idx_command_receipts_created
+    ON command_receipts(created_at DESC);
+
+CREATE TABLE session_commands (
+    idempotency_key TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    command_id TEXT NOT NULL,
+    command_kind TEXT NOT NULL,
+    payload_hash TEXT NOT NULL,
+    status TEXT NOT NULL,
+    receipt_json TEXT,
+    created_at TEXT NOT NULL,
+    completed_at TEXT
+);
+CREATE INDEX idx_session_commands_session
+    ON session_commands(session_id, created_at DESC);
+"#,
+    },
 ];
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 7;
+pub const CURRENT_SCHEMA_VERSION: i64 = 8;
 
 pub fn checksum(sql: &str) -> String {
     format!("{:x}", Sha256::digest(sql.as_bytes()))
@@ -373,7 +442,7 @@ mod tests {
     fn applies_and_is_idempotent() {
         let mut conn = Connection::open_in_memory().unwrap();
         let first = apply_migrations(&mut conn).unwrap();
-        assert_eq!(first, vec![1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(first, vec![1, 2, 3, 4, 5, 6, 7, 8]);
         let second = apply_migrations(&mut conn).unwrap();
         assert!(second.is_empty(), "re-running must be a no-op");
     }
@@ -400,6 +469,11 @@ mod tests {
             "edit_plans",
             "edit_operations",
             "edit_receipts",
+            "daemon_instances",
+            "session_owners",
+            "client_attachments",
+            "command_receipts",
+            "session_commands",
         ] {
             assert!(table_exists(&conn, table).unwrap(), "missing table {table}");
         }
