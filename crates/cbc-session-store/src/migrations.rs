@@ -684,9 +684,85 @@ CREATE INDEX idx_merge_conflicts_attempt
     ON merge_conflicts(merge_attempt_id, state);
 "#,
     },
+    Migration {
+        // W0 / PLG-023: installations, grants, invocation audit, and scoped KV
+        // state. Grants remain data, not executable authority, until policy checks.
+        version: 12,
+        name: "plugin-runtime",
+        destructive: false,
+        sql: r#"
+CREATE TABLE plugin_installations (
+    id TEXT PRIMARY KEY,
+    plugin_id TEXT NOT NULL,
+    version TEXT NOT NULL,
+    source TEXT NOT NULL,
+    package_digest TEXT NOT NULL,
+    manifest_digest TEXT NOT NULL,
+    signature_json TEXT,
+    runtime_kind TEXT NOT NULL,
+    enabled INTEGER NOT NULL,
+    installed_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(plugin_id, version, package_digest)
+);
+
+CREATE TABLE plugin_grants (
+    id TEXT PRIMARY KEY,
+    installation_id TEXT NOT NULL REFERENCES plugin_installations(id) ON DELETE CASCADE,
+    workspace_identity_digest TEXT,
+    grant_json TEXT NOT NULL,
+    granted_at TEXT NOT NULL,
+    granted_by TEXT NOT NULL,
+    revoked_at TEXT
+);
+CREATE INDEX idx_plugin_grants_workspace
+    ON plugin_grants(workspace_identity_digest, revoked_at);
+
+CREATE TABLE plugin_instances (
+    id TEXT PRIMARY KEY,
+    installation_id TEXT NOT NULL REFERENCES plugin_installations(id) ON DELETE CASCADE,
+    workspace_identity_digest TEXT,
+    worktree_id TEXT,
+    session_id TEXT,
+    state TEXT NOT NULL,
+    pid INTEGER,
+    started_at TEXT,
+    heartbeat_at TEXT,
+    stopped_at TEXT,
+    failure_count INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_plugin_instances_installation
+    ON plugin_instances(installation_id, state);
+
+CREATE TABLE plugin_invocations (
+    id TEXT PRIMARY KEY,
+    instance_id TEXT NOT NULL REFERENCES plugin_instances(id) ON DELETE CASCADE,
+    hook_or_method TEXT NOT NULL,
+    correlation_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    decision_json TEXT,
+    error_json TEXT,
+    started_at TEXT NOT NULL,
+    finished_at TEXT
+);
+CREATE INDEX idx_plugin_invocations_correlation
+    ON plugin_invocations(correlation_id, started_at);
+
+CREATE TABLE plugin_state (
+    installation_id TEXT NOT NULL REFERENCES plugin_installations(id) ON DELETE CASCADE,
+    workspace_identity_digest TEXT,
+    session_id TEXT,
+    key TEXT NOT NULL,
+    value_json TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (installation_id, workspace_identity_digest, session_id, key)
+);
+"#,
+    },
 ];
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 11;
+pub const CURRENT_SCHEMA_VERSION: i64 = 12;
 
 pub fn checksum(sql: &str) -> String {
     format!("{:x}", Sha256::digest(sql.as_bytes()))
@@ -766,7 +842,7 @@ mod tests {
     fn applies_and_is_idempotent() {
         let mut conn = Connection::open_in_memory().unwrap();
         let first = apply_migrations(&mut conn).unwrap();
-        assert_eq!(first, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+        assert_eq!(first, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
         let second = apply_migrations(&mut conn).unwrap();
         assert!(second.is_empty(), "re-running must be a no-op");
     }
@@ -817,6 +893,11 @@ mod tests {
             "worktree_proposals",
             "merge_attempts",
             "merge_conflicts",
+            "plugin_installations",
+            "plugin_grants",
+            "plugin_instances",
+            "plugin_invocations",
+            "plugin_state",
         ] {
             assert!(table_exists(&conn, table).unwrap(), "missing table {table}");
         }
