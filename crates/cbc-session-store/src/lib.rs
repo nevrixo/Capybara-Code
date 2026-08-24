@@ -21,12 +21,19 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub mod daemon;
+pub mod graph;
 pub mod memory;
 pub mod migrations;
 
 pub use daemon::{
     AttachmentMode, ClientAttachmentInput, ClientAttachmentRecord, DaemonInstanceInput,
     DaemonInstanceRecord, DaemonState, SessionOwnerClaim, SessionOwnerLease, SessionOwnerRecord,
+};
+pub use graph::{
+    AgentEdgeCreate, AgentEdgeKind, AgentEdgeRecord, AgentGraphCreate, AgentGraphMutation,
+    AgentGraphRecord, AgentGraphState, AgentNodeCreate, AgentNodeRecord, AgentNodeState,
+    AgentNodeTransition, GraphStateTransition, MAX_AGENT_GRAPH_DEPTH, MAX_AGENT_GRAPH_NODES,
+    MAX_AGENT_GRAPH_PAYLOAD_BYTES,
 };
 pub use memory::{
     DurableEvidenceInput, DurableEvidenceRecord, DurableMemoryWrite, EvidenceFreshness,
@@ -146,6 +153,24 @@ pub enum StoreError {
     InvalidDaemonRecord {
         detail: String,
     },
+    /// Graph writes use an expected revision, so a stale daemon cannot overwrite
+    /// a newer materialized scheduler decision.
+    GraphRevisionConflict {
+        graph_id: String,
+        expected: i64,
+        actual: Option<i64>,
+    },
+    /// Node transitions have their own CAS fence in addition to graph revision.
+    AgentNodeRevisionConflict {
+        node_id: String,
+        expected: i64,
+        actual: Option<i64>,
+    },
+    /// Agent graph data violated a bounded JSON, DAG, state-machine, or
+    /// session/workspace ownership invariant.
+    InvalidAgentGraph {
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for StoreError {
@@ -246,6 +271,27 @@ impl std::fmt::Display for StoreError {
             ),
             StoreError::InvalidDaemonRecord { detail } => {
                 write!(f, "invalid daemon ownership record: {detail}")
+            }
+            StoreError::GraphRevisionConflict {
+                graph_id,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "agent graph revision conflict for {graph_id}: expected {expected}, current {:?}",
+                actual
+            ),
+            StoreError::AgentNodeRevisionConflict {
+                node_id,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "agent node revision conflict for {node_id}: expected {expected}, current {:?}",
+                actual
+            ),
+            StoreError::InvalidAgentGraph { detail } => {
+                write!(f, "invalid agent graph: {detail}")
             }
         }
     }
