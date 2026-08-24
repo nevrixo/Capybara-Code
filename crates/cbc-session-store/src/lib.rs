@@ -87,6 +87,20 @@ pub enum StoreError {
     InvalidSnapshot {
         detail: String,
     },
+    /// An idempotency key is permanently bound to one command and canonical
+    /// payload digest. A mismatch is a conflict, never a silently new command.
+    IdempotencyConflict {
+        idempotency_key: String,
+        existing_command_id: String,
+    },
+    /// A completed receipt is immutable. Retrying it returns the stored result;
+    /// attempting to replace it is a caller bug or a split-brain signal.
+    ReceiptAlreadyFinal {
+        idempotency_key: String,
+    },
+    InvalidCommandReceipt {
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for StoreError {
@@ -141,6 +155,20 @@ impl std::fmt::Display for StoreError {
             ),
             StoreError::InvalidSnapshot { detail } => {
                 write!(f, "invalid snapshot envelope: {detail}")
+            }
+            StoreError::IdempotencyConflict {
+                idempotency_key,
+                existing_command_id,
+            } => write!(
+                f,
+                "idempotency key '{idempotency_key}' is already bound to command '{existing_command_id}' with a different payload"
+            ),
+            StoreError::ReceiptAlreadyFinal { idempotency_key } => write!(
+                f,
+                "command receipt for idempotency key '{idempotency_key}' is already final"
+            ),
+            StoreError::InvalidCommandReceipt { detail } => {
+                write!(f, "invalid command receipt: {detail}")
             }
         }
     }
@@ -414,6 +442,93 @@ pub struct AppendEvent {
     pub parent_event_id: Option<String>,
     #[serde(default)]
     pub correlation_id: Option<String>,
+}
+/// The version of the client-facing receipt envelope persisted by this store.
+pub const COMMAND_RECEIPT_SCHEMA_VERSION: &str = "1.0";
+
+/// Durable command lifecycle shared by local daemon and embedded mode. `accepted`
+/// is the only non-terminal status; replay always returns the stored envelope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CommandReceiptStatus {
+    Accepted,
+    Completed,
+    Partial,
+    Failed,
+    Cancelled,
+    Blocked,
+}
+
+impl CommandReceiptStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::Completed => "completed",
+            Self::Partial => "partial",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::Blocked => "blocked",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Result<Self, StoreError> {
+        match raw {
+            "accepted" => Ok(Self::Accepted),
+            "completed" => Ok(Self::Completed),
+            "partial" => Ok(Self::Partial),
+            "failed" => Ok(Self::Failed),
+            "cancelled" => Ok(Self::Cancelled),
+            "blocked" => Ok(Self::Blocked),
+            _ => Err(StoreError::InvalidCommandReceipt {
+                detail: format!("unsupported status '{raw}'"),
+            }),
+        }
+    }
+
+    pub fn is_terminal(self) -> bool {
+        !matches!(self, Self::Accepted)
+    }
+}
+
+/// Persisted idempotency record. Result and error are bounded JSON metadata, not
+/// raw tool output or transcript content.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredCommandReceipt {
+    pub schema_version: String,
+    pub idempotency_key: String,
+    pub command_id: String,
+    pub canonical_payload_hash: String,
+    pub status: CommandReceiptStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<serde_json::Value>,
+    pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<String>,
+}
+
+/// A claim tells the caller whether it owns execution or must replay an existing
+/// receipt. The latter includes unfinished work so a duplicate caller never gets
+/// a second mutable operation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum CommandReceiptClaim {
+    Acquired { receipt: StoredCommandReceipt },
+    Replayed { receipt: StoredCommandReceipt },
+}
+
+#[derive(Debug)]
+struct CommandReceiptRow {
+    idempotency_key: String,
+    command_id: String,
+    canonical_payload_hash: String,
+    status: String,
+    result_json: Option<String>,
+    error_json: Option<String>,
+    created_at: String,
+    completed_at: Option<String>,
 }
 
 fn default_level() -> String {
@@ -1951,6 +2066,189 @@ impl SessionStore {
         )?;
         Ok(())
     }
+
+    /// Acquire one durable idempotency slot before starting a command. A second
+    /// caller with the same key gets the exact stored record; a different command
+    /// or payload hash fails closed with `IdempotencyConflict`.
+    pub fn claim_command_receipt(
+        &mut self,
+        idempotency_key: &str,
+        command_id: &str,
+        canonical_payload_hash: &str,
+        created_at: &str,
+    ) -> Result<CommandReceiptClaim, StoreError> {
+        validate_command_receipt_input(
+            idempotency_key,
+            command_id,
+            canonical_payload_hash,
+            created_at,
+        )?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let existing = tx
+            .query_row(
+                "SELECT idempotency_key, command_id, canonical_payload_hash, status,
+                        result_json, error_json, created_at, completed_at
+                 FROM command_receipts WHERE idempotency_key = ?1",
+                params![idempotency_key],
+                read_command_receipt_row,
+            )
+            .optional()?
+            .map(stored_command_receipt_from_row)
+            .transpose()?;
+
+        if let Some(receipt) = existing {
+            if receipt.command_id != command_id
+                || receipt.canonical_payload_hash != canonical_payload_hash
+            {
+                return Err(StoreError::IdempotencyConflict {
+                    idempotency_key: idempotency_key.into(),
+                    existing_command_id: receipt.command_id,
+                });
+            }
+            tx.commit()?;
+            return Ok(CommandReceiptClaim::Replayed { receipt });
+        }
+
+        let receipt = StoredCommandReceipt {
+            schema_version: COMMAND_RECEIPT_SCHEMA_VERSION.into(),
+            idempotency_key: idempotency_key.into(),
+            command_id: command_id.into(),
+            canonical_payload_hash: canonical_payload_hash.into(),
+            status: CommandReceiptStatus::Accepted,
+            result: None,
+            error: None,
+            created_at: created_at.into(),
+            completed_at: None,
+        };
+        tx.execute(
+            "INSERT INTO command_receipts (
+                idempotency_key, command_id, canonical_payload_hash, status,
+                result_json, error_json, created_at, completed_at
+             ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5, NULL)",
+            params![
+                receipt.idempotency_key,
+                receipt.command_id,
+                receipt.canonical_payload_hash,
+                receipt.status.label(),
+                receipt.created_at,
+            ],
+        )?;
+        tx.commit()?;
+        Ok(CommandReceiptClaim::Acquired { receipt })
+    }
+
+    /// Read one durable command receipt for retry/replay without claiming new
+    /// work. An unknown key is intentionally `None`, not an execution signal.
+    pub fn command_receipt(
+        &self,
+        idempotency_key: &str,
+    ) -> Result<Option<StoredCommandReceipt>, StoreError> {
+        if idempotency_key.trim().is_empty() {
+            return Err(StoreError::InvalidCommandReceipt {
+                detail: "idempotencyKey must not be empty".into(),
+            });
+        }
+        self.conn
+            .query_row(
+                "SELECT idempotency_key, command_id, canonical_payload_hash, status,
+                        result_json, error_json, created_at, completed_at
+                 FROM command_receipts WHERE idempotency_key = ?1",
+                params![idempotency_key],
+                read_command_receipt_row,
+            )
+            .optional()?
+            .map(stored_command_receipt_from_row)
+            .transpose()
+    }
+
+    /// Finalize an acquired receipt exactly once. The same terminal outcome is
+    /// idempotent; a changed outcome is rejected so crash recovery cannot erase
+    /// the first durable fact.
+    pub fn complete_command_receipt(
+        &mut self,
+        idempotency_key: &str,
+        status: CommandReceiptStatus,
+        result: Option<&serde_json::Value>,
+        error: Option<&serde_json::Value>,
+        completed_at: &str,
+    ) -> Result<StoredCommandReceipt, StoreError> {
+        if !status.is_terminal() {
+            return Err(StoreError::InvalidCommandReceipt {
+                detail: "only terminal statuses may complete a command receipt".into(),
+            });
+        }
+        if completed_at.trim().is_empty() {
+            return Err(StoreError::InvalidCommandReceipt {
+                detail: "completedAt must not be empty".into(),
+            });
+        }
+        if result.is_some() && error.is_some() {
+            return Err(StoreError::InvalidCommandReceipt {
+                detail: "a receipt cannot contain both result and error".into(),
+            });
+        }
+        let result = result.cloned();
+        let error = error.cloned();
+        let result_json = bounded_receipt_json(result.as_ref(), "result")?;
+        let error_json = bounded_receipt_json(error.as_ref(), "error")?;
+
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let existing = tx
+            .query_row(
+                "SELECT idempotency_key, command_id, canonical_payload_hash, status,
+                        result_json, error_json, created_at, completed_at
+                 FROM command_receipts WHERE idempotency_key = ?1",
+                params![idempotency_key],
+                read_command_receipt_row,
+            )
+            .optional()?
+            .map(stored_command_receipt_from_row)
+            .transpose()?
+            .ok_or_else(|| StoreError::NotFound {
+                what: format!("command receipt {idempotency_key}"),
+            })?;
+
+        if existing.status.is_terminal() {
+            if existing.status == status && existing.result == result && existing.error == error {
+                tx.commit()?;
+                return Ok(existing);
+            }
+            return Err(StoreError::ReceiptAlreadyFinal {
+                idempotency_key: idempotency_key.into(),
+            });
+        }
+
+        let changed = tx.execute(
+            "UPDATE command_receipts
+             SET status = ?2, result_json = ?3, error_json = ?4, completed_at = ?5
+             WHERE idempotency_key = ?1 AND status = 'accepted'",
+            params![
+                idempotency_key,
+                status.label(),
+                result_json,
+                error_json,
+                completed_at,
+            ],
+        )?;
+        if changed != 1 {
+            return Err(StoreError::ReceiptAlreadyFinal {
+                idempotency_key: idempotency_key.into(),
+            });
+        }
+        tx.commit()?;
+
+        Ok(StoredCommandReceipt {
+            status,
+            result,
+            error,
+            completed_at: Some(completed_at.into()),
+            ..existing
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1973,6 +2271,112 @@ pub struct TransactionOperation {
     pub additions: usize,
     pub deletions: usize,
     pub new_path: Option<String>,
+}
+
+fn validate_command_receipt_input(
+    idempotency_key: &str,
+    command_id: &str,
+    canonical_payload_hash: &str,
+    created_at: &str,
+) -> Result<(), StoreError> {
+    for (field, value) in [
+        ("idempotencyKey", idempotency_key),
+        ("commandId", command_id),
+        ("canonicalPayloadHash", canonical_payload_hash),
+        ("createdAt", created_at),
+    ] {
+        if value.trim().is_empty() {
+            return Err(StoreError::InvalidCommandReceipt {
+                detail: format!("{field} must not be empty"),
+            });
+        }
+    }
+    let Some(digest) = canonical_payload_hash.strip_prefix("sha256:") else {
+        return Err(StoreError::InvalidCommandReceipt {
+            detail: "canonicalPayloadHash must use sha256:<hex> format".into(),
+        });
+    };
+    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(StoreError::InvalidCommandReceipt {
+            detail: "canonicalPayloadHash must contain a 64-character hexadecimal digest".into(),
+        });
+    }
+    Ok(())
+}
+
+fn bounded_receipt_json(
+    value: Option<&serde_json::Value>,
+    field: &str,
+) -> Result<Option<String>, StoreError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    reject_credential_payload(value)?;
+    let encoded = serde_json::to_string(value)?;
+    if encoded.len() > MAX_EVENT_PAYLOAD_BYTES {
+        return Err(StoreError::InvalidCommandReceipt {
+            detail: format!(
+                "{field} JSON exceeds the {} byte durable receipt limit",
+                MAX_EVENT_PAYLOAD_BYTES
+            ),
+        });
+    }
+    Ok(Some(encoded))
+}
+
+fn read_command_receipt_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CommandReceiptRow> {
+    Ok(CommandReceiptRow {
+        idempotency_key: row.get(0)?,
+        command_id: row.get(1)?,
+        canonical_payload_hash: row.get(2)?,
+        status: row.get(3)?,
+        result_json: row.get(4)?,
+        error_json: row.get(5)?,
+        created_at: row.get(6)?,
+        completed_at: row.get(7)?,
+    })
+}
+
+fn stored_command_receipt_from_row(
+    row: CommandReceiptRow,
+) -> Result<StoredCommandReceipt, StoreError> {
+    let status = CommandReceiptStatus::parse(&row.status)?;
+    let result = row
+        .result_json
+        .as_deref()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .transpose()?;
+    let error = row
+        .error_json
+        .as_deref()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .transpose()?;
+    if result.is_some() && error.is_some() {
+        return Err(StoreError::InvalidCommandReceipt {
+            detail: "stored receipt contains both result and error".into(),
+        });
+    }
+    if status.is_terminal() != row.completed_at.is_some() {
+        return Err(StoreError::InvalidCommandReceipt {
+            detail: "stored receipt terminal status and completion timestamp disagree".into(),
+        });
+    }
+    if !status.is_terminal() && (result.is_some() || error.is_some()) {
+        return Err(StoreError::InvalidCommandReceipt {
+            detail: "accepted receipt cannot contain result or error".into(),
+        });
+    }
+    Ok(StoredCommandReceipt {
+        schema_version: COMMAND_RECEIPT_SCHEMA_VERSION.into(),
+        idempotency_key: row.idempotency_key,
+        command_id: row.command_id,
+        canonical_payload_hash: row.canonical_payload_hash,
+        status,
+        result,
+        error,
+        created_at: row.created_at,
+        completed_at: row.completed_at,
+    })
 }
 
 /// Collect a single-column list of ids. Kept as a free function so the prepared
@@ -2375,5 +2779,180 @@ mod tests {
             .unwrap();
         let manifest = store.load_manifest("ses_1").unwrap();
         assert_eq!(manifest.turn_count, 2);
+    }
+
+    #[test]
+    fn command_receipt_claim_replay_and_completion_are_durable() {
+        let mut store = seeded_store();
+        let digest = format!("sha256:{}", "a".repeat(64));
+
+        let claimed = store
+            .claim_command_receipt("idem_1", "session.send", &digest, "2026-08-24T00:00:00Z")
+            .unwrap();
+        let CommandReceiptClaim::Acquired { receipt } = claimed else {
+            panic!("first claimant must acquire execution");
+        };
+        assert_eq!(receipt.status, CommandReceiptStatus::Accepted);
+        assert!(receipt.completed_at.is_none());
+
+        let replay = store
+            .claim_command_receipt("idem_1", "session.send", &digest, "2026-08-24T00:00:01Z")
+            .unwrap();
+        assert!(matches!(
+            replay,
+            CommandReceiptClaim::Replayed { ref receipt }
+                if receipt.status == CommandReceiptStatus::Accepted
+        ));
+
+        let completed = store
+            .complete_command_receipt(
+                "idem_1",
+                CommandReceiptStatus::Completed,
+                Some(&serde_json::json!({ "sessionId": "ses_1" })),
+                None,
+                "2026-08-24T00:00:02Z",
+            )
+            .unwrap();
+        assert_eq!(completed.status, CommandReceiptStatus::Completed);
+        assert_eq!(
+            completed.result,
+            Some(serde_json::json!({ "sessionId": "ses_1" }))
+        );
+
+        let persisted = store.command_receipt("idem_1").unwrap().unwrap();
+        assert_eq!(persisted, completed);
+        let replayed_final = store
+            .claim_command_receipt("idem_1", "session.send", &digest, "2026-08-24T00:00:03Z")
+            .unwrap();
+        assert!(matches!(
+            replayed_final,
+            CommandReceiptClaim::Replayed { ref receipt }
+                if receipt.status == CommandReceiptStatus::Completed
+        ));
+    }
+
+    #[test]
+    fn command_receipt_refuses_key_reuse_with_a_different_payload() {
+        let mut store = seeded_store();
+        let first_digest = format!("sha256:{}", "a".repeat(64));
+        let second_digest = format!("sha256:{}", "b".repeat(64));
+        store
+            .claim_command_receipt(
+                "idem_reused",
+                "session.send",
+                &first_digest,
+                "2026-08-24T00:00:00Z",
+            )
+            .unwrap();
+
+        let err = store
+            .claim_command_receipt(
+                "idem_reused",
+                "session.send",
+                &second_digest,
+                "2026-08-24T00:00:01Z",
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, StoreError::IdempotencyConflict { .. }),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn command_receipt_is_immutable_and_rejects_secret_metadata() {
+        let mut store = seeded_store();
+        let digest = format!("sha256:{}", "c".repeat(64));
+        store
+            .claim_command_receipt(
+                "idem_final",
+                "session.send",
+                &digest,
+                "2026-08-24T00:00:00Z",
+            )
+            .unwrap();
+        store
+            .complete_command_receipt(
+                "idem_final",
+                CommandReceiptStatus::Completed,
+                Some(&serde_json::json!({ "ok": true })),
+                None,
+                "2026-08-24T00:00:01Z",
+            )
+            .unwrap();
+        let err = store
+            .complete_command_receipt(
+                "idem_final",
+                CommandReceiptStatus::Failed,
+                None,
+                Some(&serde_json::json!({ "code": "DIFFERENT" })),
+                "2026-08-24T00:00:02Z",
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, StoreError::ReceiptAlreadyFinal { .. }),
+            "{err}"
+        );
+
+        store
+            .claim_command_receipt(
+                "idem_secret",
+                "session.send",
+                &digest,
+                "2026-08-24T00:00:03Z",
+            )
+            .unwrap();
+        let err = store
+            .complete_command_receipt(
+                "idem_secret",
+                CommandReceiptStatus::Failed,
+                None,
+                Some(&serde_json::json!({ "OPENAI_API_KEY": "not-persisted" })),
+                "2026-08-24T00:00:04Z",
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, StoreError::CredentialRejected { .. }),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn command_receipt_survives_store_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let digest = format!("sha256:{}", "d".repeat(64));
+        {
+            let mut store = SessionStore::open(dir.path()).unwrap();
+            store
+                .claim_command_receipt(
+                    "idem_reopen",
+                    "session.send",
+                    &digest,
+                    "2026-08-24T00:00:00Z",
+                )
+                .unwrap();
+            store
+                .complete_command_receipt(
+                    "idem_reopen",
+                    CommandReceiptStatus::Completed,
+                    Some(&serde_json::json!({ "ok": true })),
+                    None,
+                    "2026-08-24T00:00:01Z",
+                )
+                .unwrap();
+        }
+
+        let mut reopened = SessionStore::open(dir.path()).unwrap();
+        let receipt = reopened.command_receipt("idem_reopen").unwrap().unwrap();
+        assert_eq!(receipt.status, CommandReceiptStatus::Completed);
+        let replay = reopened
+            .claim_command_receipt(
+                "idem_reopen",
+                "session.send",
+                &digest,
+                "2026-08-24T00:00:02Z",
+            )
+            .unwrap();
+        assert!(matches!(replay, CommandReceiptClaim::Replayed { .. }));
     }
 }
