@@ -54,7 +54,8 @@ pub use memory::{
 };
 pub use plugin::{
     PluginGrantInput, PluginGrantRecord, PluginInstallScope, PluginInstallationInput,
-    PluginInstallationRecord, PluginPermissionSet, PluginRuntimeKind, PluginStateRecord,
+    PluginInstallationRecord, PluginInstanceRecord, PluginInstanceStart, PluginInstanceState,
+    PluginInstanceTransition, PluginPermissionSet, PluginRuntimeKind, PluginStateRecord,
     PluginStateScope, PluginStateWrite, MAX_PLUGIN_PERMISSION_ENTRIES, MAX_PLUGIN_STATE_BYTES,
 };
 

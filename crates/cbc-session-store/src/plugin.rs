@@ -67,6 +67,36 @@ impl PluginInstallScope {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginInstanceState {
+    Starting,
+    Ready,
+    Degraded,
+    Stopped,
+}
+
+impl PluginInstanceState {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Ready => "ready",
+            Self::Degraded => "degraded",
+            Self::Stopped => "stopped",
+        }
+    }
+
+    fn parse(raw: &str) -> Result<Self, StoreError> {
+        match raw {
+            "starting" => Ok(Self::Starting),
+            "ready" => Ok(Self::Ready),
+            "degraded" => Ok(Self::Degraded),
+            "stopped" => Ok(Self::Stopped),
+            _ => Err(invalid(format!("unsupported plugin instance state: {raw}"))),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PluginPermissionSet {
@@ -154,6 +184,51 @@ pub struct PluginGrantRecord {
     pub granted_by: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revoked_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PluginInstanceStart {
+    pub id: String,
+    pub installation_id: String,
+    pub workspace_identity_digest: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i64>,
+    pub started_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PluginInstanceTransition {
+    pub expected_state: PluginInstanceState,
+    pub state: PluginInstanceState,
+    pub at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginInstanceRecord {
+    pub id: String,
+    pub installation_id: String,
+    pub workspace_identity_digest: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    pub state: PluginInstanceState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub heartbeat_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stopped_at: Option<String>,
+    pub failure_count: i64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -263,6 +338,34 @@ impl SessionStore {
             .map_err(StoreError::from)
     }
 
+    /// Enabling a declaration does not grant it workspace authority. Starting an
+    /// instance still requires an active, narrowed grant for that workspace.
+    pub fn set_plugin_enabled(
+        &mut self,
+        installation_id: &str,
+        enabled: bool,
+        at: &str,
+    ) -> Result<PluginInstallationRecord, StoreError> {
+        validate_prefixed_id("installationId", installation_id, "plg_")?;
+        validate_timestamp("at", at)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut installation = require_plugin_installation(&tx, installation_id)?;
+        if installation.enabled != enabled {
+            tx.execute(
+                "UPDATE plugin_installations
+                 SET enabled = ?2, updated_at = ?3
+                 WHERE id = ?1",
+                params![installation_id, i64::from(enabled), at],
+            )?;
+            installation.enabled = enabled;
+            installation.updated_at = at.into();
+        }
+        tx.commit()?;
+        Ok(installation)
+    }
+
     /// Persist only a grant which is a component-wise subset of the installation's
     /// declared request. No caller can widen declared plugin authority here.
     pub fn grant_plugin(
@@ -341,6 +444,148 @@ impl SessionStore {
         }
         tx.commit()?;
         Ok(grant)
+    }
+
+    /// Register a workspace-bound plugin process before a supervisor invokes it.
+    /// The record is only lifecycle evidence; it grants no runtime authority.
+    pub fn start_plugin_instance(
+        &mut self,
+        input: &PluginInstanceStart,
+    ) -> Result<PluginInstanceRecord, StoreError> {
+        validate_instance_start(input)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let installation = require_plugin_installation(&tx, &input.installation_id)?;
+        if !installation.enabled {
+            return Err(invalid(
+                "plugin installation must be enabled before an instance starts",
+            ));
+        }
+        ensure_workspace_exists(&tx, &input.workspace_identity_digest)?;
+        ensure_active_plugin_grant(
+            &tx,
+            &input.installation_id,
+            &input.workspace_identity_digest,
+        )?;
+        ensure_instance_scope_binding(&tx, input)?;
+        if let Some(existing) = plugin_instance_in_tx(&tx, &input.id)? {
+            ensure_instance_start_replay(&existing, input)?;
+            tx.commit()?;
+            return Ok(existing);
+        }
+        tx.execute(
+            "INSERT INTO plugin_instances (
+                id, installation_id, workspace_identity_digest, worktree_id,
+                session_id, state, pid, started_at, heartbeat_at, stopped_at,
+                failure_count
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, NULL, 0)",
+            params![
+                &input.id,
+                &input.installation_id,
+                &input.workspace_identity_digest,
+                &input.worktree_id,
+                &input.session_id,
+                PluginInstanceState::Starting.label(),
+                input.pid,
+                &input.started_at,
+            ],
+        )?;
+        let record = PluginInstanceRecord {
+            id: input.id.clone(),
+            installation_id: input.installation_id.clone(),
+            workspace_identity_digest: input.workspace_identity_digest.clone(),
+            worktree_id: input.worktree_id.clone(),
+            session_id: input.session_id.clone(),
+            state: PluginInstanceState::Starting,
+            pid: input.pid,
+            started_at: Some(input.started_at.clone()),
+            heartbeat_at: Some(input.started_at.clone()),
+            stopped_at: None,
+            failure_count: 0,
+        };
+        tx.commit()?;
+        Ok(record)
+    }
+
+    pub fn plugin_instance(
+        &self,
+        instance_id: &str,
+    ) -> Result<Option<PluginInstanceRecord>, StoreError> {
+        validate_prefixed_id("instanceId", instance_id, "pni_")?;
+        self.conn
+            .query_row(
+                plugin_instance_select_sql(),
+                params![instance_id],
+                read_plugin_instance,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    pub fn heartbeat_plugin_instance(
+        &mut self,
+        instance_id: &str,
+        at: &str,
+    ) -> Result<PluginInstanceRecord, StoreError> {
+        validate_prefixed_id("instanceId", instance_id, "pni_")?;
+        validate_timestamp("at", at)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut instance = require_plugin_instance(&tx, instance_id)?;
+        if instance.state == PluginInstanceState::Stopped {
+            return Err(invalid(
+                "stopped plugin instances cannot receive heartbeats",
+            ));
+        }
+        tx.execute(
+            "UPDATE plugin_instances SET heartbeat_at = ?2 WHERE id = ?1",
+            params![instance_id, at],
+        )?;
+        instance.heartbeat_at = Some(at.into());
+        tx.commit()?;
+        Ok(instance)
+    }
+
+    pub fn transition_plugin_instance(
+        &mut self,
+        instance_id: &str,
+        transition: &PluginInstanceTransition,
+    ) -> Result<PluginInstanceRecord, StoreError> {
+        validate_prefixed_id("instanceId", instance_id, "pni_")?;
+        validate_instance_transition(transition)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut instance = require_plugin_instance(&tx, instance_id)?;
+        if instance.state != transition.expected_state {
+            return Err(invalid(
+                "plugin instance state does not match expected state",
+            ));
+        }
+        if instance.state == transition.state {
+            tx.commit()?;
+            return Ok(instance);
+        }
+        if !instance_transition_allowed(instance.state, transition.state) {
+            return Err(invalid("plugin instance transition is not allowed"));
+        }
+        tx.execute(
+            "UPDATE plugin_instances
+             SET state = ?2,
+                 heartbeat_at = ?3,
+                 stopped_at = CASE WHEN ?2 = 'stopped' THEN ?3 ELSE stopped_at END
+             WHERE id = ?1",
+            params![instance_id, transition.state.label(), &transition.at],
+        )?;
+        instance.state = transition.state;
+        instance.heartbeat_at = Some(transition.at.clone());
+        if transition.state == PluginInstanceState::Stopped {
+            instance.stopped_at = Some(transition.at.clone());
+        }
+        tx.commit()?;
+        Ok(instance)
     }
 
     pub fn put_plugin_state(
@@ -545,6 +790,43 @@ fn permissions_are_subset(grant: &PluginPermissionSet, request: &PluginPermissio
                 .iter()
                 .all(|value| requested.iter().any(|candidate| candidate == value))
         })
+}
+
+fn validate_instance_start(input: &PluginInstanceStart) -> Result<(), StoreError> {
+    validate_prefixed_id("instanceId", &input.id, "pni_")?;
+    validate_prefixed_id("installationId", &input.installation_id, "plg_")?;
+    validate_workspace_identity_digest(&input.workspace_identity_digest)?;
+    if let Some(worktree_id) = &input.worktree_id {
+        validate_prefixed_id("worktreeId", worktree_id, "wt_")?;
+    }
+    if let Some(session_id) = &input.session_id {
+        validate_text("sessionId", session_id, 256)?;
+    }
+    if let Some(pid) = input.pid {
+        if !(1..=i64::from(i32::MAX)).contains(&pid) {
+            return Err(invalid(
+                "plugin process ID must be a positive 32-bit integer",
+            ));
+        }
+    }
+    validate_timestamp("startedAt", &input.started_at)
+}
+
+fn validate_instance_transition(transition: &PluginInstanceTransition) -> Result<(), StoreError> {
+    validate_timestamp("at", &transition.at)
+}
+
+fn instance_transition_allowed(from: PluginInstanceState, to: PluginInstanceState) -> bool {
+    matches!(
+        (from, to),
+        (PluginInstanceState::Starting, PluginInstanceState::Ready)
+            | (PluginInstanceState::Starting, PluginInstanceState::Degraded)
+            | (PluginInstanceState::Starting, PluginInstanceState::Stopped)
+            | (PluginInstanceState::Ready, PluginInstanceState::Degraded)
+            | (PluginInstanceState::Ready, PluginInstanceState::Stopped)
+            | (PluginInstanceState::Degraded, PluginInstanceState::Ready)
+            | (PluginInstanceState::Degraded, PluginInstanceState::Stopped)
+    )
 }
 
 fn validate_state_write(write: &PluginStateWrite) -> Result<(), StoreError> {
@@ -854,6 +1136,33 @@ fn require_plugin_grant(
     })
 }
 
+fn ensure_active_plugin_grant(
+    tx: &rusqlite::Transaction<'_>,
+    installation_id: &str,
+    workspace_identity_digest: &str,
+) -> Result<(), StoreError> {
+    let granted: bool = tx.query_row(
+        "SELECT EXISTS(
+            SELECT 1
+            FROM plugin_grants
+            WHERE installation_id = ?1
+              AND revoked_at IS NULL
+              AND (
+                  workspace_identity_digest IS NULL
+                  OR workspace_identity_digest = ?2
+              )
+         )",
+        params![installation_id, workspace_identity_digest],
+        |row| row.get(0),
+    )?;
+    if !granted {
+        return Err(invalid(
+            "plugin instance requires an active grant for its workspace identity",
+        ));
+    }
+    Ok(())
+}
+
 fn ensure_grant_replay(
     existing: &PluginGrantRecord,
     input: &PluginGrantInput,
@@ -917,6 +1226,97 @@ fn ensure_state_scope_binding(
     Ok(())
 }
 
+fn ensure_instance_scope_binding(
+    tx: &rusqlite::Transaction<'_>,
+    input: &PluginInstanceStart,
+) -> Result<(), StoreError> {
+    if let Some(session_id) = &input.session_id {
+        let workspace: String = tx
+            .query_row(
+                "SELECT workspaces.canonical_path_hash
+                 FROM sessions JOIN workspaces ON workspaces.id = sessions.workspace_id
+                 WHERE sessions.id = ?1",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::NotFound {
+                what: format!("session {session_id}"),
+            })?;
+        if workspace != input.workspace_identity_digest {
+            return Err(invalid(
+                "plugin instance session must use its session workspace identity",
+            ));
+        }
+    }
+    if let Some(worktree_id) = &input.worktree_id {
+        let workspace: String = tx
+            .query_row(
+                "SELECT workspace_identity_digest FROM worktrees WHERE id = ?1",
+                params![worktree_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::NotFound {
+                what: format!("worktree {worktree_id}"),
+            })?;
+        if workspace != input.workspace_identity_digest {
+            return Err(invalid(
+                "plugin instance worktree must use its worktree workspace identity",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn plugin_instance_select_sql() -> &'static str {
+    "SELECT id, installation_id, workspace_identity_digest, worktree_id,
+            session_id, state, pid, started_at, heartbeat_at, stopped_at,
+            failure_count
+     FROM plugin_instances
+     WHERE id = ?1"
+}
+
+fn plugin_instance_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    instance_id: &str,
+) -> Result<Option<PluginInstanceRecord>, StoreError> {
+    tx.query_row(
+        plugin_instance_select_sql(),
+        params![instance_id],
+        read_plugin_instance,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn require_plugin_instance(
+    tx: &rusqlite::Transaction<'_>,
+    instance_id: &str,
+) -> Result<PluginInstanceRecord, StoreError> {
+    plugin_instance_in_tx(tx, instance_id)?.ok_or_else(|| StoreError::NotFound {
+        what: format!("plugin instance {instance_id}"),
+    })
+}
+
+fn ensure_instance_start_replay(
+    existing: &PluginInstanceRecord,
+    input: &PluginInstanceStart,
+) -> Result<(), StoreError> {
+    if existing.installation_id != input.installation_id
+        || existing.workspace_identity_digest != input.workspace_identity_digest
+        || existing.worktree_id != input.worktree_id
+        || existing.session_id != input.session_id
+        || existing.pid != input.pid
+        || existing.started_at.as_deref() != Some(input.started_at.as_str())
+    {
+        return Err(invalid(
+            "plugin instance ID is already bound to different startup metadata",
+        ));
+    }
+    Ok(())
+}
+
 fn plugin_state_in_tx(
     tx: &rusqlite::Transaction<'_>,
     write: &PluginStateWrite,
@@ -939,6 +1339,25 @@ fn plugin_state_in_tx(
     )
     .optional()
     .map_err(StoreError::from)
+}
+
+fn read_plugin_instance(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginInstanceRecord> {
+    let state = PluginInstanceState::parse(&row.get::<_, String>(5)?).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(error))
+    })?;
+    Ok(PluginInstanceRecord {
+        id: row.get(0)?,
+        installation_id: row.get(1)?,
+        workspace_identity_digest: row.get(2)?,
+        worktree_id: row.get(3)?,
+        session_id: row.get(4)?,
+        state,
+        pid: row.get(6)?,
+        started_at: row.get(7)?,
+        heartbeat_at: row.get(8)?,
+        stopped_at: row.get(9)?,
+        failure_count: row.get(10)?,
+    })
 }
 
 fn read_installation(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginInstallationRecord> {

@@ -1,7 +1,8 @@
 use cbc_session_store::{
     new_manifest, PluginGrantInput, PluginInstallScope, PluginInstallationInput,
-    PluginPermissionSet, PluginRuntimeKind, PluginStateScope, PluginStateWrite, SessionStore,
-    StoreError, MAX_PLUGIN_STATE_BYTES,
+    PluginInstanceStart, PluginInstanceState, PluginInstanceTransition, PluginPermissionSet,
+    PluginRuntimeKind, PluginStateScope, PluginStateWrite, SessionStore, StoreError,
+    MAX_PLUGIN_STATE_BYTES,
 };
 use serde_json::json;
 
@@ -244,6 +245,113 @@ fn plugin_state_is_scoped_bounded_and_compare_and_swap_fenced() {
         .put_plugin_state(&oversized)
         .expect_err("state size is bounded before persistence");
     assert!(matches!(rejected, StoreError::InvalidPlugin { .. }));
+}
+
+fn instance(id: &str) -> PluginInstanceStart {
+    PluginInstanceStart {
+        id: id.into(),
+        installation_id: "plg_instance".into(),
+        workspace_identity_digest: "workspace-fingerprint".into(),
+        worktree_id: None,
+        session_id: Some("ses_plugin".into()),
+        pid: Some(42),
+        started_at: T0.into(),
+    }
+}
+
+#[test]
+fn plugin_instances_are_workspace_bound_and_lifecycle_fenced() {
+    let mut store = seeded_store();
+    store
+        .install_plugin(&installation(
+            "plg_instance",
+            PluginRuntimeKind::Wasi,
+            PluginInstallScope::Project,
+            PluginPermissionSet::default(),
+        ))
+        .expect("install declaration");
+
+    let input = instance("pni_example");
+    assert!(matches!(
+        store.start_plugin_instance(&input),
+        Err(StoreError::InvalidPlugin { .. })
+    ));
+    store
+        .grant_plugin(&PluginGrantInput {
+            id: "pgr_instance".into(),
+            installation_id: "plg_instance".into(),
+            workspace_identity_digest: Some("workspace-fingerprint".into()),
+            permissions: PluginPermissionSet::default(),
+            granted_by: "user".into(),
+            granted_at: T0.into(),
+        })
+        .expect("grant workspace authority");
+    store
+        .set_plugin_enabled("plg_instance", true, T0)
+        .expect("enable declaration");
+
+    let starting = store
+        .start_plugin_instance(&input)
+        .expect("persist starting instance");
+    assert_eq!(starting.state, PluginInstanceState::Starting);
+    assert_eq!(starting.heartbeat_at.as_deref(), Some(T0));
+    assert_eq!(
+        store
+            .start_plugin_instance(&input)
+            .expect("idempotent start replay"),
+        starting
+    );
+
+    let ready = store
+        .transition_plugin_instance(
+            "pni_example",
+            &PluginInstanceTransition {
+                expected_state: PluginInstanceState::Starting,
+                state: PluginInstanceState::Ready,
+                at: T1.into(),
+            },
+        )
+        .expect("mark ready");
+    assert_eq!(ready.state, PluginInstanceState::Ready);
+
+    let degraded = store
+        .transition_plugin_instance(
+            "pni_example",
+            &PluginInstanceTransition {
+                expected_state: PluginInstanceState::Ready,
+                state: PluginInstanceState::Degraded,
+                at: T2.into(),
+            },
+        )
+        .expect("mark degraded");
+    assert_eq!(degraded.heartbeat_at.as_deref(), Some(T2));
+
+    let stopped = store
+        .transition_plugin_instance(
+            "pni_example",
+            &PluginInstanceTransition {
+                expected_state: PluginInstanceState::Degraded,
+                state: PluginInstanceState::Stopped,
+                at: T2.into(),
+            },
+        )
+        .expect("mark stopped");
+    assert_eq!(stopped.stopped_at.as_deref(), Some(T2));
+    assert!(matches!(
+        store.heartbeat_plugin_instance("pni_example", T2),
+        Err(StoreError::InvalidPlugin { .. })
+    ));
+    assert!(matches!(
+        store.transition_plugin_instance(
+            "pni_example",
+            &PluginInstanceTransition {
+                expected_state: PluginInstanceState::Ready,
+                state: PluginInstanceState::Degraded,
+                at: T2.into(),
+            },
+        ),
+        Err(StoreError::InvalidPlugin { .. })
+    ));
 }
 
 #[test]
