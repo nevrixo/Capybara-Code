@@ -20,9 +20,14 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+pub mod daemon;
 pub mod memory;
 pub mod migrations;
 
+pub use daemon::{
+    AttachmentMode, ClientAttachmentInput, ClientAttachmentRecord, DaemonInstanceInput,
+    DaemonInstanceRecord, DaemonState, SessionOwnerClaim, SessionOwnerLease, SessionOwnerRecord,
+};
 pub use memory::{
     DurableEvidenceInput, DurableEvidenceRecord, DurableMemoryWrite, EvidenceFreshness,
     EvidencePathBinding, MemoryRecallQuery, MemoryScope, MemoryStatus, MemoryTransition,
@@ -123,6 +128,24 @@ pub enum StoreError {
         expected: Option<i64>,
         actual: Option<i64>,
     },
+    /// A live daemon already owns the requested session lease. The caller must
+    /// wait for expiry or use explicit recovery rather than run a second actor.
+    DaemonLeaseConflict {
+        session_id: String,
+        owner_daemon_id: String,
+        lease_expires_at: String,
+    },
+    /// A stale daemon tried to renew or release after another daemon advanced
+    /// the ownership epoch. This is the split-brain fence for session actors.
+    OwnerEpochConflict {
+        session_id: String,
+        expected: i64,
+        actual: Option<i64>,
+    },
+    /// A daemon/attachment input violated the bounded local ownership contract.
+    InvalidDaemonRecord {
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for StoreError {
@@ -204,6 +227,26 @@ impl std::fmt::Display for StoreError {
                 "memory revision conflict for {id}: expected {:?}, current {:?}",
                 expected, actual
             ),
+            StoreError::DaemonLeaseConflict {
+                session_id,
+                owner_daemon_id,
+                lease_expires_at,
+            } => write!(
+                f,
+                "session {session_id} is owned by daemon {owner_daemon_id} until {lease_expires_at}"
+            ),
+            StoreError::OwnerEpochConflict {
+                session_id,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "session owner epoch conflict for {session_id}: expected {expected}, current {:?}",
+                actual
+            ),
+            StoreError::InvalidDaemonRecord { detail } => {
+                write!(f, "invalid daemon ownership record: {detail}")
+            }
         }
     }
 }
