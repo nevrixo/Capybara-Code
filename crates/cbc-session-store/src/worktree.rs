@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::{SessionStore, StoreError};
 
@@ -196,6 +197,129 @@ pub struct WorktreeMutation<T> {
     pub value: T,
 }
 
+pub const MAX_WORKTREE_PROPOSAL_FILES: usize = 512;
+pub const MAX_WORKTREE_PROPOSAL_EVIDENCE: usize = 128;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreeChangeKind {
+    Create,
+    Modify,
+    Delete,
+    Rename,
+}
+
+impl WorktreeChangeKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Create => "create",
+            Self::Modify => "modify",
+            Self::Delete => "delete",
+            Self::Rename => "rename",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeChangedFile {
+    pub path: String,
+    pub kind: WorktreeChangeKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_revision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub post_revision: Option<String>,
+    pub additions: i64,
+    pub deletions: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeProposalPayload {
+    pub changed_files: Vec<WorktreeChangedFile>,
+    pub diff_artifact_id: String,
+    pub file_manifest_artifact_id: String,
+    #[serde(default)]
+    pub verification_evidence_ids: Vec<String>,
+    #[serde(default)]
+    pub diagnostics_evidence_ids: Vec<String>,
+    #[serde(default)]
+    pub open_risks: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeProposalCreate {
+    pub id: String,
+    pub expected_worktree_revision: i64,
+    pub writer_lease_id: String,
+    pub expected_owner_epoch: i64,
+    pub graph_id: String,
+    pub node_id: String,
+    pub attempt_id: String,
+    pub payload: WorktreeProposalPayload,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreeProposalState {
+    Ready,
+    Selected,
+    Merging,
+    Merged,
+    Conflicted,
+    Rejected,
+    Superseded,
+}
+
+impl WorktreeProposalState {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Selected => "selected",
+            Self::Merging => "merging",
+            Self::Merged => "merged",
+            Self::Conflicted => "conflicted",
+            Self::Rejected => "rejected",
+            Self::Superseded => "superseded",
+        }
+    }
+
+    fn parse(raw: &str) -> Result<Self, StoreError> {
+        match raw {
+            "ready" => Ok(Self::Ready),
+            "selected" => Ok(Self::Selected),
+            "merging" => Ok(Self::Merging),
+            "merged" => Ok(Self::Merged),
+            "conflicted" => Ok(Self::Conflicted),
+            "rejected" => Ok(Self::Rejected),
+            "superseded" => Ok(Self::Superseded),
+            _ => Err(invalid(format!(
+                "unsupported worktree proposal state: {raw}"
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeProposalRecord {
+    pub id: String,
+    pub worktree_id: String,
+    pub graph_id: String,
+    pub node_id: String,
+    pub attempt_id: String,
+    pub base_commit: String,
+    pub base_workspace_revision: String,
+    pub worktree_revision: i64,
+    pub proposal_digest: String,
+    pub payload: WorktreeProposalPayload,
+    pub state: WorktreeProposalState,
+    pub created_at: String,
+}
 impl SessionStore {
     /// Register a generated worktree record. Filesystem creation is deliberately
     /// separate, so a crash between registration and Git worktree add can be
@@ -1390,4 +1514,466 @@ fn ensure_writer_lease_within_worktree_lifetime(
         ));
     }
     Ok(())
+}
+impl SessionStore {
+    /// Publish a worktree result as a durable proposal. This atomically consumes
+    /// the writer lease, records the proposal facts, and moves the worktree to
+    /// proposal_ready; a stale writer cannot publish after its lease expires.
+    pub fn create_worktree_proposal(
+        &mut self,
+        worktree_id: &str,
+        input: &WorktreeProposalCreate,
+    ) -> Result<WorktreeMutation<WorktreeProposalRecord>, StoreError> {
+        validate_identifier("worktreeId", worktree_id, "wt_")?;
+        validate_worktree_proposal_create(input)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        if let Some(existing) = worktree_proposal_in_tx(&tx, &input.id)? {
+            ensure_proposal_replay(&existing, worktree_id, input)?;
+            let worktree = require_worktree(&tx, worktree_id)?;
+            tx.commit()?;
+            return Ok(WorktreeMutation {
+                worktree,
+                value: existing,
+            });
+        }
+
+        let worktree = require_worktree(&tx, worktree_id)?;
+        ensure_worktree_revision(&worktree, input.expected_worktree_revision)?;
+        if worktree.graph_id.as_deref() != Some(input.graph_id.as_str())
+            || worktree.node_id.as_deref() != Some(input.node_id.as_str())
+        {
+            return Err(invalid(
+                "proposal graphId and nodeId must match the assigned worktree owner",
+            ));
+        }
+        let lease = require_active_writer_lease(&tx, worktree_id)?;
+        ensure_writer_lease_identity(&lease, &input.writer_lease_id, input.expected_owner_epoch)?;
+        ensure_worktree_writer_attachment(&worktree, &lease)?;
+        if lease.node_id != input.node_id {
+            return Err(invalid(
+                "proposal nodeId must match the active writer lease",
+            ));
+        }
+        if input.created_at < lease.heartbeat_at
+            || input.created_at.as_str() >= lease.expires_at.as_str()
+        {
+            return Err(invalid(
+                "proposal must be published by a live writer at or after its last heartbeat",
+            ));
+        }
+        ensure_worktree_proposal_attempt(&tx, &worktree, input)?;
+        validate_worktree_proposal_payload(&input.payload, &lease.allowed_paths)?;
+        ensure_proposal_evidence(
+            &tx,
+            &worktree,
+            &input.payload.verification_evidence_ids,
+            &input.payload.diagnostics_evidence_ids,
+            &input.created_at,
+        )?;
+
+        let proposal_digest = worktree_proposal_digest(&worktree, input)?;
+        tx.execute(
+            "INSERT INTO worktree_proposals (
+                id, worktree_id, graph_id, node_id, attempt_id, base_commit,
+                base_workspace_revision, worktree_revision, proposal_digest, proposal_json,
+                status, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'ready', ?11)",
+            params![
+                input.id,
+                worktree_id,
+                input.graph_id,
+                input.node_id,
+                input.attempt_id,
+                worktree.base_commit,
+                worktree.base_workspace_revision,
+                worktree.revision.to_string(),
+                proposal_digest,
+                serde_json::to_string(&input.payload)?,
+                input.created_at,
+            ],
+        )?;
+        let revision = next_worktree_revision(&worktree)?;
+        let released = tx.execute(
+            "UPDATE worktree_leases
+             SET state = 'released', heartbeat_at = ?2, expires_at = ?2
+             WHERE id = ?1 AND state = 'active'",
+            params![input.writer_lease_id, input.created_at],
+        )?;
+        if released != 1 {
+            return Err(invalid(
+                "active writer lease changed while publishing proposal",
+            ));
+        }
+        let changed = tx.execute(
+            "UPDATE worktrees
+             SET state = 'proposal_ready', owner_node_id = NULL, writer_lease_id = NULL,
+                 revision = ?2, updated_at = ?3
+             WHERE id = ?1 AND revision = ?4",
+            params![worktree_id, revision, input.created_at, worktree.revision],
+        )?;
+        if changed != 1 {
+            return Err(StoreError::WorktreeRevisionConflict {
+                worktree_id: worktree_id.into(),
+                expected: input.expected_worktree_revision,
+                actual: worktree_revision(&tx, worktree_id)?,
+            });
+        }
+        let proposal = WorktreeProposalRecord {
+            id: input.id.clone(),
+            worktree_id: worktree_id.into(),
+            graph_id: input.graph_id.clone(),
+            node_id: input.node_id.clone(),
+            attempt_id: input.attempt_id.clone(),
+            base_commit: worktree.base_commit.clone(),
+            base_workspace_revision: worktree.base_workspace_revision.clone(),
+            worktree_revision: worktree.revision,
+            proposal_digest,
+            payload: input.payload.clone(),
+            state: WorktreeProposalState::Ready,
+            created_at: input.created_at.clone(),
+        };
+        let worktree = WorktreeRecord {
+            state: WorktreeState::ProposalReady,
+            owner_node_id: None,
+            writer_lease_id: None,
+            revision,
+            updated_at: input.created_at.clone(),
+            ..worktree
+        };
+        tx.commit()?;
+        Ok(WorktreeMutation {
+            worktree,
+            value: proposal,
+        })
+    }
+
+    pub fn worktree_proposal(
+        &self,
+        proposal_id: &str,
+    ) -> Result<Option<WorktreeProposalRecord>, StoreError> {
+        validate_identifier("proposalId", proposal_id, "prp_")?;
+        self.conn
+            .query_row(
+                "SELECT id, worktree_id, graph_id, node_id, attempt_id, base_commit,
+                        base_workspace_revision, worktree_revision, proposal_digest,
+                        proposal_json, status, created_at
+                 FROM worktree_proposals WHERE id = ?1",
+                params![proposal_id],
+                read_worktree_proposal,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    pub fn worktree_proposals(
+        &self,
+        worktree_id: &str,
+    ) -> Result<Vec<WorktreeProposalRecord>, StoreError> {
+        validate_identifier("worktreeId", worktree_id, "wt_")?;
+        let mut statement = self.conn.prepare(
+            "SELECT id, worktree_id, graph_id, node_id, attempt_id, base_commit,
+                    base_workspace_revision, worktree_revision, proposal_digest,
+                    proposal_json, status, created_at
+             FROM worktree_proposals WHERE worktree_id = ?1
+             ORDER BY created_at DESC, id ASC",
+        )?;
+        let rows = statement.query_map(params![worktree_id], read_worktree_proposal)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+}
+fn validate_worktree_proposal_create(input: &WorktreeProposalCreate) -> Result<(), StoreError> {
+    validate_identifier("proposalId", &input.id, "prp_")?;
+    if input.expected_worktree_revision < 1 {
+        return Err(invalid("expectedWorktreeRevision must be positive"));
+    }
+    validate_identifier("writerLeaseId", &input.writer_lease_id, "wls_")?;
+    if input.expected_owner_epoch < 1 {
+        return Err(invalid("expectedOwnerEpoch must be positive"));
+    }
+    validate_identifier("graphId", &input.graph_id, "grf_")?;
+    validate_identifier("nodeId", &input.node_id, "agt_")?;
+    validate_identifier("attemptId", &input.attempt_id, "att_")?;
+    validate_timestamp("createdAt", &input.created_at)?;
+    Ok(())
+}
+
+fn validate_worktree_proposal_payload(
+    payload: &WorktreeProposalPayload,
+    allowed_paths: &[String],
+) -> Result<(), StoreError> {
+    if payload.changed_files.is_empty() || payload.changed_files.len() > MAX_WORKTREE_PROPOSAL_FILES
+    {
+        return Err(invalid(format!(
+            "changedFiles must contain 1..={MAX_WORKTREE_PROPOSAL_FILES} entries"
+        )));
+    }
+    validate_identifier("diffArtifactId", &payload.diff_artifact_id, "art_")?;
+    validate_identifier(
+        "fileManifestArtifactId",
+        &payload.file_manifest_artifact_id,
+        "art_",
+    )?;
+    let mut changed_paths = BTreeSet::new();
+    for changed in &payload.changed_files {
+        validate_repository_path(&changed.path)?;
+        if !changed_paths.insert(changed.path.as_str()) {
+            return Err(invalid(
+                "changedFiles must not contain duplicate destination paths",
+            ));
+        }
+        ensure_path_covered_by_lease(&changed.path, allowed_paths)?;
+        match changed.kind {
+            WorktreeChangeKind::Rename => {
+                let old_path = changed
+                    .old_path
+                    .as_deref()
+                    .ok_or_else(|| invalid("rename changed file requires oldPath"))?;
+                validate_repository_path(old_path)?;
+                if old_path == changed.path {
+                    return Err(invalid("rename oldPath and path must differ"));
+                }
+                ensure_path_covered_by_lease(old_path, allowed_paths)?;
+            }
+            WorktreeChangeKind::Create
+            | WorktreeChangeKind::Modify
+            | WorktreeChangeKind::Delete => {
+                if changed.old_path.is_some() {
+                    return Err(invalid("only rename changed files may include an oldPath"));
+                }
+            }
+        }
+        for (field, revision) in [
+            ("baseRevision", changed.base_revision.as_deref()),
+            ("postRevision", changed.post_revision.as_deref()),
+        ] {
+            if let Some(revision) = revision {
+                validate_bounded_text(field, revision, MAX_WORKTREE_IDENTIFIER_BYTES)?;
+            }
+        }
+        if changed.additions < 0
+            || changed.deletions < 0
+            || changed.additions > 10_000_000
+            || changed.deletions > 10_000_000
+        {
+            return Err(invalid(
+                "changed file line counts must be bounded non-negative values",
+            ));
+        }
+    }
+    if payload.verification_evidence_ids.is_empty()
+        || payload.verification_evidence_ids.len() > MAX_WORKTREE_PROPOSAL_EVIDENCE
+        || payload.diagnostics_evidence_ids.len() > MAX_WORKTREE_PROPOSAL_EVIDENCE
+    {
+        return Err(invalid(format!(
+            "proposal evidence lists must be bounded and include verification evidence"
+        )));
+    }
+    let mut evidence_ids = BTreeSet::new();
+    for evidence_id in payload
+        .verification_evidence_ids
+        .iter()
+        .chain(&payload.diagnostics_evidence_ids)
+    {
+        validate_identifier("evidenceId", evidence_id, "evidence-")?;
+        if !evidence_ids.insert(evidence_id.as_str()) {
+            return Err(invalid("proposal evidence IDs must be unique"));
+        }
+    }
+    if payload.open_risks.len() > 128 {
+        return Err(invalid("openRisks exceeds 128 entries"));
+    }
+    for risk in &payload.open_risks {
+        validate_bounded_text("openRisk", risk, 1024)?;
+    }
+    Ok(())
+}
+
+fn ensure_path_covered_by_lease(path: &str, allowed_paths: &[String]) -> Result<(), StoreError> {
+    if allowed_paths.iter().any(|allowed| {
+        allowed == "." || path == allowed || path.starts_with(&format!("{allowed}/"))
+    }) {
+        Ok(())
+    } else {
+        Err(invalid(
+            "worktree proposal changed path is outside the active writer lease scope",
+        ))
+    }
+}
+
+fn ensure_worktree_proposal_attempt(
+    tx: &rusqlite::Transaction<'_>,
+    worktree: &WorktreeRecord,
+    input: &WorktreeProposalCreate,
+) -> Result<(), StoreError> {
+    let (node_id, attempt_worktree_id, state): (String, Option<String>, String) = tx
+        .query_row(
+            "SELECT node_id, worktree_id, state FROM agent_attempts WHERE id = ?1",
+            params![&input.attempt_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?
+        .ok_or_else(|| StoreError::NotFound {
+            what: format!("agent attempt {}", input.attempt_id),
+        })?;
+    if node_id != input.node_id || attempt_worktree_id.as_deref() != Some(worktree.id.as_str()) {
+        return Err(invalid(
+            "proposal attempt must belong to the worktree's assigned node and worktree",
+        ));
+    }
+    if state != "completed" {
+        return Err(invalid(
+            "only a completed agent attempt can publish a worktree proposal",
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_proposal_evidence(
+    tx: &rusqlite::Transaction<'_>,
+    worktree: &WorktreeRecord,
+    verification_evidence_ids: &[String],
+    diagnostics_evidence_ids: &[String],
+    at: &str,
+) -> Result<(), StoreError> {
+    for evidence_id in verification_evidence_ids
+        .iter()
+        .chain(diagnostics_evidence_ids)
+    {
+        let (
+            workspace_identity_digest,
+            evidence_worktree_id,
+            exact,
+            freshness,
+            invalidated_at,
+            expires_at,
+        ): (
+            String,
+            Option<String>,
+            i64,
+            String,
+            Option<String>,
+            Option<String>,
+        ) = tx
+            .query_row(
+                "SELECT workspace_identity_digest, worktree_id, exact, freshness,
+                        invalidated_at, expires_at
+                 FROM evidence_records WHERE id = ?1",
+                params![evidence_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::NotFound {
+                what: format!("evidence {evidence_id}"),
+            })?;
+        if workspace_identity_digest != worktree.workspace_identity_digest
+            || evidence_worktree_id.as_deref() != Some(worktree.id.as_str())
+            || exact == 0
+            || freshness != "fresh"
+            || invalidated_at.is_some()
+            || expires_at
+                .as_deref()
+                .is_some_and(|expires_at| expires_at <= at)
+        {
+            return Err(invalid(
+                "proposal evidence must be fresh, exact, valid, and bound to this worktree",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn worktree_proposal_digest(
+    worktree: &WorktreeRecord,
+    input: &WorktreeProposalCreate,
+) -> Result<String, StoreError> {
+    let envelope = serde_json::json!({
+        "schemaVersion": 1,
+        "worktreeId": worktree.id,
+        "graphId": input.graph_id,
+        "nodeId": input.node_id,
+        "attemptId": input.attempt_id,
+        "baseCommit": worktree.base_commit,
+        "baseWorkspaceRevision": worktree.base_workspace_revision,
+        "worktreeRevision": worktree.revision,
+        "payload": input.payload,
+    });
+    let canonical = serde_json::to_string(&envelope)?;
+    Ok(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes())))
+}
+
+fn worktree_proposal_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    proposal_id: &str,
+) -> Result<Option<WorktreeProposalRecord>, StoreError> {
+    tx.query_row(
+        "SELECT id, worktree_id, graph_id, node_id, attempt_id, base_commit,
+                base_workspace_revision, worktree_revision, proposal_digest,
+                proposal_json, status, created_at
+         FROM worktree_proposals WHERE id = ?1",
+        params![proposal_id],
+        read_worktree_proposal,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn ensure_proposal_replay(
+    existing: &WorktreeProposalRecord,
+    worktree_id: &str,
+    input: &WorktreeProposalCreate,
+) -> Result<(), StoreError> {
+    if existing.worktree_id != worktree_id
+        || existing.graph_id != input.graph_id
+        || existing.node_id != input.node_id
+        || existing.attempt_id != input.attempt_id
+        || existing.payload != input.payload
+        || existing.created_at != input.created_at
+    {
+        return Err(invalid(
+            "worktree proposal ID is already bound to different immutable facts",
+        ));
+    }
+    Ok(())
+}
+
+fn read_worktree_proposal(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorktreeProposalRecord> {
+    let raw_revision: String = row.get(7)?;
+    let worktree_revision = raw_revision.parse::<i64>().map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, Box::new(error))
+    })?;
+    let raw_state: String = row.get(10)?;
+    let state = WorktreeProposalState::parse(&raw_state).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(10, rusqlite::types::Type::Text, Box::new(error))
+    })?;
+    let raw_payload: String = row.get(9)?;
+    let payload = serde_json::from_str(&raw_payload).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(9, rusqlite::types::Type::Text, Box::new(error))
+    })?;
+    Ok(WorktreeProposalRecord {
+        id: row.get(0)?,
+        worktree_id: row.get(1)?,
+        graph_id: row.get(2)?,
+        node_id: row.get(3)?,
+        attempt_id: row.get(4)?,
+        base_commit: row.get(5)?,
+        base_workspace_revision: row.get(6)?,
+        worktree_revision,
+        proposal_digest: row.get(8)?,
+        payload,
+        state,
+        created_at: row.get(11)?,
+    })
 }

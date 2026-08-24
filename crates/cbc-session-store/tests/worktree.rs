@@ -1,6 +1,9 @@
 use cbc_session_store::{
-    new_manifest, AgentGraphCreate, AgentNodeCreate, SessionStore, StoreError, WorktreeCreate,
-    WorktreeState, WorktreeTransition, WorktreeWriterLeaseInput, WorktreeWriterLeaseState,
+    new_manifest, AgentAttemptCreate, AgentAttemptState, AgentAttemptTransition, AgentGraphCreate,
+    AgentNodeCreate, AgentNodeState, AgentNodeTransition, DurableEvidenceInput, EvidenceFreshness,
+    EvidencePathBinding, SessionStore, StoreError, WorktreeChangeKind, WorktreeChangedFile,
+    WorktreeCreate, WorktreeProposalCreate, WorktreeProposalPayload, WorktreeState,
+    WorktreeTransition, WorktreeWriterLeaseInput, WorktreeWriterLeaseState,
 };
 use serde_json::json;
 
@@ -291,4 +294,171 @@ fn worktree_validation_rejects_unmanaged_paths_and_unscoped_writer_requests() {
         .acquire_worktree_writer_lease("wt_isolated", ready_revision, &beyond_worktree_lifetime)
         .expect_err("writer lease must not outlive the managed worktree");
     assert!(matches!(lifetime_error, StoreError::InvalidWorktree { .. }));
+}
+
+#[test]
+fn completed_writer_attempt_publishes_an_evidence_backed_proposal_atomically() {
+    let mut store = seeded_store();
+    let ready_revision = ready_worktree(&mut store);
+    let writer = store
+        .acquire_worktree_writer_lease(
+            "wt_isolated",
+            ready_revision,
+            &writer_lease("wls_one", 1, T1, T7),
+        )
+        .expect("acquire writer");
+
+    let queued = store
+        .transition_agent_node(
+            "grf_worktree",
+            "agt_writer",
+            &AgentNodeTransition {
+                expected_graph_revision: 1,
+                expected_node_revision: 1,
+                state: AgentNodeState::Queued,
+                at: T1.into(),
+                result: None,
+                blocked_reason: None,
+            },
+        )
+        .expect("queue writer node");
+    let attempt = store
+        .start_agent_attempt(
+            "grf_worktree",
+            "agt_writer",
+            queued.graph.revision,
+            queued.value.revision,
+            &AgentAttemptCreate {
+                id: "att_proposal".into(),
+                daemon_id: None,
+                owner_epoch: None,
+                worker_lease_id: None,
+                model_profile: "auto".into(),
+                provider_route: None,
+                worktree_id: Some("wt_isolated".into()),
+                turn_id: None,
+                context_pack_id: None,
+                at: T2.into(),
+            },
+        )
+        .expect("start writer attempt");
+    let running = store
+        .transition_agent_attempt(
+            "grf_worktree",
+            "agt_writer",
+            "att_proposal",
+            &AgentAttemptTransition {
+                expected_graph_revision: attempt.graph.revision,
+                expected_node_revision: 3,
+                state: AgentAttemptState::Running,
+                at: T2.into(),
+                result_claim: None,
+                verified_result: None,
+                error: None,
+                usage: None,
+            },
+        )
+        .expect("run writer attempt");
+    let completed = store
+        .transition_agent_attempt(
+            "grf_worktree",
+            "agt_writer",
+            "att_proposal",
+            &AgentAttemptTransition {
+                expected_graph_revision: running.graph.revision,
+                expected_node_revision: 4,
+                state: AgentAttemptState::Completed,
+                at: T3.into(),
+                result_claim: Some(json!({ "summary": "changed one file" })),
+                verified_result: Some(json!({ "verified": true })),
+                error: None,
+                usage: Some(json!({ "inputTokens": 1 })),
+            },
+        )
+        .expect("complete writer attempt");
+    assert_eq!(completed.value.state, AgentAttemptState::Completed);
+
+    store
+        .upsert_evidence(&DurableEvidenceInput {
+            id: "evidence-proposal".into(),
+            workspace_identity_digest: "workspace-fingerprint".into(),
+            session_id: Some("ses_worktree".into()),
+            turn_id: None,
+            agent_id: Some("agt_writer".into()),
+            task_id: None,
+            worktree_id: Some("wt_isolated".into()),
+            kind: "process_exit".into(),
+            source: "runtime.process".into(),
+            digest: "c".repeat(64),
+            exact: true,
+            freshness: EvidenceFreshness::Fresh,
+            observed_at: T3.into(),
+            expires_at: Some(T7.into()),
+            summary: "worktree verification command exited successfully".into(),
+            path_bindings: vec![EvidencePathBinding {
+                path: "src/lib.rs".into(),
+                revision_token: Some("rev-2".into()),
+            }],
+            artifact_ids: vec![],
+        })
+        .expect("record runtime evidence");
+
+    let proposal_input = WorktreeProposalCreate {
+        id: "prp_valid".into(),
+        expected_worktree_revision: writer.worktree.revision,
+        writer_lease_id: "wls_one".into(),
+        expected_owner_epoch: 1,
+        graph_id: "grf_worktree".into(),
+        node_id: "agt_writer".into(),
+        attempt_id: "att_proposal".into(),
+        payload: WorktreeProposalPayload {
+            changed_files: vec![WorktreeChangedFile {
+                path: "src/lib.rs".into(),
+                kind: WorktreeChangeKind::Modify,
+                old_path: None,
+                base_revision: Some("rev-1".into()),
+                post_revision: Some("rev-2".into()),
+                additions: 2,
+                deletions: 1,
+            }],
+            diff_artifact_id: "art_diff".into(),
+            file_manifest_artifact_id: "art_manifest".into(),
+            verification_evidence_ids: vec!["evidence-proposal".into()],
+            diagnostics_evidence_ids: vec![],
+            open_risks: vec![],
+        },
+        created_at: T3.into(),
+    };
+
+    let mut out_of_scope = proposal_input.clone();
+    out_of_scope.id = "prp_outside".into();
+    out_of_scope.payload.changed_files[0].path = "README.md".into();
+    let scope_error = store
+        .create_worktree_proposal("wt_isolated", &out_of_scope)
+        .expect_err("proposal cannot escape the writer's allowed paths");
+    assert!(matches!(scope_error, StoreError::InvalidWorktree { .. }));
+
+    let published = store
+        .create_worktree_proposal("wt_isolated", &proposal_input)
+        .expect("publish proposal");
+    assert_eq!(published.worktree.state, WorktreeState::ProposalReady);
+    assert_eq!(published.worktree.revision, 4);
+    assert_eq!(published.value.state.label(), "ready");
+    assert!(published.value.proposal_digest.starts_with("sha256:"));
+    assert!(store
+        .active_worktree_writer_lease("wt_isolated")
+        .expect("lookup writer")
+        .is_none());
+
+    let replay = store
+        .create_worktree_proposal("wt_isolated", &proposal_input)
+        .expect("same proposal is idempotent");
+    assert_eq!(replay.value, published.value);
+    assert_eq!(
+        store
+            .worktree_proposals("wt_isolated")
+            .expect("list proposals")
+            .len(),
+        1
+    );
 }

@@ -45,9 +45,11 @@ pub use memory::{
     MAX_DURABLE_MEMORY_VALUE_BYTES, MAX_MEMORY_RECALL_LIMIT,
 };
 pub use worktree::{
-    WorktreeCreate, WorktreeMutation, WorktreeRecord, WorktreeState, WorktreeTransition,
-    WorktreeWriterLeaseInput, WorktreeWriterLeaseRecord, WorktreeWriterLeaseState,
-    MAX_WORKTREE_ALLOWED_PATHS, MAX_WORKTREE_BASELINE_REVISIONS,
+    WorktreeChangeKind, WorktreeChangedFile, WorktreeCreate, WorktreeMutation,
+    WorktreeProposalCreate, WorktreeProposalPayload, WorktreeProposalRecord, WorktreeProposalState,
+    WorktreeRecord, WorktreeState, WorktreeTransition, WorktreeWriterLeaseInput,
+    WorktreeWriterLeaseRecord, WorktreeWriterLeaseState, MAX_WORKTREE_ALLOWED_PATHS,
+    MAX_WORKTREE_BASELINE_REVISIONS, MAX_WORKTREE_PROPOSAL_EVIDENCE, MAX_WORKTREE_PROPOSAL_FILES,
 };
 
 pub use migrations::{apply_migrations, CURRENT_SCHEMA_VERSION, MIGRATIONS};
