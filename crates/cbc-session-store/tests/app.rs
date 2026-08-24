@@ -233,3 +233,15 @@ fn subscription_creation_rejects_a_cursor_beyond_session_head() {
         }
     ));
 }
+
+#[test]
+fn plugin_host_client_kind_uses_public_kebab_case_wire_name() {
+    assert_eq!(
+        serde_json::to_value(AppClientKind::PluginHost).expect("serialize plugin host"),
+        json!("plugin-host")
+    );
+    assert_eq!(
+        serde_json::from_value::<AppClientKind>(json!("plugin-host")).unwrap(),
+        AppClientKind::PluginHost
+    );
+}

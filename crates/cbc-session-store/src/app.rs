@@ -15,7 +15,7 @@ pub const MAX_APP_SUBSCRIPTIONS_PER_CLIENT: usize = 64;
 pub const MAX_APP_FILTER_ENTRIES: usize = 128;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum AppClientKind {
     Tui,
     Cli,
