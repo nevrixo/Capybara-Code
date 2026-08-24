@@ -2,7 +2,7 @@
  * Durable App Server cursor backend backed by the authoritative Rust runtime.
  *
  * The public server owns transport authentication and roles. This adapter owns
- * only fixed-shape translation for the four internal cursor RPCs, and never
+ * only fixed-shape translation for the five internal cursor RPCs, and never
  * exposes a raw sidecar error or response to an App Protocol caller.
  */
 
@@ -11,6 +11,8 @@ import {
   structuredError,
   type AppInitializeParams,
   type StructuredErrorCategory,
+  type EventReplayEvent,
+  type EventReplayResult,
 } from "@cbc/app-protocol";
 import { RuntimeRpcError, type RequestMethod } from "@cbc/protocol";
 
@@ -20,7 +22,8 @@ export type RuntimeAppCursorMethod =
   | "app.client.upsert"
   | "app.subscription.create"
   | "app.subscription.ack"
-  | "app.subscription.state";
+  | "app.subscription.state"
+  | "app.subscription.replay";
 
 /** Structural subset implemented by RuntimeClient without coupling to process I/O. */
 export interface RuntimeAppServerClient {
@@ -126,6 +129,43 @@ export class RuntimeAppServerBackend implements AppServerBackend {
     return subscription;
   }
 
+  async replaySubscription(
+    input: Parameters<AppServerBackend["replaySubscription"]>[0],
+  ): Promise<EventReplayResult> {
+    const replay = replayResponse(
+      await this.#request("app.subscription.replay", {
+        subscriptionId: input.subscriptionId,
+        clientId: input.clientId,
+        ...(input.afterSequence === undefined ? {} : { afterSequence: input.afterSequence }),
+        maxEvents: input.maxEvents,
+        maxBytes: input.maxBytes,
+      }),
+    );
+    const floor = input.afterSequence ?? replay.subscription.lastAckedSequence;
+    if (
+      replay.subscription.id !== input.subscriptionId
+      || replay.subscription.clientId !== input.clientId
+      || replay.cursor.sessionId !== replay.subscription.sessionId
+      || replay.cursor.journalSequence < floor
+      || replay.events.length > input.maxEvents
+    ) {
+      throw invalidRuntimeResponse();
+    }
+    let previousSequence = floor;
+    for (const event of replay.events) {
+      if (
+        event.sessionId !== replay.subscription.sessionId
+        || event.sequence <= previousSequence
+        || event.sequence > replay.cursor.journalSequence
+      ) {
+        throw invalidRuntimeResponse();
+      }
+      previousSequence = event.sequence;
+    }
+    return replay;
+  }
+
+
   async #request(method: RuntimeAppCursorMethod, params: Record<string, unknown>): Promise<unknown> {
     try {
       return await this.#runtime.request(method, params);
@@ -156,6 +196,79 @@ function subscriptionResponse(value: unknown): AppServerSubscription {
     lastAckedSequence: nonNegativeSequence(subscription.lastAckedSequence),
   };
 }
+
+function replayResponse(value: unknown): EventReplayResult {
+  if (!isRecord(value) || !Array.isArray(value.events) || typeof value.hasMore !== "boolean") {
+    throw invalidRuntimeResponse();
+  }
+  const cursor = nestedRecord(value, "cursor");
+  return {
+    subscription: subscriptionResponse(value),
+    cursor: {
+      sessionId: opaqueId(cursor.sessionId),
+      journalSequence: nonNegativeSequence(cursor.journalSequence),
+    },
+    events: value.events.map(replayEvent),
+    hasMore: value.hasMore,
+  };
+}
+
+function replayEvent(value: unknown): EventReplayEvent {
+  if (!isRecord(value) || !Object.hasOwn(value, "payload") || value.payload === undefined) {
+    throw invalidRuntimeResponse();
+  }
+  if (value.durability !== "journaled") throw invalidRuntimeResponse();
+  const turnId = optionalEventText(value.turnId);
+  const agentId = optionalEventText(value.agentId);
+  const parentEventId = optionalEventText(value.parentEventId);
+  const correlationId = optionalEventText(value.correlationId);
+  const callerId = optionalEventText(value.callerId);
+  const taskEpochId = optionalEventText(value.taskEpochId);
+  const workspaceIdentityDigest = optionalEventText(value.workspaceIdentityDigest);
+  return {
+    schemaVersion: boundedText(value.schemaVersion, 64),
+    sequence: nonNegativeSequence(value.sequence),
+    id: eventText(value.id),
+    timestamp: boundedText(value.timestamp, 128),
+    sessionId: opaqueId(value.sessionId),
+    ...(turnId === undefined ? {} : { turnId }),
+    ...(agentId === undefined ? {} : { agentId }),
+    ...(parentEventId === undefined ? {} : { parentEventId }),
+    ...(correlationId === undefined ? {} : { correlationId }),
+    ...(callerId === undefined ? {} : { callerId }),
+    ...(taskEpochId === undefined ? {} : { taskEpochId }),
+    ...(workspaceIdentityDigest === undefined ? {} : { workspaceIdentityDigest }),
+    kind: boundedText(value.kind, 256),
+    level: boundedText(value.level, 64),
+    visibility: boundedText(value.visibility, 64),
+    durability: "journaled",
+    payload: value.payload,
+  };
+}
+
+function optionalEventText(value: unknown): string | undefined {
+  return value === undefined ? undefined : eventText(value);
+}
+
+function eventText(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 1024) {
+    throw invalidRuntimeResponse();
+  }
+  return value;
+}
+
+function boundedText(value: unknown, maxLength: number): string {
+  if (
+    typeof value !== "string"
+    || value.length === 0
+    || value.length > maxLength
+    || value.trim() !== value
+  ) {
+    throw invalidRuntimeResponse();
+  }
+  return value;
+}
+
 
 function nestedRecord(value: unknown, field: string): Record<string, unknown> {
   if (!isRecord(value) || !isRecord(value[field])) throw invalidRuntimeResponse();

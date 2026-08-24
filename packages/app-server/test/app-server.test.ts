@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { EventReplayResult } from "@cbc/app-protocol";
 
 import {
   AppServer,
@@ -12,6 +13,7 @@ class FakeBackend implements AppServerBackend {
   readonly clients: string[] = [];
   readonly subscriptions = new Map<string, AppServerSubscription>();
   readonly calls: Array<{ method: string; clientId: string }> = [];
+  readonly replayCalls: Array<Parameters<AppServerBackend["replaySubscription"]>[0]> = [];
 
   async registerClient(
     input: Parameters<AppServerBackend["registerClient"]>[0],
@@ -63,6 +65,24 @@ class FakeBackend implements AppServerBackend {
     this.subscriptions.set(record.id, record);
     return record;
   }
+
+  async replaySubscription(
+    input: Parameters<AppServerBackend["replaySubscription"]>[0],
+  ): Promise<EventReplayResult> {
+    this.replayCalls.push(input);
+    const existing = this.subscriptions.get(input.subscriptionId);
+    if (existing === undefined || existing.clientId !== input.clientId) {
+      throw new Error("unexpected subscription owner");
+    }
+    const sequence = input.afterSequence ?? existing.lastAckedSequence;
+    return {
+      subscription: existing,
+      cursor: { sessionId: existing.sessionId, journalSequence: sequence },
+      events: [],
+      hasMore: false,
+    };
+  }
+
 
   async dispatch(
     input: NonNullable<AppServerBackend["dispatch"]> extends (value: infer T) => unknown ? T : never,
@@ -131,6 +151,16 @@ describe("AppServer dispatch", () => {
     expect("error" in response && response.error.data.code).toBe("APP_CONNECTION_REQUIRED");
   });
 
+  test("rejects a response limit smaller than one durable replay batch", () => {
+    expect(() => new AppServer({
+      backend: new FakeBackend(),
+      daemonId: "daemon_local",
+      limits: { maxResponseBytes: 512 },
+      authorizer: { authorize: async () => ["observer"] as const },
+    })).toThrow();
+  });
+
+
   test("registers a client and persists a single-session cursor subscription", async () => {
     const { app, backend } = server(["observer"]);
     const connectionId = await initialize(app);
@@ -161,6 +191,62 @@ describe("AppServer dispatch", () => {
       lastAckedSequence: 4,
     });
   });
+
+  test("replays through the bound subscription with a raw cursor", async () => {
+    const { app, backend } = server(["observer"]);
+    const connectionId = await initialize(app);
+    await app.dispatch(connectionId, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "events.subscribe",
+      params: {
+        subscriptionId: "sub_replay",
+        request: {
+          sessionIds: ["session_one"],
+          from: {
+            session_one: { sessionId: "session_one", journalSequence: 4 },
+          },
+        },
+      },
+    });
+
+    const replay = await app.dispatch(connectionId, {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "events.replay",
+      params: {
+        subscriptionId: "sub_replay",
+        after: { sessionId: "session_one", journalSequence: 4 },
+        maxEvents: 8,
+        maxBytes: 2048,
+      },
+    });
+    expect("result" in replay && replay.result).toMatchObject({
+      subscription: { id: "sub_replay", clientId: "client_tui", sessionId: "session_one" },
+      cursor: { sessionId: "session_one", journalSequence: 4 },
+      events: [],
+      hasMore: false,
+    });
+    expect(backend.replayCalls).toEqual([{
+      subscriptionId: "sub_replay",
+      clientId: "client_tui",
+      afterSequence: 4,
+      maxEvents: 8,
+      maxBytes: 2048,
+    }]);
+
+    const mismatched = await app.dispatch(connectionId, {
+      jsonrpc: "2.0",
+      id: 4,
+      method: "events.replay",
+      params: {
+        subscriptionId: "sub_replay",
+        after: { sessionId: "session_other", journalSequence: 4 },
+      },
+    });
+    expect("error" in mismatched && mismatched.error.data.code).toBe("APP_CURSOR_SESSION_MISMATCH");
+  });
+
 
   test("routes ACK and unsubscribe through the bound connection identity", async () => {
     const { app, backend } = server(["observer"]);

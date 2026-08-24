@@ -20,6 +20,8 @@ import {
   type AppServerLimits,
   type CommandEnvelope,
   type EventCursor,
+  type EventReplayResult,
+  type EventSubscription,
 } from "@cbc/app-protocol";
 
 export type AppJsonRpcId = string | number;
@@ -46,13 +48,7 @@ export type AppJsonRpcResponse =
   | { readonly jsonrpc: "2.0"; readonly id: AppJsonRpcId; readonly result: unknown }
   | { readonly jsonrpc: "2.0"; readonly id: AppJsonRpcId; readonly error: AppJsonRpcError };
 
-export interface AppServerSubscription {
-  readonly id: string;
-  readonly clientId: string;
-  readonly sessionId: string;
-  readonly state: "active" | "paused" | "closed";
-  readonly lastAckedSequence: number;
-}
+export interface AppServerSubscription extends EventSubscription {}
 
 export interface AppServerBackend {
   registerClient(input: {
@@ -84,6 +80,13 @@ export interface AppServerBackend {
     readonly state: "active" | "paused" | "closed";
     readonly at: string;
   }): Promise<AppServerSubscription>;
+  replaySubscription(input: {
+    readonly subscriptionId: string;
+    readonly clientId: string;
+    readonly afterSequence?: number;
+    readonly maxEvents: number;
+    readonly maxBytes: number;
+  }): Promise<EventReplayResult>;
   health?(): Promise<Readonly<Record<string, unknown>>>;
   dispatch?(input: {
     readonly method: AppMethod;
@@ -273,6 +276,7 @@ export class AppServer {
     }
     if (method === "server.health") return this.#backend.health?.() ?? { status: "ready" };
     if (method === "events.subscribe") return this.#subscribe(params, connection);
+    if (method === "events.replay") return this.#replay(params, connection);
     if (method === "events.ack") return this.#acknowledge(params, connection);
     if (method === "events.unsubscribe") return this.#unsubscribe(params, connection);
 
@@ -337,6 +341,36 @@ export class AppServer {
       cursor: { sessionId, journalSequence: subscription.lastAckedSequence },
     };
   }
+
+  async #replay(params: unknown, connection: ConnectionContext): Promise<EventReplayResult> {
+    requireRole(connection.roles, "observer", "events.replay");
+    const input = requireRecord("events.replay params", params);
+    const subscriptionId = requireOpaqueId("subscriptionId", input.subscriptionId);
+    const after = input.after === undefined ? undefined : validateCursor(input.after, undefined);
+    const maxEvents = boundedBatchLimit("maxEvents", input.maxEvents, 1, 10_000, 64);
+    const maxBytes = boundedBatchLimit(
+      "maxBytes",
+      input.maxBytes,
+      1024,
+      this.#limits.maxResponseBytes,
+      Math.min(1024 * 1024, this.#limits.maxResponseBytes),
+    );
+    const replay = await this.#backend.replaySubscription({
+      subscriptionId,
+      clientId: connection.client.id,
+      ...(after === undefined ? {} : { afterSequence: after.journalSequence }),
+      maxEvents,
+      maxBytes,
+    });
+    validateReplayResult(replay, {
+      subscriptionId,
+      clientId: connection.client.id,
+      ...(after === undefined ? {} : { after }),
+      maxEvents,
+    });
+    return replay;
+  }
+
 
   async #acknowledge(params: unknown, connection: ConnectionContext): Promise<unknown> {
     requireRole(connection.roles, "observer", "events.ack");
@@ -479,6 +513,75 @@ function validateCursor(value: unknown, expectedSessionId: string | undefined): 
   };
 }
 
+function validateReplayResult(
+  replay: EventReplayResult,
+  expected: {
+    readonly subscriptionId: string;
+    readonly clientId: string;
+    readonly after?: EventCursor;
+    readonly maxEvents: number;
+  },
+): void {
+  if (
+    !isRecord(replay)
+    || !isRecord(replay.subscription)
+    || !isRecord(replay.cursor)
+    || !Array.isArray(replay.events)
+    || typeof replay.hasMore !== "boolean"
+  ) {
+    invalidReplayBackendResponse();
+  }
+  const subscription = replay.subscription;
+  const cursor = replay.cursor;
+  if (
+    subscription.id !== expected.subscriptionId
+    || subscription.clientId !== expected.clientId
+    || typeof subscription.sessionId !== "string"
+    || !Number.isSafeInteger(subscription.lastAckedSequence)
+    || subscription.lastAckedSequence < 0
+    || cursor.sessionId !== subscription.sessionId
+    || !Number.isSafeInteger(cursor.journalSequence)
+    || cursor.journalSequence < 0
+    || replay.events.length > expected.maxEvents
+  ) {
+    invalidReplayBackendResponse();
+  }
+  if (expected.after !== undefined && expected.after.sessionId !== subscription.sessionId) {
+    throw appError(
+      "APP_CURSOR_SESSION_MISMATCH",
+      "validation",
+      "cursor session must match the subscription session",
+    );
+  }
+  const initialSequence = expected.after?.journalSequence ?? subscription.lastAckedSequence;
+  if (cursor.journalSequence < initialSequence) invalidReplayBackendResponse();
+
+  let previousSequence = initialSequence;
+  for (const event of replay.events) {
+    const sequence = isRecord(event) ? event.sequence : undefined;
+    if (
+      !isRecord(event)
+      || event.sessionId !== subscription.sessionId
+      || typeof sequence !== "number"
+      || !Number.isSafeInteger(sequence)
+      || sequence <= previousSequence
+      || sequence > cursor.journalSequence
+    ) {
+      invalidReplayBackendResponse();
+    }
+    previousSequence = sequence;
+  }
+}
+
+function invalidReplayBackendResponse(): never {
+  throw appError(
+    "APP_REPLAY_BACKEND_INVALID",
+    "internal",
+    "backend returned an invalid event replay response",
+  );
+}
+
+
 function validateBoundCommandEnvelope(params: unknown, clientId: string): void {
   const input = requireRecord("command params", params);
   const command = input.command as CommandEnvelope<unknown> | undefined;
@@ -598,6 +701,26 @@ function validateBatchLimit(name: string, value: unknown, minimum: number, maxim
   }
 }
 
+function boundedBatchLimit(
+  name: string,
+  value: unknown,
+  minimum: number,
+  maximum: number,
+  fallback: number,
+): number {
+  if (value === undefined) return fallback;
+  const parsed = requireNonNegativeInteger(name, value);
+  if (parsed < minimum || parsed > maximum) {
+    throw appError(
+      "APP_PARAMS_INVALID",
+      "validation",
+      name + " must be between " + String(minimum) + " and " + String(maximum),
+    );
+  }
+  return parsed;
+}
+
+
 function optionalOpaqueId(value: unknown, name: string): string | undefined {
   return value === undefined ? undefined : requireOpaqueId(name, value);
 }
@@ -677,6 +800,15 @@ function validateLimits(limits: AppServerLimits): AppServerLimits {
       throw appError("APP_LIMIT_INVALID", "validation", name + " must be a positive integer");
     }
   }
+
+  if (limits.maxResponseBytes < 1024) {
+    throw appError(
+      "APP_LIMIT_INVALID",
+      "validation",
+      "maxResponseBytes must allow the minimum 1024-byte event batch",
+    );
+  }
+
   if (limits.maxSessionsPerSubscription !== 1) {
     throw appError(
       "APP_LIMIT_INVALID",
