@@ -1,0 +1,15 @@
+{
+  "name": "@cbc/app-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Capybara Code client-facing App Protocol dispatcher",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@cbc/app-protocol": "workspace:*"
+  }
+}
