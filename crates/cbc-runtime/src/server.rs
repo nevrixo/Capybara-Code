@@ -751,6 +751,9 @@ pub fn dispatch(state: &RuntimeState, request: &RpcRequest) -> Option<Result<Val
         "session.fork" => handlers::session::fork(state, params),
         "session.delete" => handlers::session::delete(state, params),
 
+        "memory.search" => handlers::memory::search(state, params),
+        "memory.remember" => handlers::memory::remember(state, params),
+
         "artifact.create" => handlers::artifact::create(state, params),
         "artifact.read" => handlers::artifact::read(state, params),
         "artifact.delete" => handlers::artifact::delete(state, params),
@@ -1340,7 +1343,9 @@ mod tests {
     ) -> String {
         let mut capability_resources: Vec<&str> = resources.to_vec();
         if matches!(operation, "process.run" | "process.start") && capability_resources.is_empty() {
-            capability_resources.push("env:sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+            capability_resources.push(
+                "env:sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            );
         }
         let mut params = json!({
             "issuerToken": TEST_ISSUER,
@@ -2444,6 +2449,107 @@ mod tests {
     }
 
     #[test]
+    fn memory_remember_reuses_only_runtime_exact_evidence() {
+        let (dir, state) = initialized();
+        let workspace = dir.path().join("ws");
+        std::fs::write(workspace.join("memory.txt"), "evidence-backed fact\n").unwrap();
+
+        let incomplete = dispatch(
+            &state,
+            &request(
+                "fs.read",
+                json!({
+                    "path": "memory.txt",
+                    "startLine": 2,
+                    "maxLines": 1,
+                    "recordEvidence": true,
+                }),
+            ),
+        )
+        .expect("incomplete read dispatched")
+        .expect_err("partial exact reads cannot become durable evidence");
+        assert_eq!(incomplete.code, error_codes::INVALID_ARGUMENT);
+
+        let observed = dispatch(
+            &state,
+            &request(
+                "fs.read",
+                json!({ "path": "memory.txt", "recordEvidence": true }),
+            ),
+        )
+        .expect("exact read dispatched")
+        .expect("complete exact read succeeds");
+        let evidence_id = observed["evidenceId"]
+            .as_str()
+            .expect("exact read returns evidence id")
+            .to_string();
+        let workspace_identity = state.require_workspace().unwrap().fingerprint();
+
+        let remembered = dispatch(
+            &state,
+            &request(
+                "memory.remember",
+                json!({
+                    "memory": {
+                        "id": "memory-runtime",
+                        "workspaceIdentityDigest": workspace_identity,
+                        "scope": "workspace",
+                        "key": "memory.runtime",
+                        "value": "memory.txt was observed by an exact runtime read",
+                        "status": "active",
+                        "confidence": 0.9,
+                        "validFor": {
+                            "workspaceIdentity": workspace_identity.clone(),
+                            "paths": ["memory.txt"],
+                        },
+                        "createdAt": "2026-08-25T00:00:00Z",
+                        "lastValidatedAt": "2026-08-25T00:00:00Z",
+                        "evidenceObservedAt": "2026-08-25T00:00:00Z",
+                        "exactEvidenceObservedAt": "2026-08-25T00:00:00Z",
+                        "createdBy": "test",
+                        "evidenceIds": [evidence_id],
+                        "reason": "runtime exact observation",
+                        "at": "2026-08-25T00:00:00Z",
+                    }
+                }),
+            ),
+        )
+        .expect("remember dispatched")
+        .expect("fresh exact evidence permits workspace memory");
+        assert_eq!(remembered["memory"]["id"], "memory-runtime");
+
+        let search = dispatch(
+            &state,
+            &request("memory.search", json!({ "query": "runtime" })),
+        )
+        .expect("search dispatched")
+        .expect("search succeeds");
+        assert_eq!(search["freshEvidenceRequired"], true);
+        assert_eq!(search["memories"].as_array().unwrap().len(), 1);
+
+        // The same runtime store is the source of truth for invalidation. Once
+        // evidence becomes invalid, model-facing search must no longer return the
+        // claim even though its audit row remains available to diagnostics.
+        state
+            .store
+            .lock()
+            .expect("store lock")
+            .as_mut()
+            .expect("store")
+            .invalidate_evidence_for_path(
+                &workspace_identity,
+                "memory.txt",
+                "test mutation",
+                "2026-08-25T00:01:00Z",
+            )
+            .expect("invalidate evidence");
+        let hidden = dispatch(&state, &request("memory.search", json!({})))
+            .expect("search dispatched")
+            .expect("search succeeds");
+        assert!(hidden["memories"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
     fn fs_read_many_supports_v2_ranges_and_aggregate_budgets() {
         let (dir, state) = initialized();
         let workspace = dir.path().join("ws");
@@ -2522,7 +2628,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn fs_edit_repreflights_then_stages_and_commits_through_transaction() {
         let (dir, state) = initialized();
@@ -2554,19 +2659,18 @@ mod tests {
             "createdAt": "2026-08-24T00:00:00Z"
         });
 
-        let preview = dispatch(
-            &state,
-            &request("fs.edit.preview", json!({ "plan": plan })),
-        )
-        .expect("edit preview dispatched")
-        .expect("edit preview succeeds");
+        let preview = dispatch(&state, &request("fs.edit.preview", json!({ "plan": plan })))
+            .expect("edit preview dispatched")
+            .expect("edit preview succeeds");
         assert_eq!(preview["status"], "previewed");
         assert_eq!(preview["files"][0]["path"], "edit.txt");
         assert!(preview["files"][0].get("text").is_none());
 
         let begin = begin_transaction(&state).expect("transaction begins");
         let transaction_id = begin["transactionId"].as_str().expect("transaction id");
-        let receipt = begin["capabilityReceipt"].as_str().expect("capability receipt");
+        let receipt = begin["capabilityReceipt"]
+            .as_str()
+            .expect("capability receipt");
         let staged = dispatch(
             &state,
             &request(
@@ -2602,5 +2706,4 @@ mod tests {
         .expect("commit succeeds");
         assert_eq!(std::fs::read_to_string(path).unwrap(), "new\n");
     }
-
 }

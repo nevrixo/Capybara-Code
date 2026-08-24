@@ -5,6 +5,7 @@ pub mod credential;
 pub mod edit;
 pub mod fs;
 pub mod git;
+pub mod memory;
 pub mod process;
 pub mod session;
 pub mod transaction;

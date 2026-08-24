@@ -57,6 +57,8 @@ pub const REQUEST_METHODS: &[&str] = &[
     "session.export",
     "session.fork",
     "session.delete",
+    "memory.search",
+    "memory.remember",
     "artifact.create",
     "artifact.read",
     "artifact.delete",
@@ -127,7 +129,7 @@ mod tests {
         // (P0-04) lets a client cancel an in-flight request. `fs.fingerprint`
         // validates a preview revision without promoting it to write authority;
         // fs.edit.preview and fs.edit add the Rust-authoritative structured edit path.
-        assert_eq!(REQUEST_METHODS.len(), 55);
+        assert_eq!(REQUEST_METHODS.len(), 57);
         for m in [
             "runtime.initialize",
             "workspace.mode.write",
@@ -143,6 +145,8 @@ mod tests {
             "credential.lease",
             "session.append",
             "artifact.create",
+            "memory.search",
+            "memory.remember",
             "update.verify",
         ] {
             assert!(is_known_request(m), "missing request method {m}");

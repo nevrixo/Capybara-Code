@@ -388,7 +388,7 @@ pub fn delete(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
 
 pub fn commit(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
     let _admission = state.acquire_write_admission()?;
-    state.require_workspace()?;
+    let ws = state.require_workspace()?;
     state.require_mutation_allowed()?;
     let transaction_id = required_str(&params, "transactionId")?;
     state.require_transaction_capability(&transaction_id, &params)?;
@@ -473,6 +473,23 @@ pub fn commit(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
         }
     }
 
+    // Evidence is invalidated *before* the filesystem transaction begins. That
+    // ordering is conservative on a later file failure, but it prevents a crash
+    // or DB error from leaving newly-mutated content backed by stale memory.
+    let mutation_paths = applying_ops
+        .iter()
+        .flat_map(|operation| {
+            std::iter::once(operation.path.clone()).chain(operation.new_path.clone())
+        })
+        .collect::<Vec<_>>();
+    let invalidated_evidence_ids = crate::handlers::memory::invalidate_paths_before_mutation(
+        state,
+        &ws.fingerprint(),
+        mutation_paths,
+        "workspace transaction applying",
+        &cbc_patch::now_iso8601(),
+    )?;
+
     // Phase 2: apply the files.
     let (records, committed_at) = {
         let mut guard = state.transactions.lock().expect("tx lock");
@@ -550,6 +567,7 @@ pub fn commit(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
             "deletions": r.deletions,
             "newPath": r.new_path,
         })).collect::<Vec<_>>(),
+        "invalidatedEvidenceIds": invalidated_evidence_ids,
         "totalAdditions": records.iter().map(|r| r.additions).sum::<usize>(),
         "totalDeletions": records.iter().map(|r| r.deletions).sum::<usize>(),
     });

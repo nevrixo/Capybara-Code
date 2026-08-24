@@ -392,13 +392,54 @@ fn read_one(
     }
     .map_err(fs_error)?;
 
-    Ok(range_response(
+    let evidence_id = if optional_bool(params, "recordEvidence", false) {
+        if is_sensitive_path(&resolved.relative) {
+            return Err(RpcError::taxonomy(
+                cbc_protocol::error_codes::PERMISSION_DENIED,
+                "PERMISSION_DENIED",
+                "cannot retain durable evidence for a sensitive path",
+            ));
+        }
+        if !mode.authoritative_for_write()
+            || start_line != 1
+            || !range.end_of_file
+            || range.truncated_by_bytes
+        {
+            return Err(RpcError::taxonomy(
+                cbc_protocol::error_codes::INVALID_ARGUMENT,
+                "INVALID_ARGUMENT",
+                "recordEvidence requires a complete exact read from the first line",
+            ));
+        }
+        let digest = range.checksum.as_deref().ok_or_else(|| {
+            RpcError::taxonomy(
+                cbc_protocol::error_codes::INTERNAL_ERROR,
+                "INTERNAL",
+                "complete exact read did not produce a content checksum",
+            )
+        })?;
+        Some(crate::handlers::memory::record_exact_read_evidence(
+            state,
+            &ws.fingerprint(),
+            &resolved.relative,
+            &range.revision_token,
+            digest,
+            params,
+        )?)
+    } else {
+        None
+    };
+    let mut response = range_response(
         state,
         &resolved.relative,
         mode,
         range,
         resolved.traversed_symlink,
-    ))
+    );
+    if let Some(evidence_id) = evidence_id {
+        response["evidenceId"] = json!(evidence_id);
+    }
+    Ok(response)
 }
 
 pub fn read_many(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
