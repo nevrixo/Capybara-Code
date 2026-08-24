@@ -24,6 +24,7 @@ pub mod daemon;
 pub mod graph;
 pub mod memory;
 pub mod migrations;
+pub mod worktree;
 
 pub use daemon::{
     AttachmentMode, ClientAttachmentInput, ClientAttachmentRecord, DaemonInstanceInput,
@@ -42,6 +43,11 @@ pub use memory::{
     StoredMemoryRecord, DEFAULT_MEMORY_RECALL_LIMIT, MAX_DURABLE_EVIDENCE_SUMMARY_BYTES,
     MAX_DURABLE_MEMORY_REFERENCES, MAX_DURABLE_MEMORY_VALIDITY_BYTES,
     MAX_DURABLE_MEMORY_VALUE_BYTES, MAX_MEMORY_RECALL_LIMIT,
+};
+pub use worktree::{
+    WorktreeCreate, WorktreeMutation, WorktreeRecord, WorktreeState, WorktreeTransition,
+    WorktreeWriterLeaseInput, WorktreeWriterLeaseRecord, WorktreeWriterLeaseState,
+    MAX_WORKTREE_ALLOWED_PATHS, MAX_WORKTREE_BASELINE_REVISIONS,
 };
 
 pub use migrations::{apply_migrations, CURRENT_SCHEMA_VERSION, MIGRATIONS};
@@ -172,6 +178,30 @@ pub enum StoreError {
     InvalidAgentGraph {
         detail: String,
     },
+    /// Worktree commands use the materialized revision as a write fence.
+    WorktreeRevisionConflict {
+        worktree_id: String,
+        expected: i64,
+        actual: Option<i64>,
+    },
+    /// An active writer lease is exclusive even if its expiry is past; recovery
+    /// must explicitly reconcile the old attempt before a replacement is allowed.
+    WorktreeWriterLeaseConflict {
+        worktree_id: String,
+        active_lease_id: String,
+        state: String,
+    },
+    /// A stale writer tried to heartbeat or release after the worktree advanced
+    /// to another monotonically increasing writer epoch.
+    WorktreeWriterEpochConflict {
+        worktree_id: String,
+        expected: i64,
+        actual: Option<i64>,
+    },
+    /// Worktree metadata, generated path, or writer scope violated isolation.
+    InvalidWorktree {
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for StoreError {
@@ -293,6 +323,35 @@ impl std::fmt::Display for StoreError {
             ),
             StoreError::InvalidAgentGraph { detail } => {
                 write!(f, "invalid agent graph: {detail}")
+            }
+            StoreError::WorktreeRevisionConflict {
+                worktree_id,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "worktree revision conflict for {worktree_id}: expected {expected}, current {:?}",
+                actual
+            ),
+            StoreError::WorktreeWriterLeaseConflict {
+                worktree_id,
+                active_lease_id,
+                state,
+            } => write!(
+                f,
+                "worktree {worktree_id} has active writer lease {active_lease_id} ({state})"
+            ),
+            StoreError::WorktreeWriterEpochConflict {
+                worktree_id,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "worktree writer epoch conflict for {worktree_id}: expected {expected}, current {:?}",
+                actual
+            ),
+            StoreError::InvalidWorktree { detail } => {
+                write!(f, "invalid worktree: {detail}")
             }
         }
     }
