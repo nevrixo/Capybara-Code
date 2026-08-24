@@ -13,6 +13,7 @@ use super::{SessionStore, StoreError};
 
 pub const MAX_PLUGIN_PERMISSION_ENTRIES: usize = 128;
 pub const MAX_PLUGIN_STATE_BYTES: usize = 64 * 1024;
+pub const MAX_PLUGIN_CIRCUIT_FAILURES: i64 = 100;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -93,6 +94,33 @@ impl PluginInstanceState {
             "degraded" => Ok(Self::Degraded),
             "stopped" => Ok(Self::Stopped),
             _ => Err(invalid(format!("unsupported plugin instance state: {raw}"))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginCircuitState {
+    Closed,
+    Open,
+    HalfOpen,
+}
+
+impl PluginCircuitState {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Closed => "closed",
+            Self::Open => "open",
+            Self::HalfOpen => "half_open",
+        }
+    }
+
+    fn parse(raw: &str) -> Result<Self, StoreError> {
+        match raw {
+            "closed" => Ok(Self::Closed),
+            "open" => Ok(Self::Open),
+            "half_open" => Ok(Self::HalfOpen),
+            _ => Err(invalid(format!("unsupported plugin circuit state: {raw}"))),
         }
     }
 }
@@ -210,6 +238,21 @@ pub struct PluginInstanceTransition {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PluginCircuitTransition {
+    pub expected_generation: i64,
+    pub state: PluginCircuitState,
+    pub failure_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_failure_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opened_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_at: Option<String>,
+    pub at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginInstanceRecord {
     pub id: String,
@@ -229,6 +272,14 @@ pub struct PluginInstanceRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stopped_at: Option<String>,
     pub failure_count: i64,
+    pub circuit_state: PluginCircuitState,
+    pub circuit_generation: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_failure_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub circuit_opened_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub circuit_retry_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -503,6 +554,11 @@ impl SessionStore {
             heartbeat_at: Some(input.started_at.clone()),
             stopped_at: None,
             failure_count: 0,
+            circuit_state: PluginCircuitState::Closed,
+            circuit_generation: 0,
+            last_failure_at: None,
+            circuit_opened_at: None,
+            circuit_retry_at: None,
         };
         tx.commit()?;
         Ok(record)
@@ -564,6 +620,13 @@ impl SessionStore {
                 "plugin instance state does not match expected state",
             ));
         }
+        if transition.state == PluginInstanceState::Ready
+            && instance.circuit_state != PluginCircuitState::Closed
+        {
+            return Err(invalid(
+                "a plugin instance with an open circuit cannot become ready",
+            ));
+        }
         if instance.state == transition.state {
             tx.commit()?;
             return Ok(instance);
@@ -584,6 +647,95 @@ impl SessionStore {
         if transition.state == PluginInstanceState::Stopped {
             instance.stopped_at = Some(transition.at.clone());
         }
+        tx.commit()?;
+        Ok(instance)
+    }
+
+    /// Persist a supervisor-owned circuit transition. The expected generation
+    /// fences completions from invocations admitted before a later circuit open.
+    pub fn transition_plugin_circuit(
+        &mut self,
+        instance_id: &str,
+        transition: &PluginCircuitTransition,
+    ) -> Result<PluginInstanceRecord, StoreError> {
+        validate_prefixed_id("instanceId", instance_id, "pni_")?;
+        validate_circuit_transition(transition)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut instance = require_plugin_instance(&tx, instance_id)?;
+        if instance.state == PluginInstanceState::Stopped {
+            return Err(invalid(
+                "stopped plugin instances cannot receive circuit transitions",
+            ));
+        }
+        if instance.circuit_generation != transition.expected_generation {
+            return Err(invalid(
+                "plugin circuit generation does not match expected generation",
+            ));
+        }
+        if !circuit_transition_allowed(instance.circuit_state, transition.state) {
+            return Err(invalid("plugin circuit transition is not allowed"));
+        }
+        validate_circuit_transition_against_instance(&instance, transition)?;
+
+        let circuit_generation = if transition.state == PluginCircuitState::Open {
+            instance
+                .circuit_generation
+                .checked_add(1)
+                .ok_or_else(|| invalid("plugin circuit generation overflow"))?
+        } else {
+            instance.circuit_generation
+        };
+        let state = match transition.state {
+            PluginCircuitState::Open | PluginCircuitState::HalfOpen => {
+                PluginInstanceState::Degraded
+            }
+            PluginCircuitState::Closed
+                if instance.circuit_state == PluginCircuitState::HalfOpen =>
+            {
+                PluginInstanceState::Ready
+            }
+            PluginCircuitState::Closed => instance.state,
+        };
+        let updated = tx.execute(
+            "UPDATE plugin_instances
+             SET state = ?2,
+                 circuit_state = ?3,
+                 circuit_generation = ?4,
+                 failure_count = ?5,
+                 last_failure_at = ?6,
+                 circuit_opened_at = ?7,
+                 circuit_retry_at = ?8,
+                 heartbeat_at = ?9
+             WHERE id = ?1
+               AND circuit_generation = ?10",
+            params![
+                instance_id,
+                state.label(),
+                transition.state.label(),
+                circuit_generation,
+                transition.failure_count,
+                &transition.last_failure_at,
+                &transition.opened_at,
+                &transition.retry_at,
+                &transition.at,
+                transition.expected_generation,
+            ],
+        )?;
+        if updated != 1 {
+            return Err(invalid(
+                "plugin circuit generation changed before the transition was persisted",
+            ));
+        }
+        instance.state = state;
+        instance.circuit_state = transition.state;
+        instance.circuit_generation = circuit_generation;
+        instance.failure_count = transition.failure_count;
+        instance.last_failure_at = transition.last_failure_at.clone();
+        instance.circuit_opened_at = transition.opened_at.clone();
+        instance.circuit_retry_at = transition.retry_at.clone();
+        instance.heartbeat_at = Some(transition.at.clone());
         tx.commit()?;
         Ok(instance)
     }
@@ -814,6 +966,140 @@ fn validate_instance_start(input: &PluginInstanceStart) -> Result<(), StoreError
 
 fn validate_instance_transition(transition: &PluginInstanceTransition) -> Result<(), StoreError> {
     validate_timestamp("at", &transition.at)
+}
+
+fn validate_circuit_transition(transition: &PluginCircuitTransition) -> Result<(), StoreError> {
+    if transition.expected_generation < 0 {
+        return Err(invalid(
+            "plugin circuit expectedGeneration must be non-negative",
+        ));
+    }
+    if !(0..=MAX_PLUGIN_CIRCUIT_FAILURES).contains(&transition.failure_count) {
+        return Err(invalid(format!(
+            "plugin circuit failureCount must be between zero and {MAX_PLUGIN_CIRCUIT_FAILURES}"
+        )));
+    }
+    validate_timestamp("at", &transition.at)?;
+
+    match transition.state {
+        PluginCircuitState::Closed => {
+            if transition.last_failure_at.is_some()
+                || transition.opened_at.is_some()
+                || transition.retry_at.is_some()
+            {
+                return Err(invalid(
+                    "a closed plugin circuit cannot retain failure timestamps",
+                ));
+            }
+        }
+        PluginCircuitState::Open | PluginCircuitState::HalfOpen => {
+            if transition.failure_count == 0 {
+                return Err(invalid(
+                    "an open plugin circuit must retain at least one failure",
+                ));
+            }
+            let (Some(last_failure_at), Some(opened_at), Some(retry_at)) = (
+                transition.last_failure_at.as_deref(),
+                transition.opened_at.as_deref(),
+                transition.retry_at.as_deref(),
+            ) else {
+                return Err(invalid(
+                    "an open plugin circuit requires failure, opened, and retry timestamps",
+                ));
+            };
+            validate_timestamp("lastFailureAt", last_failure_at)?;
+            validate_timestamp("openedAt", opened_at)?;
+            validate_timestamp("retryAt", retry_at)?;
+            if last_failure_at > opened_at
+                || opened_at > retry_at
+                || last_failure_at > transition.at.as_str()
+                || opened_at > transition.at.as_str()
+                || (transition.state == PluginCircuitState::HalfOpen
+                    && retry_at > transition.at.as_str())
+            {
+                return Err(invalid(
+                    "plugin circuit timestamps are not in canonical transition order",
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_circuit_transition_against_instance(
+    instance: &PluginInstanceRecord,
+    transition: &PluginCircuitTransition,
+) -> Result<(), StoreError> {
+    match (instance.circuit_state, transition.state) {
+        (PluginCircuitState::Closed, PluginCircuitState::Closed) => {}
+        (PluginCircuitState::Closed, PluginCircuitState::Open) => {
+            if transition.failure_count <= instance.failure_count {
+                return Err(invalid(
+                    "opening a plugin circuit must increase its failure count",
+                ));
+            }
+        }
+        (PluginCircuitState::Open, PluginCircuitState::HalfOpen) => {
+            if transition.failure_count != instance.failure_count
+                || transition.last_failure_at != instance.last_failure_at
+                || transition.opened_at != instance.circuit_opened_at
+                || transition.retry_at != instance.circuit_retry_at
+            {
+                return Err(invalid(
+                    "a half-open plugin circuit must preserve its open circuit evidence",
+                ));
+            }
+        }
+        (PluginCircuitState::HalfOpen, PluginCircuitState::Closed) => {
+            if transition.failure_count != 0 {
+                return Err(invalid(
+                    "closing a recovered plugin circuit must reset its failure count",
+                ));
+            }
+        }
+        (PluginCircuitState::HalfOpen, PluginCircuitState::Open) => {
+            if transition.failure_count <= instance.failure_count {
+                return Err(invalid(
+                    "re-opening a plugin circuit must increase its failure count",
+                ));
+            }
+            let previous_last_failure_at =
+                instance.last_failure_at.as_deref().ok_or_else(|| {
+                    invalid("a half-open plugin circuit is missing its last failure timestamp")
+                })?;
+            let previous_opened_at = instance.circuit_opened_at.as_deref().ok_or_else(|| {
+                invalid("a half-open plugin circuit is missing its opened timestamp")
+            })?;
+            let next_last_failure_at = transition.last_failure_at.as_deref().ok_or_else(|| {
+                invalid("an open plugin circuit requires a last failure timestamp")
+            })?;
+            let next_opened_at = transition
+                .opened_at
+                .as_deref()
+                .ok_or_else(|| invalid("an open plugin circuit requires an opened timestamp"))?;
+            if next_last_failure_at < previous_last_failure_at
+                || next_opened_at < previous_opened_at
+            {
+                return Err(invalid(
+                    "a re-opened plugin circuit cannot move its evidence backwards",
+                ));
+            }
+        }
+        _ => return Err(invalid("plugin circuit transition is not allowed")),
+    }
+    Ok(())
+}
+
+fn circuit_transition_allowed(from: PluginCircuitState, to: PluginCircuitState) -> bool {
+    matches!(
+        (from, to),
+        (PluginCircuitState::Closed, PluginCircuitState::Closed)
+            | (PluginCircuitState::Closed, PluginCircuitState::Open)
+            | (PluginCircuitState::Open, PluginCircuitState::HalfOpen)
+            | (PluginCircuitState::HalfOpen, PluginCircuitState::Closed)
+            | (PluginCircuitState::HalfOpen, PluginCircuitState::Open)
+    )
 }
 
 fn instance_transition_allowed(from: PluginInstanceState, to: PluginInstanceState) -> bool {
@@ -1272,7 +1558,8 @@ fn ensure_instance_scope_binding(
 fn plugin_instance_select_sql() -> &'static str {
     "SELECT id, installation_id, workspace_identity_digest, worktree_id,
             session_id, state, pid, started_at, heartbeat_at, stopped_at,
-            failure_count
+            failure_count, circuit_state, circuit_generation,
+            last_failure_at, circuit_opened_at, circuit_retry_at
      FROM plugin_instances
      WHERE id = ?1"
 }
@@ -1345,6 +1632,9 @@ fn read_plugin_instance(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginInsta
     let state = PluginInstanceState::parse(&row.get::<_, String>(5)?).map_err(|error| {
         rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(error))
     })?;
+    let circuit_state = PluginCircuitState::parse(&row.get::<_, String>(11)?).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(11, rusqlite::types::Type::Text, Box::new(error))
+    })?;
     Ok(PluginInstanceRecord {
         id: row.get(0)?,
         installation_id: row.get(1)?,
@@ -1357,6 +1647,11 @@ fn read_plugin_instance(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginInsta
         heartbeat_at: row.get(8)?,
         stopped_at: row.get(9)?,
         failure_count: row.get(10)?,
+        circuit_state,
+        circuit_generation: row.get(12)?,
+        last_failure_at: row.get(13)?,
+        circuit_opened_at: row.get(14)?,
+        circuit_retry_at: row.get(15)?,
     })
 }
 

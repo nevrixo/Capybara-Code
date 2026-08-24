@@ -1,8 +1,8 @@
 use cbc_session_store::{
-    new_manifest, PluginGrantInput, PluginInstallScope, PluginInstallationInput,
-    PluginInstanceStart, PluginInstanceState, PluginInstanceTransition, PluginPermissionSet,
-    PluginRuntimeKind, PluginStateScope, PluginStateWrite, SessionStore, StoreError,
-    MAX_PLUGIN_STATE_BYTES,
+    new_manifest, PluginCircuitState, PluginCircuitTransition, PluginGrantInput,
+    PluginInstallScope, PluginInstallationInput, PluginInstanceStart, PluginInstanceState,
+    PluginInstanceTransition, PluginPermissionSet, PluginRuntimeKind, PluginStateScope,
+    PluginStateWrite, SessionStore, StoreError, MAX_PLUGIN_STATE_BYTES,
 };
 use serde_json::json;
 
@@ -352,6 +352,133 @@ fn plugin_instances_are_workspace_bound_and_lifecycle_fenced() {
         ),
         Err(StoreError::InvalidPlugin { .. })
     ));
+}
+
+#[test]
+fn plugin_circuit_is_generation_fenced_and_recovers_durably() {
+    let mut store = seeded_store();
+    store
+        .install_plugin(&installation(
+            "plg_instance",
+            PluginRuntimeKind::Wasi,
+            PluginInstallScope::Project,
+            PluginPermissionSet::default(),
+        ))
+        .expect("install declaration");
+    store
+        .grant_plugin(&PluginGrantInput {
+            id: "pgr_circuit".into(),
+            installation_id: "plg_instance".into(),
+            workspace_identity_digest: Some("workspace-fingerprint".into()),
+            permissions: PluginPermissionSet::default(),
+            granted_by: "user".into(),
+            granted_at: T0.into(),
+        })
+        .expect("grant workspace authority");
+    store
+        .set_plugin_enabled("plg_instance", true, T0)
+        .expect("enable declaration");
+    store
+        .start_plugin_instance(&instance("pni_circuit"))
+        .expect("persist starting instance");
+    store
+        .transition_plugin_instance(
+            "pni_circuit",
+            &PluginInstanceTransition {
+                expected_state: PluginInstanceState::Starting,
+                state: PluginInstanceState::Ready,
+                at: T1.into(),
+            },
+        )
+        .expect("mark instance ready");
+
+    let opened = store
+        .transition_plugin_circuit(
+            "pni_circuit",
+            &PluginCircuitTransition {
+                expected_generation: 0,
+                state: PluginCircuitState::Open,
+                failure_count: 1,
+                last_failure_at: Some(T1.into()),
+                opened_at: Some(T1.into()),
+                retry_at: Some(T2.into()),
+                at: T1.into(),
+            },
+        )
+        .expect("open circuit after a failure");
+    assert_eq!(opened.state, PluginInstanceState::Degraded);
+    assert_eq!(opened.circuit_state, PluginCircuitState::Open);
+    assert_eq!(opened.circuit_generation, 1);
+    assert_eq!(opened.circuit_retry_at.as_deref(), Some(T2));
+    assert!(matches!(
+        store.transition_plugin_instance(
+            "pni_circuit",
+            &PluginInstanceTransition {
+                expected_state: PluginInstanceState::Degraded,
+                state: PluginInstanceState::Ready,
+                at: T1.into(),
+            },
+        ),
+        Err(StoreError::InvalidPlugin { .. })
+    ));
+    assert!(matches!(
+        store.transition_plugin_circuit(
+            "pni_circuit",
+            &PluginCircuitTransition {
+                expected_generation: 0,
+                state: PluginCircuitState::HalfOpen,
+                failure_count: 1,
+                last_failure_at: Some(T1.into()),
+                opened_at: Some(T1.into()),
+                retry_at: Some(T2.into()),
+                at: T2.into(),
+            },
+        ),
+        Err(StoreError::InvalidPlugin { .. })
+    ));
+
+    let half_open = store
+        .transition_plugin_circuit(
+            "pni_circuit",
+            &PluginCircuitTransition {
+                expected_generation: 1,
+                state: PluginCircuitState::HalfOpen,
+                failure_count: 1,
+                last_failure_at: Some(T1.into()),
+                opened_at: Some(T1.into()),
+                retry_at: Some(T2.into()),
+                at: T2.into(),
+            },
+        )
+        .expect("admit one recovery probe");
+    assert_eq!(half_open.circuit_state, PluginCircuitState::HalfOpen);
+    assert_eq!(half_open.circuit_generation, 1);
+
+    let recovered = store
+        .transition_plugin_circuit(
+            "pni_circuit",
+            &PluginCircuitTransition {
+                expected_generation: 1,
+                state: PluginCircuitState::Closed,
+                failure_count: 0,
+                last_failure_at: None,
+                opened_at: None,
+                retry_at: None,
+                at: T2.into(),
+            },
+        )
+        .expect("close circuit after a successful probe");
+    assert_eq!(recovered.state, PluginInstanceState::Ready);
+    assert_eq!(recovered.circuit_state, PluginCircuitState::Closed);
+    assert_eq!(recovered.circuit_generation, 1);
+    assert_eq!(recovered.failure_count, 0);
+    assert_eq!(recovered.last_failure_at, None);
+    assert_eq!(
+        store
+            .plugin_instance("pni_circuit")
+            .expect("reload circuit record"),
+        Some(recovered)
+    );
 }
 
 #[test]

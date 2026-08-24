@@ -53,10 +53,11 @@ pub use memory::{
     MAX_DURABLE_MEMORY_VALUE_BYTES, MAX_MEMORY_RECALL_LIMIT,
 };
 pub use plugin::{
-    PluginGrantInput, PluginGrantRecord, PluginInstallScope, PluginInstallationInput,
-    PluginInstallationRecord, PluginInstanceRecord, PluginInstanceStart, PluginInstanceState,
-    PluginInstanceTransition, PluginPermissionSet, PluginRuntimeKind, PluginStateRecord,
-    PluginStateScope, PluginStateWrite, MAX_PLUGIN_PERMISSION_ENTRIES, MAX_PLUGIN_STATE_BYTES,
+    PluginCircuitState, PluginCircuitTransition, PluginGrantInput, PluginGrantRecord,
+    PluginInstallScope, PluginInstallationInput, PluginInstallationRecord, PluginInstanceRecord,
+    PluginInstanceStart, PluginInstanceState, PluginInstanceTransition, PluginPermissionSet,
+    PluginRuntimeKind, PluginStateRecord, PluginStateScope, PluginStateWrite,
+    MAX_PLUGIN_CIRCUIT_FAILURES, MAX_PLUGIN_PERMISSION_ENTRIES, MAX_PLUGIN_STATE_BYTES,
 };
 
 pub use worktree::{
