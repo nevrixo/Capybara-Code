@@ -11,6 +11,7 @@ import {
   type EffectivePluginOperation,
   type HookConstraints,
 } from "./authority.ts";
+import { PluginCircuitBreaker, type PluginCircuitPermit } from "./circuit.ts";
 import {
   type PluginHookKind,
   type PluginInstallScope,
@@ -49,18 +50,19 @@ export interface HookDispatchOptions {
   readonly aggregateTimeoutMs?: number;
   readonly ordinaryFailure?: "open-with-warning" | "closed";
   readonly now?: () => number;
+  readonly circuitBreaker?: PluginCircuitBreaker;
 }
 
 export interface HookWarning {
   readonly pluginId: string;
   readonly hook: PluginHookKind;
-  readonly code: "PLUGIN_TIMEOUT" | "PLUGIN_PROTOCOL_ERROR" | "PLUGIN_AUTHORITY_ESCALATION";
+  readonly code: "PLUGIN_TIMEOUT" | "PLUGIN_PROTOCOL_ERROR" | "PLUGIN_AUTHORITY_ESCALATION" | "PLUGIN_CIRCUIT_OPEN";
 }
 
 export interface HookTrace {
   readonly pluginId: string;
   readonly hook: PluginHookKind;
-  readonly status: "continued" | "narrowed" | "denied" | "asked" | "failed";
+  readonly status: "continued" | "narrowed" | "denied" | "asked" | "failed" | "circuit-open";
 }
 
 interface HookOutcomeBase {
@@ -150,6 +152,25 @@ export async function dispatchBeforeHooks(
       continue;
     }
 
+    let settlement: { readonly breaker: PluginCircuitBreaker; readonly permit: PluginCircuitPermit } | undefined;
+    const circuitBreaker = configuration.circuitBreaker;
+    if (circuitBreaker !== undefined) {
+      const admission = circuitBreaker.admit(registration.pluginId);
+      if (admission.kind === "blocked") {
+        const stopped = circuitOpenOutcome(
+          registration,
+          effective,
+          annotations,
+          warnings,
+          trace,
+          configuration,
+        );
+        if (stopped !== undefined) return stopped;
+        continue;
+      }
+      settlement = { breaker: circuitBreaker, permit: admission.permit };
+    }
+
     let decision: BeforeHookDecision;
     try {
       decision = parseDecision(await withTimeout(
@@ -169,18 +190,21 @@ export async function dispatchBeforeHooks(
         warnings,
         trace,
         configuration,
+        settlement,
       );
       if (stopped !== undefined) return stopped;
       continue;
     }
 
     if (decision.action === "continue") {
+      settleCircuitSuccess(settlement);
       annotations.push(...(decision.annotations ?? []));
       trace.push({ pluginId: registration.pluginId, hook: registration.hook, status: "continued" });
       continue;
     }
 
     if (decision.action === "deny") {
+      settleCircuitSuccess(settlement);
       trace.push({ pluginId: registration.pluginId, hook: registration.hook, status: "denied" });
       return {
         action: "deny",
@@ -205,11 +229,13 @@ export async function dispatchBeforeHooks(
           warnings,
           trace,
           configuration,
+          settlement,
         );
         if (stopped !== undefined) return stopped;
         continue;
       }
       effective = narrowed.effective;
+      settleCircuitSuccess(settlement);
       trace.push({ pluginId: registration.pluginId, hook: registration.hook, status: "asked" });
       return {
         action: "ask",
@@ -232,15 +258,51 @@ export async function dispatchBeforeHooks(
         warnings,
         trace,
         configuration,
+          settlement,
       );
       if (stopped !== undefined) return stopped;
       continue;
     }
     effective = narrowed.effective;
+    settleCircuitSuccess(settlement);
     trace.push({ pluginId: registration.pluginId, hook: registration.hook, status: "narrowed" });
   }
 
   return { action: "continue", effective, annotations, warnings, trace };
+}
+
+function circuitOpenOutcome(
+  registration: RegisteredBeforeHook,
+  effective: EffectivePluginOperation,
+  annotations: readonly HookAnnotation[],
+  warnings: HookWarning[],
+  trace: HookTrace[],
+  options: Required<Pick<HookDispatchOptions, "ordinaryFailure">>,
+): BeforeHookDispatchOutcome | undefined {
+  trace.push({ pluginId: registration.pluginId, hook: registration.hook, status: "circuit-open" });
+  const failClosed = registration.scope === "builtin"
+    || registration.priority === "critical"
+    || options.ordinaryFailure === "closed";
+  if (failClosed) {
+    return {
+      action: "deny",
+      reason: "a required plugin hook is unavailable because its circuit is open",
+      effective,
+      annotations,
+      warnings,
+      trace,
+    };
+  }
+  warnings.push({ pluginId: registration.pluginId, hook: registration.hook, code: "PLUGIN_CIRCUIT_OPEN" });
+  return undefined;
+}
+
+function settleCircuitSuccess(
+  settlement: { readonly breaker: PluginCircuitBreaker; readonly permit: PluginCircuitPermit } | undefined,
+): void {
+  if (settlement !== undefined) {
+    settlement.breaker.recordSuccess(settlement.permit);
+  }
 }
 
 function failureOutcome(
@@ -251,7 +313,11 @@ function failureOutcome(
   warnings: HookWarning[],
   trace: HookTrace[],
   options: Required<Pick<HookDispatchOptions, "ordinaryFailure">>,
+  settlement?: { readonly breaker: PluginCircuitBreaker; readonly permit: PluginCircuitPermit },
 ): BeforeHookDispatchOutcome | undefined {
+  if (settlement !== undefined) {
+    settlement.breaker.recordFailure(settlement.permit);
+  }
   trace.push({ pluginId: registration.pluginId, hook: registration.hook, status: "failed" });
   const failClosed = registration.scope === "builtin"
     || registration.priority === "critical"
@@ -376,12 +442,20 @@ function validateInvocation(input: BeforeHookInvocation): void {
   }
 }
 
-function normalizeOptions(options: HookDispatchOptions): Required<HookDispatchOptions> {
-  const normalized: Required<HookDispatchOptions> = {
+type NormalizedHookDispatchOptions = Required<Omit<HookDispatchOptions, "circuitBreaker">> & {
+  readonly circuitBreaker?: PluginCircuitBreaker;
+};
+
+function normalizeOptions(options: HookDispatchOptions): NormalizedHookDispatchOptions {
+  if (options.circuitBreaker !== undefined && !(options.circuitBreaker instanceof PluginCircuitBreaker)) {
+    throw new PluginHookDispatchError("circuitBreaker must be a PluginCircuitBreaker");
+  }
+  const normalized: NormalizedHookDispatchOptions = {
     perHookTimeoutMs: options.perHookTimeoutMs ?? 2_000,
     aggregateTimeoutMs: options.aggregateTimeoutMs ?? 5_000,
     ordinaryFailure: options.ordinaryFailure ?? "open-with-warning",
     now: options.now ?? (() => Date.now()),
+    ...(options.circuitBreaker === undefined ? {} : { circuitBreaker: options.circuitBreaker }),
   };
   for (const [name, value] of [
     ["perHookTimeoutMs", normalized.perHookTimeoutMs],

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  PluginCircuitBreaker,
   dispatchBeforeHooks,
   sortBeforeHooks,
   type EffectivePluginOperation,
@@ -150,4 +151,132 @@ describe("plugin before-hook dispatcher", () => {
       trace: [{ pluginId: "alpha/user", status: "failed" }],
     });
   });
+
+  test("skips an ordinary hook whose circuit is open while preserving later hooks", async () => {
+    const circuit = new PluginCircuitBreaker({
+      failureThreshold: 1,
+      cooldownMs: 100,
+      now: () => 0,
+    });
+    let calls = 0;
+    const registrations = [
+      hook("alpha/user", "user", "ordinary", 0, async () => {
+        calls += 1;
+        throw new Error("plugin crashed");
+      }),
+      hook("beta/user", "user", "ordinary", 0, async () => {
+        calls += 1;
+        return { action: "continue" };
+      }),
+    ];
+
+    const first = await dispatchBeforeHooks(registrations, {
+      invocationId: "inv_circuit_first",
+      operation: operation(),
+    }, { circuitBreaker: circuit, now: () => 0 });
+    expect(first).toMatchObject({
+      action: "continue",
+      warnings: [{ pluginId: "alpha/user", code: "PLUGIN_PROTOCOL_ERROR" }],
+    });
+
+    const second = await dispatchBeforeHooks(registrations, {
+      invocationId: "inv_circuit_open",
+      operation: operation(),
+    }, { circuitBreaker: circuit, now: () => 0 });
+    expect(calls).toBe(3);
+    expect(second).toMatchObject({
+      action: "continue",
+      warnings: [{ pluginId: "alpha/user", code: "PLUGIN_CIRCUIT_OPEN" }],
+      trace: [
+        { pluginId: "alpha/user", status: "circuit-open" },
+        { pluginId: "beta/user", status: "continued" },
+      ],
+    });
+  });
+
+  test("fails closed for an open critical circuit and closes after its recovery probe", async () => {
+    let now = 0;
+    let shouldFail = true;
+    let calls = 0;
+    const circuit = new PluginCircuitBreaker({
+      failureThreshold: 1,
+      cooldownMs: 10,
+      now: () => now,
+    });
+    const registrations = [
+      hook("alpha/user", "user", "critical", 0, async () => {
+        calls += 1;
+        if (shouldFail) throw new Error("plugin crashed");
+        return { action: "continue" };
+      }),
+    ];
+    const invoke = (invocationId: string) => dispatchBeforeHooks(registrations, {
+      invocationId,
+      operation: operation(),
+    }, { circuitBreaker: circuit, now: () => now });
+
+    const failed = await invoke("inv_critical_failure");
+    expect(failed).toMatchObject({ action: "deny", trace: [{ status: "failed" }] });
+
+    shouldFail = false;
+    now = 5;
+    const blocked = await invoke("inv_critical_open");
+    expect(calls).toBe(1);
+    expect(blocked).toMatchObject({
+      action: "deny",
+      reason: "a required plugin hook is unavailable because its circuit is open",
+      trace: [{ pluginId: "alpha/user", status: "circuit-open" }],
+    });
+
+    now = 10;
+    const recovered = await invoke("inv_critical_probe");
+    expect(calls).toBe(2);
+    expect(recovered).toMatchObject({
+      action: "continue",
+      trace: [{ pluginId: "alpha/user", status: "continued" }],
+    });
+    expect(circuit.snapshot("alpha/user")).toMatchObject({
+      state: "closed",
+      consecutiveFailures: 0,
+    });
+  });
+
+  test("opens an ordinary circuit after an authority escalation", async () => {
+    const circuit = new PluginCircuitBreaker({
+      failureThreshold: 1,
+      cooldownMs: 100,
+      now: () => 0,
+    });
+    let calls = 0;
+    const registrations = [
+      hook("alpha/user", "user", "ordinary", 0, async () => {
+        calls += 1;
+        return {
+          action: "narrow",
+          reason: "attempted widening",
+          constraints: { toolIds: ["new-tool"] },
+        };
+      }),
+    ];
+    const invoke = (invocationId: string) => dispatchBeforeHooks(registrations, {
+      invocationId,
+      operation: operation(),
+    }, { circuitBreaker: circuit, now: () => 0 });
+
+    const failed = await invoke("inv_circuit_authority_failure");
+    expect(failed).toMatchObject({
+      action: "continue",
+      warnings: [{ pluginId: "alpha/user", code: "PLUGIN_AUTHORITY_ESCALATION" }],
+    });
+
+    const blocked = await invoke("inv_circuit_authority_open");
+    expect(calls).toBe(1);
+    expect(blocked).toMatchObject({
+      action: "continue",
+      warnings: [{ pluginId: "alpha/user", code: "PLUGIN_CIRCUIT_OPEN" }],
+      trace: [{ pluginId: "alpha/user", status: "circuit-open" }],
+    });
+  });
+
+
 });
