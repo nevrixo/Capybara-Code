@@ -549,6 +549,12 @@ export class AgentSession {
     this.#tokenSaving = new TokenSavingController(options.config.agent.tokenSaving);
     const sessionTools = nativeToolsForFeatures({
       editEngineV2: options.config.experimental.editEngineV2,
+      durableMemory:
+        options.config.experimental.durableMemory &&
+        options.config.memory.enabled &&
+        (options.config.memory.workspaceEnabled ||
+          options.config.memory.sessionEnabled ||
+          options.config.memory.taskEnabled),
     }).filter((tool) =>
       options.config.agent.compoundTools ||
       (tool.id !== "repo.investigate" && tool.id !== "verification.run_many"),
@@ -749,6 +755,17 @@ export class AgentSession {
       host: options.host,
       sessionId: options.sessionId,
       editEngineV2: options.config.experimental.editEngineV2,
+      durableMemory:
+        options.config.experimental.durableMemory &&
+        options.config.memory.enabled &&
+        (options.config.memory.workspaceEnabled ||
+          options.config.memory.sessionEnabled ||
+          options.config.memory.taskEnabled),
+      memoryScopes: {
+        workspace: options.config.memory.workspaceEnabled,
+        session: options.config.memory.sessionEnabled,
+        task: options.config.memory.taskEnabled,
+      },
       bridges,
       ...(options.verificationContract !== undefined
         ? { verificationContract: options.verificationContract }

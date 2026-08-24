@@ -175,6 +175,21 @@ describe("catalog completeness (§12.2)", () => {
       expect.arrayContaining(["fs.edit.preview", "fs.edit"]),
     );
   });
+
+  test("durable memory is opt-in through durableMemory", () => {
+    const disabled = nativeToolsForFeatures().map((tool) => tool.id);
+    const enabled = nativeToolsForFeatures({ durableMemory: true }).map((tool) => tool.id);
+    expect(NATIVE_TOOLS.map((tool) => tool.id)).toEqual(
+      expect.arrayContaining(["memory.search", "memory.remember"]),
+    );
+    expect(disabled).not.toEqual(expect.arrayContaining(["memory.search", "memory.remember"]));
+    expect(enabled).toEqual(expect.arrayContaining(["memory.search", "memory.remember"]));
+    expect(new ToolRegistry().has("memory.remember")).toBe(false);
+    const registry = new ToolRegistry(nativeToolsForFeatures({ durableMemory: true }));
+    expect(registry.has("memory.search")).toBe(true);
+    expect(registry.has("memory.remember")).toBe(true);
+    expect(registry.activeIds()).not.toEqual(expect.arrayContaining(["memory.search", "memory.remember"]));
+  });
 });
 
 describe("argument validation (§12.4, AC-10)", () => {

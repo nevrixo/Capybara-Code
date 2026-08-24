@@ -517,6 +517,12 @@ export class SubagentBridge {
     const instance = context.instance;
     const childTools = nativeToolsForFeatures({
       editEngineV2: this.#options.config.experimental.editEngineV2,
+      durableMemory:
+        this.#options.config.experimental.durableMemory &&
+        this.#options.config.memory.enabled &&
+        (this.#options.config.memory.workspaceEnabled ||
+          this.#options.config.memory.sessionEnabled ||
+          this.#options.config.memory.taskEnabled),
     }).filter((tool) =>
       !tool.id.startsWith("task.") &&
       tool.id !== "todo.write" &&
@@ -563,6 +569,17 @@ export class SubagentBridge {
       host: this.#options.host,
       sessionId: this.#options.sessionId,
       editEngineV2: this.#options.config.experimental.editEngineV2,
+      durableMemory:
+        this.#options.config.experimental.durableMemory &&
+        this.#options.config.memory.enabled &&
+        (this.#options.config.memory.workspaceEnabled ||
+          this.#options.config.memory.sessionEnabled ||
+          this.#options.config.memory.taskEnabled),
+      memoryScopes: {
+        workspace: this.#options.config.memory.workspaceEnabled,
+        session: this.#options.config.memory.sessionEnabled,
+        task: this.#options.config.memory.taskEnabled,
+      },
       bridges: childBridges,
       ...(this.#options.verificationContract !== undefined
         ? { verificationContract: this.#options.verificationContract }

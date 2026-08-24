@@ -159,6 +159,124 @@ describe("runtime sidecar environment", () => {
     });
   });
 
+  test("durable memory tools bind session context and reject disabled scopes", async () => {
+    const remembered: Record<string, unknown>[] = [];
+    const searched: Record<string, unknown>[] = [];
+    const runtime = {
+      workspace: "/work/project",
+      async rememberMemory(params: Record<string, unknown>) {
+        remembered.push(params);
+        return {
+          workspaceIdentityDigest: "a".repeat(64),
+          idempotent: false,
+          memory: {
+            id: "memory-test",
+            workspaceIdentityDigest: "a".repeat(64),
+            scope: params.scope,
+            key: params.key,
+            value: params.value,
+            status: "active",
+            confidence: 0.8,
+            validFor: {},
+            evidenceIds: params.evidenceIds,
+            revision: 1,
+            createdAt: "2026-08-25T00:00:00Z",
+            lastValidatedAt: "2026-08-25T00:00:00Z",
+            evidenceObservedAt: "2026-08-25T00:00:00Z",
+          },
+        };
+      },
+      async searchMemory(params: Record<string, unknown>) {
+        searched.push(params);
+        return {
+          workspaceIdentityDigest: "a".repeat(64),
+          freshEvidenceRequired: true,
+          limit: 32,
+          memories: [{
+            id: "memory-test",
+            workspaceIdentityDigest: "a".repeat(64),
+            scope: "workspace",
+            key: "project.rule",
+            value: "Use the existing runtime boundary.",
+            status: "active",
+            confidence: 0.8,
+            validFor: {},
+            evidenceIds: ["evidence-test"],
+            revision: 1,
+            createdAt: "2026-08-25T00:00:00Z",
+            lastValidatedAt: "2026-08-25T00:00:00Z",
+            evidenceObservedAt: "2026-08-25T00:00:00Z",
+          }],
+        };
+      },
+    };
+    const rememberAction = {
+      callId: "memory-remember",
+      toolId: "memory.remember",
+      arguments: {
+        key: "project.rule",
+        value: "Use the existing runtime boundary.",
+        scope: "workspace",
+        evidenceIds: ["evidence-test"],
+        paths: ["/work/project/src/rule.ts"],
+      },
+      display: "remember project rule",
+    };
+    const disabled = new RuntimeToolExecutor({
+      runtime: runtime as never,
+      host: { now: () => 1 } as never,
+      sessionId: "session-memory",
+    });
+    const denied = await disabled.execute(rememberAction, new AbortController().signal);
+    expect(denied.result.error?.code).toBe("NOT_FOUND");
+    expect(remembered).toHaveLength(0);
+
+    const executor = new RuntimeToolExecutor({
+      runtime: runtime as never,
+      host: { now: () => 1 } as never,
+      sessionId: "session-memory",
+      durableMemory: true,
+      memoryScopes: { workspace: true, session: false, task: false },
+      scope: () => ({ agentId: "agent-memory" }),
+    });
+    const rememberedResult = await executor.execute(rememberAction, new AbortController().signal);
+    expect(rememberedResult.result.ok).toBe(true);
+    expect(remembered).toEqual([{
+      key: "project.rule",
+      value: "Use the existing runtime boundary.",
+      evidenceIds: ["evidence-test"],
+      scope: "workspace",
+      paths: ["src/rule.ts"],
+      agentId: "agent-memory",
+    }]);
+    expect(remembered[0]?.workspaceIdentityDigest).toBeUndefined();
+
+    const searchResult = await executor.execute({
+      callId: "memory-search",
+      toolId: "memory.search",
+      arguments: { query: "runtime" },
+      display: "search memory",
+    }, new AbortController().signal);
+    expect(searchResult.result.ok).toBe(true);
+    expect(searchResult.text).toContain("Use the existing runtime boundary.");
+    expect(searched).toEqual([{
+      query: "runtime",
+      scopes: ["workspace"],
+      sessionId: "session-memory",
+    }]);
+
+    const scopedOut = new RuntimeToolExecutor({
+      runtime: runtime as never,
+      host: { now: () => 1 } as never,
+      sessionId: "session-memory",
+      durableMemory: true,
+      memoryScopes: { workspace: false, session: true, task: false },
+    });
+    const rejectedScope = await scopedOut.execute(rememberAction, new AbortController().signal);
+    expect(rejectedScope.result.error?.code).toBe("NOT_FOUND");
+    expect(remembered).toHaveLength(1);
+  });
+
   test("does not inherit provider secrets or executable-control variables", () => {
     const filtered = runtimeSidecarEnvironment({
       PATH: "C:\\bin",

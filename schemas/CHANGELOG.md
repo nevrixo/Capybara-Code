@@ -135,3 +135,13 @@ Canonical Thinking text is bounded at 4 KiB for provider summaries and 64 KiB fo
 
 - Added durable `mode.changed` and `plan.approved` event kinds.
 - Added additive context usage and TODO revision payload fields.
+
+## 1.2.0
+
+- Added additive runtime RPC methods `memory.search` and `memory.remember`.
+  The runtime, rather than a client, binds each persisted claim to its workspace and
+  derives timestamps from fresh opaque evidence.
+- Added feature-gated `memory.search` and `memory.remember` native tool IDs plus
+  `fs.read.recordEvidence`; the default catalog remains unchanged while
+  `experimental.durableMemory` is off.
+- Synchronized `fs.edit.preview` and `fs.edit` tool IDs with the generated tool schema.

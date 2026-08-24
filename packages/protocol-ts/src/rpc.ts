@@ -261,6 +261,8 @@ export const REQUEST_METHODS = [
   "session.export",
   "session.fork",
   "session.delete",
+  "memory.search",
+  "memory.remember",
   "artifact.create",
   "artifact.read",
   "artifact.delete",

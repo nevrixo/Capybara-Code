@@ -103,6 +103,14 @@ export interface ToolExecutorOptions {
   readonly bridges?: ToolBridges;
   /** Enables the Rust-authoritative anchor/range edit tool surface. */
   readonly editEngineV2?: boolean;
+  /** Enables evidence-backed durable memory tools. */
+  readonly durableMemory?: boolean;
+  /** Per-scope gates are enforced again at execution, not only in the catalog. */
+  readonly memoryScopes?: Readonly<{
+    workspace: boolean;
+    session: boolean;
+    task: boolean;
+  }>;
   /** Turn and agent identity recorded on each transaction (§18.15). */
   readonly scope?: () => {
     turnId?: string;
@@ -1300,6 +1308,127 @@ export class RuntimeToolExecutor implements ToolExecutor {
             data,
           ),
           text: data.truncated ? `${text}\n[search truncated]` : text,
+        };
+      }
+
+      case "memory.search": {
+        if (this.#options.durableMemory !== true) {
+          return {
+            result: errorResult(
+              "NOT_FOUND",
+              "durable memory is disabled; enable experimental.durableMemory and memory.enabled to use it",
+              { retryable: false },
+            ),
+          };
+        }
+        const rawScopes = args(action).scopes;
+        const rawStatuses = args(action).statuses;
+        const enabledScopes = this.#options.memoryScopes ?? {
+          workspace: true,
+          session: true,
+          task: true,
+        };
+        const scopes = rawScopes === undefined
+          ? (["workspace", "session", "task"] as const).filter((scope) => enabledScopes[scope])
+          : rawScopes as Array<"workspace" | "session" | "task">;
+        if (
+          (rawScopes !== undefined && (!Array.isArray(rawScopes) || rawScopes.some((scope) => scope !== "workspace" && scope !== "session" && scope !== "task"))) ||
+          (rawStatuses !== undefined && (!Array.isArray(rawStatuses) || rawStatuses.some((status) => status !== "active" && status !== "superseded" && status !== "contested"))) ||
+          scopes.some((scope) => !enabledScopes[scope])
+        ) {
+          return { result: errorResult("INVALID_ARGUMENT", "memory.search received an unsupported scope or status") };
+        }
+        const path = str(action, "path");
+        const key = str(action, "key");
+        const query = str(action, "query");
+        const taskId = str(action, "taskId");
+        const limit = num(action, "limit");
+        const data = await runtime.searchMemory({
+          ...(key === undefined ? {} : { key }),
+          ...(query === undefined ? {} : { query }),
+          scopes,
+          ...(rawStatuses !== undefined ? { statuses: rawStatuses as Array<"active" | "superseded" | "contested"> } : {}),
+          ...(this.#options.sessionId !== undefined ? { sessionId: this.#options.sessionId } : {}),
+          ...(taskId === undefined ? {} : { taskId }),
+          ...(path !== undefined ? { path: workspacePath(path, workspace) } : {}),
+          ...(limit === undefined ? {} : { limit }),
+        });
+        const text = data.memories
+          .map((memory) => "[" + memory.scope + "] " + memory.key + "\n" + memory.value)
+          .join("\n\n");
+        return {
+          result: okResult("recalled " + data.memories.length + " fresh memory record(s)", data),
+          text: text.length > 0 ? text : "[no matching fresh memory]",
+        };
+      }
+
+      case "memory.remember": {
+        if (this.#options.durableMemory !== true) {
+          return {
+            result: errorResult(
+              "NOT_FOUND",
+              "durable memory is disabled; enable experimental.durableMemory and memory.enabled to use it",
+              { retryable: false },
+            ),
+          };
+        }
+        const rawScope = str(action, "scope") ?? "workspace";
+        if (rawScope !== "workspace" && rawScope !== "session" && rawScope !== "task") {
+          return { result: errorResult("INVALID_ARGUMENT", "memory.remember scope must be workspace, session, or task") };
+        }
+        const scope = rawScope;
+        const enabledScopes = this.#options.memoryScopes ?? {
+          workspace: true,
+          session: true,
+          task: true,
+        };
+        if (!enabledScopes[scope]) {
+          return { result: errorResult("NOT_FOUND", "this durable memory scope is disabled by configuration") };
+        }
+        const rawEvidenceIds = args(action).evidenceIds;
+        if (
+          !Array.isArray(rawEvidenceIds) ||
+          rawEvidenceIds.length === 0 ||
+          rawEvidenceIds.some((evidenceId) => typeof evidenceId !== "string" || evidenceId.trim().length === 0)
+        ) {
+          return { result: errorResult("INVALID_ARGUMENT", "memory.remember requires one or more evidenceIds") };
+        }
+        const rawPaths = args(action).paths;
+        if (rawPaths !== undefined && (!Array.isArray(rawPaths) || rawPaths.some((path) => typeof path !== "string"))) {
+          return { result: errorResult("INVALID_ARGUMENT", "memory.remember paths must be workspace-relative strings") };
+        }
+        const taskId = str(action, "taskId");
+        const sessionId = this.#options.sessionId;
+        if (scope === "session" && sessionId === undefined) {
+          return { result: errorResult("INVALID_ARGUMENT", "session memory requires a bound session") };
+        }
+        if (scope === "task" && taskId === undefined) {
+          return { result: errorResult("INVALID_ARGUMENT", "task memory requires taskId") };
+        }
+        const scoped = this.#options.scope?.();
+        const boundTaskId = scope === "task" ? taskId : undefined;
+        const confidence = num(action, "confidence");
+        const reason = str(action, "reason");
+        const data = await runtime.rememberMemory({
+          key: str(action, "key") ?? "",
+          value: str(action, "value") ?? "",
+          evidenceIds: rawEvidenceIds as string[],
+          scope,
+          ...(scope === "session" || scope === "task"
+            ? (sessionId === undefined ? {} : { sessionId })
+            : {}),
+          ...(boundTaskId === undefined ? {} : { taskId: boundTaskId }),
+          ...(rawPaths === undefined
+            ? {}
+            : { paths: (rawPaths as string[]).map((path) => workspacePath(path, workspace)) }),
+          ...(confidence === undefined ? {} : { confidence }),
+          ...(reason === undefined ? {} : { reason }),
+          ...(scoped?.agentId !== undefined ? { agentId: scoped.agentId } : {}),
+        });
+        const summary = data.idempotent ? "reused" : "remembered";
+        return {
+          result: okResult(summary + " evidence-backed memory '" + data.memory.key + "'", data),
+          text: summary + " " + data.memory.scope + " memory '" + data.memory.key + "' (" + data.memory.id + ")",
         };
       }
 

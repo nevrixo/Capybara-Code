@@ -127,6 +127,10 @@ const readRangeProperties = {
     maximum: 8 * 1024 * 1024,
     description: "Maximum file bytes read by the runtime before an excerpt is made.",
   },
+  recordEvidence: {
+    type: "boolean",
+    description: "Persist an opaque evidence ID only for a complete exact read; sensitive or partial reads are refused.",
+  },
   allowAbsolute: { type: "boolean", default: false },
 };
 
@@ -300,6 +304,82 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
         maxMatches: { type: "integer", minimum: 1, maximum: 500, default: 100 },
       },
       ["query"],
+    ),
+  },
+  {
+    id: "memory.search",
+    title: "RecallMemory",
+    description: "Recall bounded, fresh, evidence-backed memory from this workspace only.",
+    source: "native",
+    defaultRisk: "R0",
+    maxRisk: "R0",
+    alwaysActive: false,
+    mutates: false,
+    network: false,
+    authority: "read",
+    keywords: ["memory", "recall", "evidence", "fact", "history", "context"],
+    parameters: objectSchema(
+      {
+        key: { type: "string", minLength: 1, maxLength: 512 },
+        query: { type: "string", minLength: 1, maxLength: 2_048 },
+        statuses: {
+          type: "array",
+          items: { type: "string", enum: ["active", "superseded", "contested"] },
+          maxItems: 3,
+        },
+        scopes: {
+          type: "array",
+          items: { type: "string", enum: ["workspace", "session", "task"] },
+          maxItems: 3,
+        },
+        taskId: { type: "string", minLength: 1, maxLength: 256 },
+        path: relativePath,
+        limit: { type: "integer", minimum: 1, maximum: 200, default: 32 },
+      },
+      [],
+    ),
+  },
+  {
+    id: "memory.remember",
+    title: "Remember",
+    description: "Persist a concise fact only when one or more runtime-issued evidence IDs support it.",
+    source: "native",
+    defaultRisk: "R1",
+    maxRisk: "R1",
+    alwaysActive: false,
+    mutates: false,
+    network: false,
+    authority: "session_state",
+    idempotency: "reconcilable",
+    maxParallelism: 1,
+    keywords: ["memory", "remember", "evidence", "fact", "persist", "context"],
+    parameters: objectSchema(
+      {
+        key: { type: "string", minLength: 1, maxLength: 512 },
+        value: {
+          type: "string",
+          minLength: 1,
+          maxLength: 16 * 1_024,
+          description: "A concise factual claim, never raw transcript, secrets, or hidden reasoning.",
+        },
+        scope: { type: "string", enum: ["workspace", "session", "task"], default: "workspace" },
+        taskId: { type: "string", minLength: 1, maxLength: 256 },
+        paths: { type: "array", items: relativePath, maxItems: 128 },
+        evidenceIds: {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 512 },
+          minItems: 1,
+          maxItems: 128,
+        },
+        confidence: { type: "number", minimum: 0, maximum: 1 },
+        reason: {
+          type: "string",
+          minLength: 1,
+          maxLength: 512,
+          description: "A concise factual label for the transition, not chain-of-thought.",
+        },
+      },
+      ["key", "value", "evidenceIds"],
     ),
   },
   {
@@ -1047,15 +1127,18 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
   },
 ] as const;
 /** Experimental tools are absent from the default model catalog until enabled. */
-const EXPERIMENTAL_NATIVE_TOOL_IDS = new Set(["fs.edit.preview", "fs.edit"]);
+const EDIT_ENGINE_TOOL_IDS = new Set(["fs.edit.preview", "fs.edit"]);
+const DURABLE_MEMORY_TOOL_IDS = new Set(["memory.search", "memory.remember"]);
 
 export interface NativeToolFeatures {
   readonly editEngineV2?: boolean;
+  readonly durableMemory?: boolean;
 }
 
 export function nativeToolsForFeatures(features: NativeToolFeatures = {}): ToolDefinition[] {
   return NATIVE_TOOLS.filter((tool) =>
-    !EXPERIMENTAL_NATIVE_TOOL_IDS.has(tool.id) || features.editEngineV2 === true,
+    (!EDIT_ENGINE_TOOL_IDS.has(tool.id) || features.editEngineV2 === true) &&
+    (!DURABLE_MEMORY_TOOL_IDS.has(tool.id) || features.durableMemory === true),
   );
 }
 

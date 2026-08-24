@@ -187,6 +187,8 @@ export interface ReadRequest {
   readonly maxLines?: number;
   readonly mode?: ReadMode;
   readonly maxBytes?: number;
+  /** Persist opaque evidence only for an exact, complete, non-sensitive read. */
+  readonly recordEvidence?: boolean;
   readonly allowAbsolute?: boolean;
 }
 
@@ -215,6 +217,7 @@ export interface ReadResponse {
   readonly mode: ReadMode;
   readonly revisionToken: string;
   readonly checksum?: string;
+  readonly evidenceId?: string;
   readonly authoritativeForWrite: boolean;
   readonly excerpt: ReadExcerpt;
   readonly binary?: boolean;
@@ -265,6 +268,70 @@ export interface FingerprintResponse {
   readonly checksum?: string;
 }
 
+export type DurableMemoryScope = "workspace" | "session" | "task";
+
+export interface RuntimeMemoryRecord {
+  readonly id: string;
+  readonly workspaceIdentityDigest: string;
+  readonly scope: DurableMemoryScope;
+  readonly sessionId?: string;
+  readonly taskId?: string;
+  readonly worktreeId?: string;
+  readonly key: string;
+  readonly value: string;
+  readonly status: "active" | "superseded" | "contested";
+  readonly confidence: number;
+  readonly validFor: Record<string, unknown>;
+  readonly evidenceIds: readonly string[];
+  readonly revision: number;
+  readonly createdAt: string;
+  readonly lastValidatedAt: string;
+  readonly evidenceObservedAt: string;
+  readonly exactEvidenceObservedAt?: string;
+  readonly expiresAt?: string;
+  readonly [key: string]: unknown;
+}
+
+export interface MemorySearchRequest {
+  readonly key?: string;
+  readonly query?: string;
+  readonly statuses?: readonly RuntimeMemoryRecord["status"][];
+  readonly scopes?: readonly DurableMemoryScope[];
+  readonly sessionId?: string;
+  readonly taskId?: string;
+  readonly worktreeId?: string;
+  readonly path?: string;
+  readonly limit?: number;
+}
+
+export interface MemorySearchResponse {
+  readonly workspaceIdentityDigest: string;
+  readonly freshEvidenceRequired: true;
+  readonly limit: number;
+  readonly memories: RuntimeMemoryRecord[];
+}
+
+export interface MemoryRememberProposal {
+  readonly key: string;
+  readonly value: string;
+  readonly evidenceIds: readonly string[];
+  readonly scope?: DurableMemoryScope;
+  readonly sessionId?: string;
+  readonly taskId?: string;
+  readonly worktreeId?: string;
+  readonly paths?: readonly string[];
+  readonly confidence?: number;
+  /** A concise factual label; never a raw transcript or chain of thought. */
+  readonly reason?: string;
+  readonly agentId?: string;
+}
+
+export interface MemoryRememberResponse {
+  readonly workspaceIdentityDigest: string;
+  readonly idempotent: boolean;
+  readonly memory: RuntimeMemoryRecord;
+}
+
 type LegacyReadOptions = ReadRequest & Record<string, unknown>;
 
 function objectRecord(value: unknown): Record<string, unknown> {
@@ -289,6 +356,7 @@ function normalizeReadResponse(raw: unknown, request: ReadRequest): ReadResponse
   const source = objectRecord(raw);
   const path = stringValue(source.path) ?? request.path;
   const checksum = stringValue(source.checksum);
+  const evidenceId = stringValue(source.evidenceId);
   const revisionToken = stringValue(source.revisionToken) ?? checksum ?? "";
   const mode = readMode(source.mode, request.mode ?? "exact");
   const sourceExcerpt = objectRecord(source.excerpt);
@@ -319,6 +387,7 @@ function normalizeReadResponse(raw: unknown, request: ReadRequest): ReadResponse
     mode,
     revisionToken,
     ...(checksum !== undefined ? { checksum } : {}),
+    ...(evidenceId !== undefined ? { evidenceId } : {}),
     authoritativeForWrite:
       typeof source.authoritativeForWrite === "boolean"
         ? source.authoritativeForWrite
@@ -680,7 +749,7 @@ export class Runtime {
    * timed-out write must never be replayed without an idempotency key.
    */
   async #stableRead(
-     method: "fs.list" | "fs.glob" | "fs.search" | "fs.read" | "fs.read_many" | "fs.fingerprint" | "git.status" | "git.diff" | "git.log" | "git.show",
+     method: "fs.list" | "fs.glob" | "fs.search" | "fs.read" | "fs.read_many" | "fs.fingerprint" | "git.status" | "git.diff" | "git.log" | "git.show" | "memory.search",
     params: Record<string, unknown>,
   ): Promise<unknown> {
     let delayMs = 25;
@@ -809,6 +878,21 @@ export class Runtime {
       ? await this.fingerprint(requestOrPath, options)
       : await this.fingerprint(requestOrPath);
     return response.revisionToken;
+  }
+
+  // ---- durable memory ----
+
+  /** Recall only fresh memory records bound to the initialized workspace. */
+  async searchMemory(request: MemorySearchRequest = {}): Promise<MemorySearchResponse> {
+    return await this.#stableRead("memory.search", { ...request }) as MemorySearchResponse;
+  }
+
+  /**
+   * Submit a bounded claim proposal. The runtime—not this facade—binds the
+   * workspace, derives timestamps from evidence, and makes retries idempotent.
+   */
+  async rememberMemory(proposal: MemoryRememberProposal): Promise<MemoryRememberResponse> {
+    return await this.#client.request("memory.remember", { ...proposal }) as MemoryRememberResponse;
   }
 
   /** Preflight a structured edit plan without opening a write transaction. */
