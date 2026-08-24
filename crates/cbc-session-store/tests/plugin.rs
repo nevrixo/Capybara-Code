@@ -1,8 +1,9 @@
 use cbc_session_store::{
     new_manifest, PluginCircuitState, PluginCircuitTransition, PluginGrantInput,
     PluginInstallScope, PluginInstallationInput, PluginInstanceStart, PluginInstanceState,
-    PluginInstanceTransition, PluginPermissionSet, PluginRuntimeKind, PluginStateScope,
-    PluginStateWrite, SessionStore, StoreError, MAX_PLUGIN_STATE_BYTES,
+    PluginInstanceTransition, PluginInvocationFinish, PluginInvocationStart, PluginInvocationState,
+    PluginPermissionSet, PluginRuntimeKind, PluginStateScope, PluginStateWrite, SessionStore,
+    StoreError, MAX_PLUGIN_STATE_BYTES,
 };
 use serde_json::json;
 
@@ -479,6 +480,121 @@ fn plugin_circuit_is_generation_fenced_and_recovers_durably() {
             .expect("reload circuit record"),
         Some(recovered)
     );
+}
+
+#[test]
+fn plugin_invocations_are_durable_and_terminally_fenced() {
+    let mut store = seeded_store();
+    store
+        .install_plugin(&installation(
+            "plg_instance",
+            PluginRuntimeKind::Wasi,
+            PluginInstallScope::Project,
+            PluginPermissionSet::default(),
+        ))
+        .expect("install declaration");
+    store
+        .grant_plugin(&PluginGrantInput {
+            id: "pgr_invocation".into(),
+            installation_id: "plg_instance".into(),
+            workspace_identity_digest: Some("workspace-fingerprint".into()),
+            permissions: PluginPermissionSet::default(),
+            granted_by: "user".into(),
+            granted_at: T0.into(),
+        })
+        .expect("grant workspace authority");
+    store
+        .set_plugin_enabled("plg_instance", true, T0)
+        .expect("enable declaration");
+    store
+        .start_plugin_instance(&instance("pni_invocation"))
+        .expect("persist starting instance");
+    store
+        .transition_plugin_instance(
+            "pni_invocation",
+            &PluginInstanceTransition {
+                expected_state: PluginInstanceState::Starting,
+                state: PluginInstanceState::Ready,
+                at: T1.into(),
+            },
+        )
+        .expect("mark instance ready");
+
+    let start = PluginInvocationStart {
+        id: "inv_before_tool".into(),
+        instance_id: "pni_invocation".into(),
+        hook_or_method: "before.tool".into(),
+        correlation_id: "corr_plugin".into(),
+        started_at: T1.into(),
+    };
+    let running = store
+        .start_plugin_invocation(&start)
+        .expect("persist invocation start");
+    assert_eq!(running.state, PluginInvocationState::Running);
+    assert_eq!(
+        store
+            .start_plugin_invocation(&start)
+            .expect("idempotent invocation start"),
+        running
+    );
+
+    let finish = PluginInvocationFinish {
+        state: PluginInvocationState::Succeeded,
+        decision: Some(json!({ "action": "continue" })),
+        error: None,
+        finished_at: T2.into(),
+    };
+    let completed = store
+        .finish_plugin_invocation("inv_before_tool", &finish)
+        .expect("persist invocation completion");
+    assert_eq!(completed.state, PluginInvocationState::Succeeded);
+    assert_eq!(completed.finished_at.as_deref(), Some(T2));
+    assert_eq!(completed.decision, finish.decision);
+    assert_eq!(
+        store
+            .finish_plugin_invocation("inv_before_tool", &finish)
+            .expect("idempotent completion replay"),
+        completed
+    );
+    assert!(matches!(
+        store.finish_plugin_invocation(
+            "inv_before_tool",
+            &PluginInvocationFinish {
+                state: PluginInvocationState::Failed,
+                decision: None,
+                error: Some(json!({ "code": "PLUGIN_TIMEOUT" })),
+                finished_at: T2.into(),
+            },
+        ),
+        Err(StoreError::InvalidPlugin { .. })
+    ));
+    assert_eq!(
+        store
+            .plugin_invocation("inv_before_tool")
+            .expect("reload invocation record"),
+        Some(completed)
+    );
+
+    store
+        .transition_plugin_instance(
+            "pni_invocation",
+            &PluginInstanceTransition {
+                expected_state: PluginInstanceState::Ready,
+                state: PluginInstanceState::Stopped,
+                at: T2.into(),
+            },
+        )
+        .expect("stop instance");
+    assert!(matches!(
+        store.start_plugin_invocation(&PluginInvocationStart {
+            id: "inv_after_stop".into(),
+            instance_id: "pni_invocation".into(),
+            hook_or_method: "after.tool".into(),
+            correlation_id: "corr_plugin".into(),
+            started_at: T2.into(),
+        }),
+        Err(StoreError::InvalidPlugin { .. })
+    ));
 }
 
 #[test]

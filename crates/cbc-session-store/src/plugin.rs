@@ -14,6 +14,7 @@ use super::{SessionStore, StoreError};
 pub const MAX_PLUGIN_PERMISSION_ENTRIES: usize = 128;
 pub const MAX_PLUGIN_STATE_BYTES: usize = 64 * 1024;
 pub const MAX_PLUGIN_CIRCUIT_FAILURES: i64 = 100;
+pub const MAX_PLUGIN_INVOCATION_EVIDENCE_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -280,6 +281,86 @@ pub struct PluginInstanceRecord {
     pub circuit_opened_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub circuit_retry_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginInvocationState {
+    Running,
+    Succeeded,
+    Denied,
+    Failed,
+    TimedOut,
+    Cancelled,
+}
+
+impl PluginInvocationState {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Succeeded => "succeeded",
+            Self::Denied => "denied",
+            Self::Failed => "failed",
+            Self::TimedOut => "timed_out",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    fn parse(raw: &str) -> Result<Self, StoreError> {
+        match raw {
+            "running" => Ok(Self::Running),
+            "succeeded" => Ok(Self::Succeeded),
+            "denied" => Ok(Self::Denied),
+            "failed" => Ok(Self::Failed),
+            "timed_out" => Ok(Self::TimedOut),
+            "cancelled" => Ok(Self::Cancelled),
+            _ => Err(invalid(format!(
+                "unsupported plugin invocation state: {raw}"
+            ))),
+        }
+    }
+
+    fn is_terminal(self) -> bool {
+        self != Self::Running
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PluginInvocationStart {
+    pub id: String,
+    pub instance_id: String,
+    pub hook_or_method: String,
+    pub correlation_id: String,
+    pub started_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PluginInvocationFinish {
+    pub state: PluginInvocationState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<serde_json::Value>,
+    pub finished_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginInvocationRecord {
+    pub id: String,
+    pub instance_id: String,
+    pub hook_or_method: String,
+    pub correlation_id: String,
+    pub state: PluginInvocationState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<serde_json::Value>,
+    pub started_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -577,6 +658,134 @@ impl SessionStore {
             )
             .optional()
             .map_err(StoreError::from)
+    }
+
+    /// Append a durable invocation start before sending work to a plugin host.
+    /// Replays with the same invocation identity are safe and return the record.
+    pub fn start_plugin_invocation(
+        &mut self,
+        input: &PluginInvocationStart,
+    ) -> Result<PluginInvocationRecord, StoreError> {
+        validate_invocation_start(input)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let instance = require_plugin_instance(&tx, &input.instance_id)?;
+        if instance.state == PluginInstanceState::Stopped {
+            return Err(invalid(
+                "stopped plugin instances cannot start new invocations",
+            ));
+        }
+        if let Some(existing) = plugin_invocation_in_tx(&tx, &input.id)? {
+            ensure_invocation_start_replay(&existing, input)?;
+            tx.commit()?;
+            return Ok(existing);
+        }
+        tx.execute(
+            "INSERT INTO plugin_invocations (
+                id, instance_id, hook_or_method, correlation_id, state,
+                decision_json, error_json, started_at, finished_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, ?6, NULL)",
+            params![
+                &input.id,
+                &input.instance_id,
+                &input.hook_or_method,
+                &input.correlation_id,
+                PluginInvocationState::Running.label(),
+                &input.started_at,
+            ],
+        )?;
+        let record = PluginInvocationRecord {
+            id: input.id.clone(),
+            instance_id: input.instance_id.clone(),
+            hook_or_method: input.hook_or_method.clone(),
+            correlation_id: input.correlation_id.clone(),
+            state: PluginInvocationState::Running,
+            decision: None,
+            error: None,
+            started_at: input.started_at.clone(),
+            finished_at: None,
+        };
+        tx.commit()?;
+        Ok(record)
+    }
+
+    pub fn plugin_invocation(
+        &self,
+        invocation_id: &str,
+    ) -> Result<Option<PluginInvocationRecord>, StoreError> {
+        validate_prefixed_id("invocationId", invocation_id, "inv_")?;
+        self.conn
+            .query_row(
+                plugin_invocation_select_sql(),
+                params![invocation_id],
+                read_plugin_invocation,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    /// Finish a running invocation once. A later, non-identical completion is
+    /// rejected so stale plugin host responses cannot overwrite evidence.
+    pub fn finish_plugin_invocation(
+        &mut self,
+        invocation_id: &str,
+        finish: &PluginInvocationFinish,
+    ) -> Result<PluginInvocationRecord, StoreError> {
+        validate_prefixed_id("invocationId", invocation_id, "inv_")?;
+        validate_invocation_finish(finish)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut invocation = require_plugin_invocation(&tx, invocation_id)?;
+        if finish.finished_at < invocation.started_at {
+            return Err(invalid(
+                "plugin invocation finishedAt cannot precede startedAt",
+            ));
+        }
+        if invocation.state.is_terminal() {
+            ensure_invocation_finish_replay(&invocation, finish)?;
+            tx.commit()?;
+            return Ok(invocation);
+        }
+
+        let decision_json = finish
+            .decision
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
+        let error_json = finish
+            .error
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
+        let updated = tx.execute(
+            "UPDATE plugin_invocations
+             SET state = ?2,
+                 decision_json = ?3,
+                 error_json = ?4,
+                 finished_at = ?5
+             WHERE id = ?1
+               AND state = 'running'",
+            params![
+                invocation_id,
+                finish.state.label(),
+                decision_json,
+                error_json,
+                &finish.finished_at,
+            ],
+        )?;
+        if updated != 1 {
+            return Err(invalid(
+                "plugin invocation changed before its completion was persisted",
+            ));
+        }
+        invocation.state = finish.state;
+        invocation.decision = finish.decision.clone();
+        invocation.error = finish.error.clone();
+        invocation.finished_at = Some(finish.finished_at.clone());
+        tx.commit()?;
+        Ok(invocation)
     }
 
     pub fn heartbeat_plugin_instance(
@@ -962,6 +1171,81 @@ fn validate_instance_start(input: &PluginInstanceStart) -> Result<(), StoreError
         }
     }
     validate_timestamp("startedAt", &input.started_at)
+}
+
+fn validate_invocation_start(input: &PluginInvocationStart) -> Result<(), StoreError> {
+    validate_prefixed_id("invocationId", &input.id, "inv_")?;
+    validate_prefixed_id("instanceId", &input.instance_id, "pni_")?;
+    validate_hook_or_method(&input.hook_or_method)?;
+    validate_text("correlationId", &input.correlation_id, 256)?;
+    validate_timestamp("startedAt", &input.started_at)
+}
+
+fn validate_invocation_finish(finish: &PluginInvocationFinish) -> Result<(), StoreError> {
+    if !finish.state.is_terminal() {
+        return Err(invalid(
+            "a plugin invocation completion must use a terminal state",
+        ));
+    }
+    validate_timestamp("finishedAt", &finish.finished_at)?;
+    validate_invocation_evidence("decision", finish.decision.as_ref())?;
+    validate_invocation_evidence("error", finish.error.as_ref())?;
+
+    match finish.state {
+        PluginInvocationState::Succeeded => {
+            if finish.error.is_some() {
+                return Err(invalid(
+                    "a successful plugin invocation cannot retain an error",
+                ));
+            }
+        }
+        PluginInvocationState::Denied => {
+            if finish.decision.is_none() || finish.error.is_some() {
+                return Err(invalid(
+                    "a denied plugin invocation requires a decision and no error",
+                ));
+            }
+        }
+        PluginInvocationState::Failed
+        | PluginInvocationState::TimedOut
+        | PluginInvocationState::Cancelled => {
+            if finish.decision.is_some() || finish.error.is_none() {
+                return Err(invalid(
+                    "a failed plugin invocation requires an error and no decision",
+                ));
+            }
+        }
+        PluginInvocationState::Running => unreachable!("terminal state was validated"),
+    }
+
+    Ok(())
+}
+
+fn validate_invocation_evidence(
+    field: &str,
+    value: Option<&serde_json::Value>,
+) -> Result<(), StoreError> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    if !value.is_object() {
+        return Err(invalid(format!(
+            "plugin invocation {field} must be a structured object"
+        )));
+    }
+    validate_json(field, value, MAX_PLUGIN_INVOCATION_EVIDENCE_BYTES)
+}
+
+fn validate_hook_or_method(value: &str) -> Result<(), StoreError> {
+    validate_text("hookOrMethod", value, 256)?;
+    if !value.bytes().all(|byte| {
+        byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
+    }) {
+        return Err(invalid(
+            "hookOrMethod must use lowercase dotted protocol identifier characters",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_instance_transition(transition: &PluginInstanceTransition) -> Result<(), StoreError> {
@@ -1604,6 +1888,67 @@ fn ensure_instance_start_replay(
     Ok(())
 }
 
+fn plugin_invocation_select_sql() -> &'static str {
+    "SELECT id, instance_id, hook_or_method, correlation_id, state,
+            decision_json, error_json, started_at, finished_at
+     FROM plugin_invocations
+     WHERE id = ?1"
+}
+
+fn plugin_invocation_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    invocation_id: &str,
+) -> Result<Option<PluginInvocationRecord>, StoreError> {
+    tx.query_row(
+        plugin_invocation_select_sql(),
+        params![invocation_id],
+        read_plugin_invocation,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn require_plugin_invocation(
+    tx: &rusqlite::Transaction<'_>,
+    invocation_id: &str,
+) -> Result<PluginInvocationRecord, StoreError> {
+    plugin_invocation_in_tx(tx, invocation_id)?.ok_or_else(|| StoreError::NotFound {
+        what: format!("plugin invocation {invocation_id}"),
+    })
+}
+
+fn ensure_invocation_start_replay(
+    existing: &PluginInvocationRecord,
+    input: &PluginInvocationStart,
+) -> Result<(), StoreError> {
+    if existing.instance_id != input.instance_id
+        || existing.hook_or_method != input.hook_or_method
+        || existing.correlation_id != input.correlation_id
+        || existing.started_at != input.started_at
+    {
+        return Err(invalid(
+            "plugin invocation ID is already bound to different startup metadata",
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_invocation_finish_replay(
+    existing: &PluginInvocationRecord,
+    finish: &PluginInvocationFinish,
+) -> Result<(), StoreError> {
+    if existing.state != finish.state
+        || existing.decision != finish.decision
+        || existing.error != finish.error
+        || existing.finished_at.as_deref() != Some(finish.finished_at.as_str())
+    {
+        return Err(invalid(
+            "plugin invocation already has a different terminal result",
+        ));
+    }
+    Ok(())
+}
+
 fn plugin_state_in_tx(
     tx: &rusqlite::Transaction<'_>,
     write: &PluginStateWrite,
@@ -1652,6 +1997,23 @@ fn read_plugin_instance(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginInsta
         last_failure_at: row.get(13)?,
         circuit_opened_at: row.get(14)?,
         circuit_retry_at: row.get(15)?,
+    })
+}
+
+fn read_plugin_invocation(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginInvocationRecord> {
+    let state = PluginInvocationState::parse(&row.get::<_, String>(4)?).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(error))
+    })?;
+    Ok(PluginInvocationRecord {
+        id: row.get(0)?,
+        instance_id: row.get(1)?,
+        hook_or_method: row.get(2)?,
+        correlation_id: row.get(3)?,
+        state,
+        decision: optional_json(row.get(5)?, 5)?,
+        error: optional_json(row.get(6)?, 6)?,
+        started_at: row.get(7)?,
+        finished_at: row.get(8)?,
     })
 }
 
