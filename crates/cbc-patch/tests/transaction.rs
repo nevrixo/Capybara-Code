@@ -4,8 +4,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use cbc_patch::{
-    parse_unified_diff, undo_records, FileOperationKind, FileTransaction, TransactionError,
-    TransactionState, UndoStatus,
+    parse_unified_diff, undo_records, FileOperationKind, FileTransaction, PreparedFileChange,
+    PreparedFileKind, TransactionError, TransactionState, UndoStatus,
 };
 use cbc_workspace::Workspace;
 use tempfile::TempDir;
@@ -938,4 +938,45 @@ fn stage_write_and_patch_accept_short_hash_expectations() {
         fx.read("package.json"),
         "{\n  \"name\": \"test-updated\"\n}\n"
     );
+}
+
+#[test]
+fn prepared_edit_plan_staging_discards_earlier_changes_when_later_hash_is_stale() {
+    let fx = Fixture::new();
+    fx.write("first.txt", "first\n");
+    fx.write("second.txt", "second\n");
+
+    let mut tx = FileTransaction::begin("tx_prepared_edit_atomic", None, None);
+    let changes = vec![
+        PreparedFileChange {
+            kind: PreparedFileKind::Modify,
+            path: "first.txt".to_owned(),
+            previous_path: None,
+            revision_before: Some(fx.hash_of("first.txt")),
+            revision_after: Some("ignored".to_owned()),
+            text: Some("FIRST\n".to_owned()),
+            operation_ids: vec!["edo_first".to_owned()],
+            additions: 1,
+            deletions: 1,
+        },
+        PreparedFileChange {
+            kind: PreparedFileKind::Modify,
+            path: "second.txt".to_owned(),
+            previous_path: None,
+            revision_before: Some("deadbeef".to_owned()),
+            revision_after: Some("ignored".to_owned()),
+            text: Some("SECOND\n".to_owned()),
+            operation_ids: vec!["edo_second".to_owned()],
+            additions: 1,
+            deletions: 1,
+        },
+    ];
+
+    let error = tx
+        .stage_prepared_edit_plan(&changes, &fx.resolver())
+        .expect_err("the stale second file must reject the whole staged edit");
+    assert!(matches!(error, TransactionError::Conflict { .. }));
+    assert_eq!(tx.staged_count(), 0, "the first edit must be discarded");
+    assert_eq!(fx.read("first.txt"), "first\n");
+    assert_eq!(fx.read("second.txt"), "second\n");
 }

@@ -17,7 +17,7 @@
 //! matches the post-image, so a user edit made after the agent's change is never
 //! destroyed (invariant 9 in §24.1).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use cbc_fs::{
@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::diff::{FileOperationKind, FilePatch, Hunk, HunkLine, Patch};
 
+use crate::edit::{PreparedFileChange, PreparedFileKind};
 #[derive(Debug)]
 pub enum TransactionError {
     /// A staged file's current hash differs from the expected hash (§T2).
@@ -781,6 +782,161 @@ impl FileTransaction {
             additions: 0,
             deletions: 0,
         });
+        Ok(())
+    }
+
+    /// Stage a Rust-preflighted edit plan as one all-or-nothing staging unit.
+    ///
+    /// No filesystem write happens here, but staging itself must not be partial:
+    /// a stale second file cannot leave an earlier edit accidentally queued for
+    /// commit. The runtime supplies a guard-aware resolver for every path.
+    pub fn stage_prepared_edit_plan(
+        &mut self,
+        changes: &[PreparedFileChange],
+        resolve: &dyn Fn(&str) -> Result<PathBuf, TransactionError>,
+    ) -> Result<(), TransactionError> {
+        self.ensure_open("stage edit plan")?;
+
+        let mut already_staged = BTreeSet::new();
+        for operation in &self.staged {
+            already_staged.insert(operation.relative.as_str());
+            if let Some(new_relative) = operation.new_relative.as_deref() {
+                already_staged.insert(new_relative);
+            }
+        }
+        let mut claimed = BTreeSet::new();
+        for change in changes {
+            let mut paths = vec![change.path.as_str()];
+            if let Some(previous_path) = change.previous_path.as_deref() {
+                paths.push(previous_path);
+            }
+            for path in paths {
+                if !claimed.insert(path) || already_staged.contains(path) {
+                    return Err(TransactionError::InvalidState {
+                        state: self.state.label().to_owned(),
+                        action: format!(
+                            "stage edit plan: path '{path}' overlaps an existing or duplicate staged operation"
+                        ),
+                    });
+                }
+            }
+        }
+
+        enum PreparedStage {
+            Write {
+                relative: String,
+                absolute: PathBuf,
+                content: String,
+                intent: WriteIntent,
+                expected_hash: Option<String>,
+            },
+            Delete {
+                relative: String,
+                absolute: PathBuf,
+                expected_hash: Option<String>,
+            },
+            Move {
+                from_relative: String,
+                from_absolute: PathBuf,
+                to_relative: String,
+                to_absolute: PathBuf,
+                expected_hash: Option<String>,
+            },
+        }
+
+        let mut prepared = Vec::with_capacity(changes.len());
+        for change in changes {
+            let missing_text = || TransactionError::InvalidState {
+                state: self.state.label().to_owned(),
+                action: format!(
+                    "stage edit plan: {} change for '{}' has no complete staged text",
+                    match change.kind {
+                        PreparedFileKind::Modify => "modify",
+                        PreparedFileKind::Create => "create",
+                        _ => "text",
+                    },
+                    change.path
+                ),
+            };
+            let stage = match change.kind {
+                PreparedFileKind::Modify | PreparedFileKind::Create => PreparedStage::Write {
+                    relative: change.path.clone(),
+                    absolute: resolve(&change.path)?,
+                    content: change.text.clone().ok_or_else(missing_text)?,
+                    intent: if change.kind == PreparedFileKind::Modify {
+                        WriteIntent::Replace
+                    } else {
+                        WriteIntent::Create
+                    },
+                    expected_hash: change.revision_before.clone(),
+                },
+                PreparedFileKind::Delete => PreparedStage::Delete {
+                    relative: change.path.clone(),
+                    absolute: resolve(&change.path)?,
+                    expected_hash: change.revision_before.clone(),
+                },
+                PreparedFileKind::Move => {
+                    let from_relative = change.previous_path.clone().ok_or_else(|| {
+                        TransactionError::InvalidState {
+                            state: self.state.label().to_owned(),
+                            action: format!(
+                                "stage edit plan: move destination '{}' has no source path",
+                                change.path
+                            ),
+                        }
+                    })?;
+                    PreparedStage::Move {
+                        from_absolute: resolve(&from_relative)?,
+                        to_absolute: resolve(&change.path)?,
+                        from_relative,
+                        to_relative: change.path.clone(),
+                        expected_hash: change.revision_before.clone(),
+                    }
+                }
+            };
+            prepared.push(stage);
+        }
+
+        let staged_before = self.staged.len();
+        for stage in prepared {
+            let result = match stage {
+                PreparedStage::Write {
+                    relative,
+                    absolute,
+                    content,
+                    intent,
+                    expected_hash,
+                } => self.stage_write(
+                    &relative,
+                    &absolute,
+                    &content,
+                    intent,
+                    expected_hash.as_deref(),
+                ),
+                PreparedStage::Delete {
+                    relative,
+                    absolute,
+                    expected_hash,
+                } => self.stage_delete(&relative, &absolute, expected_hash.as_deref(), false),
+                PreparedStage::Move {
+                    from_relative,
+                    from_absolute,
+                    to_relative,
+                    to_absolute,
+                    expected_hash,
+                } => self.stage_move(
+                    &from_relative,
+                    &from_absolute,
+                    &to_relative,
+                    &to_absolute,
+                    expected_hash.as_deref(),
+                ),
+            };
+            if let Err(error) = result {
+                self.staged.truncate(staged_before);
+                return Err(error);
+            }
+        }
         Ok(())
     }
 
