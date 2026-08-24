@@ -1239,3 +1239,652 @@ fn optional_json_column(
 ) -> rusqlite::Result<Option<serde_json::Value>> {
     raw.map(|value| json_column(value, index)).transpose()
 }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentAttemptState {
+    Created,
+    Leased,
+    Running,
+    WaitingTool,
+    WaitingProvider,
+    Completed,
+    Failed,
+    Cancelled,
+    Interrupted,
+    Unknown,
+}
+
+impl AgentAttemptState {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Leased => "leased",
+            Self::Running => "running",
+            Self::WaitingTool => "waiting_tool",
+            Self::WaitingProvider => "waiting_provider",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::Interrupted => "interrupted",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    fn parse(raw: &str) -> Result<Self, StoreError> {
+        match raw {
+            "created" => Ok(Self::Created),
+            "leased" => Ok(Self::Leased),
+            "running" => Ok(Self::Running),
+            "waiting_tool" => Ok(Self::WaitingTool),
+            "waiting_provider" => Ok(Self::WaitingProvider),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "cancelled" => Ok(Self::Cancelled),
+            "interrupted" => Ok(Self::Interrupted),
+            "unknown" => Ok(Self::Unknown),
+            _ => Err(invalid(format!("unsupported attempt state: {raw}"))),
+        }
+    }
+
+    fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Completed | Self::Failed | Self::Cancelled | Self::Interrupted | Self::Unknown
+        )
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAttemptCreate {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daemon_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_epoch: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker_lease_id: Option<String>,
+    pub model_profile: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_route: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_pack_id: Option<String>,
+    pub at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAttemptRecord {
+    pub id: String,
+    pub node_id: String,
+    pub ordinal: i64,
+    pub state: AgentAttemptState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daemon_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_epoch: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker_lease_id: Option<String>,
+    pub model_profile: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_route: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_pack_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_claim: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verified_result: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub heartbeat_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAttemptTransition {
+    pub expected_graph_revision: i64,
+    pub expected_node_revision: i64,
+    pub state: AgentAttemptState,
+    pub at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_claim: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verified_result: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<serde_json::Value>,
+}
+
+impl SessionStore {
+    /// Reserve the next immutable attempt ordinal and move one queued node into
+    /// dispatching. The node revision fences concurrent scheduler admissions.
+    pub fn start_agent_attempt(
+        &mut self,
+        graph_id: &str,
+        node_id: &str,
+        expected_graph_revision: i64,
+        expected_node_revision: i64,
+        input: &AgentAttemptCreate,
+    ) -> Result<AgentGraphMutation<AgentAttemptRecord>, StoreError> {
+        validate_identifier("graphId", graph_id, "grf_")?;
+        validate_identifier("nodeId", node_id, "agt_")?;
+        validate_attempt_create(input)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let graph = require_graph(&tx, graph_id)?;
+        ensure_graph_revision(&graph, expected_graph_revision)?;
+        ensure_graph_mutable(&graph)?;
+        let node = require_node(&tx, node_id)?;
+        if node.graph_id != graph_id {
+            return Err(invalid("node belongs to a different graph"));
+        }
+        ensure_node_revision(&node, expected_node_revision)?;
+        if node.state != AgentNodeState::Queued || node.active_attempt_id.is_some() {
+            return Err(invalid("only an unleased queued node can start an attempt"));
+        }
+        if node.attempt_count >= node.max_attempts {
+            return Err(invalid("node maxAttempts is exhausted"));
+        }
+        let ordinal = node
+            .attempt_count
+            .checked_add(1)
+            .ok_or_else(|| invalid("attempt ordinal overflow"))?;
+        tx.execute(
+            "INSERT INTO agent_attempts (
+                id, node_id, ordinal, state, daemon_id, owner_epoch, worker_lease_id,
+                model_profile, provider_route, worktree_id, turn_id, context_pack_id,
+                result_claim_json, verified_result_json, error_json, usage_json,
+                started_at, heartbeat_at, finished_at
+             ) VALUES (
+                ?1, ?2, ?3, 'leased', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+                NULL, NULL, NULL, NULL, NULL, ?12, NULL
+             )",
+            params![
+                input.id,
+                node_id,
+                ordinal,
+                input.daemon_id,
+                input.owner_epoch,
+                input.worker_lease_id,
+                input.model_profile,
+                input.provider_route,
+                input.worktree_id,
+                input.turn_id,
+                input.context_pack_id,
+                input.at,
+            ],
+        )?;
+        let node_revision = node
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| invalid("agent node revision overflow"))?;
+        let changed = tx.execute(
+            "UPDATE agent_nodes
+             SET state = 'dispatching', active_attempt_id = ?2, attempt_count = ?3,
+                 revision = ?4, updated_at = ?5
+             WHERE id = ?1 AND revision = ?6",
+            params![
+                node_id,
+                input.id,
+                ordinal,
+                node_revision,
+                input.at,
+                node.revision
+            ],
+        )?;
+        if changed != 1 {
+            return Err(StoreError::AgentNodeRevisionConflict {
+                node_id: node_id.into(),
+                expected: expected_node_revision,
+                actual: agent_node_revision(&tx, node_id)?,
+            });
+        }
+        let graph = advance_graph(&tx, &graph, &input.at)?;
+        tx.commit()?;
+        Ok(AgentGraphMutation {
+            graph,
+            value: AgentAttemptRecord {
+                id: input.id.clone(),
+                node_id: node_id.into(),
+                ordinal,
+                state: AgentAttemptState::Leased,
+                daemon_id: input.daemon_id.clone(),
+                owner_epoch: input.owner_epoch,
+                worker_lease_id: input.worker_lease_id.clone(),
+                model_profile: input.model_profile.clone(),
+                provider_route: input.provider_route.clone(),
+                worktree_id: input.worktree_id.clone(),
+                turn_id: input.turn_id.clone(),
+                context_pack_id: input.context_pack_id.clone(),
+                result_claim: None,
+                verified_result: None,
+                error: None,
+                usage: None,
+                started_at: None,
+                heartbeat_at: Some(input.at.clone()),
+                finished_at: None,
+            },
+        })
+    }
+
+    pub fn agent_attempt(
+        &self,
+        attempt_id: &str,
+    ) -> Result<Option<AgentAttemptRecord>, StoreError> {
+        validate_identifier("attemptId", attempt_id, "att_")?;
+        self.conn
+            .query_row(
+                "SELECT id, node_id, ordinal, state, daemon_id, owner_epoch, worker_lease_id,
+                        model_profile, provider_route, worktree_id, turn_id, context_pack_id,
+                        result_claim_json, verified_result_json, error_json, usage_json,
+                        started_at, heartbeat_at, finished_at
+                 FROM agent_attempts WHERE id = ?1",
+                params![attempt_id],
+                read_attempt,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    pub fn agent_attempts_for_node(
+        &self,
+        node_id: &str,
+    ) -> Result<Vec<AgentAttemptRecord>, StoreError> {
+        validate_identifier("nodeId", node_id, "agt_")?;
+        let mut statement = self.conn.prepare(
+            "SELECT id, node_id, ordinal, state, daemon_id, owner_epoch, worker_lease_id,
+                    model_profile, provider_route, worktree_id, turn_id, context_pack_id,
+                    result_claim_json, verified_result_json, error_json, usage_json,
+                    started_at, heartbeat_at, finished_at
+             FROM agent_attempts WHERE node_id = ?1 ORDER BY ordinal ASC",
+        )?;
+        let rows = statement.query_map(params![node_id], read_attempt)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
+    /// Recovery reads leased/running attempts that have not heartbeat since the
+    /// supplied time. It does not mutate them: a coordinator must reconcile the
+    /// provider and then issue a revision-fenced transition.
+    pub fn stale_agent_attempts(&self, now: &str) -> Result<Vec<AgentAttemptRecord>, StoreError> {
+        validate_timestamp("now", now)?;
+        let mut statement = self.conn.prepare(
+            "SELECT id, node_id, ordinal, state, daemon_id, owner_epoch, worker_lease_id,
+                    model_profile, provider_route, worktree_id, turn_id, context_pack_id,
+                    result_claim_json, verified_result_json, error_json, usage_json,
+                    started_at, heartbeat_at, finished_at
+             FROM agent_attempts
+             WHERE state IN ('leased', 'running', 'waiting_tool', 'waiting_provider')
+               AND heartbeat_at IS NOT NULL AND heartbeat_at <= ?1
+             ORDER BY heartbeat_at ASC, id ASC",
+        )?;
+        let rows = statement.query_map(params![now], read_attempt)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+}
+
+impl SessionStore {
+    pub fn transition_agent_attempt(
+        &mut self,
+        graph_id: &str,
+        node_id: &str,
+        attempt_id: &str,
+        transition: &AgentAttemptTransition,
+    ) -> Result<AgentGraphMutation<AgentAttemptRecord>, StoreError> {
+        validate_identifier("graphId", graph_id, "grf_")?;
+        validate_identifier("nodeId", node_id, "agt_")?;
+        validate_identifier("attemptId", attempt_id, "att_")?;
+        validate_attempt_transition(transition)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let graph = require_graph(&tx, graph_id)?;
+        ensure_graph_revision(&graph, transition.expected_graph_revision)?;
+        let node = require_node(&tx, node_id)?;
+        if node.graph_id != graph_id || node.active_attempt_id.as_deref() != Some(attempt_id) {
+            return Err(invalid("attempt is not the active attempt for this node"));
+        }
+        ensure_node_revision(&node, transition.expected_node_revision)?;
+        let attempt = require_attempt(&tx, attempt_id)?;
+        if attempt.node_id != node_id {
+            return Err(invalid("attempt belongs to a different node"));
+        }
+        if !attempt_transition_allowed(attempt.state, transition.state) {
+            return Err(invalid(format!(
+                "invalid attempt state transition {} -> {}",
+                attempt.state.label(),
+                transition.state.label()
+            )));
+        }
+        let node_state = node_state_for_attempt(&node, transition.state)?;
+        let node_revision = node
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| invalid("agent node revision overflow"))?;
+        let started_at = if transition.state == AgentAttemptState::Running {
+            Some(
+                attempt
+                    .started_at
+                    .clone()
+                    .unwrap_or_else(|| transition.at.clone()),
+            )
+        } else {
+            attempt.started_at.clone()
+        };
+        let terminal = transition.state.is_terminal();
+        let finished_at = terminal.then(|| transition.at.clone());
+        tx.execute(
+            "UPDATE agent_attempts
+             SET state = ?2, result_claim_json = ?3, verified_result_json = ?4,
+                 error_json = ?5, usage_json = ?6, started_at = ?7, heartbeat_at = ?8,
+                 finished_at = ?9
+             WHERE id = ?1",
+            params![
+                attempt_id,
+                transition.state.label(),
+                transition
+                    .result_claim
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()?,
+                transition
+                    .verified_result
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()?,
+                transition
+                    .error
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()?,
+                transition
+                    .usage
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()?,
+                started_at,
+                transition.at,
+                finished_at,
+            ],
+        )?;
+        let node_terminal_at = node_state.is_terminal().then(|| transition.at.clone());
+        let node_result = if node_state == AgentNodeState::Completed {
+            transition
+                .verified_result
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()?
+        } else {
+            None
+        };
+        let changed = tx.execute(
+            "UPDATE agent_nodes
+             SET state = ?2, active_attempt_id = ?3, result_json = ?4,
+                 blocked_reason_json = NULL, revision = ?5, updated_at = ?6, terminal_at = ?7
+             WHERE id = ?1 AND revision = ?8",
+            params![
+                node_id,
+                node_state.label(),
+                if terminal { None } else { Some(attempt_id) },
+                node_result,
+                node_revision,
+                transition.at,
+                node_terminal_at,
+                node.revision,
+            ],
+        )?;
+        if changed != 1 {
+            return Err(StoreError::AgentNodeRevisionConflict {
+                node_id: node_id.into(),
+                expected: transition.expected_node_revision,
+                actual: agent_node_revision(&tx, node_id)?,
+            });
+        }
+        let graph = advance_graph(&tx, &graph, &transition.at)?;
+        tx.commit()?;
+        Ok(AgentGraphMutation {
+            graph,
+            value: AgentAttemptRecord {
+                id: attempt.id,
+                node_id: attempt.node_id,
+                ordinal: attempt.ordinal,
+                state: transition.state,
+                daemon_id: attempt.daemon_id,
+                owner_epoch: attempt.owner_epoch,
+                worker_lease_id: attempt.worker_lease_id,
+                model_profile: attempt.model_profile,
+                provider_route: attempt.provider_route,
+                worktree_id: attempt.worktree_id,
+                turn_id: attempt.turn_id,
+                context_pack_id: attempt.context_pack_id,
+                result_claim: transition.result_claim.clone(),
+                verified_result: transition.verified_result.clone(),
+                error: transition.error.clone(),
+                usage: transition.usage.clone(),
+                started_at,
+                heartbeat_at: Some(transition.at.clone()),
+                finished_at,
+            },
+        })
+    }
+}
+
+fn validate_attempt_create(input: &AgentAttemptCreate) -> Result<(), StoreError> {
+    validate_identifier("attemptId", &input.id, "att_")?;
+    validate_bounded_text("modelProfile", &input.model_profile, 256)?;
+    validate_timestamp("at", &input.at)?;
+    match (&input.daemon_id, input.owner_epoch) {
+        (Some(daemon_id), Some(epoch)) => {
+            validate_bounded_text("daemonId", daemon_id, MAX_GRAPH_IDENTIFIER_BYTES)?;
+            if epoch < 1 {
+                return Err(invalid("ownerEpoch must be positive"));
+            }
+        }
+        (None, None) => {}
+        _ => return Err(invalid("daemonId and ownerEpoch must be supplied together")),
+    }
+    for (field, value) in [
+        ("workerLeaseId", input.worker_lease_id.as_deref()),
+        ("providerRoute", input.provider_route.as_deref()),
+        ("turnId", input.turn_id.as_deref()),
+        ("contextPackId", input.context_pack_id.as_deref()),
+    ] {
+        if let Some(value) = value {
+            validate_bounded_text(field, value, MAX_GRAPH_IDENTIFIER_BYTES)?;
+        }
+    }
+    if let Some(worktree_id) = &input.worktree_id {
+        validate_identifier("worktreeId", worktree_id, "wt_")?;
+    }
+    Ok(())
+}
+
+fn validate_attempt_transition(transition: &AgentAttemptTransition) -> Result<(), StoreError> {
+    if transition.expected_graph_revision < 1 || transition.expected_node_revision < 1 {
+        return Err(invalid(
+            "expected graph and node revisions must be positive",
+        ));
+    }
+    validate_timestamp("at", &transition.at)?;
+    for (field, value) in [
+        ("resultClaim", transition.result_claim.as_ref()),
+        ("verifiedResult", transition.verified_result.as_ref()),
+        ("error", transition.error.as_ref()),
+        ("usage", transition.usage.as_ref()),
+    ] {
+        if let Some(value) = value {
+            validate_json_object(field, value)?;
+        }
+    }
+    if !transition.state.is_terminal()
+        && (transition.result_claim.is_some()
+            || transition.verified_result.is_some()
+            || transition.error.is_some())
+    {
+        return Err(invalid(
+            "non-terminal attempt transition cannot set result or error payload",
+        ));
+    }
+    if transition.state == AgentAttemptState::Completed && transition.error.is_some() {
+        return Err(invalid("completed attempt cannot carry an error payload"));
+    }
+    if transition.state == AgentAttemptState::Failed && transition.verified_result.is_some() {
+        return Err(invalid("failed attempt cannot carry verifiedResult"));
+    }
+    Ok(())
+}
+
+fn require_attempt(
+    tx: &rusqlite::Transaction<'_>,
+    attempt_id: &str,
+) -> Result<AgentAttemptRecord, StoreError> {
+    tx.query_row(
+        "SELECT id, node_id, ordinal, state, daemon_id, owner_epoch, worker_lease_id,
+                model_profile, provider_route, worktree_id, turn_id, context_pack_id,
+                result_claim_json, verified_result_json, error_json, usage_json,
+                started_at, heartbeat_at, finished_at
+         FROM agent_attempts WHERE id = ?1",
+        params![attempt_id],
+        read_attempt,
+    )
+    .optional()?
+    .ok_or_else(|| StoreError::NotFound {
+        what: format!("agent attempt {attempt_id}"),
+    })
+}
+
+fn attempt_transition_allowed(from: AgentAttemptState, to: AgentAttemptState) -> bool {
+    use AgentAttemptState as State;
+    match from {
+        State::Created => matches!(to, State::Leased | State::Cancelled),
+        State::Leased => matches!(
+            to,
+            State::Running | State::Failed | State::Cancelled | State::Interrupted | State::Unknown
+        ),
+        State::Running => matches!(
+            to,
+            State::WaitingTool
+                | State::WaitingProvider
+                | State::Completed
+                | State::Failed
+                | State::Cancelled
+                | State::Interrupted
+                | State::Unknown
+        ),
+        State::WaitingTool | State::WaitingProvider => matches!(
+            to,
+            State::Running
+                | State::Completed
+                | State::Failed
+                | State::Cancelled
+                | State::Interrupted
+                | State::Unknown
+        ),
+        State::Completed
+        | State::Failed
+        | State::Cancelled
+        | State::Interrupted
+        | State::Unknown => false,
+    }
+}
+
+fn node_state_for_attempt(
+    node: &AgentNodeRecord,
+    attempt_state: AgentAttemptState,
+) -> Result<AgentNodeState, StoreError> {
+    match attempt_state {
+        AgentAttemptState::Running => {
+            if !matches!(
+                node.state,
+                AgentNodeState::Dispatching | AgentNodeState::Running
+            ) {
+                return Err(invalid(
+                    "attempt can run only from a dispatching or running node",
+                ));
+            }
+            Ok(AgentNodeState::Running)
+        }
+        AgentAttemptState::WaitingTool | AgentAttemptState::WaitingProvider => {
+            if node.state != AgentNodeState::Running {
+                return Err(invalid("attempt can wait only while its node is running"));
+            }
+            Ok(AgentNodeState::Running)
+        }
+        AgentAttemptState::Completed => {
+            if node.state != AgentNodeState::Running {
+                return Err(invalid(
+                    "attempt can complete only while its node is running",
+                ));
+            }
+            Ok(AgentNodeState::Completed)
+        }
+        AgentAttemptState::Failed => match node.state {
+            AgentNodeState::Dispatching | AgentNodeState::Running => Ok(AgentNodeState::Failed),
+            _ => Err(invalid("attempt cannot fail from the current node state")),
+        },
+        AgentAttemptState::Cancelled => {
+            if node.state.is_terminal() {
+                return Err(invalid("terminal node cannot be cancelled again"));
+            }
+            Ok(AgentNodeState::Cancelled)
+        }
+        AgentAttemptState::Interrupted | AgentAttemptState::Unknown => match node.state {
+            AgentNodeState::Dispatching | AgentNodeState::Running => {
+                Ok(AgentNodeState::Reconciling)
+            }
+            _ => Err(invalid(
+                "attempt cannot reconcile from the current node state",
+            )),
+        },
+        AgentAttemptState::Created | AgentAttemptState::Leased => Err(invalid(
+            "attempt cannot transition back to created or leased",
+        )),
+    }
+}
+
+fn read_attempt(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentAttemptRecord> {
+    let raw_state: String = row.get(3)?;
+    let state = AgentAttemptState::parse(&raw_state).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(error))
+    })?;
+    Ok(AgentAttemptRecord {
+        id: row.get(0)?,
+        node_id: row.get(1)?,
+        ordinal: row.get(2)?,
+        state,
+        daemon_id: row.get(4)?,
+        owner_epoch: row.get(5)?,
+        worker_lease_id: row.get(6)?,
+        model_profile: row.get(7)?,
+        provider_route: row.get(8)?,
+        worktree_id: row.get(9)?,
+        turn_id: row.get(10)?,
+        context_pack_id: row.get(11)?,
+        result_claim: optional_json_column(row.get(12)?, 12)?,
+        verified_result: optional_json_column(row.get(13)?, 13)?,
+        error: optional_json_column(row.get(14)?, 14)?,
+        usage: optional_json_column(row.get(15)?, 15)?,
+        started_at: row.get(16)?,
+        heartbeat_at: row.get(17)?,
+        finished_at: row.get(18)?,
+    })
+}

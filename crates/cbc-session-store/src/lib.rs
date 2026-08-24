@@ -30,6 +30,7 @@ pub use daemon::{
     DaemonInstanceRecord, DaemonState, SessionOwnerClaim, SessionOwnerLease, SessionOwnerRecord,
 };
 pub use graph::{
+    AgentAttemptCreate, AgentAttemptRecord, AgentAttemptState, AgentAttemptTransition,
     AgentEdgeCreate, AgentEdgeKind, AgentEdgeRecord, AgentGraphCreate, AgentGraphMutation,
     AgentGraphRecord, AgentGraphState, AgentNodeCreate, AgentNodeRecord, AgentNodeState,
     AgentNodeTransition, GraphStateTransition, MAX_AGENT_GRAPH_DEPTH, MAX_AGENT_GRAPH_NODES,

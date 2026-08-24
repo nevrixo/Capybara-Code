@@ -1,6 +1,7 @@
 use cbc_session_store::{
-    new_manifest, AgentEdgeCreate, AgentEdgeKind, AgentGraphCreate, AgentNodeCreate,
-    AgentNodeState, AgentNodeTransition, SessionStore, StoreError,
+    new_manifest, AgentAttemptCreate, AgentAttemptState, AgentAttemptTransition, AgentEdgeCreate,
+    AgentEdgeKind, AgentGraphCreate, AgentNodeCreate, AgentNodeState, AgentNodeTransition,
+    SessionStore, StoreError,
 };
 use serde_json::json;
 
@@ -262,4 +263,239 @@ fn graph_cannot_be_bound_to_another_workspace_than_its_session() {
         .expect_err("cross-workspace graph is unsafe");
     assert!(matches!(err, StoreError::InvalidAgentGraph { .. }));
     assert!(store.agent_graph("grf_test").expect("query").is_none());
+}
+#[test]
+fn attempt_lifecycle_is_durable_and_fences_late_worker_transitions() {
+    let mut store = store();
+    let created = store.create_agent_graph(&graph(2)).expect("create graph");
+    let queued = store
+        .transition_agent_node(
+            "grf_test",
+            "agt_root",
+            &AgentNodeTransition {
+                expected_graph_revision: created.graph.revision,
+                expected_node_revision: created.value.revision,
+                state: AgentNodeState::Queued,
+                at: T1.into(),
+                result: None,
+                blocked_reason: None,
+            },
+        )
+        .expect("queue node");
+
+    let leased = store
+        .start_agent_attempt(
+            "grf_test",
+            "agt_root",
+            queued.graph.revision,
+            queued.value.revision,
+            &AgentAttemptCreate {
+                id: "att_root_1".into(),
+                daemon_id: Some("daemon_a".into()),
+                owner_epoch: Some(1),
+                worker_lease_id: Some("lease_a".into()),
+                model_profile: "auto".into(),
+                provider_route: Some("primary".into()),
+                worktree_id: None,
+                turn_id: Some("turn_1".into()),
+                context_pack_id: None,
+                at: T1.into(),
+            },
+        )
+        .expect("lease attempt");
+    assert_eq!(leased.value.ordinal, 1);
+    assert_eq!(leased.value.state, AgentAttemptState::Leased);
+    assert_eq!(
+        store.stale_agent_attempts(T2).expect("stale lookup").len(),
+        1
+    );
+
+    let running = store
+        .transition_agent_attempt(
+            "grf_test",
+            "agt_root",
+            "att_root_1",
+            &AgentAttemptTransition {
+                expected_graph_revision: leased.graph.revision,
+                expected_node_revision: 3,
+                state: AgentAttemptState::Running,
+                at: T2.into(),
+                result_claim: None,
+                verified_result: None,
+                error: None,
+                usage: None,
+            },
+        )
+        .expect("start running");
+    assert_eq!(running.value.state, AgentAttemptState::Running);
+
+    let waiting = store
+        .transition_agent_attempt(
+            "grf_test",
+            "agt_root",
+            "att_root_1",
+            &AgentAttemptTransition {
+                expected_graph_revision: running.graph.revision,
+                expected_node_revision: 4,
+                state: AgentAttemptState::WaitingTool,
+                at: T3.into(),
+                result_claim: None,
+                verified_result: None,
+                error: None,
+                usage: Some(json!({ "inputTokens": 10 })),
+            },
+        )
+        .expect("wait tool");
+    assert_eq!(waiting.value.state, AgentAttemptState::WaitingTool);
+
+    let resumed = store
+        .transition_agent_attempt(
+            "grf_test",
+            "agt_root",
+            "att_root_1",
+            &AgentAttemptTransition {
+                expected_graph_revision: waiting.graph.revision,
+                expected_node_revision: 5,
+                state: AgentAttemptState::Running,
+                at: T4.into(),
+                result_claim: None,
+                verified_result: None,
+                error: None,
+                usage: None,
+            },
+        )
+        .expect("resume");
+
+    let completed = store
+        .transition_agent_attempt(
+            "grf_test",
+            "agt_root",
+            "att_root_1",
+            &AgentAttemptTransition {
+                expected_graph_revision: resumed.graph.revision,
+                expected_node_revision: 6,
+                state: AgentAttemptState::Completed,
+                at: "2026-08-25T00:00:05.000Z".into(),
+                result_claim: Some(json!({ "summary": "done" })),
+                verified_result: Some(json!({ "verified": true })),
+                error: None,
+                usage: Some(json!({ "outputTokens": 20 })),
+            },
+        )
+        .expect("complete");
+    assert_eq!(completed.value.state, AgentAttemptState::Completed);
+    assert!(completed.value.finished_at.is_some());
+    assert!(store
+        .stale_agent_attempts("2026-08-25T00:00:06.000Z")
+        .expect("stale")
+        .is_empty());
+
+    let node = store
+        .agent_node("agt_root")
+        .expect("node")
+        .expect("present");
+    assert_eq!(node.state, AgentNodeState::Completed);
+    assert_eq!(node.active_attempt_id, None);
+    assert_eq!(node.attempt_count, 1);
+}
+#[test]
+fn retry_creates_a_new_attempt_ordinal_without_overwriting_failure_history() {
+    let mut store = store();
+    let created = store.create_agent_graph(&graph(2)).expect("create");
+    let queued = store
+        .transition_agent_node(
+            "grf_test",
+            "agt_root",
+            &AgentNodeTransition {
+                expected_graph_revision: 1,
+                expected_node_revision: 1,
+                state: AgentNodeState::Queued,
+                at: T1.into(),
+                result: None,
+                blocked_reason: None,
+            },
+        )
+        .expect("queue");
+    let first = store
+        .start_agent_attempt(
+            "grf_test",
+            "agt_root",
+            queued.graph.revision,
+            queued.value.revision,
+            &AgentAttemptCreate {
+                id: "att_root_1".into(),
+                daemon_id: Some("daemon_a".into()),
+                owner_epoch: Some(1),
+                worker_lease_id: None,
+                model_profile: "auto".into(),
+                provider_route: None,
+                worktree_id: None,
+                turn_id: None,
+                context_pack_id: None,
+                at: T1.into(),
+            },
+        )
+        .expect("first attempt");
+    let failed = store
+        .transition_agent_attempt(
+            "grf_test",
+            "agt_root",
+            "att_root_1",
+            &AgentAttemptTransition {
+                expected_graph_revision: first.graph.revision,
+                expected_node_revision: 3,
+                state: AgentAttemptState::Failed,
+                at: T2.into(),
+                result_claim: None,
+                verified_result: None,
+                error: Some(json!({ "code": "provider_failed" })),
+                usage: None,
+            },
+        )
+        .expect("fail first attempt");
+    let revived = store
+        .transition_agent_node(
+            "grf_test",
+            "agt_root",
+            &AgentNodeTransition {
+                expected_graph_revision: failed.graph.revision,
+                expected_node_revision: 4,
+                state: AgentNodeState::Queued,
+                at: T3.into(),
+                result: None,
+                blocked_reason: None,
+            },
+        )
+        .expect("revive node");
+    let second = store
+        .start_agent_attempt(
+            "grf_test",
+            "agt_root",
+            revived.graph.revision,
+            revived.value.revision,
+            &AgentAttemptCreate {
+                id: "att_root_2".into(),
+                daemon_id: Some("daemon_b".into()),
+                owner_epoch: Some(2),
+                worker_lease_id: None,
+                model_profile: "fallback".into(),
+                provider_route: None,
+                worktree_id: None,
+                turn_id: None,
+                context_pack_id: None,
+                at: T4.into(),
+            },
+        )
+        .expect("second attempt");
+    assert_eq!(second.value.ordinal, 2);
+
+    let attempts = store.agent_attempts_for_node("agt_root").expect("history");
+    assert_eq!(attempts.len(), 2);
+    assert_eq!(attempts[0].state, AgentAttemptState::Failed);
+    assert_eq!(attempts[1].state, AgentAttemptState::Leased);
+    assert_eq!(
+        attempts[0].error,
+        Some(json!({ "code": "provider_failed" }))
+    );
+    assert_eq!(created.graph.id, "grf_test");
 }
