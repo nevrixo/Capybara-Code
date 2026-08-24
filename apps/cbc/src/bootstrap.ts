@@ -406,6 +406,39 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
     sessionId,
     workspaceRoot: context.workspacePath,
     workspaceTrusted: trust === "trusted-always" || trust === "trusted-once",
+    // Runtime-backed LSP edit snapshots are configured below.
+    enabled: effective.experimental.fullLsp && effective.lsp.enabled,
+    workspaceIdentityDigest: () => runtime.workspaceId,
+    allowRenamePreview:
+      effective.experimental.editEngineV2 && effective.lsp.mutations.rename,
+    maxEditOperations: effective.edit.maxOperationsPerPlan,
+    maxEditPaths: effective.lsp.mutations.maxFiles,
+    maxPendingRequests: effective.lsp.maxPendingRequestsPerServer,
+    readEditDocument: async (path) => {
+      const response = await runtime.read({
+        path,
+        mode: "exact",
+        maxLines: 5_000,
+        maxBytes: effective.edit.maxFileBytes,
+      });
+      if (
+        response.mode !== "exact" ||
+        !response.authoritativeForWrite ||
+        response.binary === true ||
+        response.path !== path ||
+        response.revisionToken.trim().length === 0 ||
+        response.excerpt.startLine !== 1 ||
+        !response.excerpt.endOfFile ||
+        response.excerpt.truncatedByBytes
+      ) {
+        return undefined;
+      }
+      return {
+        path: response.path,
+        text: response.excerpt.text,
+        revision: response.revisionToken,
+      };
+    },
     readFile: async (path) => {
       const parts = path.split("/");
       if (parts.some((part) => part.length === 0 || part === "." || part === "..")) {

@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 
 import { preflightEditPlan, textDigest } from "@cbc/edit-domain";
 
-import { buildLspEditPlan, LspEditDomainError } from "../src/index.ts";
+import { buildLspEditPlan, collectLspWorkspaceEditPaths, LspEditDomainError } from "../src/index.ts";
 
 const workspaceRoot = process.platform === "win32" ? "C:\\lsp-workspace" : "/lsp-workspace";
 
@@ -80,6 +80,21 @@ describe("buildLspEditPlan", () => {
       expect.objectContaining({ kind: "delete_file", path: "src/c.ts", expectedRevision: "sha256:c" }),
       expect.objectContaining({ kind: "create_file", path: "src/d.ts", content: "" }),
     ]);
+  });
+
+  test("collects deterministic source and destination paths before snapshot reads", () => {
+    const paths = collectLspWorkspaceEditPaths({
+      changes: {
+        [workspaceUri("src/z.ts")]: [],
+      },
+      documentChanges: [
+        { kind: "rename", oldUri: workspaceUri("src/a.ts"), newUri: workspaceUri("src/b.ts") },
+        { kind: "create", uri: workspaceUri("src/new.ts") },
+        { kind: "delete", uri: workspaceUri("src/z.ts") },
+      ],
+    }, workspaceRoot);
+
+    expect(paths).toEqual(["src/a.ts", "src/b.ts", "src/new.ts", "src/z.ts"]);
   });
 
   test("rejects URIs outside the workspace and text edits without an exact snapshot", () => {

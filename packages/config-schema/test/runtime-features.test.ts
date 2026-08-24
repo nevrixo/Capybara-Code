@@ -22,14 +22,21 @@ describe("durable runtime configuration gates", () => {
     expect(config.appServer.allowLoopbackWebsocket).toBe(false);
   });
 
-  test("accepts a user-owned feature gate while making its rollout state visible", () => {
-    const merged = mergeConfig([{ source: "user", values: { "experimental.editEngineV2": true } }]);
+  test("applies wired user-owned feature gates without a false rollout warning", () => {
+    const merged = mergeConfig([{
+      source: "user",
+      values: {
+        "experimental.editEngineV2": true,
+        "experimental.fullLsp": true,
+      },
+    }]);
     expect(merged.config.experimental.editEngineV2).toBe(true);
-    expect(merged.issues).toContainEqual(expect.objectContaining({
-      path: "experimental.editEngineV2",
-      severity: "warning",
-    }));
-    expect(configKeyInfo("experimental.editEngineV2")?.status).toBe("experimental");
+    expect(merged.config.experimental.fullLsp).toBe(true);
+    expect(merged.issues.some((issue) =>
+      issue.path === "experimental.editEngineV2" || issue.path === "experimental.fullLsp",
+    )).toBe(false);
+    expect(configKeyInfo("experimental.editEngineV2")?.status).toBe("wired");
+    expect(configKeyInfo("experimental.fullLsp")?.status).toBe("wired");
   });
 
   test("rejects invalid constrained settings and fixed safety-boundary values", () => {

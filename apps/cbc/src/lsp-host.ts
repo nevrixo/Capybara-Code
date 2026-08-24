@@ -7,10 +7,17 @@
  */
 
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import type { LspServerConfig } from "@cbc/config-schema";
+import {
+  buildLspEditPlan,
+  collectLspWorkspaceEditPaths,
+  type LspEditDocument,
+  type LspEditPlanResult,
+  type LspWorkspaceEdit,
+} from "@cbc/lsp-domain";
 import type {
   RepoFile,
   RepositoryIntelligence,
@@ -64,6 +71,7 @@ const MAX_LSP_DOCUMENTS_PER_LANGUAGE = 64;
 const MAX_LSP_DOCUMENT_BYTES = 1_000_000;
 const MAX_LSP_SYMBOLS_PER_DOCUMENT = 512;
 const MAX_LSP_PARALLEL_REQUESTS = 4;
+const DEFAULT_MAX_LSP_PENDING_REQUESTS = 64;
 const MAX_LSP_HEADER_BYTES = 16 * 1024;
 const MAX_LSP_FRAME_BYTES = 1_024 * 1_024;
 const MAX_LSP_TOTAL_OUTPUT_BYTES = 32 * 1_024 * 1_024;
@@ -100,6 +108,33 @@ interface IndexedDocument {
   readonly failed: boolean;
 }
 
+/** A zero-based UTF-16 text location, matching the LSP wire protocol. */
+export interface LspTextDocumentPosition {
+  readonly path: string;
+  readonly line: number;
+  readonly character: number;
+}
+
+export interface LspReferencesRequest extends LspTextDocumentPosition {
+  readonly includeDeclaration?: boolean;
+}
+
+export interface LspRenameRequest extends LspTextDocumentPosition {
+  readonly newName: string;
+}
+
+export interface LspQueryResult {
+  readonly server: string;
+  readonly result: unknown;
+}
+
+/** A semantic rename proposal. Applying it still requires the fs.edit authority path. */
+export interface LspRenamePreview {
+  readonly server: string;
+  readonly workspaceEdit: LspWorkspaceEdit;
+  readonly edit: LspEditPlanResult;
+}
+
 export interface LspHostOptions {
   readonly runtime: LspRuntime;
   /** The complete server catalog from the one global configuration file. */
@@ -108,12 +143,29 @@ export interface LspHostOptions {
   readonly workspaceRoot: string;
   /** Starting an external language server is never allowed for untrusted code. */
   readonly workspaceTrusted: boolean;
+  /** Explicit rollout gate; omitted for backwards-compatible direct host use. */
+  readonly enabled?: boolean;
+  /** Exact runtime workspace identity required for semantic edit proposals. */
+  readonly workspaceIdentityDigest?: () => string | undefined;
   /** Reads the current interaction mode. A thrown observer fails closed to Plan. */
   readonly isBuildMode?: () => boolean;
   /** Testable executable lookup. The default uses Bun's PATH-aware resolver. */
   readonly resolveExecutable?: (command: string) => string | undefined;
   /** Trusted workspace reader used to open a bounded document for an LSP request. */
   readonly readFile?: (path: string) => Promise<string | undefined>;
+  /**
+   * Obtains a complete, runtime-authoritative document snapshot for an edit
+   * proposal. It must never use the host filesystem directly.
+   */
+  readonly readEditDocument?: (path: string) => Promise<LspEditDocument | undefined>;
+  /** Semantic rename remains unavailable until both LSP and edit rollouts allow it. */
+  readonly allowRenamePreview?: boolean;
+  /** Mirrors the configured structured-edit operation ceiling. */
+  readonly maxEditOperations?: number;
+  /** Upper bound on runtime document snapshots acquired for one LSP proposal. */
+  readonly maxEditPaths?: number;
+  /** Upper bound on unresolved JSON-RPC requests for one server process. */
+  readonly maxPendingRequests?: number;
   /** Called whenever a sidebar-visible service state changes. */
   readonly onStatus?: (servers: readonly SidebarService[]) => void;
 }
@@ -149,7 +201,13 @@ export class LspHost {
     for (const descriptor of this.#servers) {
       this.#services.set(descriptor.name, {
         descriptor,
-        status: !descriptor.enabled
+        status: options.enabled === false
+          ? {
+              name: descriptor.name,
+              state: "disabled",
+              detail: "disabled by experimental.fullLsp",
+            }
+          : !descriptor.enabled
           ? {
               name: descriptor.name,
               state: "disabled",
@@ -175,6 +233,48 @@ export class LspHost {
     return [...this.#services.values()]
       .map((service) => service.status)
       .sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  /** Request semantic definitions without granting filesystem authority. */
+  async definition(input: LspTextDocumentPosition): Promise<LspQueryResult> {
+    return await this.#positionQuery("textDocument/definition", input);
+  }
+
+  async references(input: LspReferencesRequest): Promise<LspQueryResult> {
+    return await this.#positionQuery(
+      "textDocument/references",
+      input,
+      { context: { includeDeclaration: input.includeDeclaration ?? true } },
+    );
+  }
+
+  async hover(input: LspTextDocumentPosition): Promise<LspQueryResult> {
+    return await this.#positionQuery("textDocument/hover", input);
+  }
+
+  /**
+   * Turn a server-produced WorkspaceEdit into a revision-bound proposal. This
+   * never applies the result; callers must route the returned plan to fs.edit.
+   */
+  async renamePreview(input: LspRenameRequest): Promise<LspRenamePreview> {
+    if (this.#options.allowRenamePreview === false) {
+      throw new Error("LSP rename preview is disabled by configuration");
+    }
+    if (input.newName.trim().length === 0 || Buffer.byteLength(input.newName, "utf8") > 1_024) {
+      throw new Error("LSP rename requires a non-empty name up to 1024 UTF-8 bytes");
+    }
+    const query = await this.#positionQuery(
+      "textDocument/rename",
+      input,
+      { newName: input.newName },
+    );
+    const workspaceEdit = lspWorkspaceEdit(query.result);
+    const edit = await this.#toEditPlan(workspaceEdit);
+    return {
+      server: query.server,
+      workspaceEdit,
+      edit,
+    };
   }
 
   /**
@@ -218,7 +318,11 @@ export class LspHost {
     this.#generation += 1;
     await Promise.all([...this.#processes.values()].map((process) => this.#stop(process)));
     for (const service of this.#services.values()) {
-      this.#setStatus(service.descriptor.name, "disabled", "paused in Plan mode");
+      this.#setStatus(
+        service.descriptor.name,
+        "disabled",
+        this.#options.enabled === false ? "disabled by experimental.fullLsp" : "paused in Plan mode",
+      );
     }
   }
 
@@ -232,12 +336,132 @@ export class LspHost {
     }
   }
 
+  async #positionQuery(
+    method:
+      | "textDocument/definition"
+      | "textDocument/references"
+      | "textDocument/hover"
+      | "textDocument/rename",
+    input: LspTextDocumentPosition,
+    extra: Readonly<Record<string, unknown>> = {},
+  ): Promise<LspQueryResult> {
+    assertLspPosition(input);
+    const uri = workspaceFileUri(this.#options.workspaceRoot, input.path);
+    const descriptor = this.#descriptorForPath(input.path);
+    const process = await this.#startForQuery(descriptor);
+    const result = await this.#withOpenedDocument(
+      process,
+      descriptor,
+      input.path,
+      uri,
+      async (openedUri) =>
+        await this.#request(
+          process,
+          method,
+          {
+            ...extra,
+            textDocument: { uri: openedUri },
+            position: { line: input.line, character: input.character },
+          },
+          descriptor.timeoutMs,
+        ),
+    );
+    this.#setStatus(descriptor.name, "ready", "semantic query ready");
+    return { server: descriptor.name, result };
+  }
+
+  #descriptorForPath(path: string): LspServerDescriptor {
+    if (!this.#mayStart()) {
+      throw new Error(this.#unavailableDetail());
+    }
+    const normalized = path.toLowerCase();
+    const descriptor = this.#servers.find(
+      (candidate) =>
+        candidate.extensions.some((extension) => normalized.endsWith(extension.toLowerCase())),
+    );
+    if (descriptor === undefined) {
+      throw new Error("no configured language server supports " + path);
+    }
+    if (!descriptor.enabled) {
+      throw new Error("language server is disabled by global config");
+    }
+    return descriptor;
+  }
+
+  #unavailableDetail(): string {
+    if (this.#options.enabled === false) return "LSP is disabled by experimental.fullLsp";
+    if (!this.#options.workspaceTrusted) return "LSP is unavailable in an untrusted workspace";
+    if (this.#closed) return "LSP session is closed";
+    return "LSP queries require trusted Build mode";
+  }
+
+  async #startForQuery(descriptor: LspServerDescriptor): Promise<LspProcess> {
+    const executable = (this.#options.resolveExecutable ?? resolveLspExecutable)(descriptor.command);
+    if (executable === undefined) {
+      this.#setStatus(descriptor.name, "down", "not installed; " + descriptor.installHint);
+      throw new Error("language server executable is unavailable");
+    }
+    this.#setStatus(descriptor.name, "starting", "starting " + descriptor.command);
+    try {
+      return await this.#ensureProcess(descriptor);
+    } catch (error) {
+      if (!this.#closed) {
+        this.#setStatus(descriptor.name, "down", "language server unavailable");
+      }
+      throw error;
+    }
+  }
+
+  async #toEditPlan(workspaceEdit: LspWorkspaceEdit): Promise<LspEditPlanResult> {
+    let workspaceIdentityDigest: string | undefined = undefined;
+    try {
+      workspaceIdentityDigest = this.#options.workspaceIdentityDigest?.();
+    } catch {
+      throw new Error("runtime workspace identity is unavailable");
+    }
+    if (typeof workspaceIdentityDigest !== "string" || workspaceIdentityDigest.trim().length === 0) {
+      throw new Error("LSP edit preview requires a runtime workspace identity");
+    }
+    const readEditDocument = this.#options.readEditDocument;
+    if (readEditDocument === undefined) {
+      throw new Error("LSP edit preview requires runtime exact document snapshots");
+    }
+
+    const paths = collectLspWorkspaceEditPaths(workspaceEdit, this.#options.workspaceRoot);
+    const maxPaths = this.#options.maxEditPaths ?? this.#options.maxEditOperations ?? 100;
+    if (!Number.isSafeInteger(maxPaths) || maxPaths < 1 || paths.length > maxPaths) {
+      throw new Error("LSP edit preview exceeds the configured document limit");
+    }
+    const documents: LspEditDocument[] = [];
+    for (const path of paths) {
+      const document = await readEditDocument(path);
+      if (document === undefined) continue;
+      if (document.path !== path) {
+        throw new Error("runtime edit snapshot path did not match " + path);
+      }
+      documents.push(document);
+    }
+    return buildLspEditPlan(workspaceEdit, {
+      workspaceRoot: this.#options.workspaceRoot,
+      workspaceIdentityDigest,
+      sessionId: this.#options.sessionId,
+      documents,
+      ...(this.#options.maxEditOperations === undefined
+        ? {}
+        : { maxOperations: this.#options.maxEditOperations }),
+    });
+  }
+
   async #indexLanguage(
     descriptor: LspServerDescriptor,
     files: readonly RepoFile[],
     intelligence: RepositoryIntelligence,
     generation: number,
   ): Promise<void> {
+    if (this.#options.enabled === false) {
+      this.#setStatus(descriptor.name, "disabled", "disabled by experimental.fullLsp");
+      return;
+    }
     if (!descriptor.enabled) {
       this.#setStatus(descriptor.name, "disabled", "disabled by global config");
       return;
@@ -326,7 +550,7 @@ export class LspHost {
   }
 
   #mayStart(): boolean {
-    if (!this.#options.workspaceTrusted || this.#closed || this.#paused) return false;
+    if (this.#options.enabled === false || !this.#options.workspaceTrusted || this.#closed || this.#paused) return false;
     try {
       return this.#options.isBuildMode?.() !== false;
     } catch {
@@ -455,9 +679,31 @@ export class LspHost {
     file: RepoFile,
   ): Promise<unknown> {
     const uri = workspaceFileUri(this.#options.workspaceRoot, file.path);
+    return await this.#withOpenedDocument(
+      process,
+      descriptor,
+      file.path,
+      uri,
+      async (openedUri) =>
+        await this.#request(
+          process,
+          "textDocument/documentSymbol",
+          { textDocument: { uri: openedUri } },
+          descriptor.timeoutMs,
+        ),
+    );
+  }
+
+  async #withOpenedDocument<T>(
+    process: LspProcess,
+    descriptor: LspServerDescriptor,
+    path: string,
+    uri: string,
+    request: (uri: string) => Promise<T>,
+  ): Promise<T> {
     let text: string | undefined;
     try {
-      text = await this.#options.readFile?.(file.path);
+      text = await this.#options.readFile?.(path);
     } catch {
       // A read failure should not prevent a workspace-aware server from loading
       // the same file directly from its sandboxed root.
@@ -476,9 +722,7 @@ export class LspHost {
       });
     }
     try {
-      return await this.#request(process, "textDocument/documentSymbol", {
-        textDocument: { uri },
-      }, descriptor.timeoutMs);
+      return await request(uri);
     } finally {
       if (opened) {
         await this.#notify(process, "textDocument/didClose", {
@@ -496,6 +740,10 @@ export class LspHost {
   ): Promise<unknown> {
     if (process.jobId === undefined || process.stopped) {
       throw new Error("LSP server is not running");
+    }
+    const maxPending = this.#options.maxPendingRequests ?? DEFAULT_MAX_LSP_PENDING_REQUESTS;
+    if (!Number.isSafeInteger(maxPending) || maxPending < 1 || process.pending.size >= maxPending) {
+      throw new Error("language server has too many pending requests");
     }
     const id = process.nextRequestId;
     process.nextRequestId += 1;
@@ -726,9 +974,37 @@ function isLspCandidate(file: RepoFile, descriptor: LspServerDescriptor): boolea
   return descriptor.extensions.some((extension) => path.endsWith(extension));
 }
 
+function assertLspPosition(input: LspTextDocumentPosition): void {
+  if (typeof input.path !== "string" || input.path.length === 0) {
+    throw new Error("LSP query requires a workspace-relative path");
+  }
+  if (
+    !Number.isSafeInteger(input.line) ||
+    !Number.isSafeInteger(input.character) ||
+    input.line < 0 ||
+    input.character < 0
+  ) {
+    throw new Error("LSP positions must be zero-based non-negative integers");
+  }
+}
+
+function lspWorkspaceEdit(value: unknown): LspWorkspaceEdit {
+  const record = asRecord(value);
+  if (record === undefined || (record.changes === undefined && record.documentChanges === undefined)) {
+    throw new Error("language server did not return a WorkspaceEdit");
+  }
+  return record as LspWorkspaceEdit;
+}
+
 function workspaceFileUri(workspaceRoot: string, path: string): string {
   const parts = path.split("/");
-  if (parts.some((part) => part.length === 0 || part === "." || part === "..")) {
+  if (
+    path.startsWith("/") ||
+    path.includes("\\") ||
+    isAbsolute(path) ||
+    /^[a-z]:/i.test(path) ||
+    parts.some((part) => part.length === 0 || part === "." || part === "..")
+  ) {
     throw new Error("LSP path must remain workspace-relative");
   }
   return pathToFileURL(join(workspaceRoot, ...parts)).href;

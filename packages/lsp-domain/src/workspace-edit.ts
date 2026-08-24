@@ -55,7 +55,7 @@ export function buildLspEditPlan(
     (`edo_lsp_${planId.slice(4, 24)}_${operations.length.toString(36)}`) as EditOperationId;
 
   const addTextEdits = (uri: string, edits: readonly LspTextEdit[]): void => {
-    const path = workspacePathFromUri(uri, options.workspaceRoot);
+    const path = workspacePathFromLspUri(uri, options.workspaceRoot);
     const document = requiredDocument(documents, path);
     paths.add(path);
     if (!Array.isArray(edits) || edits.length === 0) {
@@ -150,7 +150,7 @@ function addDocumentChange(change: LspDocumentChange, context: ChangeContext): v
   }
   switch (change.kind) {
     case "create": {
-      const path = workspacePathFromUri(stringProperty(change, "uri"), context.workspaceRoot);
+      const path = workspacePathFromLspUri(stringProperty(change, "uri"), context.workspaceRoot);
       context.operations.push({
         kind: "create_file",
         operationId: context.nextOperationId(),
@@ -161,8 +161,8 @@ function addDocumentChange(change: LspDocumentChange, context: ChangeContext): v
       return;
     }
     case "rename": {
-      const path = workspacePathFromUri(stringProperty(change, "oldUri"), context.workspaceRoot);
-      const toPath = workspacePathFromUri(stringProperty(change, "newUri"), context.workspaceRoot);
+      const path = workspacePathFromLspUri(stringProperty(change, "oldUri"), context.workspaceRoot);
+      const toPath = workspacePathFromLspUri(stringProperty(change, "newUri"), context.workspaceRoot);
       const document = requiredDocument(context.documents, path);
       context.operations.push({
         kind: "move_file",
@@ -176,7 +176,7 @@ function addDocumentChange(change: LspDocumentChange, context: ChangeContext): v
       return;
     }
     case "delete": {
-      const path = workspacePathFromUri(stringProperty(change, "uri"), context.workspaceRoot);
+      const path = workspacePathFromLspUri(stringProperty(change, "uri"), context.workspaceRoot);
       const document = requiredDocument(context.documents, path);
       context.operations.push({
         kind: "delete_file",
@@ -241,7 +241,8 @@ function oneBasedUtf16Position(position: LspPosition | undefined, path: string):
   return { line: position.line + 1, column: position.character + 1 };
 }
 
-function workspacePathFromUri(uri: string, workspaceRoot: string): string {
+/** Convert a file URI into a validated, workspace-relative slash path. */
+export function workspacePathFromLspUri(uri: string, workspaceRoot: string): string {
   let absolute: string;
   try {
     absolute = fileURLToPath(uri);
@@ -257,6 +258,57 @@ function workspacePathFromUri(uri: string, workspaceRoot: string): string {
   const normalized = path.replace(/\\/g, "/");
   assertWorkspacePath(normalized);
   return normalized;
+}
+
+/**
+ * Collect every workspace path an LSP edit references before acquiring exact
+ * runtime snapshots. This performs no I/O and is intentionally conservative:
+ * callers may omit a destination which does not exist yet, while the adapter
+ * still fails closed if a source document snapshot is required but missing.
+ */
+export function collectLspWorkspaceEditPaths(
+  workspaceEdit: LspWorkspaceEdit,
+  workspaceRoot: string,
+): readonly string[] {
+  const paths = new Set<string>();
+  const add = (uri: string): void => {
+    paths.add(workspacePathFromLspUri(uri, workspaceRoot));
+  };
+
+  if (workspaceEdit.changes !== undefined) {
+    if (!isRecord(workspaceEdit.changes)) {
+      throw failure("LSP_EDIT_INVALID", "WorkspaceEdit changes must be an object");
+    }
+    for (const uri of Object.keys(workspaceEdit.changes)) add(uri);
+  }
+
+  if (workspaceEdit.documentChanges !== undefined) {
+    if (!Array.isArray(workspaceEdit.documentChanges)) {
+      throw failure("LSP_EDIT_INVALID", "WorkspaceEdit documentChanges must be an array");
+    }
+    for (const change of workspaceEdit.documentChanges) {
+      if (isTextDocumentEdit(change)) {
+        add(change.textDocument.uri);
+        continue;
+      }
+      if (!isRecord(change) || typeof change.kind !== "string") {
+        throw failure("LSP_EDIT_INVALID", "unsupported LSP document change");
+      }
+      switch (change.kind) {
+        case "create":
+        case "delete":
+          add(stringProperty(change, "uri"));
+          break;
+        case "rename":
+          add(stringProperty(change, "oldUri"));
+          add(stringProperty(change, "newUri"));
+          break;
+        default:
+          throw failure("LSP_EDIT_INVALID", "unsupported LSP resource operation");
+      }
+    }
+  }
+  return [...paths].sort();
 }
 
 function assertWorkspacePath(path: string): void {

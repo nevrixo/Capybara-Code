@@ -204,6 +204,158 @@ describe("LspHost", () => {
     expect(stops).toBe(1);
   });
 
+  test("turns a supervised rename response into a runtime-bound edit plan", async () => {
+    let notification:
+      | ((method: string, params: unknown) => void)
+      | undefined;
+    let protocolChannel = "";
+    let starts = 0;
+    let stops = 0;
+    const methods: string[] = [];
+    const documentText = "export const Widget = 1;\n";
+    const runtime = {
+      issueCapability: async () => ({ id: "cap", sessionId: "session-1", actionHash: "hash" }),
+      startJob: async (params: Record<string, unknown>) => {
+        starts += 1;
+        protocolChannel = String(params.protocolChannel);
+        return { jobId: "job-1", display: "fake LSP" };
+      },
+      sendInput: async (params: Record<string, unknown>) => {
+        const data = params.data;
+        if (typeof data !== "string") throw new Error("expected framed LSP input");
+        const message = messageFromFrame(data);
+        if (typeof message.method === "string") methods.push(message.method);
+        if (typeof message.id !== "number") return undefined;
+
+        const request = message.params as {
+          readonly newName?: unknown;
+          readonly textDocument?: { readonly uri?: unknown };
+        };
+        const uri = typeof request.textDocument?.uri === "string" ? request.textDocument.uri : "";
+        const result =
+          message.method === "textDocument/rename"
+            ? {
+                changes: {
+                  [uri]: [{
+                    range: {
+                      start: { line: 0, character: 13 },
+                      end: { line: 0, character: 19 },
+                    },
+                    newText: request.newName,
+                  }],
+                },
+              }
+            : { capabilities: {} };
+        notification?.("lsp.stdio.output", {
+          protocolChannel,
+          text: lspFrame({ jsonrpc: "2.0", id: message.id, result }),
+        });
+        return undefined;
+      },
+      stopJob: async () => {
+        stops += 1;
+        return undefined;
+      },
+      subscribeNotifications: (handler: (method: string, params: unknown) => void) => {
+        notification = handler;
+        return () => {
+          if (notification === handler) notification = undefined;
+        };
+      },
+    };
+    const host = new LspHost({
+      runtime: runtime as never,
+      servers: {
+        typescript: {
+          command: "typescript-language-server",
+          args: ["--stdio"],
+          extensions: [".ts"],
+          languageId: "typescript",
+          timeoutMs: 1_000,
+        },
+      },
+      sessionId: "session-1",
+      workspaceRoot: "/work",
+      workspaceTrusted: true,
+      enabled: true,
+      allowRenamePreview: true,
+      workspaceIdentityDigest: () => "ws_1",
+      readFile: async () => documentText,
+      readEditDocument: async (path) =>
+        path === "src/widget.ts"
+          ? { path, text: documentText, revision: "sha256:widget" }
+          : undefined,
+      isBuildMode: () => true,
+      resolveExecutable: () => "fake-lsp",
+    });
+
+    const preview = await host.renamePreview({
+      path: "src/widget.ts",
+      line: 0,
+      character: 13,
+      newName: "Renamed",
+    });
+
+    expect(starts).toBe(1);
+    expect(methods).toContain("initialize");
+    expect(methods).toContain("textDocument/didOpen");
+    expect(methods).toContain("textDocument/rename");
+    expect(methods).toContain("textDocument/didClose");
+    expect(preview.edit.plan.operations).toEqual([expect.objectContaining({
+      kind: "replace_range",
+      path: "src/widget.ts",
+      baseRevision: "sha256:widget",
+      replacement: "Renamed",
+      range: {
+        start: { line: 1, column: 14 },
+        end: { line: 1, column: 20 },
+        encoding: "utf16",
+      },
+    })]);
+
+    await host.close();
+    expect(stops).toBe(1);
+  });
+
+  test("does not start a server while the full LSP rollout gate is disabled", async () => {
+    let starts = 0;
+    const host = new LspHost({
+      servers: {
+        typescript: {
+          command: "typescript-language-server",
+          extensions: [".ts"],
+          languageId: "typescript",
+        },
+      },
+      runtime: {
+        issueCapability: async () => ({ id: "cap", sessionId: "session-1", actionHash: "hash" }),
+        startJob: async () => {
+          starts += 1;
+          return { jobId: "job-1", display: "fake LSP" };
+        },
+        sendInput: async () => undefined,
+        stopJob: async () => undefined,
+        subscribeNotifications: () => () => undefined,
+      } as never,
+      sessionId: "session-1",
+      workspaceRoot: "/work",
+      workspaceTrusted: true,
+      enabled: false,
+      isBuildMode: () => true,
+      resolveExecutable: () => "fake-lsp",
+    });
+
+    await expect(host.definition({ path: "src/widget.ts", line: 0, character: 0 }))
+      .rejects.toThrow("experimental.fullLsp");
+    expect(starts).toBe(0);
+    expect(host.statuses()).toContainEqual({
+      name: "typescript",
+      state: "disabled",
+      detail: "disabled by experimental.fullLsp",
+    });
+    await host.close();
+  });
+
   test("never starts a language server for an untrusted workspace", async () => {
     let starts = 0;
     const host = new LspHost({

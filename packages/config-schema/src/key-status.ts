@@ -143,6 +143,14 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
 
   // ---- maps ----
   // ---- durable runtime feature gates (implemented incrementally) ----
+  ["experimental.editEngineV2", { status: "wired", consumer: "AgentSession / RuntimeToolExecutor structured edit gate" }],
+  ["experimental.fullLsp", { status: "wired", consumer: "bootstrap.ts / LspHost supervised LSP gate" }],
+  ["edit.maxOperationsPerPlan", { status: "wired", consumer: "LspHost WorkspaceEdit adapter bound" }],
+  ["edit.maxFileBytes", { status: "wired", consumer: "bootstrap.ts runtime exact edit snapshot bound" }],
+  ["lsp.enabled", { status: "wired", consumer: "bootstrap.ts / LspHost startup gate" }],
+  ["lsp.mutations.rename", { status: "wired", consumer: "bootstrap.ts LSP rename preview gate" }],
+  ["lsp.mutations.maxFiles", { status: "wired", consumer: "LspHost exact snapshot path bound" }],
+  ["lsp.maxPendingRequestsPerServer", { status: "wired", consumer: "LspHost JSON-RPC pending request bound" }],
   ["experimental.", { status: "experimental", note: "new runtime surfaces remain disabled until their feature gate is explicitly enabled" }],
   ["edit.", { status: "experimental", note: "Anchor/Range Edit Engine rollout is feature-gated" }],
   ["lsp.", { status: "experimental", note: "Full LSP service rollout is feature-gated" }],
