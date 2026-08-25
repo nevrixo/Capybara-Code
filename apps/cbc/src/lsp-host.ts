@@ -16,6 +16,7 @@ import {
   collectLspWorkspaceEditPaths,
   normalizeLspDiagnostics,
   normalizeLspPullDiagnostics,
+  normalizeLspWorkspaceDiagnostics,
   type LspDiagnosticSnapshot,
   type LspEditDocument,
   type LspEditPlanResult,
@@ -73,6 +74,8 @@ export function configuredLspServers(
 const MAX_LSP_DOCUMENTS_PER_LANGUAGE = 64;
 const MAX_LSP_DIAGNOSTIC_DOCUMENTS = MAX_LSP_DOCUMENTS_PER_LANGUAGE * 2;
 const MAX_LSP_DIAGNOSTIC_SERVERS = 8;
+const MAX_LSP_WORKSPACE_DIAGNOSTIC_SNAPSHOTS = 32;
+const MAX_LSP_WORKSPACE_DIAGNOSTICS_PER_SNAPSHOT = 64;
 const MAX_LSP_WORKSPACE_SYMBOL_SERVERS = 8;
 const MAX_LSP_WORKSPACE_SYMBOL_QUERY_BYTES = 512;
 const UNSAFE_LSP_QUERY_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/;
@@ -113,6 +116,7 @@ interface LspProcess {
   nextRequestId: number;
   nextDocumentVersion: number;
   supportsPullDiagnostics: boolean;
+  supportsWorkspaceDiagnostics: boolean;
 }
 
 interface ServiceState {
@@ -376,7 +380,7 @@ export class LspHost {
       return EMPTY_LSP_DIAGNOSTIC_LOOKUP;
     }
 
-    await this.#refreshPullDiagnostics(path);
+    await this.#refreshDiagnostics(path);
 
     const document = await this.#readDiagnosticDocument(path);
     const workspaceIdentityDigest = this.#workspaceIdentityDigest();
@@ -743,6 +747,7 @@ export class LspHost {
       nextRequestId: 1,
       nextDocumentVersion: 1,
       supportsPullDiagnostics: false,
+      supportsWorkspaceDiagnostics: false,
     };
     this.#processes.set(descriptor.name, process);
     process.unsubscribe = this.#options.runtime.subscribeNotifications((method, params) => {
@@ -818,6 +823,11 @@ export class LspHost {
         rootUri,
         workspaceFolders: [{ uri: rootUri, name: "workspace" }],
         capabilities: {
+          workspace: {
+            diagnostic: {
+              refreshSupport: false,
+            },
+          },
           textDocument: {
             declaration: { linkSupport: true },
             definition: { linkSupport: true },
@@ -846,7 +856,9 @@ export class LspHost {
           },
         },
       }, descriptor.timeoutMs);
-      process.supportsPullDiagnostics = supportsPullDiagnostics(initializeResult);
+      const diagnosticSupport = diagnosticCapabilitySupport(initializeResult);
+      process.supportsPullDiagnostics = diagnosticSupport.document;
+      process.supportsWorkspaceDiagnostics = diagnosticSupport.workspace;
       await this.#notify(process, "initialized", {});
       return process;
     } catch (error) {
@@ -876,21 +888,30 @@ export class LspHost {
     );
   }
 
-  async #refreshPullDiagnostics(path: string): Promise<void> {
+  async #refreshDiagnostics(path: string): Promise<void> {
     let descriptor: LspServerDescriptor | undefined;
     let process: LspProcess | undefined;
     try {
       descriptor = this.#descriptorForPath(path);
       process = await this.#startForQuery(descriptor);
-      if (!process.supportsPullDiagnostics) {
+      let requested = false;
+      let captured = 0;
+      if (process.supportsPullDiagnostics) {
+        requested = true;
+        captured += (await this.#pullDiagnostics(process, descriptor, path)) ? 1 : 0;
+      }
+      if (process.supportsWorkspaceDiagnostics) {
+        requested = true;
+        captured += await this.#pullWorkspaceDiagnostics(process, descriptor, path);
+      }
+      if (!requested) {
         this.#setStatus(descriptor.name, "ready", "pull diagnostics not supported");
         return;
       }
-      const captured = await this.#pullDiagnostics(process, descriptor, path);
       this.#setStatus(
         descriptor.name,
         "ready",
-        captured ? "pull diagnostics ready" : "pull diagnostics yielded no fresh evidence",
+        captured > 0 ? "pull diagnostics ready" : "pull diagnostics yielded no fresh evidence",
       );
     } catch {
       if (descriptor !== undefined && process !== undefined && this.#mayStart()) {
@@ -942,6 +963,84 @@ export class LspHost {
         return true;
       },
     );
+  }
+
+  async #pullWorkspaceDiagnostics(
+    process: LspProcess,
+    descriptor: LspServerDescriptor,
+    path: string,
+  ): Promise<number> {
+    const uri = workspaceFileUri(this.#options.workspaceRoot, path);
+    const document = await this.#readDiagnosticDocument(path);
+    const tracked = process.diagnosticDocuments.get(uri);
+    if (
+      document !== undefined &&
+      tracked !== undefined &&
+      tracked.path === path &&
+      tracked.document.revision === document.revision
+    ) {
+      return await this.#requestWorkspaceDiagnostics(process, descriptor);
+    }
+    if (document === undefined) return 0;
+    return await this.#withOpenedDocument(
+      process,
+      descriptor,
+      path,
+      uri,
+      async (_openedUri, openedTracked) =>
+        openedTracked === undefined
+          ? 0
+          : await this.#requestWorkspaceDiagnostics(process, descriptor),
+    );
+  }
+
+  async #requestWorkspaceDiagnostics(
+    process: LspProcess,
+    descriptor: LspServerDescriptor,
+  ): Promise<number> {
+    const trackedDocuments = [...process.diagnosticDocuments.values()];
+    if (trackedDocuments.length === 0) return 0;
+    const result = await this.#request(
+      process,
+      "workspace/diagnostic",
+      { previousResultIds: [] },
+      descriptor.timeoutMs,
+    );
+    if (!this.#mayStart()) {
+      throw new Error("LSP workspace diagnostics request was cancelled");
+    }
+    const workspaceIdentityDigest = this.#workspaceIdentityDigest();
+    if (workspaceIdentityDigest === undefined) return 0;
+    const normalized = normalizeLspWorkspaceDiagnostics(result, {
+      workspaceRoot: this.#options.workspaceRoot,
+      workspaceIdentityDigest,
+      server: descriptor.name,
+      documents: trackedDocuments.map((tracked) => ({
+        uri: tracked.uri,
+        document: tracked.document,
+        documentVersion: tracked.version,
+      })),
+      publishedAt: new Date().toISOString(),
+      maxSnapshots: MAX_LSP_WORKSPACE_DIAGNOSTIC_SNAPSHOTS,
+      maxDiagnostics: MAX_LSP_WORKSPACE_DIAGNOSTICS_PER_SNAPSHOT,
+    });
+    const trackedByPath = new Map(trackedDocuments.map((tracked) => [tracked.path, tracked]));
+    let captured = 0;
+    for (const snapshot of normalized.snapshots) {
+      const tracked = trackedByPath.get(snapshot.path);
+      if (
+        tracked === undefined ||
+        process.diagnosticDocuments.get(tracked.uri) !== tracked
+      ) {
+        continue;
+      }
+      this.#diagnosticSnapshots.set(
+        this.#diagnosticCacheKey(descriptor.name, snapshot.path),
+        snapshot,
+      );
+      captured += 1;
+    }
+    return captured;
   }
 
   async #withOpenedDocument<T>(
@@ -1436,11 +1535,21 @@ function contentLength(header: string): number | undefined {
   return result;
 }
 
-function supportsPullDiagnostics(value: unknown): boolean {
+function diagnosticCapabilitySupport(value: unknown): {
+  readonly document: boolean;
+  readonly workspace: boolean;
+} {
   const initialize = asRecord(value);
   const capabilities = asRecord(initialize?.capabilities);
   const diagnosticProvider = capabilities?.diagnosticProvider;
-  return asRecord(diagnosticProvider) !== undefined && !Array.isArray(diagnosticProvider);
+  const provider = asRecord(diagnosticProvider);
+  if (provider === undefined || Array.isArray(diagnosticProvider)) {
+    return { document: false, workspace: false };
+  }
+  return {
+    document: true,
+    workspace: provider.workspaceDiagnostics === true,
+  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
