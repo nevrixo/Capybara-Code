@@ -1,0 +1,63 @@
+{
+  "x-dialect": "json-schema-draft-2020-12",
+  "$id": "cbc:agent-graph/node",
+  "title": "GraphNode",
+  "description": "Agent graph node. Matches packages/agent-graph-domain/src/types.ts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "depth",
+    "title",
+    "role",
+    "state",
+    "attemptCount",
+    "maxAttempts",
+    "priority",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "id": { "type": "string", "pattern": "^agt_" },
+    "parentId": { "type": "string", "pattern": "^agt_" },
+    "depth": { "type": "integer", "minimum": 0, "maximum": 3 },
+    "title": { "type": "string", "minLength": 1 },
+    "role": { "type": "string", "minLength": 1 },
+    "state": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "ready",
+        "running",
+        "waiting",
+        "paused",
+        "completed",
+        "partial",
+        "failed",
+        "cancelled",
+        "blocked"
+      ]
+    },
+    "attemptCount": { "type": "integer", "minimum": 0 },
+    "maxAttempts": { "type": "integer", "minimum": 1 },
+    "activeAttemptId": { "type": "string", "pattern": "^att_" },
+    "pausedFrom": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "ready",
+        "running",
+        "waiting",
+        "paused",
+        "completed",
+        "partial",
+        "failed",
+        "cancelled",
+        "blocked"
+      ]
+    },
+    "priority": { "type": "integer" },
+    "createdAt": { "type": "string", "minLength": 1 },
+    "updatedAt": { "type": "string", "minLength": 1 }
+  }
+}

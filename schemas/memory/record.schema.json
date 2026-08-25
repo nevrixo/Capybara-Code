@@ -1,0 +1,75 @@
+{
+  "x-dialect": "json-schema-draft-2020-12",
+  "$id": "cbc:memory/record",
+  "title": "MemoryRecord",
+  "description": "Evidence-backed durable memory record. Matches packages/context-engine/src/memory.ts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "key",
+    "value",
+    "scope",
+    "status",
+    "confidence",
+    "evidenceIds",
+    "validFor",
+    "createdAt",
+    "lastValidatedAt",
+    "evidenceObservedAt",
+    "supersedes",
+    "contestedWith",
+    "revision"
+  ],
+  "properties": {
+    "id": { "type": "string", "pattern": "^memory-" },
+    "key": { "type": "string", "minLength": 1 },
+    "value": { "type": "string", "minLength": 1 },
+    "scope": {
+      "type": "string",
+      "enum": ["workspace", "session", "task"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["active", "superseded", "contested"]
+    },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "evidenceIds": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "validFor": { "$ref": "#/$defs/memoryValidity" },
+    "createdAt": { "type": "string", "minLength": 1 },
+    "lastValidatedAt": { "type": "string", "minLength": 1 },
+    "evidenceObservedAt": { "type": "string", "minLength": 1 },
+    "exactEvidenceObservedAt": { "type": "string", "minLength": 1 },
+    "expiresAt": { "type": "string", "minLength": 1 },
+    "supersedes": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^memory-" }
+    },
+    "supersededBy": { "type": "string", "pattern": "^memory-" },
+    "contestedWith": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^memory-" }
+    },
+    "revision": { "type": "integer", "minimum": 1 }
+  },
+  "$defs": {
+    "memoryValidity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "workspaceIdentity": { "type": "string", "minLength": 1 },
+        "sessionId": { "type": "string", "minLength": 1 },
+        "taskId": { "type": "string", "minLength": 1 },
+        "branch": { "type": "string", "minLength": 1 },
+        "paths": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

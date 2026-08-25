@@ -1,0 +1,54 @@
+{
+  "x-dialect": "json-schema-draft-2020-12",
+  "$id": "cbc:worktree/record",
+  "title": "WorktreeRecord",
+  "description": "Isolated writer worktree lifecycle record.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "workspaceIdentityDigest",
+    "graphId",
+    "path",
+    "state",
+    "baseCommit",
+    "baseWorkspaceRevision",
+    "createdAt",
+    "updatedAt",
+    "revision"
+  ],
+  "properties": {
+    "id": { "type": "string", "pattern": "^wt_" },
+    "workspaceIdentityDigest": { "type": "string", "minLength": 1 },
+    "graphId": { "type": "string", "minLength": 1 },
+    "nodeId": { "type": "string", "minLength": 1 },
+    "path": { "type": "string", "minLength": 1 },
+    "state": {
+      "type": "string",
+      "enum": [
+        "creating",
+        "ready",
+        "leased",
+        "dirty",
+        "proposal_ready",
+        "merging",
+        "merged",
+        "conflicted",
+        "abandoned",
+        "deleting",
+        "deleted",
+        "recovery_required"
+      ]
+    },
+    "baseCommit": { "type": "string", "minLength": 1 },
+    "baseWorkspaceRevision": { "type": "string", "minLength": 1 },
+    "headCommit": { "type": "string", "minLength": 1 },
+    "dirtyDigest": { "type": "string", "minLength": 1 },
+    "createdAt": { "type": "string", "minLength": 1 },
+    "updatedAt": { "type": "string", "minLength": 1 },
+    "expiresAt": { "type": "string", "minLength": 1 },
+    "ownerNodeId": { "type": "string", "minLength": 1 },
+    "writerLeaseId": { "type": "string", "minLength": 1 },
+    "revision": { "type": "integer", "minimum": 0 }
+  }
+}

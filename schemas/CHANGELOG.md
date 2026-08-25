@@ -38,6 +38,36 @@ does not fail validation, so nothing would catch it except a human reading this 
 
 ---
 
+## protocol 1.0 · events 1.0 — worktree/merge + memory store methods
+
+Additive request methods (still protocol 1.0 major):
+
+- After `git.checkpoint`: `worktree.create`, `worktree.list`, `worktree.inspect`,
+  `worktree.status`, `worktree.diff`, `worktree.remove`, `worktree.reconcile`,
+  `merge.preview`
+- After `memory.remember`: `memory.list`, `memory.get`, `memory.forget`,
+  `memory.resolve_contest`, `memory.verify`
+- Mutating set gains `worktree.create`, `worktree.remove`, `worktree.reconcile`
+- `fs.edit` may carry optional `expectedPlanDigest` (stale preview →
+  `HASH_MISMATCH` / `EDIT_PREVIEW_STALE`)
+
+Request method count is now 75.
+
+## protocol 1.0 · events 1.0 — runtime feature catalog
+
+Added the modification-plan §17 event kinds as a minor, additive change:
+
+- `edit.*` plan/preview/commit/conflict receipts
+- `lsp.*` server/document/query/WorkspaceEdit lifecycle
+- `memory.*` durable recall transitions
+- `daemon.*` / session ownership / command receipts
+- `graph.*` / `agent.*` persistent AgentGraph
+- `worktree.*` / `merge.*` isolated writers
+- `plugin.*` hook/tool/grant lifecycle
+
+Unknown kinds remain skippable on replay (§20.10). App Server transport
+notifications stay in `@cbc/app-protocol`, not this journal catalog.
+
 ## protocol 1.0 · events 1.0 — unreleased
 
 Initial published contract, matching PRD v1.0.
