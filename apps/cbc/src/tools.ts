@@ -1790,6 +1790,7 @@ export class RuntimeToolExecutor implements ToolExecutor {
       case "lsp.hover":
       case "lsp.signature_help":
       case "lsp.document_highlights":
+      case "lsp.call_hierarchy":
       case "lsp.code_actions":
       case "lsp.code_action_preview":
       case "lsp.format_preview":
