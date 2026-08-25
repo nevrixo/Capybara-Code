@@ -598,18 +598,17 @@ export function defaultConfig(): CbcConfig {
       verificationPlannerV2: true,
       commentaryPolicyV2: true,
     },
-    // Every new runtime surface is opt-in at the common gate. The detailed
-    // limits are still materialized so enabling a feature never requires an
-    // unsafe, partially specified configuration.
+    // Wired runtime surfaces are on by default. A user can still disable any
+    // gate; a project cannot re-enable a user-disabled gate.
     experimental: {
-      editEngineV2: false,
-      fullLsp: false,
-      sessionDaemon: false,
-      durableMemory: false,
-      persistentAgentGraph: false,
-      worktreeMultiAgent: false,
-      pluginRuntime: false,
-      appServer: false,
+      editEngineV2: true,
+      fullLsp: true,
+      sessionDaemon: true,
+      durableMemory: true,
+      persistentAgentGraph: true,
+      worktreeMultiAgent: true,
+      pluginRuntime: true,
+      appServer: true,
     },
     edit: {
       engine: "anchor-range-v2",

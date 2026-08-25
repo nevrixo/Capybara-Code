@@ -275,6 +275,7 @@
         "task.spawn",
         "task.status",
         "task.cancel",
+        "plugin.invoke",
         "skill.search",
         "skill.load",
         "mcp.search",

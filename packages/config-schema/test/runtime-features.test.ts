@@ -3,17 +3,17 @@ import { describe, expect, test } from "bun:test";
 import { configKeyInfo, defaultConfig, mergeConfig } from "../src/index.ts";
 
 describe("durable runtime configuration gates", () => {
-  test("ships every new surface disabled behind an explicit common gate", () => {
+  test("ships every wired runtime surface enabled, with a user-owned disable gate", () => {
     const config = defaultConfig();
     expect(config.experimental).toEqual({
-      editEngineV2: false,
-      fullLsp: false,
-      sessionDaemon: false,
-      durableMemory: false,
-      persistentAgentGraph: false,
-      worktreeMultiAgent: false,
-      pluginRuntime: false,
-      appServer: false,
+      editEngineV2: true,
+      fullLsp: true,
+      sessionDaemon: true,
+      durableMemory: true,
+      persistentAgentGraph: true,
+      worktreeMultiAgent: true,
+      pluginRuntime: true,
+      appServer: true,
     });
     expect(config.edit.maxOperationsPerPlan).toBe(100);
     expect(config.memory.privacy.storeRawTranscript).toBe(false);
@@ -62,8 +62,11 @@ describe("durable runtime configuration gates", () => {
     expect(merged.issues.filter((issue) => issue.severity === "error")).toHaveLength(3);
   });
 
-  test("does not let a project activate a gated runtime feature", () => {
-    const merged = mergeConfig([{ source: "project", values: { "experimental.fullLsp": true } }]);
+  test("does not let a project re-enable a user-disabled runtime feature", () => {
+    const merged = mergeConfig([
+      { source: "user", values: { "experimental.fullLsp": false } },
+      { source: "project", values: { "experimental.fullLsp": true } },
+    ]);
     expect(merged.config.experimental.fullLsp).toBe(false);
     expect(merged.issues).toContainEqual(expect.objectContaining({
       path: "experimental.fullLsp",

@@ -38,6 +38,18 @@ does not fail validation, so nothing would catch it except a human reading this 
 
 ---
 
+## config — experimental runtime surfaces default on
+
+`experimental.*` gates now default to `true`. A user can still set any gate to
+`false`. A project cannot re-enable a user-disabled gate. This is a more
+permissive default (rule 4) for a fresh install; existing user configs that
+already set the keys keep their values.
+
+## tools 1.0 — plugin.invoke
+
+Model-facing plugin invocation goes through ToolRegistry and permission
+policy. Plugins cannot widen authority.
+
 ## protocol 1.0 · events 1.0 — worktree/merge + memory store methods
 
 Additive request methods (still protocol 1.0 major):

@@ -1062,19 +1062,19 @@
       }
     },
     "experimental": {
-      "description": "Feature gates. All default to false so unsupported runtime paths remain inert.",
+      "description": "Feature gates. Defaults are on; a user may disable any gate and a project cannot re-enable a user-disabled gate.",
       "type": "object",
       "additionalProperties": false,
       "required": ["editEngineV2", "fullLsp", "sessionDaemon", "durableMemory", "persistentAgentGraph", "worktreeMultiAgent", "pluginRuntime", "appServer"],
       "properties": {
-        "editEngineV2": { "type": "boolean", "default": false },
-        "fullLsp": { "type": "boolean", "default": false },
-        "sessionDaemon": { "type": "boolean", "default": false },
-        "durableMemory": { "type": "boolean", "default": false },
-        "persistentAgentGraph": { "type": "boolean", "default": false },
-        "worktreeMultiAgent": { "type": "boolean", "default": false },
-        "pluginRuntime": { "type": "boolean", "default": false },
-        "appServer": { "type": "boolean", "default": false }
+        "editEngineV2": { "type": "boolean", "default": true },
+        "fullLsp": { "type": "boolean", "default": true },
+        "sessionDaemon": { "type": "boolean", "default": true },
+        "durableMemory": { "type": "boolean", "default": true },
+        "persistentAgentGraph": { "type": "boolean", "default": true },
+        "worktreeMultiAgent": { "type": "boolean", "default": true },
+        "pluginRuntime": { "type": "boolean", "default": true },
+        "appServer": { "type": "boolean", "default": true }
       }
     },
     "edit": {
