@@ -31,6 +31,8 @@ import { errorResult, okResult } from "@cbc/tool-registry";
 import type {
   LspCodeActionPreview,
   LspCodeActionPreviewRequest,
+  LspFormattingPreview,
+  LspFormattingPreviewRequest,
   LspDiagnosticLookup,
   LspQueryResult,
   LspReferencesRequest,
@@ -103,6 +105,10 @@ export interface LspCodeActionPreviewReader {
   codeActionPreview(input: LspCodeActionPreviewRequest): Promise<LspCodeActionPreview>;
 }
 
+export interface LspFormattingPreviewReader {
+  formatPreview(input: LspFormattingPreviewRequest): Promise<LspFormattingPreview>;
+}
+
 export interface LspRenamePreviewReader {
   renamePreview(input: LspRenameRequest): Promise<LspRenamePreview>;
 }
@@ -114,6 +120,7 @@ export interface LspToolReader extends
   LspSemanticReader,
   LspCodeActionsReader,
   LspCodeActionPreviewReader,
+  LspFormattingPreviewReader,
   LspRenamePreviewReader {}
 
 export interface LspSemanticBridgeOptions {
@@ -266,6 +273,17 @@ export interface LspToolCodeActionPreviewResult {
   readonly plan: Readonly<Record<string, unknown>>;
 }
 
+/** A formatting outcome is either an exact-bound plan or an explicit no-op. */
+export interface LspToolFormattingPreviewResult {
+  readonly schemaVersion: "1.0";
+  readonly kind: "format_preview";
+  readonly server: string;
+  readonly path: string;
+  readonly changed: boolean;
+  readonly paths: readonly string[];
+  readonly plan?: Readonly<Record<string, unknown>>;
+}
+
 type LspToolSemanticResult =
   | LspToolLocationQueryResult
   | LspToolHoverResult
@@ -278,6 +296,7 @@ export type LspWorkspaceSymbolsBridge = (action: ProposedAction, signal: AbortSi
 export type LspSemanticBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspCodeActionsBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspCodeActionPreviewBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
+export type LspFormattingPreviewBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspRenamePreviewBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspToolBridge = LspSemanticBridge;
 
@@ -557,6 +576,46 @@ export function createLspCodeActionPreviewBridge(
 }
 
 /**
+ * Formatting stays proposal-only. It returns an explicit no-op when the
+ * language server has no edits, or a safe revision-bound plan otherwise.
+ */
+export function createLspFormattingPreviewBridge(
+  reader: LspFormattingPreviewReader,
+): LspFormattingPreviewBridge {
+  return async (action, signal) => {
+    const request = formattingPreviewRequest(action);
+    if (request === undefined) {
+      return {
+        result: errorResult(
+          "INVALID_ARGUMENT",
+          "lsp.format_preview requires a bounded workspace-relative path",
+        ),
+      };
+    }
+    if (signal.aborted) return cancelledFormattingPreview();
+
+    try {
+      const preview = await reader.formatPreview(request);
+      if (signal.aborted) return cancelledFormattingPreview();
+      const result = projectFormattingPreview(preview, request.path);
+      if (result === undefined) throw new Error("formatting preview could not be projected safely");
+      return {
+        result: okResult(formattingPreviewSummary(result), result),
+        text: renderFormattingPreview(result),
+      };
+    } catch {
+      return {
+        result: errorResult(
+          "NOT_INITIALIZED",
+          "LSP formatting preview is currently unavailable; retry after the language server is ready",
+          { retryable: true },
+        ),
+      };
+    }
+  };
+}
+
+/**
  * Rename stays proposal-only: this bridge returns a reconstructed, bounded
  * edit plan but never exposes the raw server WorkspaceEdit or writes files.
  */
@@ -599,7 +658,7 @@ export function createLspRenamePreviewBridge(
   };
 }
 
-/** Combine diagnostics, symbols, semantic queries, safe code actions, and proposal-only rename. */
+/** Combine diagnostics, symbols, semantic queries, safe edit proposals, and rename. */
 export function createLspToolBridge(
   reader: LspToolReader,
   options: LspSemanticBridgeOptions,
@@ -610,6 +669,7 @@ export function createLspToolBridge(
   const semantic = createLspSemanticBridge(reader, options);
   const codeActions = createLspCodeActionsBridge(reader, options);
   const codeActionPreview = createLspCodeActionPreviewBridge(reader);
+  const formattingPreview = createLspFormattingPreviewBridge(reader);
   const renamePreview = createLspRenamePreviewBridge(reader);
   return async (action, signal) =>
     action.toolId === "lsp.diagnostics"
@@ -622,6 +682,8 @@ export function createLspToolBridge(
       ? await codeActions(action, signal)
       : action.toolId === "lsp.code_action_preview"
       ? await codeActionPreview(action, signal)
+      : action.toolId === "lsp.format_preview"
+      ? await formattingPreview(action, signal)
       : action.toolId === "lsp.rename_preview"
       ? await renamePreview(action, signal)
       : await semantic(action, signal);
@@ -660,6 +722,12 @@ function cancelledCodeActions(): Execution {
 function cancelledCodeActionPreview(): Execution {
   return {
     result: errorResult("CANCELLED", "LSP code action preview was cancelled", { retryable: true }),
+  };
+}
+
+function cancelledFormattingPreview(): Execution {
+  return {
+    result: errorResult("CANCELLED", "LSP formatting preview was cancelled", { retryable: true }),
   };
 }
 
@@ -718,6 +786,14 @@ function codeActionPreviewRequest(
     character: raw.character,
     actionIndex,
   });
+}
+
+function formattingPreviewRequest(action: ProposedAction): LspFormattingPreviewRequest | undefined {
+  if (action.toolId !== "lsp.format_preview") return undefined;
+  const raw = lspArguments(action);
+  if (raw === undefined) return undefined;
+  const path = lspPathFromArguments(raw, MAX_SEMANTIC_PATH_BYTES);
+  return path === undefined ? undefined : Object.freeze({ path });
 }
 
 function renamePreviewRequest(action: ProposedAction): LspRenameRequest | undefined {
@@ -813,6 +889,42 @@ function projectCodeActionPreview(value: unknown): LspToolCodeActionPreviewResul
     server: renameProjection.server,
     paths: renameProjection.paths,
     plan: renameProjection.plan,
+  });
+}
+
+function projectFormattingPreview(
+  value: unknown,
+  path: string,
+): LspToolFormattingPreviewResult | undefined {
+  const preview = isRecord(value) ? value : undefined;
+  const server = opaquePlanText(preview?.server, MAX_METADATA_BYTES);
+  if (preview === undefined || server === undefined) return undefined;
+  if (preview.edit === undefined) {
+    return Object.freeze({
+      schemaVersion: "1.0" as const,
+      kind: "format_preview" as const,
+      server,
+      path,
+      changed: false,
+      paths: Object.freeze([]) as readonly string[],
+    });
+  }
+  const editProjection = projectRenamePreview(value);
+  if (
+    editProjection === undefined ||
+    editProjection.paths.length !== 1 ||
+    editProjection.paths[0] !== path
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    schemaVersion: "1.0" as const,
+    kind: "format_preview" as const,
+    server: editProjection.server,
+    path,
+    changed: true,
+    paths: editProjection.paths,
+    plan: editProjection.plan,
   });
 }
 
@@ -1027,6 +1139,23 @@ function renderCodeActionPreview(result: LspToolCodeActionPreviewResult): string
     "Language-server code action preview created a revision-bound plan for " +
       String(result.paths.length) + " file(s): " + result.paths.join(", "),
     "[This proposal has not run a language-server command or written files. Run fs.edit.preview to re-preflight it; fs.edit requires its own approval and re-preflights immediately before staging.]",
+  ].join("\n"), MAX_TEXT_BYTES);
+}
+
+function formattingPreviewSummary(result: LspToolFormattingPreviewResult): string {
+  return result.changed
+    ? "revision-bound LSP formatting proposal returned for " + result.path
+    : "LSP formatting preview found no edits for " + result.path;
+}
+
+function renderFormattingPreview(result: LspToolFormattingPreviewResult): string {
+  if (!result.changed) {
+    return "Language-server formatting preview found no edits for " + result.path +
+      ". No files were written.";
+  }
+  return truncateUtf8([
+    "Language-server formatting preview created a revision-bound plan for " + result.path + ".",
+    "[This proposal has not written files. Run fs.edit.preview to re-preflight it; fs.edit requires its own approval and re-preflights immediately before staging.]",
   ].join("\n"), MAX_TEXT_BYTES);
 }
 
