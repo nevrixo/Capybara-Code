@@ -134,6 +134,7 @@ describe("AgentSession LSP tool gate", () => {
     const missingFormattingMutation = makeSession(true, true, "trusted-always", true, false, false);
     const enabled = makeSession(true, true, "trusted-always", true, false, false, true);
 
+    const formattingTools = ["lsp.format_preview", "lsp.range_format_preview"];
     for (const session of [
       disabled,
       missingBridge,
@@ -141,9 +142,13 @@ describe("AgentSession LSP tool gate", () => {
       missingEditEngine,
       missingFormattingMutation,
     ]) {
-      expect(session.registry.has("lsp.format_preview")).toBe(false);
+      for (const toolId of formattingTools) {
+        expect(session.registry.has(toolId)).toBe(false);
+      }
     }
-    expect(enabled.registry.has("lsp.format_preview")).toBe(true);
-    expect(enabled.registry.activeIds()).not.toContain("lsp.format_preview");
+    for (const toolId of formattingTools) {
+      expect(enabled.registry.has(toolId)).toBe(true);
+      expect(enabled.registry.activeIds()).not.toContain(toolId);
+    }
   });
 });
