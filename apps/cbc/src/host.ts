@@ -205,21 +205,25 @@ export function runtimeBinaryCandidates(
   // A release archive invoked in place, where `bin/` sits beside `libexec/`.
   candidates.push(join(host.executableDir, name));
 
-  // Development checkout root derived from module location.
+  // Development checkout root derived from module location. Prefer debug:
+  // `cargo build` and `cargo test` refresh it, while an older release artifact
+  // may still be present from packaging. Selecting that stale release can pair
+  // the current TypeScript host with a runtime that does not implement the same
+  // tool surface.
   try {
     const projectRoot = new URL("../../..", import.meta.url).pathname
       .replace(/^\/([A-Za-z]:)/, "$1")
       .replace(/\/+$/, "");
-    candidates.push(join(projectRoot, "target", "release", name));
     candidates.push(join(projectRoot, "target", "debug", name));
+    candidates.push(join(projectRoot, "target", "release", name));
   } catch {}
 
   // Honor CARGO_TARGET_DIR so a WSL Linux build can keep artifacts off /mnt/c
   // without colliding with a Windows `target/` next to the same checkout.
   const cargoTarget = host.env.CARGO_TARGET_DIR;
   if (cargoTarget !== undefined && cargoTarget.length > 0) {
-    candidates.push(join(cargoTarget, "release", name));
     candidates.push(join(cargoTarget, "debug", name));
+    candidates.push(join(cargoTarget, "release", name));
   }
 
   // Development: `cargo build` and `cargo build --release` output.

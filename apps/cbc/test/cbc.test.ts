@@ -14,6 +14,7 @@ import { selectClearSequence, TerminalInputDecoder } from "../src/bun-host.ts";
 import { EXIT, CliError, exitForStatus } from "../src/exit.ts";
 import {
   expandHome,
+  findRuntimeBinary,
   join,
   parentOf,
   resolvePaths,
@@ -495,7 +496,7 @@ describe("paths", () => {
     expect(runtimeBinaryCandidates(host)[0]).toBe("/custom/cbc-runtime");
   });
 
-  test("CARGO_TARGET_DIR is searched after the checkout target/", () => {
+  test("development runtime lookup prefers debug builds before stale release artifacts", async () => {
     const host = createFakeHost({
       cwd: "/work",
       env: { CARGO_TARGET_DIR: "/home/dev/.cache/cbc-target" },
@@ -504,9 +505,20 @@ describe("paths", () => {
     expect(candidates).toContain("/home/dev/.cache/cbc-target/release/cbc-runtime");
     expect(candidates).toContain("/home/dev/.cache/cbc-target/debug/cbc-runtime");
     const checkoutDebug = candidates.findIndex((path) => path.endsWith("/target/debug/cbc-runtime") && !path.includes(".cache"));
+    const checkoutRelease = candidates.findIndex((path) => path.endsWith("/target/release/cbc-runtime") && !path.includes(".cache"));
     const cargoDebug = candidates.indexOf("/home/dev/.cache/cbc-target/debug/cbc-runtime");
+    const cargoRelease = candidates.indexOf("/home/dev/.cache/cbc-target/release/cbc-runtime");
     expect(checkoutDebug).toBeGreaterThanOrEqual(0);
+    expect(checkoutRelease).toBeGreaterThanOrEqual(0);
+    expect(checkoutDebug).toBeLessThan(checkoutRelease);
     expect(cargoDebug).toBeGreaterThan(checkoutDebug);
+    expect(cargoDebug).toBeLessThan(cargoRelease);
+
+    const debug = candidates[checkoutDebug] as string;
+    const release = candidates[checkoutRelease] as string;
+    host.files.set(debug, "current runtime");
+    host.files.set(release, "stale runtime");
+    await expect(findRuntimeBinary(host)).resolves.toEqual({ path: debug });
   });
 
   test("join normalizes separators and drops empty segments", () => {

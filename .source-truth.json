@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-25T22:11:28.729Z",
+  "generatedAt": "2026-08-25T22:48:44.037Z",
   "git": {
-    "commit": "40bffe2e5324bf365dd82df6bd41e4eb0b450028",
+    "commit": "e4ab52957188747989a74d16e5363787b1b9cc09",
     "dirty": true,
-    "dirtyHash": "8086160275abdb301538e604c18664b3014287f13e844b4543fd853985aa2344"
+    "dirtyHash": "28b0edeef84a02a06f63af8941f66b9b278875bf4a9daa904663de22a916065c"
   },
   "roots": [
     "apps",
@@ -263,8 +263,8 @@
     },
     {
       "path": "apps/cbc/src/host.ts",
-      "bytes": 14324,
-      "sha256": "343634f7bae4742822b1c40dfa41ca6b220ec0689348f41968dacecde95b65f1"
+      "bytes": 14598,
+      "sha256": "20fa1f2061a383748f68765b3bb601f2fc1dcb12f2c9773263a6d6023edeeeba"
     },
     {
       "path": "apps/cbc/src/input-reader.ts",
@@ -473,8 +473,8 @@
     },
     {
       "path": "apps/cbc/test/cbc.test.ts",
-      "bytes": 243213,
-      "sha256": "0f069e24ce88893d867090ead54fc8efc9e52038b4b780875b0de425065b0e3b"
+      "bytes": 243940,
+      "sha256": "14a8ab61028065e18e835c5440272b4cfcb0ef95cf96db97d5ce868a6b5a681e"
     },
     {
       "path": "apps/cbc/test/config-template.test.ts",
@@ -3182,5 +3182,5 @@
       "sha256": "3af6b7d3ec7041c90b18206fe898b904d8781a97c25369189f2733173c6d23a5"
     }
   ],
-  "digest": "995c6353d35254a00c9db8cac49a0829e74868c5ec9f2bd08acaaa62f4cf7b2c"
+  "digest": "d4c2096c311fc9e5801d75431ad191c6ffda2a3b43cca780ace4331d586ac298"
 }
