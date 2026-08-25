@@ -472,6 +472,56 @@ describe("LSP formatting preview feature gate", () => {
   });
 });
 
+describe("LSP range formatting preview feature gate", () => {
+  test("shares the formatting mutation gate and validates bounded range coordinates", () => {
+    const id = "lsp.range_format_preview";
+    const disabled = nativeToolsForFeatures().map((tool) => tool.id);
+    const missingFullLsp = nativeToolsForFeatures({
+      editEngineV2: true,
+      lspFormattingPreview: true,
+    }).map((tool) => tool.id);
+    const missingEditEngine = nativeToolsForFeatures({
+      fullLsp: true,
+      lspFormattingPreview: true,
+    }).map((tool) => tool.id);
+    const missingFormattingGate = nativeToolsForFeatures({
+      fullLsp: true,
+      editEngineV2: true,
+    }).map((tool) => tool.id);
+    const enabled = nativeToolsForFeatures({
+      fullLsp: true,
+      editEngineV2: true,
+      lspFormattingPreview: true,
+    }).map((tool) => tool.id);
+
+    expect(NATIVE_TOOLS.map((tool) => tool.id)).toContain(id);
+    expect(disabled).not.toContain(id);
+    expect(missingFullLsp).not.toContain(id);
+    expect(missingEditEngine).not.toContain(id);
+    expect(missingFormattingGate).not.toContain(id);
+    expect(enabled).toContain(id);
+    expect(findTool(id)).toMatchObject({
+      authority: "read",
+      idempotency: "idempotent",
+      maxParallelism: 1,
+      resultSchemaId: "lsp.range_format_preview.v1",
+    });
+
+    const schema = findTool(id)!.parameters;
+    const valid = {
+      path: "src/widget.ts",
+      startLine: 0,
+      startCharacter: 19,
+      endLine: 0,
+      endCharacter: 21,
+    };
+    expect(parseAndValidate(JSON.stringify(valid), schema).ok).toBe(true);
+    expect(parseAndValidate(JSON.stringify({ ...valid, endCharacter: 1_000_001 }), schema).ok).toBe(false);
+    expect(parseAndValidate(JSON.stringify({ ...valid, startLine: -1 }), schema).ok).toBe(false);
+    expect(parseAndValidate(JSON.stringify({ ...valid, unexpected: true }), schema).ok).toBe(false);
+  });
+});
+
 describe("argument validation (§12.4, AC-10)", () => {
   const schema = findTool("fs.read")!.parameters;
 
