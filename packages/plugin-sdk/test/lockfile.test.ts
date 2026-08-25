@@ -3,8 +3,10 @@ import { describe, expect, test } from "bun:test";
 import {
   PluginLockfileError,
   assertPluginLockEntryMatchesManifest,
+  assertPluginLockEntryMatchesVerifiedManifest,
   assertPluginSignaturePolicy,
   validatePluginLockfile,
+  verifyPluginManifestDocument,
   type PluginLockEntry,
   type PluginLockfile,
   type PluginManifest,
@@ -92,6 +94,26 @@ describe("plugin lockfile validation", () => {
       manifest(),
       MANIFEST_DIGEST,
     )).not.toThrow();
+  });
+
+  test("binds lock validation to a verified manifest document digest", () => {
+    const document = verifyPluginManifestDocument(
+      new TextEncoder().encode(JSON.stringify(manifest())),
+    );
+    const pinned = entry({ manifestDigest: document.digest });
+
+    expect(() => assertPluginLockEntryMatchesVerifiedManifest(
+      pinned,
+      document,
+    )).not.toThrow();
+    expect(() => assertPluginLockEntryMatchesVerifiedManifest(
+      entry(),
+      document,
+    )).toThrow(/manifestDigest/);
+    expect(() => assertPluginLockEntryMatchesVerifiedManifest(
+      pinned,
+      { ...document },
+    )).toThrow(/produced by/);
   });
 
   test("rejects grants that widen array or enum permissions", () => {

@@ -1,6 +1,10 @@
 // Strict, transport-neutral plugin lockfile contracts.
 
 import type { PluginManifest, PluginPermissionRequest } from "./contracts.ts";
+import {
+  assertVerifiedPluginManifestDocument,
+  type VerifiedPluginManifestDocument,
+} from "./manifest-document.ts";
 import { validatePluginManifest } from "./manifest.ts";
 
 export const PLUGIN_LOCKFILE_SCHEMA_VERSION = "1.0" as const;
@@ -93,6 +97,21 @@ export function assertPluginLockEntryMatchesManifest(
     fail("plugin lock entry manifestDigest must exactly match the verified manifest digest");
   }
   assertNarrowerPermissions(entry.grants, manifest.permissions);
+}
+
+// Prefer this bridge when a manifest came from an untrusted package document:
+// it binds the lock entry to the document verifier's exact source-byte digest.
+export function assertPluginLockEntryMatchesVerifiedManifest(
+  entry: PluginLockEntry,
+  document: VerifiedPluginManifestDocument,
+): void {
+  assertVerifiedPluginManifestDocument(document);
+  assertPluginLockEntryMatchesManifest(
+    document.manifest.id,
+    entry,
+    document.manifest,
+    document.digest,
+  );
 }
 
 // A required policy rejects omitted or explicitly unverified lock metadata.

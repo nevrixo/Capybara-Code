@@ -2,6 +2,7 @@
 
 export * from "./contracts.ts";
 export * from "./manifest.ts";
+export * from "./manifest-document.ts";
 export * from "./package.ts";
 export * from "./lockfile.ts";
 export * from "./authority.ts";
