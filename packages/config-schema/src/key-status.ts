@@ -149,6 +149,7 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
   ["edit.maxFileBytes", { status: "wired", consumer: "bootstrap.ts runtime exact edit snapshot bound" }],
   ["lsp.enabled", { status: "wired", consumer: "bootstrap.ts / LspHost startup gate" }],
   ["lsp.mutations.rename", { status: "wired", consumer: "bootstrap.ts LSP rename preview gate" }],
+  ["lsp.mutations.codeActions", { status: "wired", consumer: "bootstrap.ts LSP code action preview gate" }],
   ["lsp.mutations.maxFiles", { status: "wired", consumer: "LspHost exact snapshot path bound" }],
   ["lsp.mutations.maxChangedBytes", { status: "wired", consumer: "LspHost WorkspaceEdit emitted-text bound" }],
   ["lsp.maxPendingRequestsPerServer", { status: "wired", consumer: "LspHost JSON-RPC pending request bound" }],
