@@ -47,6 +47,7 @@ describe("AgentSession LSP tool gate", () => {
     const lspTools = [
       "lsp.diagnostics",
       "lsp.definition",
+      "lsp.symbols",
       "lsp.declaration",
       "lsp.type_definition",
       "lsp.implementation",
