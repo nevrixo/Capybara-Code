@@ -72,6 +72,9 @@ export function configuredLspServers(
 const MAX_LSP_DOCUMENTS_PER_LANGUAGE = 64;
 const MAX_LSP_DIAGNOSTIC_DOCUMENTS = MAX_LSP_DOCUMENTS_PER_LANGUAGE * 2;
 const MAX_LSP_DIAGNOSTIC_SERVERS = 8;
+const MAX_LSP_WORKSPACE_SYMBOL_SERVERS = 8;
+const MAX_LSP_WORKSPACE_SYMBOL_QUERY_BYTES = 512;
+const UNSAFE_LSP_QUERY_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/;
 const MAX_LSP_DOCUMENT_BYTES = 1_000_000;
 const MAX_LSP_SYMBOLS_PER_DOCUMENT = 512;
 const MAX_LSP_PARALLEL_REQUESTS = 4;
@@ -303,6 +306,54 @@ export class LspHost {
     const result = await this.#documentSymbols(process, descriptor, path);
     this.#setStatus(descriptor.name, "ready", "document symbols ready");
     return { server: descriptor.name, result };
+  }
+
+  /**
+   * Query each enabled, configured server for resolved workspace symbols.
+   * Individual server failures are isolated so one unavailable language cannot
+   * suppress safe results from another enabled server.
+   */
+  async workspaceSymbols(query: string): Promise<readonly LspQueryResult[]> {
+    assertLspWorkspaceSymbolQuery(query);
+    if (!this.#mayStart()) throw new Error(this.#unavailableDetail());
+
+    const descriptors = this.#servers
+      .filter((descriptor) => descriptor.enabled)
+      .slice(0, MAX_LSP_WORKSPACE_SYMBOL_SERVERS);
+    if (descriptors.length === 0) {
+      throw new Error("no enabled language server is configured for workspace symbol queries");
+    }
+
+    const outcomes = await mapBounded(
+      descriptors,
+      MAX_LSP_PARALLEL_REQUESTS,
+      async (descriptor): Promise<LspQueryResult | undefined> => {
+        try {
+          const process = await this.#startForQuery(descriptor);
+          const result = await this.#request(
+            process,
+            "workspace/symbol",
+            { query },
+            descriptor.timeoutMs,
+          );
+          if (!this.#mayStart()) throw new Error("LSP workspace symbol query was cancelled");
+          this.#setStatus(descriptor.name, "ready", "workspace symbols ready");
+          return Object.freeze({ server: descriptor.name, result });
+        } catch {
+          if (this.#mayStart()) {
+            this.#setStatus(descriptor.name, "degraded", "workspace symbol request unavailable");
+          }
+          return undefined;
+        }
+      },
+    );
+    const available = outcomes.filter(
+      (outcome): outcome is LspQueryResult => outcome !== undefined,
+    );
+    if (available.length === 0) {
+      throw new Error("LSP workspace symbol query is unavailable");
+    }
+    return Object.freeze(available);
   }
 
   /**
@@ -1225,6 +1276,20 @@ function assertLspPosition(input: LspTextDocumentPosition): void {
     input.character < 0
   ) {
     throw new Error("LSP positions must be zero-based non-negative integers");
+  }
+}
+
+function assertLspWorkspaceSymbolQuery(query: string): void {
+  if (
+    typeof query !== "string" ||
+    query.trim().length === 0 ||
+    Buffer.byteLength(query, "utf8") > MAX_LSP_WORKSPACE_SYMBOL_QUERY_BYTES ||
+    UNSAFE_LSP_QUERY_CHARACTERS.test(query)
+  ) {
+    throw new Error(
+      "LSP workspace symbol query must be non-empty, control-free text up to " +
+        String(MAX_LSP_WORKSPACE_SYMBOL_QUERY_BYTES) + " UTF-8 bytes",
+    );
   }
 }
 

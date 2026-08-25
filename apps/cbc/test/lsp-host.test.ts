@@ -139,6 +139,8 @@ describe("LspHost", () => {
                   ],
                 },
               ]
+            : message.method === "workspace/symbol"
+            ? []
             : { capabilities: {} };
         notification?.("lsp.stdio.output", {
           protocolChannel,
@@ -198,6 +200,16 @@ describe("LspHost", () => {
       name: "typescript",
       state: "ready",
       detail: "2 symbol(s) in 1 file(s)",
+    });
+
+    const workspaceSymbols = await host.workspaceSymbols("Widget");
+    expect(workspaceSymbols).toEqual([{ server: "typescript", result: [] }]);
+    expect(starts).toBe(1);
+    expect(methods).toContain("workspace/symbol");
+    expect(statuses.at(-1)).toContainEqual({
+      name: "typescript",
+      state: "ready",
+      detail: "workspace symbols ready",
     });
 
     await host.close();
