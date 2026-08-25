@@ -112,6 +112,7 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: "/skills", description: "list or inspect Skills", args: [{ name: "skill" }] },
   { name: "/mcp", description: "show MCP server health" },
   { name: "/context", description: "inspect the context budget" },
+  { name: "/memory", description: "inspect, forget, or resolve durable memory", args: [{ name: "action", values: ["inspect", "forget", "resolve"] }] },
   { name: "/compact", description: "compact the session context" },
   { name: "/new", description: "start a new chat" },
   { name: "/resume", description: "resume a session", args: [{ name: "session" }] },

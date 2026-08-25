@@ -34,6 +34,7 @@ export type SlashIntent =
   | { readonly kind: "set_permission"; readonly preset?: string; readonly save?: boolean }
   | { readonly kind: "set_mode"; readonly mode?: "build" | "plan"; readonly save?: boolean; readonly stopActive?: boolean }
   | { readonly kind: "status" }
+  | { readonly kind: "memory"; readonly action?: "inspect" | "forget" | "resolve"; readonly argument?: string }
   | { readonly kind: "compact" }
   | { readonly kind: "resume"; readonly id?: string }
   | { readonly kind: "new_session" }
@@ -110,6 +111,17 @@ export function parseSlash(raw: string): SlashIntent {
     }
     case "/status":
       return { kind: "status" };
+    case "/memory": {
+      const action = rest[0] === "inspect" || rest[0] === "forget" || rest[0] === "resolve"
+        ? rest[0]
+        : undefined;
+      const memoryArg = rest.slice(action === undefined ? 0 : 1).join(" ").trim();
+      return {
+        kind: "memory",
+        ...(action !== undefined ? { action } : {}),
+        ...(memoryArg.length > 0 ? { argument: memoryArg } : {}),
+      };
+    }
     case "/compact":
       return { kind: "compact" };
     case "/new":

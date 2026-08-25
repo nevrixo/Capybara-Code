@@ -1615,6 +1615,30 @@ async function handleSlash(
       return "continue";
     }
 
+    case "memory": {
+      const loaded = await context.config();
+      if (!loaded.config.experimental.durableMemory || !loaded.config.memory.enabled) {
+        ui.text("Durable memory is disabled. Enable experimental.durableMemory and memory.enabled.");
+        return "continue";
+      }
+      try {
+        const recalled = await boot.runtime.searchMemory({
+          statuses: intent.action === "resolve" ? ["contested"] : ["active", "contested", "superseded"],
+          limit: 32,
+        });
+        if (recalled.memories.length === 0) {
+          ui.openOverlay("status", ["No durable memory records in this workspace."]);
+          return "continue";
+        }
+        ui.openOverlay("status", recalled.memories.map((memory) =>
+          `[${memory.status}/${memory.scope}] ${memory.key}\n${memory.value}`
+        ));
+      } catch (error) {
+        ui.text("Memory inspect failed: " + (error instanceof Error ? error.message : String(error)));
+      }
+      return "continue";
+    }
+
     case "compact": {
       const result = session.compactContext({ userRequested: true });
       if (result === undefined) {
