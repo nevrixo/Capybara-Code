@@ -47,6 +47,10 @@ export type KeyAction =
   | "sessions_drawer"
   | "context_drawer"
   | "todo_drawer"
+  | "memory_drawer"
+  | "graph_drawer"
+  | "worktree_drawer"
+  | "plugins_drawer"
   | "cycle_interaction_mode"
   | "details_overlay"
   | "toggle_sidebar"
@@ -163,6 +167,10 @@ export const DEFAULT_KEYMAP: readonly KeyBinding[] = [
   { action: "sessions_drawer", key: "ctrl+x l", description: "sessions", when: "always" },
   { action: "context_drawer", key: "ctrl+x c", description: "context", when: "always" },
   { action: "todo_drawer", key: "ctrl+x p", description: "TODO list", when: "always" },
+  { action: "memory_drawer", key: "ctrl+x y", description: "durable memory", when: "always" },
+  { action: "graph_drawer", key: "ctrl+x g", description: "agent graph", when: "always" },
+  { action: "worktree_drawer", key: "ctrl+x w", description: "worktrees", when: "always" },
+  { action: "plugins_drawer", key: "ctrl+x u", description: "plugins", when: "always" },
   { action: "model_picker", key: "ctrl+x m", description: "model picker", when: "always" },
   { action: "help", key: "ctrl+x h", description: "help", when: "always" },
   { action: "redraw", key: "ctrl+l", description: "redraw the viewport", when: "always" },

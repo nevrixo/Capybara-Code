@@ -625,6 +625,14 @@ export class ComposerSession {
         return { kind: "open_overlay", overlay: "context" };
       case "todo_drawer":
         return { kind: "open_overlay", overlay: "todo" };
+      case "memory_drawer":
+        return { kind: "open_overlay", overlay: "memory" };
+      case "graph_drawer":
+        return { kind: "open_overlay", overlay: "graph" };
+      case "worktree_drawer":
+        return { kind: "open_overlay", overlay: "worktree" };
+      case "plugins_drawer":
+        return { kind: "open_overlay", overlay: "plugins" };
       case "details_overlay":
         return { kind: "open_overlay", overlay: "details" };
       case "cycle_interaction_mode":

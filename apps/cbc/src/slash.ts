@@ -45,6 +45,9 @@ const OVERLAY_FOR: Readonly<Record<string, OverlayKind>> = {
   "/skills": "skills",
   "/mcp": "mcp",
   "/context": "context",
+  "/graph": "graph",
+  "/worktree": "worktree",
+  "/plugins": "plugins",
 };
 
 /**

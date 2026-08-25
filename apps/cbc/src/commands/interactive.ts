@@ -1629,22 +1629,34 @@ async function handleSlash(
         ui.text("Durable memory is disabled. Enable experimental.durableMemory and memory.enabled.");
         return "continue";
       }
-      try {
-        const recalled = await boot.runtime.searchMemory({
-          statuses: intent.action === "resolve" ? ["contested"] : ["active", "contested", "superseded"],
-          limit: 32,
-        });
-        if (recalled.memories.length === 0) {
-          ui.openOverlay("status", ["No durable memory records in this workspace."]);
-          return "continue";
+      const service = boot.session.memoryService;
+      if (intent.action === "forget" && intent.argument && service !== undefined) {
+        const id = intent.argument.startsWith("memory-") ? intent.argument : `memory-${intent.argument}`;
+        try {
+          service.forget(id as `memory-${string}`);
+          await boot.runtime.forgetMemory({ id }).catch(() => undefined);
+          ui.text(`Forgot ${id}.`);
+        } catch (error) {
+          ui.text("Memory forget failed: " + (error instanceof Error ? error.message : String(error)));
         }
-        ui.openOverlay("status", recalled.memories.map((memory) =>
-          `[${memory.status}/${memory.scope}] ${memory.key}\n${memory.value}`
-        ));
-      } catch (error) {
-        ui.text("Memory inspect failed: " + (error instanceof Error ? error.message : String(error)));
+        return "continue";
       }
-      return "continue";
+      if (intent.action === "resolve" && intent.argument && service !== undefined) {
+        const id = intent.argument.startsWith("memory-") ? intent.argument : `memory-${intent.argument}`;
+        try {
+          const record = service.inspect().records.find((item) => item.id === id);
+          service.resolveContest({
+            winnerId: id as `memory-${string}`,
+            evidenceIds: record?.evidenceIds ?? [],
+            reason: "user resolved from /memory",
+          });
+          ui.text(`Resolved contest in favor of ${id}.`);
+        } catch (error) {
+          ui.text("Memory resolve failed: " + (error instanceof Error ? error.message : String(error)));
+        }
+        return "continue";
+      }
+      return await handleOverlay(context, ui, boot, "memory");
     }
 
     case "compact": {
@@ -1750,6 +1762,63 @@ async function handleOverlay(
 
     case "todo": {
       ui.openOverlay("todo", renderTodoList(session.viewModel.todo, ui.blockContext));
+      return "continue";
+    }
+
+    case "memory": {
+      const service = boot.session.memoryService;
+      if (service === undefined) {
+        ui.openOverlay("memory", ["Durable memory is disabled."]);
+        return "continue";
+      }
+      const view = service.inspect();
+      if (view.records.length === 0) {
+        ui.openOverlay("memory", ["No durable memory records in this workspace."]);
+        return "continue";
+      }
+      ui.openOverlay("memory", view.records.map((memory) => {
+        const forgotten = view.forgottenIds.includes(memory.id) ? " forgotten" : "";
+        return `[${memory.status}/${memory.scope}${forgotten}] ${memory.key}\n${memory.value}`;
+      }));
+      return "continue";
+    }
+
+    case "graph": {
+      const tasks = session.viewModel.timeline.filter((item) => item.type === "task");
+      ui.openOverlay(
+        "graph",
+        tasks.length === 0
+          ? ["No agent-graph nodes in this session."]
+          : tasks.map((item) => `${item.sequence}  ${item.role}  ${item.summary ?? item.state}`),
+      );
+      return "continue";
+    }
+
+    case "worktree": {
+      try {
+        const listed = await boot.runtime.listWorktrees() as {
+          worktrees?: Array<{ id?: string; path?: string; state?: string }>;
+        };
+        const rows = listed.worktrees ?? [];
+        ui.openOverlay(
+          "worktree",
+          rows.length === 0
+            ? ["No isolated worktrees."]
+            : rows.map((tree) => `${tree.id ?? "?"}  ${tree.state ?? ""}  ${tree.path ?? ""}`),
+        );
+      } catch (error) {
+        ui.openOverlay("worktree", [
+          "Worktree list failed: " + (error instanceof Error ? error.message : String(error)),
+        ]);
+      }
+      return "continue";
+    }
+
+    case "plugins": {
+      ui.openOverlay("plugins", [
+        "Plugin grants are workspace-bound. Default runtime has no ambient network or write authority.",
+        "Before-hooks may only deny or narrow. After-hooks are fail-open.",
+      ]);
       return "continue";
     }
 

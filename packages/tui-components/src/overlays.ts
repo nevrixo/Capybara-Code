@@ -29,7 +29,11 @@ export type OverlayKind =
   | "status"
   | "settings"
   | "details"
-  | "help";
+  | "help"
+  | "memory"
+  | "graph"
+  | "worktree"
+  | "plugins";
 
 export const OVERLAY_KINDS: readonly OverlayKind[] = [
   "command_palette",
@@ -48,6 +52,10 @@ export const OVERLAY_KINDS: readonly OverlayKind[] = [
   "settings",
   "details",
   "help",
+  "memory",
+  "graph",
+  "worktree",
+  "plugins",
 ];
 
 export const OVERLAY_TITLES: Readonly<Record<OverlayKind, string>> = {
@@ -67,6 +75,10 @@ export const OVERLAY_TITLES: Readonly<Record<OverlayKind, string>> = {
   settings: "Settings",
   details: "Transcript details",
   help: "Help",
+  memory: "Memory",
+  graph: "Agent graph",
+  worktree: "Worktrees",
+  plugins: "Plugins",
 };
 
 /**
@@ -113,6 +125,9 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: "/mcp", description: "show MCP server health" },
   { name: "/context", description: "inspect the context budget" },
   { name: "/memory", description: "inspect, forget, or resolve durable memory", args: [{ name: "action", values: ["inspect", "forget", "resolve"] }] },
+  { name: "/graph", description: "inspect the durable agent graph" },
+  { name: "/worktree", description: "inspect isolated writer worktrees" },
+  { name: "/plugins", description: "inspect installed plugin grants" },
   { name: "/compact", description: "compact the session context" },
   { name: "/new", description: "start a new chat" },
   { name: "/resume", description: "resume a session", args: [{ name: "session" }] },
