@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "capybara-code"
+version = "0.1.0"
+description = "Asyncio Python SDK for the Capybara Code App Protocol"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Capybara Code" }]
+keywords = ["capybara", "coding-agent", "json-rpc"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "License :: OSI Approved :: Apache Software License",
+  "Framework :: AsyncIO",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["capybara_code*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
