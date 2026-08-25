@@ -33,6 +33,7 @@ import type {
   LspCodeActionPreviewRequest,
   LspFormattingPreview,
   LspFormattingPreviewRequest,
+  LspRangeFormattingPreviewRequest,
   LspDiagnosticLookup,
   LspQueryResult,
   LspReferencesRequest,
@@ -109,6 +110,10 @@ export interface LspFormattingPreviewReader {
   formatPreview(input: LspFormattingPreviewRequest): Promise<LspFormattingPreview>;
 }
 
+export interface LspRangeFormattingPreviewReader {
+  rangeFormatPreview(input: LspRangeFormattingPreviewRequest): Promise<LspFormattingPreview>;
+}
+
 export interface LspRenamePreviewReader {
   renamePreview(input: LspRenameRequest): Promise<LspRenamePreview>;
 }
@@ -121,6 +126,7 @@ export interface LspToolReader extends
   LspCodeActionsReader,
   LspCodeActionPreviewReader,
   LspFormattingPreviewReader,
+  LspRangeFormattingPreviewReader,
   LspRenamePreviewReader {}
 
 export interface LspSemanticBridgeOptions {
@@ -276,7 +282,7 @@ export interface LspToolCodeActionPreviewResult {
 /** A formatting outcome is either an exact-bound plan or an explicit no-op. */
 export interface LspToolFormattingPreviewResult {
   readonly schemaVersion: "1.0";
-  readonly kind: "format_preview";
+  readonly kind: "format_preview" | "range_format_preview";
   readonly server: string;
   readonly path: string;
   readonly changed: boolean;
@@ -297,6 +303,7 @@ export type LspSemanticBridge = (action: ProposedAction, signal: AbortSignal) =>
 export type LspCodeActionsBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspCodeActionPreviewBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspFormattingPreviewBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
+export type LspRangeFormattingPreviewBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspRenamePreviewBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspToolBridge = LspSemanticBridge;
 
@@ -616,6 +623,46 @@ export function createLspFormattingPreviewBridge(
 }
 
 /**
+ * Range formatting remains proposal-only. Its host enforces the requested range
+ * before this bridge strips raw server payloads down to a revision-bound plan.
+ */
+export function createLspRangeFormattingPreviewBridge(
+  reader: LspRangeFormattingPreviewReader,
+): LspRangeFormattingPreviewBridge {
+  return async (action, signal) => {
+    const request = rangeFormattingPreviewRequest(action);
+    if (request === undefined) {
+      return {
+        result: errorResult(
+          "INVALID_ARGUMENT",
+          "lsp.range_format_preview requires a bounded workspace-relative path and ordered zero-based range",
+        ),
+      };
+    }
+    if (signal.aborted) return cancelledRangeFormattingPreview();
+
+    try {
+      const preview = await reader.rangeFormatPreview(request);
+      if (signal.aborted) return cancelledRangeFormattingPreview();
+      const result = projectFormattingPreview(preview, request.path, "range_format_preview");
+      if (result === undefined) throw new Error("range formatting preview could not be projected safely");
+      return {
+        result: okResult(rangeFormattingPreviewSummary(result), result),
+        text: renderRangeFormattingPreview(result),
+      };
+    } catch {
+      return {
+        result: errorResult(
+          "NOT_INITIALIZED",
+          "LSP range formatting preview is currently unavailable; retry after the language server is ready",
+          { retryable: true },
+        ),
+      };
+    }
+  };
+}
+
+/**
  * Rename stays proposal-only: this bridge returns a reconstructed, bounded
  * edit plan but never exposes the raw server WorkspaceEdit or writes files.
  */
@@ -670,6 +717,7 @@ export function createLspToolBridge(
   const codeActions = createLspCodeActionsBridge(reader, options);
   const codeActionPreview = createLspCodeActionPreviewBridge(reader);
   const formattingPreview = createLspFormattingPreviewBridge(reader);
+  const rangeFormattingPreview = createLspRangeFormattingPreviewBridge(reader);
   const renamePreview = createLspRenamePreviewBridge(reader);
   return async (action, signal) =>
     action.toolId === "lsp.diagnostics"
@@ -684,6 +732,8 @@ export function createLspToolBridge(
       ? await codeActionPreview(action, signal)
       : action.toolId === "lsp.format_preview"
       ? await formattingPreview(action, signal)
+      : action.toolId === "lsp.range_format_preview"
+      ? await rangeFormattingPreview(action, signal)
       : action.toolId === "lsp.rename_preview"
       ? await renamePreview(action, signal)
       : await semantic(action, signal);
@@ -728,6 +778,12 @@ function cancelledCodeActionPreview(): Execution {
 function cancelledFormattingPreview(): Execution {
   return {
     result: errorResult("CANCELLED", "LSP formatting preview was cancelled", { retryable: true }),
+  };
+}
+
+function cancelledRangeFormattingPreview(): Execution {
+  return {
+    result: errorResult("CANCELLED", "LSP range formatting preview was cancelled", { retryable: true }),
   };
 }
 
@@ -794,6 +850,33 @@ function formattingPreviewRequest(action: ProposedAction): LspFormattingPreviewR
   if (raw === undefined) return undefined;
   const path = lspPathFromArguments(raw, MAX_SEMANTIC_PATH_BYTES);
   return path === undefined ? undefined : Object.freeze({ path });
+}
+
+function rangeFormattingPreviewRequest(
+  action: ProposedAction,
+): LspRangeFormattingPreviewRequest | undefined {
+  if (action.toolId !== "lsp.range_format_preview") return undefined;
+  const raw = lspArguments(action);
+  if (raw === undefined) return undefined;
+  const path = lspPathFromArguments(raw, MAX_SEMANTIC_PATH_BYTES);
+  if (
+    path === undefined ||
+    !isSemanticPositionComponent(raw.startLine) ||
+    !isSemanticPositionComponent(raw.startCharacter) ||
+    !isSemanticPositionComponent(raw.endLine) ||
+    !isSemanticPositionComponent(raw.endCharacter) ||
+    raw.startLine > raw.endLine ||
+    (raw.startLine === raw.endLine && raw.startCharacter > raw.endCharacter)
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    path,
+    startLine: raw.startLine,
+    startCharacter: raw.startCharacter,
+    endLine: raw.endLine,
+    endCharacter: raw.endCharacter,
+  });
 }
 
 function renamePreviewRequest(action: ProposedAction): LspRenameRequest | undefined {
@@ -895,6 +978,7 @@ function projectCodeActionPreview(value: unknown): LspToolCodeActionPreviewResul
 function projectFormattingPreview(
   value: unknown,
   path: string,
+  kind: LspToolFormattingPreviewResult["kind"] = "format_preview",
 ): LspToolFormattingPreviewResult | undefined {
   const preview = isRecord(value) ? value : undefined;
   const server = opaquePlanText(preview?.server, MAX_METADATA_BYTES);
@@ -902,7 +986,7 @@ function projectFormattingPreview(
   if (preview.edit === undefined) {
     return Object.freeze({
       schemaVersion: "1.0" as const,
-      kind: "format_preview" as const,
+      kind,
       server,
       path,
       changed: false,
@@ -919,7 +1003,7 @@ function projectFormattingPreview(
   }
   return Object.freeze({
     schemaVersion: "1.0" as const,
-    kind: "format_preview" as const,
+    kind,
     server: editProjection.server,
     path,
     changed: true,
@@ -1155,6 +1239,23 @@ function renderFormattingPreview(result: LspToolFormattingPreviewResult): string
   }
   return truncateUtf8([
     "Language-server formatting preview created a revision-bound plan for " + result.path + ".",
+    "[This proposal has not written files. Run fs.edit.preview to re-preflight it; fs.edit requires its own approval and re-preflights immediately before staging.]",
+  ].join("\n"), MAX_TEXT_BYTES);
+}
+
+function rangeFormattingPreviewSummary(result: LspToolFormattingPreviewResult): string {
+  return result.changed
+    ? "revision-bound LSP range formatting proposal returned for " + result.path
+    : "LSP range formatting preview found no edits for " + result.path;
+}
+
+function renderRangeFormattingPreview(result: LspToolFormattingPreviewResult): string {
+  if (!result.changed) {
+    return "Language-server range formatting preview found no edits for " + result.path +
+      ". No files were written.";
+  }
+  return truncateUtf8([
+    "Language-server range formatting preview created a revision-bound plan for " + result.path + ".",
     "[This proposal has not written files. Run fs.edit.preview to re-preflight it; fs.edit requires its own approval and re-preflights immediately before staging.]",
   ].join("\n"), MAX_TEXT_BYTES);
 }
