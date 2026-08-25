@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-25T19:51:37.831Z",
+  "generatedAt": "2026-08-25T19:53:41.701Z",
   "git": {
-    "commit": "ff81cc6f535e34a7bc140892301571218ccdd487",
+    "commit": "fba7f38b6afbc00f2ca78f92f0a4152fd2d9575b",
     "dirty": true,
-    "dirtyHash": "e1b420ef4a2d604a64614b4658124cf7138d802c97f4a497a8e16b053221a04c"
+    "dirtyHash": "535a17a0ae3355011904252d936d296c13531291eb7c7c4da89c719735fdf343"
   },
   "roots": [
     "apps",
@@ -2613,8 +2613,8 @@
     },
     {
       "path": "packages/session-domain/src/todo.ts",
-      "bytes": 56168,
-      "sha256": "9d9c70d37ee660a3481d116d81153b3312293fce1ce4a84f11e02749e8ef8a65"
+      "bytes": 53808,
+      "sha256": "058eb3127946e6d61d1726e46db0fe5b7c1c2e584a91696b4084e3d436111bcb"
     },
     {
       "path": "packages/session-domain/test/compaction-capsule.test.ts",
@@ -3177,5 +3177,5 @@
       "sha256": "3af6b7d3ec7041c90b18206fe898b904d8781a97c25369189f2733173c6d23a5"
     }
   ],
-  "digest": "e1b7cf9229519329ac0529aa1c8590e7af1095b9617a3b77fcd9f48571b79f14"
+  "digest": "ca3fb110e587268b805f90e254303a5f3dae23c0bd3424441269f1a3f96252ed"
 }
