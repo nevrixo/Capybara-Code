@@ -150,6 +150,7 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
   ["lsp.enabled", { status: "wired", consumer: "bootstrap.ts / LspHost startup gate" }],
   ["lsp.mutations.rename", { status: "wired", consumer: "bootstrap.ts LSP rename preview gate" }],
   ["lsp.mutations.maxFiles", { status: "wired", consumer: "LspHost exact snapshot path bound" }],
+  ["lsp.mutations.maxChangedBytes", { status: "wired", consumer: "LspHost WorkspaceEdit emitted-text bound" }],
   ["lsp.maxPendingRequestsPerServer", { status: "wired", consumer: "LspHost JSON-RPC pending request bound" }],
   ["experimental.", { status: "experimental", note: "new runtime surfaces remain disabled until their feature gate is explicitly enabled" }],
   ["edit.", { status: "experimental", note: "Anchor/Range Edit Engine rollout is feature-gated" }],

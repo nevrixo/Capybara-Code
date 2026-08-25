@@ -414,6 +414,7 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
       effective.experimental.editEngineV2 && effective.lsp.mutations.rename,
     maxEditOperations: effective.edit.maxOperationsPerPlan,
     maxEditPaths: effective.lsp.mutations.maxFiles,
+    maxEditChangedBytes: effective.lsp.mutations.maxChangedBytes,
     maxPendingRequests: effective.lsp.maxPendingRequestsPerServer,
     readEditDocument: async (path) => {
       const response = await runtime.read({

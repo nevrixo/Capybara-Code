@@ -201,6 +201,8 @@ export interface LspHostOptions {
   readonly maxEditOperations?: number;
   /** Upper bound on runtime document snapshots acquired for one LSP proposal. */
   readonly maxEditPaths?: number;
+  /** Upper bound on UTF-8 bytes introduced by one LSP-generated edit proposal. */
+  readonly maxEditChangedBytes?: number;
   /** Upper bound on unresolved JSON-RPC requests for one server process. */
   readonly maxPendingRequests?: number;
   /** Called whenever a sidebar-visible service state changes. */
@@ -633,7 +635,7 @@ export class LspHost {
       }
       documents.push(document);
     }
-    return buildLspEditPlan(workspaceEdit, {
+    const edit = buildLspEditPlan(workspaceEdit, {
       workspaceRoot: this.#options.workspaceRoot,
       workspaceIdentityDigest,
       sessionId: this.#options.sessionId,
@@ -642,6 +644,15 @@ export class LspHost {
         ? {}
         : { maxOperations: this.#options.maxEditOperations }),
     });
+    const maxChangedBytes = this.#options.maxEditChangedBytes ?? 16_777_216;
+    if (
+      !Number.isSafeInteger(maxChangedBytes) ||
+      maxChangedBytes < 1 ||
+      lspEditPlanChangedBytes(edit) > maxChangedBytes
+    ) {
+      throw new Error("LSP edit preview exceeds the configured changed-byte limit");
+    }
+    return edit;
   }
 
   async #indexLanguage(
@@ -1525,6 +1536,25 @@ function lspWorkspaceEdit(value: unknown): LspWorkspaceEdit {
     throw new Error("language server did not return a WorkspaceEdit");
   }
   return record as LspWorkspaceEdit;
+}
+
+/** Count only text emitted by the server; runtime preflight still checks every deletion. */
+function lspEditPlanChangedBytes(edit: LspEditPlanResult): number {
+  let total = 0;
+  for (const operation of edit.plan.operations) {
+    const text =
+      operation.kind === "replace_range"
+        ? operation.replacement
+        : operation.kind === "create_file"
+        ? operation.content
+        : "";
+    const bytes = Buffer.byteLength(text, "utf8");
+    if (!Number.isSafeInteger(bytes) || bytes > Number.MAX_SAFE_INTEGER - total) {
+      return Number.MAX_SAFE_INTEGER;
+    }
+    total += bytes;
+  }
+  return total;
 }
 
 function workspaceFileUri(workspaceRoot: string, path: string): string {
