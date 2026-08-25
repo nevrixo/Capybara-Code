@@ -42,17 +42,20 @@ function makeSession(fullLsp: boolean, includeBridge: boolean, trust: "trusted-a
   });
 }
 
-describe("AgentSession LSP diagnostics tool gate", () => {
-  test("requires both the fullLsp feature flag and a supplied root bridge", () => {
+describe("AgentSession LSP tool gate", () => {
+  test("requires fullLsp, trusted workspace, and a supplied root bridge for every LSP read tool", () => {
+    const lspTools = ["lsp.diagnostics", "lsp.definition", "lsp.references", "lsp.hover"];
     const disabled = makeSession(false, true);
     const missingBridge = makeSession(true, false);
     const enabled = makeSession(true, true);
     const untrusted = makeSession(true, true, "untrusted");
 
-    expect(disabled.registry.has("lsp.diagnostics")).toBe(false);
-    expect(missingBridge.registry.has("lsp.diagnostics")).toBe(false);
-    expect(enabled.registry.has("lsp.diagnostics")).toBe(true);
-    expect(untrusted.registry.has("lsp.diagnostics")).toBe(false);
-    expect(enabled.registry.activeIds()).not.toContain("lsp.diagnostics");
+    for (const toolId of lspTools) {
+      expect(disabled.registry.has(toolId)).toBe(false);
+      expect(missingBridge.registry.has(toolId)).toBe(false);
+      expect(enabled.registry.has(toolId)).toBe(true);
+      expect(untrusted.registry.has(toolId)).toBe(false);
+      expect(enabled.registry.activeIds()).not.toContain(toolId);
+    }
   });
 });

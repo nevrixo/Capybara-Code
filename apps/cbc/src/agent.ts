@@ -547,7 +547,7 @@ export class AgentSession {
     this.#backgroundJobsReconciled = typeof options.runtime.jobStatus !== "function";
     this.#permissionPreset = options.config.permissions.preset;
     this.#tokenSaving = new TokenSavingController(options.config.agent.tokenSaving);
-    const fullLspDiagnostics =
+    const fullLspTools =
       options.config.experimental.fullLsp &&
       options.config.lsp.enabled &&
       (options.trust === "trusted-always" || options.trust === "trusted-once") &&
@@ -560,7 +560,7 @@ export class AgentSession {
         (options.config.memory.workspaceEnabled ||
           options.config.memory.sessionEnabled ||
           options.config.memory.taskEnabled),
-      fullLsp: fullLspDiagnostics,
+      fullLsp: fullLspTools,
     }).filter((tool) =>
       options.config.agent.compoundTools ||
       (tool.id !== "repo.investigate" && tool.id !== "verification.run_many"),
