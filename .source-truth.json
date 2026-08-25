@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-25T23:08:46.446Z",
+  "generatedAt": "2026-08-25T23:15:33.301Z",
   "git": {
-    "commit": "9e24985d54a5e774f3c21acc453927938b9f9ca7",
+    "commit": "daf51930def785ad1b84bfdf3881114ad057c257",
     "dirty": true,
-    "dirtyHash": "aac6640a6296760c75c0d64a687079fd8c0cc37f3578d1e05a6d1c2a17127566"
+    "dirtyHash": "eb7c57eba698507a375597627ca5a23b92661803d5b14eb67ddfe55b72088aba"
   },
   "roots": [
     "apps",
@@ -30,6 +30,7 @@
     "(^|[\\\\/])dist([\\\\/]|$)",
     "(^|[\\\\/])target([\\\\/]|$)",
     "(^|[\\\\/])__pycache__([\\\\/]|$)",
+    "(^|[\\\\/])\\.pytest_cache([\\\\/]|$)",
     "(^|[\\\\/])benchmarks([\\\\/][^\\\\/]+)?[\\\\/]results([\\\\/]|$)",
     "\\.orig$",
     "\\.bak$",
@@ -44,6 +45,7 @@
     "dist/",
     "target/",
     "__pycache__/",
+    ".pytest_cache/",
     "benchmarks/**/results/"
   ],
   "toolVersions": {
@@ -53,18 +55,18 @@
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
     "typescript": "5.9.3"
   },
-  "fileCount": 625,
+  "fileCount": 620,
   "historicalArtifacts": [],
   "files": [
     {
       "path": "Cargo.lock",
       "bytes": 22010,
-      "sha256": "b38284e95d38fcaf10a7b11960b1d218870006ac280428850c08158d289f42e8"
+      "sha256": "0e6704512c53705ace30a6329592700544ec5e1e67a227eb03a4f28814203067"
     },
     {
       "path": "Cargo.toml",
       "bytes": 1654,
-      "sha256": "a9126098f57ae4162199eafc23df6ec9ad0ad0459135dc69fe3aba3b8fee8efc"
+      "sha256": "11a51cea90266bc99380c1d1d3c13401cd874558a97b55b55169e609bbbb2291"
     },
     {
       "path": "README.md",
@@ -169,7 +171,7 @@
     {
       "path": "apps/cbc/package.json",
       "bytes": 301,
-      "sha256": "22b336238e0d518f8b759795f88a9c1194bad29e604f916f6f7df702a80214d3"
+      "sha256": "5459774d3dc63ce0a484796b194745c227c5c72c2616cfccb96c602e78a6a427"
     },
     {
       "path": "apps/cbc/src/account-login.ts",
@@ -319,7 +321,7 @@
     {
       "path": "apps/cbc/src/main.ts",
       "bytes": 999,
-      "sha256": "fc61199078abbb35ca516abedf59cf3a62bcf8cdd57b80dcf522730f069136cd"
+      "sha256": "cd0b48f6afb77904463b7222ec7ec00422553227cd45a81927262fbc39da7543"
     },
     {
       "path": "apps/cbc/src/mcp-credentials.ts",
@@ -849,7 +851,7 @@
     {
       "path": "bun.lock",
       "bytes": 20752,
-      "sha256": "614d197c038bc5ab0fbd2b5f46cb97dc24fe5caca98278caba03650357995947"
+      "sha256": "818de88d4767dbecdaefd095433a4bb3467f132b1a158c16e9d55bf77c5a1b91"
     },
     {
       "path": "crates/cbc-artifacts/Cargo.toml",
@@ -1504,7 +1506,7 @@
     {
       "path": "package.json",
       "bytes": 2537,
-      "sha256": "f4ac3f057ddcd319cc8d147e3ca493cd9724534e2b9bf67d5e1522a1f951bef4"
+      "sha256": "3f9c6217ff9fda592584296e6a124c501c6630b14bc3520978bec547125836b9"
     },
     {
       "path": "packages/agent-graph-domain/package.json",
@@ -2447,31 +2449,6 @@
       "sha256": "cad2879698cadcabe31e790ee327b1c3a504383fb6289ea5809d46aa0c38bc3b"
     },
     {
-      "path": "packages/sdk-python/.pytest_cache/.gitignore",
-      "bytes": 37,
-      "sha256": "3ed731b65d06150c138e2dadb0be0697550888a6b47eb8c45ecc9adba8b8e9bd"
-    },
-    {
-      "path": "packages/sdk-python/.pytest_cache/CACHEDIR.TAG",
-      "bytes": 191,
-      "sha256": "37dc88ef9a0abeddbe81053a6dd8fdfb13afb613045ea1eb4a5c815a74a3bde4"
-    },
-    {
-      "path": "packages/sdk-python/.pytest_cache/README.md",
-      "bytes": 302,
-      "sha256": "73fd6fccdd802c419a6b2d983d6c3173b7da97558ac4b589edec2dfe443db9ad"
-    },
-    {
-      "path": "packages/sdk-python/.pytest_cache/v/cache/lastfailed",
-      "bytes": 84,
-      "sha256": "8d0e94d37d40d7724b52c448a3477ff4332fd7b2b4b974fbbf7c98b87671dc04"
-    },
-    {
-      "path": "packages/sdk-python/.pytest_cache/v/cache/nodeids",
-      "bytes": 217,
-      "sha256": "ca56f28495861c0f2fed2ee81e6167c2eae8dd771fbd8bcbcd8953a78c45336f"
-    },
-    {
       "path": "packages/sdk-python/capybara_code/__init__.py",
       "bytes": 609,
       "sha256": "9b6273583e7682a01e272caa115d69f82fb89c8cb54158ea384c2077748c4c5e"
@@ -3159,7 +3136,7 @@
     {
       "path": "scripts/release.test.ts",
       "bytes": 11019,
-      "sha256": "42b67d37135e72509382ccaa4652dd2ebca0e650253f486b6135dd8b24906032"
+      "sha256": "9ea5b114c5f3ebb42bc1a01fe8931d20dd5a87fd0b5b1f43888df9e4d9216e71"
     },
     {
       "path": "scripts/smoke-release.ts",
@@ -3168,8 +3145,8 @@
     },
     {
       "path": "scripts/source-truth.ts",
-      "bytes": 10867,
-      "sha256": "317fb132d800aff4666d63574cba6375dc88bcf05b5f739b7493f7328c482549"
+      "bytes": 10923,
+      "sha256": "1af630b1ff0b6db5b415b4dda49423020a19dc555392eeb34f57eeba1bdf0144"
     },
     {
       "path": "scripts/write-release-checksums.ts",
@@ -3182,5 +3159,5 @@
       "sha256": "3af6b7d3ec7041c90b18206fe898b904d8781a97c25369189f2733173c6d23a5"
     }
   ],
-  "digest": "da7d70372bea4b451e1d122d7605b0039948bf1ac7d07f50b2700cba1d8758c4"
+  "digest": "9f19e03c644c6ca1538e06ba167b658581f17fe37e79669d27487b1e5aa908f1"
 }
