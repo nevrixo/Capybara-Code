@@ -89,6 +89,7 @@ pub enum MemoryStatus {
     Active,
     Superseded,
     Contested,
+    Forgotten,
 }
 
 impl MemoryStatus {
@@ -97,6 +98,7 @@ impl MemoryStatus {
             Self::Active => "active",
             Self::Superseded => "superseded",
             Self::Contested => "contested",
+            Self::Forgotten => "forgotten",
         }
     }
 
@@ -105,6 +107,7 @@ impl MemoryStatus {
             "active" => Ok(Self::Active),
             "superseded" => Ok(Self::Superseded),
             "contested" => Ok(Self::Contested),
+            "forgotten" => Ok(Self::Forgotten),
             _ => Err(StoreError::InvalidDurableMemory {
                 detail: format!("stored memory has unsupported status '{raw}'"),
             }),
@@ -658,18 +661,14 @@ impl SessionStore {
         for related_id in &contested_with {
             insert_memory_relation(&tx, &input.id, related_id, "contested_with")?;
         }
-        tx.execute(
-            "INSERT INTO memory_transitions (
-                memory_id, from_status, to_status, reason, evidence_ids_json, at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                input.id,
-                from_status.map(MemoryStatus::label).unwrap_or("absent"),
-                input.status.label(),
-                input.reason,
-                serde_json::to_string(&evidence_ids)?,
-                input.at,
-            ],
+        insert_memory_transition(
+            &tx,
+            &input.id,
+            from_status,
+            input.status,
+            &input.reason,
+            &evidence_ids,
+            &input.at,
         )?;
         tx.commit()?;
 
@@ -693,6 +692,135 @@ impl SessionStore {
             .optional()?
             .map(|row| stored_memory_from_row(&self.conn, row))
             .transpose()
+    }
+
+    /// Logical forget: keep the audit row, record a transition, and hide the
+    /// claim from default (active-only) recall. Forgotten records remain
+    /// readable by id and by inspect queries that opt into the status.
+    pub fn forget_memory(
+        &mut self,
+        id: &str,
+        workspace_identity_digest: &str,
+        reason: &str,
+        at: &str,
+    ) -> Result<StoredMemoryRecord, StoreError> {
+        validate_prefixed_identifier("memoryId", id, "memory-")?;
+        validate_workspace_identity(workspace_identity_digest)?;
+        validate_transition_text("reason", reason)?;
+        validate_timestamp("at", at)?;
+
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (from_status, revision) = bound_memory_status(&tx, id, workspace_identity_digest)?;
+        if from_status != MemoryStatus::Forgotten {
+            tx.execute(
+                "UPDATE memory_records SET status = ?2, revision = ?3 WHERE id = ?1",
+                params![id, MemoryStatus::Forgotten.label(), revision + 1],
+            )?;
+            insert_memory_transition(
+                &tx,
+                id,
+                Some(from_status),
+                MemoryStatus::Forgotten,
+                reason,
+                &[],
+                at,
+            )?;
+        }
+        tx.commit()?;
+        self.memory(id)?.ok_or_else(|| StoreError::NotFound {
+            what: format!("memory {id} after forget"),
+        })
+    }
+
+    /// Activate `winner_id` and supersede each loser in one transaction.
+    /// Every touched record must already belong to `workspace_identity_digest`.
+    pub fn resolve_memory_contest(
+        &mut self,
+        winner_id: &str,
+        loser_ids: &[String],
+        workspace_identity_digest: &str,
+        reason: &str,
+        at: &str,
+    ) -> Result<StoredMemoryRecord, StoreError> {
+        validate_prefixed_identifier("memoryId", winner_id, "memory-")?;
+        validate_workspace_identity(workspace_identity_digest)?;
+        validate_transition_text("reason", reason)?;
+        validate_timestamp("at", at)?;
+        let losers = sorted_unique(loser_ids);
+        validate_memory_reference_ids(winner_id, "loserIds", &losers, "memory-")?;
+
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (winner_status, winner_revision) =
+            bound_memory_status(&tx, winner_id, workspace_identity_digest)?;
+        let mut loser_rows = Vec::with_capacity(losers.len());
+        for loser_id in &losers {
+            let (status, revision) = bound_memory_status(&tx, loser_id, workspace_identity_digest)?;
+            loser_rows.push((loser_id.clone(), status, revision));
+        }
+
+        tx.execute(
+            "UPDATE memory_records
+             SET status = ?2, revision = ?3, last_validated_at = ?4
+             WHERE id = ?1",
+            params![
+                winner_id,
+                MemoryStatus::Active.label(),
+                winner_revision + 1,
+                at,
+            ],
+        )?;
+        insert_memory_transition(
+            &tx,
+            winner_id,
+            Some(winner_status),
+            MemoryStatus::Active,
+            reason,
+            &[],
+            at,
+        )?;
+        tx.execute(
+            "DELETE FROM memory_relations
+             WHERE memory_id = ?1 AND relation IN ('contested_with', 'superseded_by')",
+            params![winner_id],
+        )?;
+        for (loser_id, loser_status, loser_revision) in &loser_rows {
+            tx.execute(
+                "UPDATE memory_records SET status = ?2, revision = ?3 WHERE id = ?1",
+                params![
+                    loser_id,
+                    MemoryStatus::Superseded.label(),
+                    loser_revision + 1
+                ],
+            )?;
+            insert_memory_transition(
+                &tx,
+                loser_id,
+                Some(*loser_status),
+                MemoryStatus::Superseded,
+                reason,
+                &[],
+                at,
+            )?;
+            tx.execute(
+                "DELETE FROM memory_relations
+                 WHERE memory_id = ?1 AND relation IN ('contested_with', 'superseded_by')",
+                params![loser_id],
+            )?;
+            insert_memory_relation(&tx, loser_id, winner_id, "superseded_by")?;
+            tx.execute(
+                "INSERT OR IGNORE INTO memory_relations (memory_id, related_memory_id, relation)
+                 VALUES (?1, ?2, 'supersedes')",
+                params![winner_id, loser_id],
+            )?;
+        }
+        tx.commit()?;
+        self.memory(winner_id)?.ok_or_else(|| StoreError::NotFound {
+            what: format!("memory {winner_id} after contest resolution"),
+        })
     }
 
     /// Recall only visible, unexpired claims. By default every linked evidence
@@ -1375,6 +1503,61 @@ fn insert_memory_relation(
     Ok(())
 }
 
+fn insert_memory_transition(
+    tx: &rusqlite::Transaction<'_>,
+    memory_id: &str,
+    from_status: Option<MemoryStatus>,
+    to_status: MemoryStatus,
+    reason: &str,
+    evidence_ids: &[String],
+    at: &str,
+) -> Result<(), StoreError> {
+    tx.execute(
+        "INSERT INTO memory_transitions (
+            memory_id, from_status, to_status, reason, evidence_ids_json, at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            memory_id,
+            from_status.map(MemoryStatus::label).unwrap_or("absent"),
+            to_status.label(),
+            reason,
+            serde_json::to_string(evidence_ids)?,
+            at,
+        ],
+    )?;
+    Ok(())
+}
+
+fn bound_memory_status(
+    tx: &rusqlite::Transaction<'_>,
+    id: &str,
+    workspace_identity_digest: &str,
+) -> Result<(MemoryStatus, i64), StoreError> {
+    let (workspace, status, revision) = tx
+        .query_row(
+            "SELECT workspace_identity_digest, status, revision
+             FROM memory_records WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| StoreError::NotFound {
+            what: format!("memory {id}"),
+        })?;
+    if workspace != workspace_identity_digest {
+        return Err(StoreError::InvalidDurableMemory {
+            detail: format!("memory {id} is already bound to another workspace identity"),
+        });
+    }
+    Ok((MemoryStatus::parse(&status)?, revision))
+}
+
 fn memory_has_fresh_evidence(
     conn: &rusqlite::Connection,
     memory_id: &str,
@@ -1798,6 +1981,146 @@ mod tests {
         assert_eq!(
             store.memory_transitions("memory-revision").unwrap().len(),
             2
+        );
+    }
+
+    #[test]
+    fn forget_hides_from_default_recall_but_remains_gettable() {
+        let mut store = SessionStore::open_in_memory().unwrap();
+        store.upsert_evidence(&evidence("evidence-forget")).unwrap();
+        let stored = store
+            .upsert_memory(&memory("memory-forget", "evidence-forget"))
+            .unwrap();
+        let forgotten = store
+            .forget_memory(
+                "memory-forget",
+                WORKSPACE,
+                "no longer relevant",
+                "2026-08-25T00:03:00Z",
+            )
+            .unwrap();
+        assert_eq!(forgotten.status, MemoryStatus::Forgotten);
+        assert_eq!(forgotten.revision, stored.revision + 1);
+        assert!(store
+            .recall_memory(&MemoryRecallQuery::active_workspace(WORKSPACE, NOW))
+            .unwrap()
+            .is_empty());
+        let fetched = store.memory("memory-forget").unwrap().unwrap();
+        assert_eq!(fetched.status, MemoryStatus::Forgotten);
+        let inspect = store
+            .recall_memory(&MemoryRecallQuery {
+                statuses: vec![MemoryStatus::Forgotten],
+                require_fresh_evidence: false,
+                ..MemoryRecallQuery::active_workspace(WORKSPACE, NOW)
+            })
+            .unwrap();
+        assert_eq!(inspect.len(), 1);
+        assert_eq!(inspect[0].id, "memory-forget");
+        let transitions = store.memory_transitions("memory-forget").unwrap();
+        assert_eq!(
+            transitions.last().unwrap().from_status,
+            Some(MemoryStatus::Active)
+        );
+        assert_eq!(
+            transitions.last().unwrap().to_status,
+            MemoryStatus::Forgotten
+        );
+
+        let again = store
+            .forget_memory(
+                "memory-forget",
+                WORKSPACE,
+                "already forgotten",
+                "2026-08-25T00:04:00Z",
+            )
+            .unwrap();
+        assert_eq!(again.revision, forgotten.revision);
+        assert_eq!(store.memory_transitions("memory-forget").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn forget_rejects_cross_workspace_identity() {
+        let mut store = SessionStore::open_in_memory().unwrap();
+        store.upsert_evidence(&evidence("evidence-bound")).unwrap();
+        store
+            .upsert_memory(&memory("memory-bound", "evidence-bound"))
+            .unwrap();
+        let error = store
+            .forget_memory(
+                "memory-bound",
+                "workspace-other",
+                "foreign forget",
+                "2026-08-25T00:03:00Z",
+            )
+            .unwrap_err();
+        assert!(
+            matches!(error, StoreError::InvalidDurableMemory { .. }),
+            "{error}"
+        );
+        assert_eq!(
+            store.memory("memory-bound").unwrap().unwrap().status,
+            MemoryStatus::Active
+        );
+    }
+
+    #[test]
+    fn resolve_memory_contest_activates_winner_and_supersedes_losers() {
+        let mut store = SessionStore::open_in_memory().unwrap();
+        store.upsert_evidence(&evidence("evidence-left")).unwrap();
+        store.upsert_evidence(&evidence("evidence-right")).unwrap();
+        let mut left = memory("memory-left", "evidence-left");
+        left.key = "formatter".into();
+        left.value = "prettier".into();
+        left.status = MemoryStatus::Contested;
+        left.contested_with = vec!["memory-right".into()];
+        let mut right = memory("memory-right", "evidence-right");
+        right.key = "formatter".into();
+        right.value = "biome".into();
+        right.status = MemoryStatus::Contested;
+        right.contested_with = vec!["memory-left".into()];
+        // Related memory must exist before either contested_with link is written.
+        right.contested_with.clear();
+        store.upsert_memory(&right).unwrap();
+        store.upsert_memory(&left).unwrap();
+        let mut right_update = right.clone();
+        right_update.expected_revision = Some(1);
+        right_update.contested_with = vec!["memory-left".into()];
+        right_update.at = "2026-08-25T00:01:00Z".into();
+        store.upsert_memory(&right_update).unwrap();
+
+        let winner = store
+            .resolve_memory_contest(
+                "memory-left",
+                &["memory-right".into()],
+                WORKSPACE,
+                "checked-in config wins",
+                "2026-08-25T00:05:00Z",
+            )
+            .unwrap();
+        assert_eq!(winner.status, MemoryStatus::Active);
+        assert!(winner.supersedes.contains(&"memory-right".to_string()));
+        assert!(winner.contested_with.is_empty());
+        let loser = store.memory("memory-right").unwrap().unwrap();
+        assert_eq!(loser.status, MemoryStatus::Superseded);
+        assert_eq!(loser.superseded_by.as_deref(), Some("memory-left"));
+        let recalled = store
+            .recall_memory(&MemoryRecallQuery::active_workspace(WORKSPACE, NOW))
+            .unwrap();
+        assert_eq!(recalled.len(), 1);
+        assert_eq!(recalled[0].id, "memory-left");
+
+        let error = store
+            .resolve_memory_contest(
+                "memory-left",
+                &["memory-right".into()],
+                "workspace-other",
+                "foreign resolve",
+                "2026-08-25T00:06:00Z",
+            )
+            .unwrap_err();
+        assert!(
+            matches!(error, StoreError::InvalidDurableMemory { .. }),
+            "{error}"
         );
     }
 

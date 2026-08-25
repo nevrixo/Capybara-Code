@@ -22,6 +22,7 @@ use sha2::{Digest, Sha256};
 
 pub mod app;
 pub mod daemon;
+pub mod edit;
 pub mod graph;
 pub mod memory;
 pub mod migrations;
@@ -38,12 +39,17 @@ pub use daemon::{
     AttachmentMode, ClientAttachmentInput, ClientAttachmentRecord, DaemonInstanceInput,
     DaemonInstanceRecord, DaemonState, SessionOwnerClaim, SessionOwnerLease, SessionOwnerRecord,
 };
+pub use edit::{
+    EditOperationRecord, EditPlanRecord, EditReceiptRecord, EDIT_OPERATION_ID_PREFIX,
+    EDIT_PLAN_ID_PREFIX, EDIT_PLAN_STATUSES, EDIT_RECEIPT_ID_PREFIX,
+};
 pub use graph::{
     AgentAttemptCreate, AgentAttemptRecord, AgentAttemptState, AgentAttemptTransition,
-    AgentEdgeCreate, AgentEdgeKind, AgentEdgeRecord, AgentGraphCreate, AgentGraphMutation,
-    AgentGraphRecord, AgentGraphState, AgentNodeCreate, AgentNodeRecord, AgentNodeState,
-    AgentNodeTransition, GraphStateTransition, MAX_AGENT_GRAPH_DEPTH, MAX_AGENT_GRAPH_NODES,
-    MAX_AGENT_GRAPH_PAYLOAD_BYTES,
+    AgentBudgetReservation, AgentBudgetReservationState, AgentBudgetReserve, AgentCheckpointCreate,
+    AgentCheckpointRecord, AgentEdgeCreate, AgentEdgeKind, AgentEdgeRecord, AgentGraphCreate,
+    AgentGraphMutation, AgentGraphRecord, AgentGraphState, AgentMessageCreate, AgentMessageRecord,
+    AgentNodeCreate, AgentNodeRecord, AgentNodeState, AgentNodeTransition, GraphStateTransition,
+    MAX_AGENT_GRAPH_DEPTH, MAX_AGENT_GRAPH_NODES, MAX_AGENT_GRAPH_PAYLOAD_BYTES,
 };
 pub use memory::{
     DurableEvidenceInput, DurableEvidenceRecord, DurableMemoryWrite, EvidenceFreshness,

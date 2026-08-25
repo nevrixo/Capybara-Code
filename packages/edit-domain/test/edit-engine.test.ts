@@ -9,6 +9,7 @@ import {
   type EditDocument,
   type EditOperation,
   type EditPlan,
+  type EditReceipt,
   type EditWorkspaceSnapshot,
 } from "../src/index.ts";
 
@@ -231,4 +232,40 @@ describe("edit-domain preflight", () => {
     }
   });
 
+});
+
+describe("edit-domain receipt", () => {
+  test("requires durable identity fields and omits staged file text", () => {
+    const receipt: EditReceipt = {
+      schemaVersion: EDIT_SCHEMA_VERSION,
+      id: "edr_test",
+      planId: "edp_test",
+      planDigest: "sha256:plan",
+      status: "staged",
+      createdAt: "2026-08-25T00:00:00.000Z",
+      transactionId: "tx_1",
+      files: [{
+        kind: "modify",
+        path: "src/a.ts",
+        operationIds: ["edo_replace"],
+        additions: 1,
+        deletions: 1,
+      }],
+      resolvedOperations: [{
+        operationId: "edo_replace",
+        path: "src/a.ts",
+        byteRange: { start: 0, end: 3 },
+        resolution: {
+          method: "range",
+          score: 100,
+          candidateCount: 1,
+          baseRevision: "rev_1",
+          currentRevision: "rev_1",
+        },
+      }],
+    };
+    expect(receipt.id.startsWith("edr_")).toBe(true);
+    expect(receipt.planId.startsWith("edp_")).toBe(true);
+    expect(receipt.files?.[0] && "text" in receipt.files[0]).toBe(false);
+  });
 });

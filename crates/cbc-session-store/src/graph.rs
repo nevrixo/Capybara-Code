@@ -4,6 +4,8 @@
 //! only queryable graph state and rejects invalid DAG/state transitions before a
 //! scheduler can observe them after daemon restart.
 
+use std::collections::BTreeSet;
+
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
@@ -12,8 +14,10 @@ use super::{reject_credential_payload, SessionStore, StoreError};
 pub const MAX_AGENT_GRAPH_NODES: usize = 10_000;
 pub const MAX_AGENT_GRAPH_DEPTH: i64 = 64;
 pub const MAX_AGENT_GRAPH_PAYLOAD_BYTES: usize = 64 * 1024;
+pub const MAX_AGENT_GRAPH_MESSAGES: usize = 10_000;
 const MAX_GRAPH_IDENTIFIER_BYTES: usize = 256;
 const MAX_ATTEMPTS_PER_NODE: i64 = 64;
+const MAX_AGENT_GRAPH_EVIDENCE_IDS: usize = 32;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1886,5 +1890,647 @@ fn read_attempt(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentAttemptRecord>
         started_at: row.get(16)?,
         heartbeat_at: row.get(17)?,
         finished_at: row.get(18)?,
+    })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentMessageCreate {
+    pub id: String,
+    pub graph_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_node_id: Option<String>,
+    pub to_node_id: String,
+    pub kind: String,
+    pub body: serde_json::Value,
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentMessageRecord {
+    pub id: String,
+    pub graph_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_node_id: Option<String>,
+    pub to_node_id: String,
+    pub kind: String,
+    pub body: serde_json::Value,
+    pub evidence_ids: Vec<String>,
+    pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivered_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub acknowledged_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentCheckpointCreate {
+    pub id: String,
+    pub node_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
+    pub graph_revision: i64,
+    pub state: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_pack_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_revision: Option<String>,
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentCheckpointRecord {
+    pub id: String,
+    pub node_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
+    pub graph_revision: i64,
+    pub state: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_pack_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_revision: Option<String>,
+    pub evidence_ids: Vec<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentBudgetReservationState {
+    Reserved,
+    Settled,
+}
+
+impl AgentBudgetReservationState {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Reserved => "reserved",
+            Self::Settled => "settled",
+        }
+    }
+
+    fn parse(raw: &str) -> Result<Self, StoreError> {
+        match raw {
+            "reserved" => Ok(Self::Reserved),
+            "settled" => Ok(Self::Settled),
+            _ => Err(invalid(format!(
+                "unsupported budget reservation state: {raw}"
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentBudgetReserve {
+    pub id: String,
+    pub graph_id: String,
+    pub node_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
+    pub resource: String,
+    pub reserved: f64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentBudgetReservation {
+    pub id: String,
+    pub graph_id: String,
+    pub node_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
+    pub resource: String,
+    pub reserved: f64,
+    pub consumed: f64,
+    pub state: AgentBudgetReservationState,
+    pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settled_at: Option<String>,
+}
+
+impl SessionStore {
+    /// Enqueue a durable mailbox message. Workspace/session ownership is implied
+    /// by the graph_id foreign key; endpoints must belong to that graph.
+    pub fn enqueue_agent_message(
+        &mut self,
+        msg: &AgentMessageCreate,
+    ) -> Result<AgentMessageRecord, StoreError> {
+        validate_message_create(msg)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let graph = require_graph(&tx, &msg.graph_id)?;
+        let to = require_node(&tx, &msg.to_node_id)?;
+        if to.graph_id != graph.id {
+            return Err(invalid("toNodeId belongs to a different graph"));
+        }
+        if let Some(from_id) = &msg.from_node_id {
+            let from = require_node(&tx, from_id)?;
+            if from.graph_id != graph.id {
+                return Err(invalid("fromNodeId belongs to a different graph"));
+            }
+        }
+        let pending: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM agent_messages WHERE graph_id = ?1",
+            params![msg.graph_id],
+            |row| row.get(0),
+        )?;
+        if pending >= MAX_AGENT_GRAPH_MESSAGES as i64 {
+            return Err(invalid(format!(
+                "graph {} reached the {MAX_AGENT_GRAPH_MESSAGES} message limit",
+                msg.graph_id
+            )));
+        }
+        tx.execute(
+            "INSERT INTO agent_messages (
+                id, graph_id, from_node_id, to_node_id, kind, body_json, evidence_ids_json,
+                created_at, delivered_at, acknowledged_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, NULL)",
+            params![
+                msg.id,
+                msg.graph_id,
+                msg.from_node_id,
+                msg.to_node_id,
+                msg.kind,
+                serde_json::to_string(&msg.body)?,
+                serde_json::to_string(&msg.evidence_ids)?,
+                msg.created_at,
+            ],
+        )?;
+        tx.commit()?;
+        Ok(AgentMessageRecord {
+            id: msg.id.clone(),
+            graph_id: msg.graph_id.clone(),
+            from_node_id: msg.from_node_id.clone(),
+            to_node_id: msg.to_node_id.clone(),
+            kind: msg.kind.clone(),
+            body: msg.body.clone(),
+            evidence_ids: msg.evidence_ids.clone(),
+            created_at: msg.created_at.clone(),
+            delivered_at: None,
+            acknowledged_at: None,
+        })
+    }
+
+    pub fn pending_agent_messages(
+        &self,
+        node_id: &str,
+    ) -> Result<Vec<AgentMessageRecord>, StoreError> {
+        validate_identifier("nodeId", node_id, "agt_")?;
+        self.agent_node(node_id)?
+            .ok_or_else(|| StoreError::NotFound {
+                what: format!("agent node {node_id}"),
+            })?;
+        let mut statement = self.conn.prepare(
+            "SELECT id, graph_id, from_node_id, to_node_id, kind, body_json, evidence_ids_json,
+                    created_at, delivered_at, acknowledged_at
+             FROM agent_messages
+             WHERE to_node_id = ?1 AND delivered_at IS NULL
+             ORDER BY created_at ASC, id ASC",
+        )?;
+        let rows = statement.query_map(params![node_id], read_message)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
+    pub fn deliver_agent_message(
+        &mut self,
+        id: &str,
+        at: &str,
+    ) -> Result<AgentMessageRecord, StoreError> {
+        validate_identifier("messageId", id, "msg_")?;
+        validate_timestamp("at", at)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let message = require_message(&tx, id)?;
+        if message.delivered_at.is_some() {
+            return Err(invalid("message already delivered"));
+        }
+        let changed = tx.execute(
+            "UPDATE agent_messages SET delivered_at = ?2 WHERE id = ?1 AND delivered_at IS NULL",
+            params![id, at],
+        )?;
+        if changed != 1 {
+            return Err(invalid("message already delivered"));
+        }
+        tx.commit()?;
+        Ok(AgentMessageRecord {
+            delivered_at: Some(at.into()),
+            ..message
+        })
+    }
+
+    pub fn put_agent_checkpoint(
+        &mut self,
+        input: &AgentCheckpointCreate,
+    ) -> Result<AgentCheckpointRecord, StoreError> {
+        validate_checkpoint_create(input)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let node = require_node(&tx, &input.node_id)?;
+        if let Some(attempt_id) = &input.attempt_id {
+            let attempt = require_attempt(&tx, attempt_id)?;
+            if attempt.node_id != node.id {
+                return Err(invalid("attempt belongs to a different node"));
+            }
+        }
+        let record = AgentCheckpointRecord {
+            id: input.id.clone(),
+            node_id: input.node_id.clone(),
+            attempt_id: input.attempt_id.clone(),
+            graph_revision: input.graph_revision,
+            state: input.state.clone(),
+            context_pack_id: input.context_pack_id.clone(),
+            worktree_revision: input.worktree_revision.clone(),
+            evidence_ids: input.evidence_ids.clone(),
+            created_at: input.created_at.clone(),
+        };
+        insert_checkpoint(&tx, &record, &serde_json::to_string(&input.state)?)?;
+        tx.commit()?;
+        Ok(record)
+    }
+
+    pub fn latest_agent_checkpoint(
+        &self,
+        node_id: &str,
+    ) -> Result<Option<AgentCheckpointRecord>, StoreError> {
+        validate_identifier("nodeId", node_id, "agt_")?;
+        self.agent_node(node_id)?
+            .ok_or_else(|| StoreError::NotFound {
+                what: format!("agent node {node_id}"),
+            })?;
+        self.conn
+            .query_row(
+                "SELECT id, node_id, attempt_id, graph_revision, state_json, context_pack_id,
+                        worktree_revision, evidence_ids_json, created_at
+                 FROM agent_checkpoints
+                 WHERE node_id = ?1
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT 1",
+                params![node_id],
+                read_checkpoint,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    pub fn reserve_agent_budget(
+        &mut self,
+        input: &AgentBudgetReserve,
+    ) -> Result<AgentBudgetReservation, StoreError> {
+        validate_budget_reserve(input)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let graph = require_graph(&tx, &input.graph_id)?;
+        let node = require_node(&tx, &input.node_id)?;
+        if node.graph_id != graph.id {
+            return Err(invalid("node belongs to a different graph"));
+        }
+        if let Some(attempt_id) = &input.attempt_id {
+            let attempt = require_attempt(&tx, attempt_id)?;
+            if attempt.node_id != node.id {
+                return Err(invalid("attempt belongs to a different node"));
+            }
+        }
+        tx.execute(
+            "INSERT INTO agent_budget_reservations (
+                id, graph_id, node_id, attempt_id, resource, reserved, consumed, state,
+                created_at, settled_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, NULL)",
+            params![
+                input.id,
+                input.graph_id,
+                input.node_id,
+                input.attempt_id,
+                input.resource,
+                input.reserved,
+                AgentBudgetReservationState::Reserved.label(),
+                input.created_at,
+            ],
+        )?;
+        tx.commit()?;
+        Ok(AgentBudgetReservation {
+            id: input.id.clone(),
+            graph_id: input.graph_id.clone(),
+            node_id: input.node_id.clone(),
+            attempt_id: input.attempt_id.clone(),
+            resource: input.resource.clone(),
+            reserved: input.reserved,
+            consumed: 0.0,
+            state: AgentBudgetReservationState::Reserved,
+            created_at: input.created_at.clone(),
+            settled_at: None,
+        })
+    }
+
+    pub fn settle_agent_budget(
+        &mut self,
+        id: &str,
+        consumed: f64,
+        at: &str,
+    ) -> Result<AgentBudgetReservation, StoreError> {
+        validate_identifier("budgetReservationId", id, "bgt_")?;
+        validate_timestamp("at", at)?;
+        if !consumed.is_finite() || consumed < 0.0 {
+            return Err(invalid("consumed must be a finite non-negative number"));
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let reservation = require_budget(&tx, id)?;
+        if reservation.state != AgentBudgetReservationState::Reserved {
+            return Err(invalid("budget reservation is already settled"));
+        }
+        if consumed > reservation.reserved {
+            return Err(invalid("consumed cannot exceed reserved"));
+        }
+        let changed = tx.execute(
+            "UPDATE agent_budget_reservations
+             SET consumed = ?2, state = ?3, settled_at = ?4
+             WHERE id = ?1 AND state = ?5",
+            params![
+                id,
+                consumed,
+                AgentBudgetReservationState::Settled.label(),
+                at,
+                AgentBudgetReservationState::Reserved.label(),
+            ],
+        )?;
+        if changed != 1 {
+            return Err(invalid("budget reservation is already settled"));
+        }
+        tx.commit()?;
+        Ok(AgentBudgetReservation {
+            consumed,
+            state: AgentBudgetReservationState::Settled,
+            settled_at: Some(at.into()),
+            ..reservation
+        })
+    }
+
+    /// Persist a JSON snapshot as a checkpoint on the graph root node.
+    pub fn persist_graph_snapshot(
+        &mut self,
+        graph_id: &str,
+        snapshot_json: &str,
+        at: &str,
+    ) -> Result<(), StoreError> {
+        validate_identifier("graphId", graph_id, "grf_")?;
+        validate_timestamp("at", at)?;
+        if snapshot_json.len() > MAX_AGENT_GRAPH_PAYLOAD_BYTES {
+            return Err(invalid(format!(
+                "snapshotJson exceeds the {MAX_AGENT_GRAPH_PAYLOAD_BYTES} byte limit"
+            )));
+        }
+        let snapshot: serde_json::Value = serde_json::from_str(snapshot_json)
+            .map_err(|_| invalid("snapshotJson must be valid JSON"))?;
+        validate_json_object("snapshotJson", &snapshot)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let graph = require_graph(&tx, graph_id)?;
+        let ordinal: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM agent_checkpoints WHERE node_id = ?1",
+            params![graph.root_node_id],
+            |row| row.get(0),
+        )?;
+        let id = format!("chk_snap_{}_{}", graph_id, ordinal + 1);
+        insert_checkpoint(
+            &tx,
+            &AgentCheckpointRecord {
+                id,
+                node_id: graph.root_node_id.clone(),
+                attempt_id: None,
+                graph_revision: graph.revision,
+                state: snapshot,
+                context_pack_id: None,
+                worktree_revision: None,
+                evidence_ids: Vec::new(),
+                created_at: at.into(),
+            },
+            snapshot_json,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Latest root-node checkpoint `state_json`, if the graph has a snapshot.
+    pub fn load_graph_snapshot(&self, graph_id: &str) -> Result<Option<String>, StoreError> {
+        validate_identifier("graphId", graph_id, "grf_")?;
+        let raw: Option<Option<String>> = self
+            .conn
+            .query_row(
+                "SELECT c.state_json
+                 FROM agent_graphs AS g
+                 LEFT JOIN agent_checkpoints AS c ON c.node_id = g.root_node_id
+                 WHERE g.id = ?1
+                 ORDER BY c.created_at DESC, c.id DESC
+                 LIMIT 1",
+                params![graph_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match raw {
+            None => Err(StoreError::NotFound {
+                what: format!("agent graph {graph_id}"),
+            }),
+            Some(snapshot) => Ok(snapshot),
+        }
+    }
+}
+
+fn validate_message_create(input: &AgentMessageCreate) -> Result<(), StoreError> {
+    validate_identifier("messageId", &input.id, "msg_")?;
+    validate_identifier("graphId", &input.graph_id, "grf_")?;
+    if let Some(from_id) = &input.from_node_id {
+        validate_identifier("fromNodeId", from_id, "agt_")?;
+    }
+    validate_identifier("toNodeId", &input.to_node_id, "agt_")?;
+    validate_bounded_text("kind", &input.kind, 128)?;
+    validate_json_object("body", &input.body)?;
+    validate_evidence_ids(&input.evidence_ids)?;
+    validate_timestamp("createdAt", &input.created_at)
+}
+
+fn validate_checkpoint_create(input: &AgentCheckpointCreate) -> Result<(), StoreError> {
+    validate_identifier("checkpointId", &input.id, "chk_")?;
+    validate_identifier("nodeId", &input.node_id, "agt_")?;
+    if let Some(attempt_id) = &input.attempt_id {
+        validate_identifier("attemptId", attempt_id, "att_")?;
+    }
+    if input.graph_revision < 1 {
+        return Err(invalid("graphRevision must be positive"));
+    }
+    validate_json_object("state", &input.state)?;
+    if let Some(context_pack_id) = &input.context_pack_id {
+        validate_bounded_text("contextPackId", context_pack_id, MAX_GRAPH_IDENTIFIER_BYTES)?;
+    }
+    if let Some(worktree_revision) = &input.worktree_revision {
+        validate_bounded_text(
+            "worktreeRevision",
+            worktree_revision,
+            MAX_GRAPH_IDENTIFIER_BYTES,
+        )?;
+    }
+    validate_evidence_ids(&input.evidence_ids)?;
+    validate_timestamp("createdAt", &input.created_at)
+}
+
+fn validate_budget_reserve(input: &AgentBudgetReserve) -> Result<(), StoreError> {
+    validate_identifier("budgetReservationId", &input.id, "bgt_")?;
+    validate_identifier("graphId", &input.graph_id, "grf_")?;
+    validate_identifier("nodeId", &input.node_id, "agt_")?;
+    if let Some(attempt_id) = &input.attempt_id {
+        validate_identifier("attemptId", attempt_id, "att_")?;
+    }
+    validate_bounded_text("resource", &input.resource, 128)?;
+    if !input.reserved.is_finite() || input.reserved <= 0.0 {
+        return Err(invalid("reserved must be a finite positive number"));
+    }
+    validate_timestamp("createdAt", &input.created_at)
+}
+
+fn validate_evidence_ids(ids: &[String]) -> Result<(), StoreError> {
+    if ids.len() > MAX_AGENT_GRAPH_EVIDENCE_IDS {
+        return Err(invalid(format!(
+            "evidenceIds exceed the {MAX_AGENT_GRAPH_EVIDENCE_IDS} item limit"
+        )));
+    }
+    let mut seen = BTreeSet::new();
+    for id in ids {
+        validate_bounded_text("evidenceId", id, MAX_GRAPH_IDENTIFIER_BYTES)?;
+        if !seen.insert(id.as_str()) {
+            return Err(invalid("duplicate evidenceId"));
+        }
+    }
+    Ok(())
+}
+
+fn insert_checkpoint(
+    tx: &rusqlite::Transaction<'_>,
+    record: &AgentCheckpointRecord,
+    state_json: &str,
+) -> Result<(), StoreError> {
+    tx.execute(
+        "INSERT INTO agent_checkpoints (
+            id, node_id, attempt_id, graph_revision, state_json, context_pack_id,
+            worktree_revision, evidence_ids_json, created_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            record.id,
+            record.node_id,
+            record.attempt_id,
+            record.graph_revision,
+            state_json,
+            record.context_pack_id,
+            record.worktree_revision,
+            serde_json::to_string(&record.evidence_ids)?,
+            record.created_at,
+        ],
+    )?;
+    Ok(())
+}
+
+fn require_message(
+    tx: &rusqlite::Transaction<'_>,
+    message_id: &str,
+) -> Result<AgentMessageRecord, StoreError> {
+    tx.query_row(
+        "SELECT id, graph_id, from_node_id, to_node_id, kind, body_json, evidence_ids_json,
+                created_at, delivered_at, acknowledged_at
+         FROM agent_messages WHERE id = ?1",
+        params![message_id],
+        read_message,
+    )
+    .optional()?
+    .ok_or_else(|| StoreError::NotFound {
+        what: format!("agent message {message_id}"),
+    })
+}
+
+fn require_budget(
+    tx: &rusqlite::Transaction<'_>,
+    reservation_id: &str,
+) -> Result<AgentBudgetReservation, StoreError> {
+    tx.query_row(
+        "SELECT id, graph_id, node_id, attempt_id, resource, reserved, consumed, state,
+                created_at, settled_at
+         FROM agent_budget_reservations WHERE id = ?1",
+        params![reservation_id],
+        read_budget,
+    )
+    .optional()?
+    .ok_or_else(|| StoreError::NotFound {
+        what: format!("agent budget reservation {reservation_id}"),
+    })
+}
+
+fn read_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentMessageRecord> {
+    Ok(AgentMessageRecord {
+        id: row.get(0)?,
+        graph_id: row.get(1)?,
+        from_node_id: row.get(2)?,
+        to_node_id: row.get(3)?,
+        kind: row.get(4)?,
+        body: json_column(row.get(5)?, 5)?,
+        evidence_ids: string_list_column(row.get(6)?, 6)?,
+        created_at: row.get(7)?,
+        delivered_at: row.get(8)?,
+        acknowledged_at: row.get(9)?,
+    })
+}
+
+fn read_checkpoint(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentCheckpointRecord> {
+    Ok(AgentCheckpointRecord {
+        id: row.get(0)?,
+        node_id: row.get(1)?,
+        attempt_id: row.get(2)?,
+        graph_revision: row.get(3)?,
+        state: json_column(row.get(4)?, 4)?,
+        context_pack_id: row.get(5)?,
+        worktree_revision: row.get(6)?,
+        evidence_ids: string_list_column(row.get(7)?, 7)?,
+        created_at: row.get(8)?,
+    })
+}
+
+fn read_budget(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentBudgetReservation> {
+    let raw_state: String = row.get(7)?;
+    let state = AgentBudgetReservationState::parse(&raw_state).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, Box::new(error))
+    })?;
+    Ok(AgentBudgetReservation {
+        id: row.get(0)?,
+        graph_id: row.get(1)?,
+        node_id: row.get(2)?,
+        attempt_id: row.get(3)?,
+        resource: row.get(4)?,
+        reserved: row.get(5)?,
+        consumed: row.get(6)?,
+        state,
+        created_at: row.get(8)?,
+        settled_at: row.get(9)?,
+    })
+}
+
+fn string_list_column(raw: String, index: usize) -> rusqlite::Result<Vec<String>> {
+    serde_json::from_str(&raw).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
     })
 }

@@ -1,7 +1,8 @@
 use cbc_session_store::{
-    new_manifest, AgentAttemptCreate, AgentAttemptState, AgentAttemptTransition, AgentEdgeCreate,
-    AgentEdgeKind, AgentGraphCreate, AgentNodeCreate, AgentNodeState, AgentNodeTransition,
-    SessionStore, StoreError,
+    new_manifest, AgentAttemptCreate, AgentAttemptState, AgentAttemptTransition,
+    AgentBudgetReservationState, AgentBudgetReserve, AgentCheckpointCreate, AgentEdgeCreate,
+    AgentEdgeKind, AgentGraphCreate, AgentMessageCreate, AgentNodeCreate, AgentNodeState,
+    AgentNodeTransition, SessionStore, StoreError,
 };
 use serde_json::json;
 
@@ -498,4 +499,197 @@ fn retry_creates_a_new_attempt_ordinal_without_overwriting_failure_history() {
         Some(json!({ "code": "provider_failed" }))
     );
     assert_eq!(created.graph.id, "grf_test");
+}
+
+#[test]
+fn mailbox_enqueue_pending_and_deliver_round_trip() {
+    let mut store = store();
+    store.create_agent_graph(&graph(2)).expect("create graph");
+    store
+        .add_agent_node("grf_test", 1, &child("agt_child", "agt_root"), T1)
+        .expect("add child");
+
+    let enqueued = store
+        .enqueue_agent_message(&AgentMessageCreate {
+            id: "msg_hint_1".into(),
+            graph_id: "grf_test".into(),
+            from_node_id: Some("agt_root".into()),
+            to_node_id: "agt_child".into(),
+            kind: "hint".into(),
+            body: json!({ "text": "auth" }),
+            evidence_ids: vec!["evidence-a".into()],
+            created_at: T2.into(),
+        })
+        .expect("enqueue");
+    assert_eq!(enqueued.id, "msg_hint_1");
+    assert_eq!(enqueued.delivered_at, None);
+    assert_eq!(enqueued.body, json!({ "text": "auth" }));
+
+    let pending = store.pending_agent_messages("agt_child").expect("pending");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].from_node_id.as_deref(), Some("agt_root"));
+    assert!(store
+        .pending_agent_messages("agt_root")
+        .expect("root mailbox")
+        .is_empty());
+
+    let credential = store
+        .enqueue_agent_message(&AgentMessageCreate {
+            id: "msg_secret".into(),
+            graph_id: "grf_test".into(),
+            from_node_id: Some("agt_root".into()),
+            to_node_id: "agt_child".into(),
+            kind: "hint".into(),
+            body: json!({ "api_key": "sk-live-not-a-secret-store" }),
+            evidence_ids: vec![],
+            created_at: T3.into(),
+        })
+        .expect_err("credential-shaped body is rejected");
+    assert!(matches!(credential, StoreError::CredentialRejected { .. }));
+
+    let delivered = store
+        .deliver_agent_message("msg_hint_1", T3)
+        .expect("deliver");
+    assert_eq!(delivered.delivered_at.as_deref(), Some(T3));
+    assert!(store
+        .pending_agent_messages("agt_child")
+        .expect("drained")
+        .is_empty());
+
+    let again = store
+        .deliver_agent_message("msg_hint_1", T4)
+        .expect_err("already delivered");
+    assert!(matches!(again, StoreError::InvalidAgentGraph { .. }));
+}
+
+#[test]
+fn checkpoint_put_and_latest_round_trip() {
+    let mut store = store();
+    store.create_agent_graph(&graph(2)).expect("create graph");
+
+    let first = store
+        .put_agent_checkpoint(&AgentCheckpointCreate {
+            id: "chk_root_1".into(),
+            node_id: "agt_root".into(),
+            attempt_id: None,
+            graph_revision: 1,
+            state: json!({ "cursor": "step-1", "tokens": 12 }),
+            context_pack_id: Some("pack_1".into()),
+            worktree_revision: Some("rev_a".into()),
+            evidence_ids: vec!["evidence-a".into()],
+            created_at: T1.into(),
+        })
+        .expect("put first checkpoint");
+    assert_eq!(first.graph_revision, 1);
+
+    store
+        .put_agent_checkpoint(&AgentCheckpointCreate {
+            id: "chk_root_2".into(),
+            node_id: "agt_root".into(),
+            attempt_id: None,
+            graph_revision: 1,
+            state: json!({ "cursor": "step-2" }),
+            context_pack_id: None,
+            worktree_revision: None,
+            evidence_ids: vec![],
+            created_at: T2.into(),
+        })
+        .expect("put later checkpoint");
+
+    let latest = store
+        .latest_agent_checkpoint("agt_root")
+        .expect("latest")
+        .expect("present");
+    assert_eq!(latest.id, "chk_root_2");
+    assert_eq!(latest.state, json!({ "cursor": "step-2" }));
+}
+
+#[test]
+fn budget_reserve_and_settle_round_trip() {
+    let mut store = store();
+    store.create_agent_graph(&graph(2)).expect("create graph");
+
+    let reserved = store
+        .reserve_agent_budget(&AgentBudgetReserve {
+            id: "bgt_tokens_1".into(),
+            graph_id: "grf_test".into(),
+            node_id: "agt_root".into(),
+            attempt_id: None,
+            resource: "tokens".into(),
+            reserved: 100.0,
+            created_at: T1.into(),
+        })
+        .expect("reserve");
+    assert_eq!(reserved.state, AgentBudgetReservationState::Reserved);
+    assert_eq!(reserved.consumed, 0.0);
+
+    let over = store
+        .settle_agent_budget("bgt_tokens_1", 150.0, T2)
+        .expect_err("cannot consume more than reserved");
+    assert!(matches!(over, StoreError::InvalidAgentGraph { .. }));
+
+    let settled = store
+        .settle_agent_budget("bgt_tokens_1", 40.0, T2)
+        .expect("settle");
+    assert_eq!(settled.state, AgentBudgetReservationState::Settled);
+    assert_eq!(settled.consumed, 40.0);
+    assert_eq!(settled.settled_at.as_deref(), Some(T2));
+
+    let again = store
+        .settle_agent_budget("bgt_tokens_1", 1.0, T3)
+        .expect_err("already settled");
+    assert!(matches!(again, StoreError::InvalidAgentGraph { .. }));
+}
+
+#[test]
+fn graph_snapshot_persists_on_the_root_checkpoint() {
+    let mut store = store();
+    store.create_agent_graph(&graph(2)).expect("create graph");
+    store
+        .add_agent_node("grf_test", 1, &child("agt_child", "agt_root"), T1)
+        .expect("add child");
+
+    let snapshot = json!({
+        "schemaVersion": "1.0",
+        "state": { "revision": 2 },
+        "mailbox": [{ "id": "msg_1", "kind": "hint" }]
+    })
+    .to_string();
+    store
+        .persist_graph_snapshot("grf_test", &snapshot, T2)
+        .expect("persist snapshot");
+
+    let loaded = store
+        .load_graph_snapshot("grf_test")
+        .expect("load")
+        .expect("present");
+    assert_eq!(loaded, snapshot);
+
+    store
+        .put_agent_checkpoint(&AgentCheckpointCreate {
+            id: "chk_child_1".into(),
+            node_id: "agt_child".into(),
+            attempt_id: None,
+            graph_revision: 2,
+            state: json!({ "child": true }),
+            context_pack_id: None,
+            worktree_revision: None,
+            evidence_ids: vec![],
+            created_at: T3.into(),
+        })
+        .expect("child checkpoint must not shadow the root snapshot");
+    assert_eq!(
+        store
+            .load_graph_snapshot("grf_test")
+            .expect("load after child")
+            .expect("still root"),
+        snapshot
+    );
+
+    let root = store
+        .latest_agent_checkpoint("agt_root")
+        .expect("root checkpoint")
+        .expect("present");
+    assert_eq!(root.state["schemaVersion"], json!("1.0"));
+    assert!(root.id.starts_with("chk_snap_"));
 }

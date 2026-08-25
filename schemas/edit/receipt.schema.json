@@ -1,0 +1,100 @@
+{
+  "x-dialect": "json-schema-draft-2020-12",
+  "$id": "cbc:edit/receipt",
+  "title": "EditReceipt",
+  "description": "Durable edit application receipt. Matches packages/edit-domain/src/receipt.ts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "planId",
+    "planDigest",
+    "status",
+    "createdAt"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "id": { "type": "string", "pattern": "^edr_" },
+    "planId": { "type": "string", "pattern": "^edp_" },
+    "planDigest": { "type": "string", "minLength": 1 },
+    "status": {
+      "type": "string",
+      "enum": ["previewed", "staged", "committed", "conflicted", "failed"]
+    },
+    "createdAt": { "type": "string", "minLength": 1 },
+    "transactionId": { "type": "string", "minLength": 1 },
+    "files": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/preparedFileChange" }
+    },
+    "resolvedOperations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/resolvedTextEdit" }
+    }
+  },
+  "$defs": {
+    "byteRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "resolutionEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "score",
+        "candidateCount",
+        "baseRevision",
+        "currentRevision"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": ["range", "expected_range", "exact_text", "context", "symbol_fallback"]
+        },
+        "score": { "type": "number" },
+        "candidateCount": { "type": "integer", "minimum": 0 },
+        "baseRevision": { "type": "string", "minLength": 1 },
+        "currentRevision": { "type": "string", "minLength": 1 }
+      }
+    },
+    "preparedFileChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path", "operationIds", "additions", "deletions"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["modify", "create", "delete", "move"]
+        },
+        "path": { "type": "string", "minLength": 1 },
+        "previousPath": { "type": "string", "minLength": 1 },
+        "revisionBefore": { "type": "string", "minLength": 1 },
+        "revisionAfter": { "type": "string", "minLength": 1 },
+        "operationIds": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^edo_" }
+        },
+        "additions": { "type": "integer", "minimum": 0 },
+        "deletions": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "resolvedTextEdit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operationId", "path", "byteRange", "resolution"],
+      "properties": {
+        "operationId": { "type": "string", "pattern": "^edo_" },
+        "path": { "type": "string", "minLength": 1 },
+        "byteRange": { "$ref": "#/$defs/byteRange" },
+        "resolution": { "$ref": "#/$defs/resolutionEvidence" }
+      }
+    }
+  }
+}
