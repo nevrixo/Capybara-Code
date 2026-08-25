@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import {
   LspDiagnosticDomainError,
   normalizeLspDiagnostics,
+  normalizeLspPullDiagnostics,
 } from "../src/index.ts";
 
 const workspaceRoot = process.platform === "win32" ? "C:\\lsp-diagnostics-workspace" : "/lsp-diagnostics-workspace";
@@ -26,6 +27,16 @@ function options(overrides: Partial<Parameters<typeof normalizeLspDiagnostics>[1
     },
     documentVersion: 7,
     publishedAt,
+    ...overrides,
+  };
+}
+
+function pullOptions(
+  overrides: Partial<Parameters<typeof normalizeLspPullDiagnostics>[1]> = {},
+) {
+  return {
+    ...options(),
+    uri: workspaceUri("src/example.ts"),
     ...overrides,
   };
 }
@@ -193,6 +204,47 @@ describe("normalizeLspDiagnostics", () => {
         options(),
       ),
       "LSP_DIAGNOSTICS_LIMIT",
+    );
+  });
+});
+
+describe("normalizeLspPullDiagnostics", () => {
+  test("normalizes a full report into revision-bound diagnostic evidence", () => {
+    const snapshot = normalizeLspPullDiagnostics(
+      {
+        kind: "full",
+        items: params().diagnostics,
+        resultId: "server-private-result-id",
+        relatedDocuments: { ignored: true },
+      },
+      pullOptions(),
+    );
+
+    expect(snapshot).toEqual(normalizeLspDiagnostics(params(), options()));
+    expect(JSON.stringify(snapshot)).not.toContain("server-private-result-id");
+    expect(JSON.stringify(snapshot)).not.toContain("relatedDocuments");
+  });
+
+  test("does not invent evidence for unchanged reports and rejects malformed reports", () => {
+    expect(normalizeLspPullDiagnostics(
+      { kind: "unchanged", resultId: "prior" },
+      pullOptions(),
+    )).toBeUndefined();
+
+    expectDiagnosticError(
+      () => normalizeLspPullDiagnostics({ kind: "full", items: {} }, pullOptions()),
+      "LSP_DIAGNOSTICS_INVALID",
+    );
+    expectDiagnosticError(
+      () => normalizeLspPullDiagnostics({ kind: "future" }, pullOptions()),
+      "LSP_DIAGNOSTICS_INVALID",
+    );
+    expectDiagnosticError(
+      () => normalizeLspPullDiagnostics(
+        { kind: "full", items: [] },
+        pullOptions({ uri: workspaceUri("../outside.ts") }),
+      ),
+      "LSP_DIAGNOSTICS_SCOPE_VIOLATION",
     );
   });
 });

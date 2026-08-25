@@ -63,6 +63,12 @@ export interface NormalizeLspDiagnosticsOptions {
   readonly maxDiagnostics?: number;
 }
 
+/** Options for a capability-gated textDocument/diagnostic response. */
+export interface NormalizeLspPullDiagnosticsOptions extends NormalizeLspDiagnosticsOptions {
+  /** Runtime-generated URI for the exact document sent to the server. */
+  readonly uri: string;
+}
+
 export type LspDiagnosticErrorCode =
   | "LSP_DIAGNOSTICS_INVALID"
   | "LSP_DIAGNOSTICS_SCOPE_VIOLATION"
@@ -148,6 +154,33 @@ export function normalizeLspDiagnostics(
     totalDiagnostics: rawDiagnostics.length,
     truncated: rawDiagnostics.length > maxDiagnostics,
   });
+}
+
+/**
+ * Normalize a capability-gated textDocument/diagnostic response into the same
+ * revision-bound evidence contract as push diagnostics. Unchanged reports carry
+ * no fresh diagnostic items and therefore yield no new snapshot.
+ */
+export function normalizeLspPullDiagnostics(
+  result: unknown,
+  options: NormalizeLspPullDiagnosticsOptions,
+): LspDiagnosticSnapshot | undefined {
+  const report = requiredRecord(result, "pull diagnostic report");
+  if (report.kind === "unchanged") return undefined;
+  if (report.kind !== "full") {
+    throw failure("LSP_DIAGNOSTICS_INVALID", "pull diagnostic report kind must be full or unchanged");
+  }
+  if (!Array.isArray(report.items)) {
+    throw failure("LSP_DIAGNOSTICS_INVALID", "full pull diagnostic report requires items");
+  }
+  return normalizeLspDiagnostics(
+    {
+      uri: options.uri,
+      version: options.documentVersion,
+      diagnostics: report.items,
+    },
+    options,
+  );
 }
 
 function normalizeDocument(value: LspEditDocument): LspEditDocument {
