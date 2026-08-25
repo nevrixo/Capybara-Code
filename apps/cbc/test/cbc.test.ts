@@ -5311,6 +5311,7 @@ describe("tool execution helpers", () => {
       "lsp.type_definition",
       "lsp.implementation",
       "lsp.signature_help",
+      "lsp.document_highlights",
     ]) {
       const locationQuery = await executor.execute(
         {
@@ -5345,6 +5346,7 @@ describe("tool execution helpers", () => {
       "lsp.type_definition",
       "lsp.implementation",
       "lsp.signature_help",
+      "lsp.document_highlights",
     ]);
   });
 
