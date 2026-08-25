@@ -68,6 +68,7 @@ describe("AgentSession LSP tool gate", () => {
       "lsp.hover",
       "lsp.signature_help",
       "lsp.document_highlights",
+      "lsp.call_hierarchy",
       "lsp.code_actions",
     ];
     const disabled = makeSession(false, true);
