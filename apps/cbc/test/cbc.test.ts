@@ -5306,6 +5306,25 @@ describe("tool execution helpers", () => {
     expect(definition.result.ok).toBe(true);
     expect(definition.result.summary).toContain("lsp.definition");
 
+    const callHierarchy = await executor.execute(
+      {
+        callId: "lsp-call-hierarchy",
+        toolId: "lsp.call_hierarchy",
+        arguments: {
+          path: "src/widget.ts",
+          line: 0,
+          character: 0,
+          direction: "incoming",
+          offset: 0,
+          limit: 16,
+        },
+        display: "lsp.call_hierarchy src/widget.ts incoming",
+      },
+      new AbortController().signal,
+    );
+    expect(callHierarchy.result.ok).toBe(true);
+    expect(callHierarchy.result.summary).toContain("lsp.call_hierarchy");
+
     for (const toolId of [
       "lsp.declaration",
       "lsp.type_definition",
@@ -5407,6 +5426,7 @@ describe("tool execution helpers", () => {
       "lsp.symbols",
       "lsp.workspace_symbols",
       "lsp.definition",
+      "lsp.call_hierarchy",
       "lsp.declaration",
       "lsp.type_definition",
       "lsp.implementation",
