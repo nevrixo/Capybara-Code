@@ -489,6 +489,20 @@ describe("paths", () => {
     expect(runtimeBinaryCandidates(host)[0]).toBe("/custom/cbc-runtime");
   });
 
+  test("CARGO_TARGET_DIR is searched after the checkout target/", () => {
+    const host = createFakeHost({
+      cwd: "/work",
+      env: { CARGO_TARGET_DIR: "/home/dev/.cache/cbc-target" },
+    });
+    const candidates = runtimeBinaryCandidates(host);
+    expect(candidates).toContain("/home/dev/.cache/cbc-target/release/cbc-runtime");
+    expect(candidates).toContain("/home/dev/.cache/cbc-target/debug/cbc-runtime");
+    const checkoutDebug = candidates.findIndex((path) => path.endsWith("/target/debug/cbc-runtime") && !path.includes(".cache"));
+    const cargoDebug = candidates.indexOf("/home/dev/.cache/cbc-target/debug/cbc-runtime");
+    expect(checkoutDebug).toBeGreaterThanOrEqual(0);
+    expect(cargoDebug).toBeGreaterThan(checkoutDebug);
+  });
+
   test("join normalizes separators and drops empty segments", () => {
     expect(join("a\\b", "", "/c/", "d")).toBe("a/b/c/d");
   });

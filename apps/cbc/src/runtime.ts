@@ -571,6 +571,7 @@ export class Runtime {
         ...located.missing.map((path) => `  ${path}`),
         "",
         "In a development checkout, build it with `cargo build -p cbc-runtime`.",
+        "On WSL, build with Linux rustc so the sidecar is `cbc-runtime`, not `cbc-runtime.exe`.",
         "In a release install, reinstall the archive so bin/ and libexec/ stay together.",
       ]);
     }

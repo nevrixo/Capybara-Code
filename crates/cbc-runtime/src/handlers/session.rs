@@ -538,7 +538,11 @@ pub fn resolve(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
             .into_iter()
             .filter(|entry| entry.id.starts_with(&selector) || entry.title.starts_with(&selector))
             .collect();
-        let selected = if matches.len() == 1 { matches.first().cloned() } else { None };
+        let selected = if matches.len() == 1 {
+            matches.first().cloned()
+        } else {
+            None
+        };
         Ok((selected, matches.into_iter().take(8).collect()))
     })?;
     Ok(json!({

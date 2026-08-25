@@ -212,8 +212,15 @@ export function runtimeBinaryCandidates(
       .replace(/\/+$/, "");
     candidates.push(join(projectRoot, "target", "release", name));
     candidates.push(join(projectRoot, "target", "debug", name));
-
   } catch {}
+
+  // Honor CARGO_TARGET_DIR so a WSL Linux build can keep artifacts off /mnt/c
+  // without colliding with a Windows `target/` next to the same checkout.
+  const cargoTarget = host.env.CARGO_TARGET_DIR;
+  if (cargoTarget !== undefined && cargoTarget.length > 0) {
+    candidates.push(join(cargoTarget, "release", name));
+    candidates.push(join(cargoTarget, "debug", name));
+  }
 
   // Development: `cargo build` and `cargo build --release` output.
   candidates.push(join(host.cwd, "target", "debug", name));

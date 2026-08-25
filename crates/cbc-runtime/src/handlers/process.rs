@@ -446,13 +446,25 @@ fn require_owned_job(state: &RuntimeState, params: &Value, job_id: &str) -> Resu
         return Ok(());
     }
     let requester = requester_session(params).ok_or_else(|| {
-        RpcError::taxonomy(error_codes::PERMISSION_DENIED, "PERMISSION_DENIED", "a session id is required to control a process")
+        RpcError::taxonomy(
+            error_codes::PERMISSION_DENIED,
+            "PERMISSION_DENIED",
+            "a session id is required to control a process",
+        )
     })?;
     let owners = state.job_owners.lock().expect("job owner lock");
     match owners.get(job_id) {
         Some(owner) if owner == &requester => Ok(()),
-        Some(_) => Err(RpcError::taxonomy(error_codes::PERMISSION_DENIED, "PERMISSION_DENIED", "the process belongs to another session")),
-        None => Err(RpcError::taxonomy(error_codes::PERMISSION_DENIED, "PERMISSION_DENIED", "process ownership is unknown")),
+        Some(_) => Err(RpcError::taxonomy(
+            error_codes::PERMISSION_DENIED,
+            "PERMISSION_DENIED",
+            "the process belongs to another session",
+        )),
+        None => Err(RpcError::taxonomy(
+            error_codes::PERMISSION_DENIED,
+            "PERMISSION_DENIED",
+            "process ownership is unknown",
+        )),
     }
 }
 
@@ -516,11 +528,18 @@ pub fn run(
 
     let owner = required_str(&params, "capabilitySessionId")?;
     let mut owners = state.job_owners.lock().expect("job owner lock");
-    let job_id = state.supervisor.start(spec, cancel.clone()).map_err(process_error)?;
+    let job_id = state
+        .supervisor
+        .start(spec, cancel.clone())
+        .map_err(process_error)?;
     owners.insert(job_id.clone(), owner);
     drop(owners);
     let outcome = state.supervisor.wait(&job_id).map_err(process_error);
-    state.job_owners.lock().expect("job owner lock").remove(&job_id);
+    state
+        .job_owners
+        .lock()
+        .expect("job owner lock")
+        .remove(&job_id);
     if let Some(key) = &cancel_key {
         state.cancel_tokens.lock().expect("cancel lock").remove(key);
     }
@@ -656,7 +675,11 @@ pub fn status(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
         }
         None => {
             let requester = requester_session(&params).ok_or_else(|| {
-                RpcError::taxonomy(error_codes::PERMISSION_DENIED, "PERMISSION_DENIED", "a session id is required to inspect processes")
+                RpcError::taxonomy(
+                    error_codes::PERMISSION_DENIED,
+                    "PERMISSION_DENIED",
+                    "a session id is required to inspect processes",
+                )
             })?;
             let owners = state.job_owners.lock().expect("job owner lock");
             let jobs = state
