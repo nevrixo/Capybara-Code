@@ -204,6 +204,7 @@ describe("catalog completeness (§12.2)", () => {
       "lsp.hover",
       "lsp.signature_help",
       "lsp.document_highlights",
+      "lsp.code_actions",
     ];
     const disabled = nativeToolsForFeatures().map((tool) => tool.id);
     const enabled = nativeToolsForFeatures({ fullLsp: true }).map((tool) => tool.id);
@@ -235,6 +236,7 @@ describe("catalog completeness (§12.2)", () => {
       "lsp.hover",
       "lsp.signature_help",
       "lsp.document_highlights",
+      "lsp.code_actions",
     ]) {
       expect(findTool(id)).toMatchObject({
         authority: "read",
