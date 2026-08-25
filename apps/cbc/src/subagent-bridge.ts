@@ -163,12 +163,24 @@ function fileGraphStore(
     initial = undefined;
   }
   const memory = new MemoryGraphStore(initial);
+  const durablePath = path.replace(/\.json$/, ".checkpoint.json");
   return {
     load: () => memory.load(),
     save: (snapshot) => {
       memory.save(snapshot);
       mkdirSync(directory, { recursive: true });
       writeFileSync(path, JSON.stringify(snapshot), { encoding: "utf8", mode: 0o600 });
+    },
+    persistDurable: (_graphId, snapshotJson) => {
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(durablePath, snapshotJson, { encoding: "utf8", mode: 0o600 });
+    },
+    loadDurable: () => {
+      try {
+        return readFileSync(durablePath, "utf8");
+      } catch {
+        return undefined;
+      }
     },
   };
 }
@@ -198,7 +210,8 @@ export class SubagentBridge {
         : {}),
       ...(options.config.experimental.worktreeMultiAgent && options.config.worktrees.enabled
         ? {
-            writerPartition: (task) => task.allowedPaths[0] ?? "base",
+            writerPartition: (task) =>
+              task.allowedPaths[0] === undefined ? `worktree:${task.goal.slice(0, 24)}` : `worktree:${task.allowedPaths[0]}`,
           }
         : {}),
       emitter: {
@@ -611,6 +624,21 @@ export class SubagentBridge {
         ? { ask: this.#options.bridges.ask }
         : {}),
     };
+
+    if (
+      this.#options.config.experimental.worktreeMultiAgent &&
+      this.#options.config.worktrees.enabled &&
+      roleDefinition(instance.role).canWrite
+    ) {
+      try {
+        await this.#options.runtime.createWorktree({
+          path: join(".capybara", "worktrees", instance.id),
+          revision: "HEAD",
+        });
+      } catch {
+        // Partition isolation still holds even if Git worktree creation is refused.
+      }
+    }
 
     const childExecutor = new RuntimeToolExecutor({
       runtime: this.#options.runtime,
