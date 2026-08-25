@@ -575,6 +575,35 @@ fn plugin_invocations_are_durable_and_terminally_fenced() {
         Some(completed)
     );
 
+    let running_on_stop = store
+        .start_plugin_invocation(&PluginInvocationStart {
+            id: "inv_after_tool".into(),
+            instance_id: "pni_invocation".into(),
+            hook_or_method: "after.tool".into(),
+            correlation_id: "corr_plugin".into(),
+            started_at: T1.into(),
+        })
+        .expect("persist invocation that will be interrupted");
+    assert_eq!(running_on_stop.state, PluginInvocationState::Running);
+    assert!(matches!(
+        store.transition_plugin_instance(
+            "pni_invocation",
+            &PluginInstanceTransition {
+                expected_state: PluginInstanceState::Ready,
+                state: PluginInstanceState::Stopped,
+                at: T0.into(),
+            },
+        ),
+        Err(StoreError::InvalidPlugin { .. })
+    ));
+    assert_eq!(
+        store
+            .plugin_instance("pni_invocation")
+            .expect("reload instance after rejected stop")
+            .expect("instance record")
+            .state,
+        PluginInstanceState::Ready
+    );
     store
         .transition_plugin_instance(
             "pni_invocation",
@@ -585,6 +614,35 @@ fn plugin_invocations_are_durable_and_terminally_fenced() {
             },
         )
         .expect("stop instance");
+    let cancelled = store
+        .plugin_invocation("inv_after_tool")
+        .expect("reload interrupted invocation")
+        .expect("interrupted invocation record");
+    assert_eq!(cancelled.state, PluginInvocationState::Cancelled);
+    assert_eq!(cancelled.finished_at.as_deref(), Some(T2));
+    assert_eq!(
+        cancelled.error,
+        Some(json!({
+            "code": "PLUGIN_INSTANCE_STOPPED",
+            "detail": "plugin instance stopped before invocation completion",
+        }))
+    );
+    assert!(store
+        .reconcile_interrupted_plugin_invocations("pni_invocation", T2)
+        .expect("idempotent stopped-instance reconciliation")
+        .is_empty());
+    assert!(matches!(
+        store.finish_plugin_invocation(
+            "inv_after_tool",
+            &PluginInvocationFinish {
+                state: PluginInvocationState::Succeeded,
+                decision: Some(json!({ "action": "continue" })),
+                error: None,
+                finished_at: T2.into(),
+            },
+        ),
+        Err(StoreError::InvalidPlugin { .. })
+    ));
     assert!(matches!(
         store.start_plugin_invocation(&PluginInvocationStart {
             id: "inv_after_stop".into(),

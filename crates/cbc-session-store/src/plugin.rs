@@ -788,6 +788,28 @@ impl SessionStore {
         Ok(invocation)
     }
 
+    /// Terminally reconcile any running invocations after a stopped instance is
+    /// recovered. Repeated calls are idempotent and return an empty ledger.
+    pub fn reconcile_interrupted_plugin_invocations(
+        &mut self,
+        instance_id: &str,
+        at: &str,
+    ) -> Result<Vec<PluginInvocationRecord>, StoreError> {
+        validate_prefixed_id("instanceId", instance_id, "pni_")?;
+        validate_timestamp("at", at)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let instance = require_plugin_instance(&tx, instance_id)?;
+        if instance.state != PluginInstanceState::Stopped {
+            return Err(invalid(
+                "only stopped plugin instances can reconcile interrupted invocations",
+            ));
+        }
+        let reconciled = reconcile_running_plugin_invocations_in_tx(&tx, instance_id, at)?;
+        tx.commit()?;
+        Ok(reconciled)
+    }
     pub fn heartbeat_plugin_instance(
         &mut self,
         instance_id: &str,
@@ -842,6 +864,9 @@ impl SessionStore {
         }
         if !instance_transition_allowed(instance.state, transition.state) {
             return Err(invalid("plugin instance transition is not allowed"));
+        }
+        if transition.state == PluginInstanceState::Stopped {
+            reconcile_running_plugin_invocations_in_tx(&tx, instance_id, &transition.at)?;
         }
         tx.execute(
             "UPDATE plugin_instances
@@ -1906,6 +1931,70 @@ fn plugin_invocation_in_tx(
     )
     .optional()
     .map_err(StoreError::from)
+}
+fn reconcile_running_plugin_invocations_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    instance_id: &str,
+    at: &str,
+) -> Result<Vec<PluginInvocationRecord>, StoreError> {
+    let mut statement = tx.prepare(
+        "SELECT id, instance_id, hook_or_method, correlation_id, state,
+                decision_json, error_json, started_at, finished_at
+         FROM plugin_invocations
+         WHERE instance_id = ?1
+           AND state = 'running'
+         ORDER BY started_at ASC, id ASC",
+    )?;
+    let rows = statement.query_map(params![instance_id], read_plugin_invocation)?;
+    let mut running = Vec::new();
+    for row in rows {
+        running.push(row?);
+    }
+    drop(statement);
+    if running
+        .iter()
+        .any(|invocation| at < invocation.started_at.as_str())
+    {
+        return Err(invalid(
+            "plugin invocation startedAt cannot follow its instance stop timestamp",
+        ));
+    }
+    if running.is_empty() {
+        return Ok(running);
+    }
+
+    let error = serde_json::json!({
+        "code": "PLUGIN_INSTANCE_STOPPED",
+        "detail": "plugin instance stopped before invocation completion",
+    });
+    let error_json = serde_json::to_string(&error)?;
+    let updated = tx.execute(
+        "UPDATE plugin_invocations
+         SET state = ?2,
+             decision_json = NULL,
+             error_json = ?3,
+             finished_at = ?4
+         WHERE instance_id = ?1
+           AND state = 'running'",
+        params![
+            instance_id,
+            PluginInvocationState::Cancelled.label(),
+            error_json,
+            at,
+        ],
+    )?;
+    if updated != running.len() {
+        return Err(invalid(
+            "plugin invocation changed before instance stop reconciliation",
+        ));
+    }
+    for invocation in &mut running {
+        invocation.state = PluginInvocationState::Cancelled;
+        invocation.decision = None;
+        invocation.error = Some(error.clone());
+        invocation.finished_at = Some(at.into());
+    }
+    Ok(running)
 }
 
 fn require_plugin_invocation(
