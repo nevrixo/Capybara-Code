@@ -212,6 +212,47 @@ export function globMatch(pattern: string, text: string): boolean {
   return matchFrom(pattern, 0, text, 0);
 }
 
+/**
+ * Whether two path-glob sets can touch the same file.
+ *
+ * Deciding glob-versus-glob intersection exactly is not worth the complexity
+ * here, so this errs toward reporting overlap: it compares the literal prefixes
+ * and tries each glob against the other as a path. A false positive costs a
+ * narrower scope; a false negative could grant contradictory path authority.
+ */
+export function overlappingGlobs(
+  held: readonly string[],
+  requested: readonly string[],
+): Array<[string, string]> {
+  const overlaps: Array<[string, string]> = [];
+  for (const want of requested) {
+    for (const have of held) {
+      if (globScopesOverlap(want, have)) overlaps.push([want, have]);
+    }
+  }
+  return overlaps;
+}
+
+function globScopesOverlap(a: string, b: string): boolean {
+  if (a === b) return true;
+  // Either pattern matching the other as a literal path is a definite overlap.
+  if (globMatch(a, b) || globMatch(b, a)) return true;
+  // Otherwise fall back to directory containment of the wildcard-free prefixes.
+  const prefixA = literalPrefix(a);
+  const prefixB = literalPrefix(b);
+  if (prefixA.length === 0 || prefixB.length === 0) return true;
+  return prefixA.startsWith(prefixB) || prefixB.startsWith(prefixA);
+}
+
+/** The part of a glob before its first wildcard, trimmed to a directory boundary. */
+function literalPrefix(glob: string): string {
+  const wildcard = glob.search(/[*?[]/);
+  const literal = wildcard === -1 ? glob : glob.slice(0, wildcard);
+  const cut = literal.lastIndexOf("/");
+  if (wildcard === -1) return literal;
+  return cut === -1 ? "" : literal.slice(0, cut + 1);
+}
+
 function matchFrom(pattern: string, pi: number, text: string, ti: number): boolean {
   if (pi >= pattern.length) return ti >= text.length;
 

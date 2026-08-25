@@ -9,6 +9,8 @@
  * So validation here is a spawn precondition, not advice.
  */
 
+import { overlappingGlobs } from "@cbc/tool-registry";
+
 import { roleDefinition, type SubagentRole } from "./roles.ts";
 
 /** §15.4 task contract. */
@@ -142,13 +144,19 @@ export function validateTask(task: AgentTask, role: SubagentRole): TaskValidatio
         message: "a writer child needs at least one allowed path for its lease (§15.8)",
       });
     }
-    // The Rust lease accepts positive globs only. Reject an exclusion-shaped
-    // writer contract rather than handing the child a broad lease that silently
-    // includes its forbidden paths; callers must split the positive scope.
-    if (task.forbiddenPaths.length > 0) {
+    // The Rust lease accepts positive globs only. A forbidden path already
+    // outside that positive lease is redundant and safe (the common examples
+    // are node_modules and dist beside a few explicitly allowed source files).
+    // Keep refusing carve-outs inside the lease because a process could bypass
+    // an exclusion that only the higher-level tool policy understands.
+    const forbiddenOverlaps = overlappingGlobs(task.allowedPaths, task.forbiddenPaths);
+    if (forbiddenOverlaps.length > 0) {
       issues.push({
         field: "forbiddenPaths",
-        message: "writer leases cannot represent forbidden exclusions; use only explicit allowed paths",
+        message:
+          "writer leases cannot represent forbidden exclusions inside allowedPaths; " +
+          forbiddenOverlaps.map(([forbidden, allowed]) => `'${forbidden}' overlaps '${allowed}'`).join(", ") +
+          "; narrow allowedPaths instead",
       });
     }
   } else if (task.allowedPaths.length > 0) {

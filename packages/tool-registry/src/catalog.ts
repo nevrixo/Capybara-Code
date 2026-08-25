@@ -1331,6 +1331,7 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
       "Spawn a subagent to complete a scoped parallel task. The §15.4 contract is enforced at spawn: " +
       "the goal must be a specific, scoped objective of at least 20 characters (vague goals like 'fix the repo' are refused); " +
       "writer roles (executor, refactorer) need a write scope — pass allowedPaths, or name the files in the goal so they can be inferred; " +
+      "writer forbiddenPaths are accepted when they are already outside allowedPaths, but cannot carve exclusions out of an allowed glob; " +
       "constraints and expectedOutput are filled from the goal or matching Plan item when omitted; " +
       "read-only roles must not receive allowedPaths. " +
       "Pass facts you already collected in context so the child does not re-read them.",
@@ -1384,7 +1385,14 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
           default: [],
         },
         allowedPaths: { type: "array", items: relativePath, maxItems: 32, default: [] },
-        forbiddenPaths: { type: "array", items: relativePath, maxItems: 32, default: [] },
+        forbiddenPaths: {
+          type: "array",
+          description:
+            "Paths the child must not access. For writer roles these must not overlap allowedPaths; narrow allowedPaths instead of using an exclusion.",
+          items: relativePath,
+          maxItems: 32,
+          default: [],
+        },
         verification: { type: "array", items: { type: "string", maxLength: 500 }, default: [] },
         modelProfile: { type: "string", default: "auto" },
         dependencies: {

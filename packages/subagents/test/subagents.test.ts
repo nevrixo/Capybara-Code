@@ -222,6 +222,30 @@ describe("task contract (§15.4, SUB-002)", () => {
     expect(validateTask(task, "executor").issues.some((i) => i.field === "allowedPaths")).toBe(true);
   });
 
+  test("a writer accepts redundant forbidden paths outside its explicit lease on the first spawn", () => {
+    const task = executorTask({
+      allowedPaths: ["index.html", "package.json", "src/main.jsx", "src/style.css"],
+      forbiddenPaths: ["node_modules", "dist"],
+    });
+    const result = validateTask(task, "executor");
+    expect(result.ok).toBe(true);
+    expect(task.forbiddenPaths).toEqual(["node_modules", "dist"]);
+  });
+
+  test("a writer still rejects forbidden carve-outs inside its lease", () => {
+    const result = validateTask(
+      executorTask({
+        allowedPaths: ["src/**"],
+        forbiddenPaths: ["src/generated/**"],
+      }),
+      "executor",
+    );
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: "forbiddenPaths", message: expect.stringContaining("overlaps") }),
+    ]));
+  });
+
   test("a read-only role cannot be granted write paths", () => {
     const task = buildTask({ ...exploreTask(), allowedPaths: ["src/a.ts"] }, "explore");
     const result = validateTask(task, "explore");
