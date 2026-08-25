@@ -14,6 +14,8 @@ import type { LspServerConfig } from "@cbc/config-schema";
 import {
   buildLspEditPlan,
   collectLspWorkspaceEditPaths,
+  normalizeLspDiagnostics,
+  type LspDiagnosticSnapshot,
   type LspEditDocument,
   type LspEditPlanResult,
   type LspWorkspaceEdit,
@@ -68,6 +70,7 @@ export function configuredLspServers(
 }
 
 const MAX_LSP_DOCUMENTS_PER_LANGUAGE = 64;
+const MAX_LSP_DIAGNOSTIC_DOCUMENTS = MAX_LSP_DOCUMENTS_PER_LANGUAGE * 2;
 const MAX_LSP_DOCUMENT_BYTES = 1_000_000;
 const MAX_LSP_SYMBOLS_PER_DOCUMENT = 512;
 const MAX_LSP_PARALLEL_REQUESTS = 4;
@@ -84,17 +87,26 @@ interface PendingRequest {
   readonly reject: (error: Error) => void;
   readonly timer: ReturnType<typeof setTimeout>;
 }
+interface TrackedDiagnosticDocument {
+  readonly uri: string;
+  readonly path: string;
+  readonly document: LspEditDocument;
+  readonly version: number;
+}
+
 
 interface LspProcess {
   readonly descriptor: LspServerDescriptor;
   readonly protocolChannel: string;
   readonly pending: Map<number, PendingRequest>;
+  readonly diagnosticDocuments: Map<string, TrackedDiagnosticDocument>;
   jobId?: string | undefined;
   unsubscribe?: (() => void) | undefined;
   buffer: Buffer;
   totalOutputBytes: number;
   stopped: boolean;
   nextRequestId: number;
+  nextDocumentVersion: number;
 }
 
 interface ServiceState {
@@ -188,6 +200,7 @@ export class LspHost {
   readonly #servers: readonly LspServerDescriptor[];
   readonly #services = new Map<string, ServiceState>();
   readonly #processes = new Map<string, LspProcess>();
+  readonly #diagnosticSnapshots = new Map<string, LspDiagnosticSnapshot>();
   #lastFiles: readonly RepoFile[] = [];
   #lastIntelligence: RepositoryIntelligence | undefined;
   #queue: Promise<void> = Promise.resolve();
@@ -250,6 +263,32 @@ export class LspHost {
 
   async hover(input: LspTextDocumentPosition): Promise<LspQueryResult> {
     return await this.#positionQuery("textDocument/hover", input);
+  }
+
+  /**
+   * Return only diagnostics whose captured revision still matches a fresh,
+   * runtime-authoritative document read. This never starts a language server.
+   */
+  async diagnostics(path: string): Promise<readonly LspDiagnosticSnapshot[]> {
+    workspaceFileUri(this.#options.workspaceRoot, path);
+    if (!this.#mayStart()) return [];
+    const document = await this.#readDiagnosticDocument(path);
+    if (document === undefined) return [];
+    const workspaceIdentityDigest = this.#workspaceIdentityDigest();
+    if (workspaceIdentityDigest === undefined) return [];
+
+    const snapshots: LspDiagnosticSnapshot[] = [];
+    for (const descriptor of this.#servers) {
+      const snapshot = this.#diagnosticSnapshots.get(this.#diagnosticCacheKey(descriptor.name, path));
+      if (
+        snapshot !== undefined &&
+        snapshot.workspaceIdentityDigest === workspaceIdentityDigest &&
+        snapshot.documentRevision === document.revision
+      ) {
+        snapshots.push(snapshot);
+      }
+    }
+    return Object.freeze(snapshots);
   }
 
   /**
@@ -579,10 +618,12 @@ export class LspHost {
       descriptor,
       protocolChannel,
       pending: new Map(),
+      diagnosticDocuments: new Map(),
       buffer: Buffer.alloc(0),
       totalOutputBytes: 0,
       stopped: false,
       nextRequestId: 1,
+      nextDocumentVersion: 1,
     };
     this.#processes.set(descriptor.name, process);
     process.unsubscribe = this.#options.runtime.subscribeNotifications((method, params) => {
@@ -662,6 +703,12 @@ export class LspHost {
             documentSymbol: {
               hierarchicalDocumentSymbolSupport: true,
             },
+            publishDiagnostics: {
+              versionSupport: true,
+              relatedInformation: false,
+              codeDescriptionSupport: false,
+              dataSupport: false,
+            },
           },
         },
       }, descriptor.timeoutMs);
@@ -701,25 +748,41 @@ export class LspHost {
     uri: string,
     request: (uri: string) => Promise<T>,
   ): Promise<T> {
-    let text: string | undefined;
-    try {
-      text = await this.#options.readFile?.(path);
-    } catch {
-      // A read failure should not prevent a workspace-aware server from loading
-      // the same file directly from its sandboxed root.
-      text = undefined;
+    const diagnosticDocument = await this.#readDiagnosticDocument(path);
+    let text: string | undefined = diagnosticDocument?.text;
+    if (text === undefined) {
+      try {
+        text = await this.#options.readFile?.(path);
+      } catch {
+        // A read failure should not prevent a workspace-aware server from loading
+        // the same file directly from its sandboxed root.
+        text = undefined;
+      }
     }
+
     const opened =
       typeof text === "string" && Buffer.byteLength(text, "utf8") <= MAX_LSP_DOCUMENT_BYTES;
+    let tracked: TrackedDiagnosticDocument | undefined;
     if (opened) {
-      await this.#notify(process, "textDocument/didOpen", {
-        textDocument: {
-          uri,
-          languageId: descriptor.languageId,
-          version: 1,
-          text,
-        },
-      });
+      const version =
+        diagnosticDocument === undefined ? 1 : this.#nextDocumentVersion(process);
+      if (diagnosticDocument !== undefined) {
+        tracked = { uri, path, document: diagnosticDocument, version };
+        this.#rememberDiagnosticDocument(process, tracked);
+      }
+      try {
+        await this.#notify(process, "textDocument/didOpen", {
+          textDocument: {
+            uri,
+            languageId: descriptor.languageId,
+            version,
+            text,
+          },
+        });
+      } catch (error) {
+        if (tracked !== undefined) this.#forgetDiagnosticDocument(process, tracked);
+        throw error;
+      }
     }
     try {
       return await request(uri);
@@ -731,6 +794,111 @@ export class LspHost {
       }
     }
   }
+
+  async #readDiagnosticDocument(path: string): Promise<LspEditDocument | undefined> {
+    const readEditDocument = this.#options.readEditDocument;
+    if (readEditDocument === undefined) return undefined;
+    try {
+      const document = await readEditDocument(path);
+      if (
+        document === undefined ||
+        document.path !== path ||
+        typeof document.text !== "string" ||
+        typeof document.revision !== "string" ||
+        document.revision.trim().length === 0 ||
+        Buffer.byteLength(document.text, "utf8") > MAX_LSP_DOCUMENT_BYTES
+      ) {
+        return undefined;
+      }
+      return { path: document.path, text: document.text, revision: document.revision };
+    } catch {
+      return undefined;
+    }
+  }
+
+  #nextDocumentVersion(process: LspProcess): number {
+    const version = process.nextDocumentVersion;
+    if (
+      !Number.isSafeInteger(version) ||
+      version < 1 ||
+      version >= Number.MAX_SAFE_INTEGER
+    ) {
+      throw new Error("LSP document version counter is exhausted");
+    }
+    process.nextDocumentVersion = version + 1;
+    return version;
+  }
+
+  #rememberDiagnosticDocument(
+    process: LspProcess,
+    tracked: TrackedDiagnosticDocument,
+  ): void {
+    process.diagnosticDocuments.delete(tracked.uri);
+    process.diagnosticDocuments.set(tracked.uri, tracked);
+    this.#diagnosticSnapshots.delete(this.#diagnosticCacheKey(process.descriptor.name, tracked.path));
+
+    while (process.diagnosticDocuments.size > MAX_LSP_DIAGNOSTIC_DOCUMENTS) {
+      const oldest = process.diagnosticDocuments.values().next().value;
+      if (oldest === undefined) return;
+      process.diagnosticDocuments.delete(oldest.uri);
+      this.#diagnosticSnapshots.delete(
+        this.#diagnosticCacheKey(process.descriptor.name, oldest.path),
+      );
+    }
+  }
+
+  #forgetDiagnosticDocument(process: LspProcess, tracked: TrackedDiagnosticDocument): void {
+    if (process.diagnosticDocuments.get(tracked.uri) !== tracked) return;
+    process.diagnosticDocuments.delete(tracked.uri);
+    this.#diagnosticSnapshots.delete(this.#diagnosticCacheKey(process.descriptor.name, tracked.path));
+  }
+
+  #captureDiagnostics(process: LspProcess, params: unknown): void {
+    const notification = asRecord(params);
+    const uri = notification?.uri;
+    if (typeof uri !== "string") return;
+    const tracked = process.diagnosticDocuments.get(uri);
+    if (tracked === undefined) return;
+    const workspaceIdentityDigest = this.#workspaceIdentityDigest();
+    if (workspaceIdentityDigest === undefined) return;
+
+    try {
+      const snapshot = normalizeLspDiagnostics(params, {
+        workspaceRoot: this.#options.workspaceRoot,
+        workspaceIdentityDigest,
+        server: process.descriptor.name,
+        document: tracked.document,
+        documentVersion: tracked.version,
+        publishedAt: new Date().toISOString(),
+      });
+      this.#diagnosticSnapshots.set(
+        this.#diagnosticCacheKey(process.descriptor.name, snapshot.path),
+        snapshot,
+      );
+    } catch {
+      // Invalid, oversized, or stale server output remains unavailable evidence.
+    }
+  }
+
+  #workspaceIdentityDigest(): string | undefined {
+    try {
+      const digest = this.#options.workspaceIdentityDigest?.();
+      return typeof digest === "string" && digest.trim().length > 0 ? digest : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  #diagnosticCacheKey(server: string, path: string): string {
+    return server + "\u0000" + path;
+  }
+
+  #clearDiagnosticsForServer(server: string): void {
+    for (const [key, snapshot] of this.#diagnosticSnapshots) {
+      if (snapshot.server === server) this.#diagnosticSnapshots.delete(key);
+    }
+  }
+
 
   async #request(
     process: LspProcess,
@@ -801,6 +969,8 @@ export class LspHost {
     }
     if (method === "process.exited" && event.jobId === process.jobId) {
       process.jobId = undefined;
+      process.diagnosticDocuments.clear();
+      this.#clearDiagnosticsForServer(process.descriptor.name);
       this.#rejectPending(process, new Error("LSP server exited"));
       process.unsubscribe?.();
       process.unsubscribe = undefined;
@@ -858,6 +1028,14 @@ export class LspHost {
 
   #handleMessage(process: LspProcess, raw: unknown): void {
     const message = asRecord(raw);
+    if (
+      message !== undefined &&
+      message.id === undefined &&
+      message.method === "textDocument/publishDiagnostics"
+    ) {
+      this.#captureDiagnostics(process, message.params);
+      return;
+    }
     if (message === undefined || typeof message.id !== "number") return;
     const pending = process.pending.get(message.id);
     if (pending === undefined) return;
@@ -882,6 +1060,8 @@ export class LspHost {
   async #stop(process: LspProcess): Promise<void> {
     if (process.stopped) return;
     process.stopped = true;
+    process.diagnosticDocuments.clear();
+    this.#clearDiagnosticsForServer(process.descriptor.name);
     process.unsubscribe?.();
     process.unsubscribe = undefined;
     this.#rejectPending(process, new Error("LSP server stopped"));

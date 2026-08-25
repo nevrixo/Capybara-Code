@@ -317,6 +317,144 @@ describe("LspHost", () => {
     expect(stops).toBe(1);
   });
 
+  test("keeps only diagnostics bound to the latest runtime document revision", async () => {
+    let notification:
+      | ((method: string, params: unknown) => void)
+      | undefined;
+    let protocolChannel = "";
+    let openedUri = "";
+    let revision = "sha256:widget-1";
+    const documentText = "const value = 1;\n";
+    const runtime = {
+      issueCapability: async () => ({ id: "cap", sessionId: "session-1", actionHash: "hash" }),
+      startJob: async (params: Record<string, unknown>) => {
+        protocolChannel = String(params.protocolChannel);
+        return { jobId: "job-1", display: "fake LSP" };
+      },
+      sendInput: async (params: Record<string, unknown>) => {
+        const data = params.data;
+        if (typeof data !== "string") throw new Error("expected framed LSP input");
+        const message = messageFromFrame(data);
+        if (message.method === "textDocument/didOpen") {
+          const opened = message.params as {
+            readonly textDocument?: { readonly uri?: unknown; readonly version?: unknown };
+          };
+          const uri = opened.textDocument?.uri;
+          const version = opened.textDocument?.version;
+          if (typeof uri === "string" && typeof version === "number") {
+            openedUri = uri;
+            notification?.("lsp.stdio.output", {
+              protocolChannel,
+              text: lspFrame({
+                jsonrpc: "2.0",
+                method: "textDocument/publishDiagnostics",
+                params: {
+                  uri,
+                  version,
+                  diagnostics: [{
+                    range: {
+                      start: { line: 0, character: 6 },
+                      end: { line: 0, character: 11 },
+                    },
+                    severity: 1,
+                    code: 2322,
+                    source: "tsserver",
+                    message: "bad\u001b[31m value",
+                    data: { mustNotEscape: true },
+                  }],
+                },
+              }),
+            });
+          }
+          return undefined;
+        }
+        if (typeof message.id !== "number") return undefined;
+        notification?.("lsp.stdio.output", {
+          protocolChannel,
+          text: lspFrame({
+            jsonrpc: "2.0",
+            id: message.id,
+            result: message.method === "initialize" ? { capabilities: {} } : [],
+          }),
+        });
+        return undefined;
+      },
+      stopJob: async () => undefined,
+      subscribeNotifications: (handler: (method: string, params: unknown) => void) => {
+        notification = handler;
+        return () => {
+          if (notification === handler) notification = undefined;
+        };
+      },
+    };
+    const host = new LspHost({
+      runtime: runtime as never,
+      servers: {
+        typescript: {
+          command: "typescript-language-server",
+          args: ["--stdio"],
+          extensions: [".ts"],
+          languageId: "typescript",
+          timeoutMs: 1_000,
+        },
+      },
+      sessionId: "session-1",
+      workspaceRoot: "/work",
+      workspaceTrusted: true,
+      enabled: true,
+      workspaceIdentityDigest: () => "ws_1",
+      readFile: async () => "non-authoritative fallback",
+      readEditDocument: async (path) =>
+        path === "src/widget.ts"
+          ? { path, text: documentText, revision }
+          : undefined,
+      isBuildMode: () => true,
+      resolveExecutable: () => "fake-lsp",
+    });
+
+    await host.definition({ path: "src/widget.ts", line: 0, character: 0 });
+    const current = await host.diagnostics("src/widget.ts");
+
+    expect(current).toEqual([expect.objectContaining({
+      server: "typescript",
+      workspaceIdentityDigest: "ws_1",
+      path: "src/widget.ts",
+      documentRevision: "sha256:widget-1",
+      documentVersion: 1,
+      diagnostics: [{
+        range: {
+          start: { line: 0, character: 6 },
+          end: { line: 0, character: 11 },
+        },
+        severity: 1,
+        code: "2322",
+        source: "tsserver",
+        message: "bad [31m value",
+      }],
+      totalDiagnostics: 1,
+      truncated: false,
+    })]);
+
+    notification?.("lsp.stdio.output", {
+      protocolChannel,
+      text: lspFrame({
+        jsonrpc: "2.0",
+        method: "textDocument/publishDiagnostics",
+        params: {
+          uri: openedUri,
+          version: 999,
+          diagnostics: [],
+        },
+      }),
+    });
+    expect(await host.diagnostics("src/widget.ts")).toEqual(current);
+
+    revision = "sha256:widget-2";
+    expect(await host.diagnostics("src/widget.ts")).toEqual([]);
+
+    await host.close();
+  });
+
   test("does not start a server while the full LSP rollout gate is disabled", async () => {
     let starts = 0;
     const host = new LspHost({
