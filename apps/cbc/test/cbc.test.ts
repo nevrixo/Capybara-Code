@@ -5327,6 +5327,23 @@ describe("tool execution helpers", () => {
       expect(locationQuery.result.summary).toContain(toolId);
     }
 
+    const codeActionPreview = await executor.execute(
+      {
+        callId: "lsp-code-action-preview",
+        toolId: "lsp.code_action_preview",
+        arguments: {
+          path: "src/widget.ts",
+          line: 0,
+          character: 0,
+          actionIndex: 0,
+        },
+        display: "lsp.code_action_preview src/widget.ts #0",
+      },
+      new AbortController().signal,
+    );
+    expect(codeActionPreview.result.ok).toBe(true);
+    expect(codeActionPreview.result.summary).toContain("lsp.code_action_preview");
+
     const renamePreview = await executor.execute(
       {
         callId: "lsp-rename-preview",
@@ -5366,6 +5383,7 @@ describe("tool execution helpers", () => {
       "lsp.signature_help",
       "lsp.document_highlights",
       "lsp.code_actions",
+      "lsp.code_action_preview",
       "lsp.rename_preview",
     ]);
   });
