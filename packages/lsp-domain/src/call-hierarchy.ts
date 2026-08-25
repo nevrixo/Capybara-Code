@@ -433,4 +433,3 @@ function failure(
 ): LspCallHierarchyDomainError {
   return new LspCallHierarchyDomainError(code, message);
 }
-
