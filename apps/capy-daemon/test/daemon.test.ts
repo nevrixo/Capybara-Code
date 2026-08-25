@@ -414,6 +414,55 @@ describe("CapybaraDaemon with fake backend", () => {
     }
     await daemon.stop();
   });
+
+  test("session.ensure owns a worker without a command envelope", async () => {
+    const dir = runtimeDir();
+    const daemon = new CapybaraDaemon({
+      runtimeDir: dir,
+      listen: false,
+      executableDigest: DIGEST,
+      daemonId: "dmn_ensure",
+    });
+    await daemon.start();
+    const initialized = await daemon.dispatch(undefined, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "server.initialize",
+      params: {
+        protocolVersion: "1.0",
+        client: {
+          id: "client_tui",
+          name: "capy",
+          version: "1.0.0",
+          kind: "tui",
+        },
+        capabilities: {
+          eventStreaming: true,
+          eventAck: true,
+          approvals: true,
+          interactivePrompts: true,
+          artifactStreaming: false,
+          richDiff: false,
+        },
+      },
+    });
+    expect("result" in initialized).toBe(true);
+    const connectionId = "result" in initialized
+      ? (initialized.result as { connectionId: string }).connectionId
+      : undefined;
+    const ensured = await daemon.dispatch(connectionId, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "session.ensure",
+      params: { sessionId: "ses_owned" },
+    });
+    expect("error" in ensured).toBe(false);
+    expect("result" in ensured).toBe(true);
+    if ("result" in ensured) {
+      expect(ensured.result).toEqual({ sessionId: "ses_owned", owned: true });
+    }
+    await daemon.stop();
+  });
 });
 
 describe("approval manager detach survival", () => {

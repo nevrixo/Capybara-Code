@@ -127,7 +127,7 @@ const DEFAULT_LIMITS: AppServerLimits = {
 const OBSERVER_METHODS = new Set<AppMethod>([
   "server.capabilities", "server.ping", "server.health", "server.version", "server.logs.tail",
   "workspace.inspect", "workspace.list", "workspace.trust.get", "workspace.services",
-  "session.list", "session.get", "session.attach", "session.detach", "session.export",
+  "session.list", "session.get", "session.attach", "session.detach", "session.ensure", "session.export",
   "turn.get", "turn.list", "turn.wait",
   "events.subscribe", "events.unsubscribe", "events.replay", "events.ack", "events.getSnapshot",
   "approval.list", "approval.get",
@@ -615,9 +615,10 @@ function roleFor(method: AppMethod): AppClientRole {
 }
 
 function requiresCommandEnvelope(method: AppMethod): boolean {
-  // Subscription lifecycle is self-contained and idempotent by its durable
-  // cursor. Every other mutation, including approval and administrator actions,
-  // must use the common command envelope.
+  // Subscription and session-attach lifecycle (ensure/attach/detach) are
+  // idempotent connection ownership, not command-envelope mutations. Every
+  // other mutation, including approval and administrator actions, must use
+  // the common command envelope.
   return !OBSERVER_METHODS.has(method);
 }
 

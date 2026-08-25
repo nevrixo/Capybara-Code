@@ -303,6 +303,29 @@ describe("AppServer dispatch", () => {
     expect(backend.calls).toEqual([]);
   });
 
+  test("session attach lifecycle methods do not require a command envelope", async () => {
+    const { app, backend } = server(["observer", "controller"]);
+    const connectionId = await initialize(app);
+    for (const [id, method] of [
+      [2, "session.ensure"],
+      [3, "session.attach"],
+      [4, "session.detach"],
+    ] as const) {
+      const response = await app.dispatch(connectionId, {
+        jsonrpc: "2.0",
+        id,
+        method,
+        params: { sessionId: "ses_1", workspaceIdentityDigest: "ws_1" },
+      });
+      expect("result" in response).toBe(true);
+    }
+    expect(backend.calls.map((call) => call.method)).toEqual([
+      "session.ensure",
+      "session.attach",
+      "session.detach",
+    ]);
+  });
+
   test("requires a client-bound command envelope for delegated mutations", async () => {
     const { app, backend } = server(["observer", "controller"]);
     const connectionId = await initialize(app);

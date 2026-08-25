@@ -2246,10 +2246,12 @@ export class AgentSession {
     };
   }
 
-  async hydrateDurableMemory(runtime: Pick<Runtime, "searchMemory">): Promise<number> {
+  async hydrateDurableMemory(runtime: Pick<Runtime, "listMemory">): Promise<number> {
     const service = this.#memoryService;
     if (service === undefined) return 0;
-    const recalled = await runtime.searchMemory({
+    // Inspect, do not search: restore must include forgotten/stale rows and
+    // must not mark records as accessed during session open.
+    const recalled = await runtime.listMemory({
       statuses: ["active", "contested", "superseded", "forgotten"],
       limit: 200,
     });

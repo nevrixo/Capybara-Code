@@ -107,6 +107,61 @@ describe("typed runtime read facade", () => {
     await runtime.stop();
   });
 
+  test("searchMemory treats an unknown sidecar method as empty recall", async () => {
+    const fake = createFakeRuntime({
+      handler: ({ method }) => {
+        if (method === "memory.search") {
+          const error = new Error("unknown method: memory.search") as Error & { code: number };
+          error.code = -32601;
+          throw error;
+        }
+        return {};
+      },
+    });
+    const runtime = await Runtime.start({
+      host: testHost(),
+      workspace: "/work",
+      dataDir: "/data",
+      clientVersion: "test",
+      spawner: fake.spawner,
+    });
+    await expect(runtime.searchMemory({ query: "runtime" })).resolves.toEqual({
+      workspaceIdentityDigest: "ws_fake",
+      freshEvidenceRequired: true,
+      limit: 32,
+      memories: [],
+    });
+    await runtime.stop();
+  });
+
+  test("listMemory treats an unknown sidecar method as empty inspect", async () => {
+    const fake = createFakeRuntime({
+      handler: ({ method }) => {
+        if (method === "memory.list") {
+          const error = new Error("unknown method: memory.list") as Error & { code: number };
+          error.code = -32601;
+          throw error;
+        }
+        return {};
+      },
+    });
+    const runtime = await Runtime.start({
+      host: testHost(),
+      workspace: "/work",
+      dataDir: "/data",
+      clientVersion: "test",
+      spawner: fake.spawner,
+    });
+    await expect(runtime.listMemory({
+      statuses: ["active", "contested", "superseded", "forgotten"],
+      limit: 200,
+    })).resolves.toEqual({
+      workspaceIdentityDigest: "ws_fake",
+      memories: [],
+    });
+    await runtime.stop();
+  });
+
   test("listWorktrees treats an unknown sidecar method as an empty list", async () => {
     const fake = createFakeRuntime({
       handler: ({ method }) => {

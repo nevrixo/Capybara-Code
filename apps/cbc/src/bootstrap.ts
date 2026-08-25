@@ -43,6 +43,7 @@ import {
   type TimelineItem,
 } from "@cbc/session-domain";
 import { builtinSkillFiles } from "@cbc/skills";
+import { APP_COMMAND_SCHEMA_VERSION } from "@cbc/app-protocol";
 import { AppServer } from "@cbc/app-server";
 import { CapybaraClient } from "@cbc/sdk";
 
@@ -798,7 +799,19 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
           kind: options.headlessPolicy !== undefined ? "cli" : "tui",
         },
       });
-      await daemonClient.request("session.ensure", { sessionId });
+      await daemonClient.request("session.ensure", {
+        sessionId,
+        // Older daemons still classified session.ensure as a mutation.
+        command: {
+          schemaVersion: APP_COMMAND_SCHEMA_VERSION,
+          commandId: "cmd_ensure_" + crypto.randomUUID().replaceAll("-", ""),
+          idempotencyKey: "idem_ensure_" + sessionId,
+          correlationId: "cor_ensure_" + sessionId,
+          clientId: daemonClient.clientId,
+          issuedAt: new Date().toISOString(),
+          payload: { sessionId },
+        },
+      });
       await daemonClient.request("session.attach", {
         sessionId,
         workspaceIdentityDigest: runtime.workspaceId ?? sessionId,

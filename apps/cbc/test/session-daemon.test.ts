@@ -33,6 +33,7 @@ describe("session daemon product flow", () => {
       path: socketPath,
       client: { id: "client_tui", name: "capy", version: "1.0.0", kind: "tui" },
     });
+    await client.request("session.ensure", { sessionId: "ses_live" });
     await client.request("session.attach", {
       sessionId: "ses_live",
       workspaceIdentityDigest: "ws_live",

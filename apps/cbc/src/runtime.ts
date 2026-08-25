@@ -360,9 +360,13 @@ export interface MemoryVerifyResponse extends MemoryRecordResponse {
 
 type LegacyReadOptions = ReadRequest & Record<string, unknown>;
 
+function isMethodNotFound(error: unknown): boolean {
+  return error instanceof RuntimeRpcError && error.code === JSONRPC_ERROR_CODES.methodNotFound;
+}
+
 function isWorktreeListUnavailable(error: unknown): boolean {
   if (!(error instanceof RuntimeRpcError)) return false;
-  if (error.code === JSONRPC_ERROR_CODES.methodNotFound) return true;
+  if (isMethodNotFound(error)) return true;
   return error.taxonomy === "NOT_FOUND";
 }
 
@@ -812,7 +816,7 @@ export class Runtime {
         return await this.#client.request(method, params);
       } catch (error) {
         const retryable =
-          (error instanceof RuntimeRpcError && error.retryable) ||
+          (error instanceof RuntimeRpcError && error.retryable && !isMethodNotFound(error)) ||
           (error instanceof Error && /timed out|temporarily unavailable|broken pipe/i.test(error.message));
         if (!retryable || attempt === 2 || this.#client.health === "fatal") throw error;
         await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
@@ -938,7 +942,17 @@ export class Runtime {
 
   /** Recall only fresh memory records bound to the initialized workspace. */
   async searchMemory(request: MemorySearchRequest = {}): Promise<MemorySearchResponse> {
-    return await this.#stableRead("memory.search", { ...request }) as MemorySearchResponse;
+    try {
+      return await this.#stableRead("memory.search", { ...request }) as MemorySearchResponse;
+    } catch (error) {
+      if (!isMethodNotFound(error)) throw error;
+      return {
+        workspaceIdentityDigest: this.workspaceId ?? "",
+        freshEvidenceRequired: true,
+        limit: request.limit ?? 32,
+        memories: [],
+      };
+    }
   }
 
   /**
@@ -951,7 +965,12 @@ export class Runtime {
 
   /** Inspect active and contested memory; pass statuses to include forgotten rows. */
   async listMemory(request: MemorySearchRequest = {}): Promise<MemoryListResponse> {
-    return await this.#stableRead("memory.list", { ...request }) as MemoryListResponse;
+    try {
+      return await this.#stableRead("memory.list", { ...request }) as MemoryListResponse;
+    } catch (error) {
+      if (!isMethodNotFound(error)) throw error;
+      return { workspaceIdentityDigest: this.workspaceId ?? "", memories: [] };
+    }
   }
 
   async getMemory(id: string): Promise<MemoryRecordResponse> {
