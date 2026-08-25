@@ -10,14 +10,15 @@ import {
 import { usageError } from "./exit.ts";
 
 export type Command =
-  | { readonly kind: "interactive"; readonly prompt?: string }
-  | { readonly kind: "run"; readonly prompt?: string; readonly resultFile?: string }
+  | { readonly kind: "interactive"; readonly prompt?: string; readonly noDaemon?: boolean }
+  | { readonly kind: "run"; readonly prompt?: string; readonly resultFile?: string; readonly noDaemon?: boolean }
   | { readonly kind: "auth"; readonly sub: "login"; readonly device: boolean }
   | { readonly kind: "auth"; readonly sub: "api"; readonly fromStdin: boolean }
   | { readonly kind: "auth"; readonly sub: "status" }
   | { readonly kind: "auth"; readonly sub: "logout"; readonly all: boolean }
   | { readonly kind: "model"; readonly sub: "refresh" }
   | { readonly kind: "config"; readonly sub: "set"; readonly path: string; readonly value: string }
+  | { readonly kind: "daemon"; readonly sub: "start" | "stop" | "status" | "logs" | "attach"; readonly sessionId?: string }
   | { readonly kind: "version" }
   | { readonly kind: "help"; readonly topic?: string };
 
@@ -142,12 +143,13 @@ export function parseArgs(argv: readonly string[]): ParseResult {
   const spec = first === undefined ? undefined : findCommand(first);
 
   if (spec === undefined) {
-    validateFlags(tokens.rawFlags, GLOBAL_FLAGS, "capy");
+    const flags = validateFlags(tokens.rawFlags, GLOBAL_FLAGS, "capy");
     const prompt = tokens.positionals.join(" ").trim();
     return {
       command: {
         kind: "interactive",
         ...(prompt.length > 0 ? { prompt } : {}),
+        ...(flags.has("--no-daemon") ? { noDaemon: true } : {}),
       },
     };
   }
@@ -162,14 +164,18 @@ export function parseArgs(argv: readonly string[]): ParseResult {
       ]);
     }
     const operands = rest.slice(1);
-    const flags = validateFlags(tokens.rawFlags, sub.flags ?? [], contextLabel + " " + sub.name);
+    const flags = validateFlags(
+      tokens.rawFlags,
+      [...GLOBAL_FLAGS, ...(sub.flags ?? [])],
+      contextLabel + " " + sub.name,
+    );
     if (sub.operandPolicy !== "deferred") {
       validatePositionals(operands, sub, contextLabel + " " + sub.name);
     }
     return { command: buildSubcommand(spec.name, sub.name, operands, flags) };
   }
 
-  const flags = validateFlags(tokens.rawFlags, spec.flags ?? [], contextLabel);
+  const flags = validateFlags(tokens.rawFlags, [...GLOBAL_FLAGS, ...(spec.flags ?? [])], contextLabel);
   validatePositionals(rest, spec, contextLabel);
   switch (spec.name) {
     case "run": {
@@ -180,6 +186,7 @@ export function parseArgs(argv: readonly string[]): ParseResult {
           kind: "run",
           ...(prompt.length > 0 ? { prompt } : {}),
           ...(typeof resultFile === "string" && resultFile.trim().length > 0 ? { resultFile } : {}),
+          ...(flags.has("--no-daemon") ? { noDaemon: true } : {}),
         },
       };
     }
@@ -229,6 +236,21 @@ function buildSubcommand(
       value: operands[1] as string,
     };
   }
+  if (commandName === "daemon") {
+    switch (subName) {
+      case "start":
+      case "stop":
+      case "status":
+      case "logs":
+        return { kind: "daemon", sub: subName };
+      case "attach":
+        return {
+          kind: "daemon",
+          sub: "attach",
+          ...(operands[0] !== undefined ? { sessionId: operands[0] } : {}),
+        };
+    }
+  }
   throw usageError("unsupported command: capy " + commandName + " " + subName);
 }
 
@@ -238,8 +260,14 @@ export const HELP_TEXT = [
   "Usage",
   "  capy [prompt...]                 open the interactive TUI",
   "  capy run [prompt...]             run headlessly",
+  "  capy --no-daemon [prompt...]     keep execution inside this process",
   "",
   "Commands",
+  "  daemon start                     start the local daemon",
+  "  daemon stop                      stop the local daemon",
+  "  daemon status                    show daemon health",
+  "  daemon logs                      print recent daemon logs",
+  "  daemon attach [id]               reconnect this client to daemon-owned work",
   "  auth login [--device]            sign in",
   "  auth api [--stdin]               store an API key",
   "  auth status                      show the active credential",

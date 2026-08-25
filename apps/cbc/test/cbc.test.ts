@@ -391,7 +391,7 @@ describe("parseArgs", () => {
   });
 
   test("the registry and help expose only the minimal public surface", () => {
-    expect(commandNames()).toEqual(["run", "auth", "model", "config", "version", "help"]);
+    expect(commandNames()).toEqual(["run", "auth", "model", "config", "daemon", "version", "help"]);
     for (const text of [
       "auth login",
       "auth api",
@@ -399,6 +399,11 @@ describe("parseArgs", () => {
       "auth logout",
       "model refresh",
       "config set",
+      "daemon start",
+      "daemon stop",
+      "daemon status",
+      "daemon logs",
+      "daemon attach",
       "version",
       "help",
     ]) {
@@ -4380,6 +4385,16 @@ describe("slash router", () => {
       kind: "set_permission",
       preset: "auto",
       save: true,
+    });
+  });
+
+  test("daemon commands and --no-daemon are part of the public launcher", () => {
+    expect(parseArgs(["daemon", "status"]).command).toEqual({ kind: "daemon", sub: "status" });
+    expect(parseArgs(["--no-daemon"]).command).toEqual({ kind: "interactive", noDaemon: true });
+    expect(parseArgs(["run", "--no-daemon", "hi"]).command).toEqual({
+      kind: "run",
+      prompt: "hi",
+      noDaemon: true,
     });
   });
 

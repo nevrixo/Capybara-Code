@@ -31,7 +31,9 @@ export interface CommandSpec {
 }
 
 /** No flag aliases are global; use capy help and capy version. */
-export const GLOBAL_FLAGS: readonly FlagSpec[] = [];
+export const GLOBAL_FLAGS: readonly FlagSpec[] = [
+  { name: "--no-daemon", kind: "boolean", summary: "run the session inside this process instead of attaching to the local daemon" },
+];
 
 export const COMMAND_REGISTRY: readonly CommandSpec[] = [
   {
@@ -81,6 +83,21 @@ export const COMMAND_REGISTRY: readonly CommandSpec[] = [
           { label: "<path>", required: true },
           { label: "<value>", required: true },
         ],
+      },
+    ],
+  },
+  {
+    name: "daemon",
+    summary: "manage the local session daemon",
+    subcommands: [
+      { name: "start", summary: "start the local daemon if it is not already running" },
+      { name: "stop", summary: "stop the local daemon" },
+      { name: "status", summary: "print daemon health and ownership" },
+      { name: "logs", summary: "print recent daemon diagnostic lines" },
+      {
+        name: "attach",
+        summary: "attach this client to existing daemon-owned work",
+        positionals: [{ label: "[id]", required: false }],
       },
     ],
   },

@@ -6,6 +6,7 @@ import { authApi, authLogin, authLogout, authStatus } from "./commands/auth.ts";
 import { configSet } from "./commands/config.ts";
 import { CommandContext, type CommandResult } from "./commands/context.ts";
 import { interactive } from "./commands/interactive.ts";
+import { daemonCommand } from "./commands/daemon.ts";
 import { modelRefresh } from "./commands/model.ts";
 import { run } from "./commands/run.ts";
 import type { Host } from "./host.ts";
@@ -63,6 +64,12 @@ async function dispatch(context: CommandContext, command: Command): Promise<Comm
 
     case "config":
       return await configSet(context, { path: command.path, value: command.value });
+
+    case "daemon":
+      return await daemonCommand(context, {
+        sub: command.sub,
+        ...(command.sessionId !== undefined ? { sessionId: command.sessionId } : {}),
+      });
 
     case "version":
       context.out("capy " + context.version);
