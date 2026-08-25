@@ -19,6 +19,7 @@ import {
   TokenSavingController,
   type ApprovalBroker,
   type CompiledModelRequest,
+  type ContextPressureGuardResult,
   type KernelEmitter,
   type PromptInputs,
   type ResolvedTokenSavingPlan,
@@ -70,6 +71,8 @@ import {
 } from "@cbc/provider-openai";
 import {
   compact,
+  ContextPressureController,
+  evaluateContextPressure,
   PROMPT_CAPSULE_BYTE_LIMIT,
   PROMPT_CAPSULE_ITEM_LIMIT,
   RESUME_TAIL_BYTE_LIMIT,
@@ -88,7 +91,9 @@ import {
   type PlanContextStrategy,
   type TodoActionIntent,
   type TodoHostEvidence,
+  type CompactionCapsule,
   type CompactionResult,
+  type ContextPressureDecision,
   type JournalTransport,
   type SessionHydrationPosition,
   type SessionViewModel,
@@ -279,6 +284,7 @@ export interface AgentSessionSnapshotSeed {
   readonly promptHistoryDigest?: string;
   readonly promptSerializedBytes?: number;
   readonly compactState?: string;
+  readonly compactionCapsule?: CompactionCapsule;
   readonly turnCounter: number;
   readonly residentTimelineOmitted?: number;
 }
@@ -314,6 +320,24 @@ function isSnapshotHistoryItem(value: unknown): value is ModelInputItem {
     default:
       return false;
   }
+}
+
+function isCompactionCapsule(value: unknown): value is CompactionCapsule {
+  if (!isRecord(value)) return false;
+  return typeof value.id === "string" &&
+    Number.isSafeInteger(value.generation) &&
+    isRecord(value.sourceRange) &&
+    Number.isSafeInteger(value.sourceRange.firstSequence) &&
+    Number.isSafeInteger(value.sourceRange.lastSequence) &&
+    typeof value.goal === "string" &&
+    Array.isArray(value.decisions) &&
+    Array.isArray(value.mutations) &&
+    Array.isArray(value.verification) &&
+    Array.isArray(value.unresolved) &&
+    Array.isArray(value.todoSnapshot) &&
+    Array.isArray(value.evidenceRefs) &&
+    Number.isSafeInteger(value.tokenCount) &&
+    typeof value.digest === "string";
 }
 
 /** Parse only the versioned, prompt-complete snapshot payload emitted below. */
@@ -375,6 +399,7 @@ export function parseAgentSessionSnapshot(
     turnCounter,
     ...(residentTimelineOmitted !== undefined ? { residentTimelineOmitted } : {}),
     ...(typeof raw.compactState === "string" && raw.compactState.length > 0 ? { compactState: raw.compactState } : {}),
+    ...(isCompactionCapsule(raw.compactionCapsule) ? { compactionCapsule: raw.compactionCapsule } : {}),
   };
 }
 
@@ -494,6 +519,7 @@ export class AgentSession {
   /** Digest-bound Build execution capability; a cancelled turn keeps it available for an immediate retry. */
   #planExecution: { readonly digest: string; readonly contextStrategy: PlanContextStrategy } | undefined;
   #compactState: string | undefined;
+  #lastCompactionCapsule: CompactionCapsule | undefined;
   #taskDescription: string | undefined;
   #cacheKey: string | undefined;
   #lastCompiledPackId: string | undefined;
@@ -528,6 +554,8 @@ export class AgentSession {
   readonly #activeBackgroundJobs = new Set<string>();
   #backgroundJobsReconciled = true;
   #compacting = false;
+  readonly #contextPressure = new ContextPressureController();
+  #lastContextPressure: ContextPressureDecision | undefined;
   #epochAnnounced = false;
   readonly #contextScopes = new Map<string, AgentContextScope>();
   #rootContextScope!: AgentContextScope;
@@ -639,6 +667,7 @@ export class AgentSession {
             omittedRanges: prompt.omittedRanges,
           },
           ...(this.#compactState !== undefined ? { compactState: this.#compactState } : {}),
+          ...(this.#lastCompactionCapsule === undefined ? {} : { compactionCapsule: this.#lastCompactionCapsule }),
           turnCounter: this.#turnCounter,
           residentTimelineOmitted: this.recorder.residentTimelineOmitted,
         };
@@ -1064,6 +1093,7 @@ export class AgentSession {
       promptCompiler: options.config.agent.promptCompiler,
       parallelToolCalls: options.config.agent.toolGraph.providerParallelTools,
       nativeCompaction: options.config.model.context.providerCompaction,
+      nativeCompactionDynamic: true,
       compactionThresholdTokens: options.config.model.context.compactionThresholdTokens,
       serviceTier: options.config.provider.openai.serviceTier,
       phasePolicy: options.config.model.router.phasePolicy,
@@ -1143,10 +1173,13 @@ export class AgentSession {
         );
         const accumulated = hasTruncatedObservation || newToolBytes > 128 * 1024;
         if (accumulated) await this.#artifactizeAccumulatedOutputs(newToolOutputs);
-        this.compactContext({ toolOutputAccumulation: accumulated });
+        if (accumulated || this.#options.config.model.context.compactionPolicy === "legacy") {
+          this.compactContext({ toolOutputAccumulation: accumulated });
+        }
         if (accumulated) this.#lastToolOutputCompactionHistoryLength = this.kernel.history.length;
         await this.#prepareContextPack();
       },
+      contextPressureGuard: (prompt) => this.#guardContextPressure(prompt),
       testCommandFor: (paths) => testCommandFor(paths, options.config.perf.verificationPlannerV2 !== false),
       ...(options.verificationContract !== undefined
         ? {
@@ -1265,6 +1298,8 @@ export class AgentSession {
           : {}),
       });
       this.#compactState = options.seed.compactState;
+      this.#lastCompactionCapsule = options.seed.compactionCapsule;
+      if (this.#lastCompactionCapsule !== undefined) this.#contextPressure.noteCompaction(this.#lastCompactionCapsule.generation);
       this.#turnCounter = Math.max(this.#turnCounter, options.seed.turnCounter);
     }
     this.recorder.hydrate(events, options.finalPosition);
@@ -1291,6 +1326,10 @@ export class AgentSession {
     const payload = compacted !== undefined && isRecord(compacted.payload) ? compacted.payload : undefined;
     if (typeof payload?.compactState === "string" && payload.compactState.length > 0) {
       this.#compactState = payload.compactState;
+    }
+    if (isCompactionCapsule(payload?.capsule)) {
+      this.#lastCompactionCapsule = payload.capsule;
+      this.#contextPressure.noteCompaction(payload.capsule.generation);
     }
     this.#turnCounter = Math.max(this.#turnCounter, turnCounterFromEvents(events));
     this.#backgroundJobsReconciled = false;
@@ -2136,6 +2175,61 @@ export class AgentSession {
         : item));
   }
 
+  #guardContextPressure(prompt: CompiledModelRequest): ContextPressureGuardResult {
+    const routeWindow = this.#currentRoute?.capability.contextWindow;
+    const reserve = this.#options.config.model.context.reserveOutputTokens;
+    const configuredBudget = this.#options.config.model.softContextTokens;
+    const inputBudgetTokens = Math.min(
+      configuredBudget,
+      routeWindow === undefined ? configuredBudget : Math.max(1, routeWindow - reserve),
+    );
+    const savingLevel = this.#tokenSavingLastPlan?.effectiveLevel ?? this.#options.config.agent.tokenSaving;
+    const decision = evaluateContextPressure({
+      currentCompiledTokens: prompt.inputTokens,
+      inputBudgetTokens,
+      pendingHistoryDeltaTokens: 0,
+      pendingContextPackTokens: 0,
+      recentRequestGrowthP95: this.#contextPressure.recentRequestGrowthP95,
+      // Tool schemas are already included in prompt.inputTokens. Keep a small
+      // expansion reserve for provider-side activation/continuation metadata.
+      reservedToolExpansionTokens: Math.min(8_192, Math.ceil(estimateTokens(prompt.serializedTools) * 0.1)),
+      tokenSavingLevel: savingLevel,
+      emergencyRatio: this.#options.config.model.context.emergencyRatio,
+      ...(this.#options.config.model.context.minFreeTokens === "auto" ? {} : { minFreeTokens: this.#options.config.model.context.minFreeTokens }),
+    });
+    this.#contextPressure.observeCompiledTokens(prompt.inputTokens);
+    this.#lastContextPressure = decision;
+    const compactionPolicy = this.#options.config.model.context.compactionPolicy;
+    if (decision.state !== "compact" && decision.state !== "emergency") {
+      return { action: "accept", decision };
+    }
+    if (compactionPolicy === "off" && decision.state !== "emergency") {
+      return { action: "accept", decision };
+    }
+    if (compactionPolicy === "legacy" && decision.state === "compact") {
+      return { action: "accept", decision };
+    }
+    const compacted = this.compactContext({
+      pressure: decision,
+      ...(decision.targetTokens === undefined ? {} : { targetTokens: decision.targetTokens }),
+    });
+    if (compacted === undefined) {
+      // Returning the action still forces the kernel's one-recompile boundary;
+      // the second evaluation will become CONTEXT_BUDGET_EXCEEDED if nothing
+      // changed, rather than silently sending an over-budget request.
+      return {
+        action: decision.state === "emergency" ? "emergency" : "compact",
+        targetTokens: decision.targetTokens ?? Math.max(1_024, Math.floor(inputBudgetTokens * 0.7)),
+        decision,
+      };
+    }
+    return {
+      action: decision.state === "emergency" ? "emergency" : "compact",
+      targetTokens: decision.targetTokens ?? compacted.tokensAfter,
+      decision,
+    };
+  }
+
   async hydrateDurableMemory(runtime: Pick<Runtime, "searchMemory">): Promise<number> {
     const service = this.#memoryService;
     if (service === undefined) return 0;
@@ -2173,21 +2267,31 @@ export class AgentSession {
     return restored;
   }
 
-  compactContext(options: { userRequested?: boolean; toolOutputAccumulation?: boolean } = {}): CompactionResult | undefined {
+  compactContext(options: {
+    userRequested?: boolean;
+    toolOutputAccumulation?: boolean;
+    pressure?: ContextPressureDecision;
+    targetTokens?: number;
+  } = {}): CompactionResult | undefined {
     if (this.#compacting) return undefined;
     // Token saving moves only the local soft-budget trigger; the journal and
     // the provider-native threshold stay exactly where they were.
     const savingPlan = this.#tokenSavingResolve(this.#tokenSavingPhase());
-    const trigger = shouldCompact(this.recorder.model, {
-      ...options,
-      softBudgetRatio: savingPlan.localCompactionRatio,
-    }) ??
-      (options.toolOutputAccumulation === true ? "tool_output_accumulation" : undefined);
+    const trigger = options.pressure !== undefined
+      ? (options.pressure.state === "emergency" ? "emergency_pressure" : "projected_pressure")
+      : options.userRequested === true || options.toolOutputAccumulation === true
+        ? (options.userRequested === true ? "user_requested" : "tool_output_accumulation")
+        : this.#options.config.model.context.compactionPolicy === "legacy"
+          ? shouldCompact(this.recorder.model, { softBudgetRatio: savingPlan.localCompactionRatio })
+          : undefined;
     if (trigger === undefined) return undefined;
 
     this.#compacting = true;
     try {
       const result = compact(this.recorder.model, trigger, estimateTokens, {
+        ...(options.targetTokens === undefined ? {} : { targetTokens: options.targetTokens }),
+        generation: this.#contextPressure.generation + 1,
+        evidenceRefs: this.context.lastMaterialization?.evidenceIds ?? [],
         reflections: this.context.reflections.map((reflection) => ({
           toolId: reflection.toolId,
           category: reflection.category,
@@ -2198,6 +2302,8 @@ export class AgentSession {
       });
       const state = renderCompactState(result.state);
       this.#compactState = state;
+      this.#lastCompactionCapsule = result.capsule;
+      this.#contextPressure.noteCompaction(result.capsule.generation);
       // The journal retains every event; only the provider-facing replay is
       // shortened. This is what prevents old tool output from being paid again
       // on every sample after compaction.
@@ -2220,8 +2326,25 @@ export class AgentSession {
         tokensBefore: result.tokensBefore,
         tokensAfter: result.tokensAfter,
         eventsSummarized: result.eventsSummarized,
+        generation: result.capsule.generation,
+        targetTokens: options.targetTokens,
+        currentTokens: result.tokensBefore,
+        projectedTokens: options.pressure?.projectedTokens,
+        exactEvidenceRetained: result.capsule.evidenceRefs.length,
+        artifactsCreated: result.state.evidenceRefs.length,
+        sourceFirstSequence: result.capsule.sourceRange.firstSequence,
+        sourceLastSequence: result.capsule.sourceRange.lastSequence,
+        capsule: result.capsule,
         compactState: state,
       });
+      if (options.targetTokens !== undefined && result.tokensAfter > options.targetTokens) {
+        this.#emit("context.compaction_target_missed", {
+          targetTokens: options.targetTokens,
+          tokensAfter: result.tokensAfter,
+          projectedTokens: options.pressure?.projectedTokens ?? result.tokensBefore,
+          reasonCodes: ["target_tokens_not_reached"],
+        });
+      }
       return result;
     } finally {
       this.#compacting = false;
@@ -3410,6 +3533,7 @@ export class AgentSession {
       } : {}),
       interactionMode: this.recorder.model.modeState.activeTurn ?? this.recorder.model.modeState.selected,
       ...(this.#compactState !== undefined ? { compactState: this.#compactState } : {}),
+      contextGeneration: this.#contextPressure.generation,
       ...(contextProjection === undefined ? { repositoryContext } : { contextProjection }),
       contextManifest: {
         ...structuredClone(materialized),

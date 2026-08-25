@@ -6,16 +6,24 @@
  * truth, so rollback, export, and replay all still see the full history.
  */
 
+import { createHash } from "node:crypto";
 import type { SessionViewModel, TimelineItem } from "./reducer.ts";
 
 /** §18.9 compaction trigger conditions. */
 export type CompactionTrigger =
+  | "projected_pressure"
+  | "emergency_pressure"
+  | "tool_output"
+  | "manual"
+  | "provider_context_error"
+  /** Legacy journal values remain readable and replayable. */
   | "soft_budget_70"
   | "tool_output_accumulation"
   | "user_requested"
   | "provider_context_error_expected";
 
 export const COMPACTION_SOFT_BUDGET_RATIO = 0.7;
+export const COMPACTION_EMERGENCY_RATIO = 0.9;
 
 /**
  * A pointer to content that was too large to keep inline (§18.17).
@@ -68,6 +76,12 @@ export interface CompactionReflection {
 }
 
 export interface CompactionOptions {
+  /** Desired upper bound for the rendered compact state. */
+  readonly targetTokens?: number;
+  /** Monotonic capsule generation; defaults to one plus the source generation. */
+  readonly generation?: number;
+  /** Exact evidence handles pinned into the capsule. */
+  readonly evidenceRefs?: readonly string[];
   /**
    * Reflections from the current turn, newest last. These rank above every other
    * unresolved item: an approach already tried and understood is the single most
@@ -85,6 +99,29 @@ export interface CompactionOptions {
 export const DEFAULT_RETAIN_PER_GROUP = 6;
 export const DEFAULT_MAX_ITEM_CHARS = 600;
 
+export interface CompactTodoSnapshot {
+  readonly id: string;
+  readonly text: string;
+  readonly status: "pending" | "active" | "done" | "blocked" | "skipped";
+  readonly blockedReason?: string;
+}
+
+export interface CompactionCapsule {
+  readonly id: string;
+  readonly generation: number;
+  readonly sourceRange: { readonly firstSequence: number; readonly lastSequence: number };
+  readonly goal: string;
+  readonly decisions: readonly string[];
+  readonly mutations: ReadonlyArray<{ path: string; summary: string }>;
+  readonly verification: readonly string[];
+  readonly unresolved: readonly string[];
+  readonly todoSnapshot: readonly CompactTodoSnapshot[];
+  readonly evidenceRefs: readonly string[];
+  readonly tokenCount: number;
+  readonly digest: string;
+  readonly narrativeHint?: string;
+}
+
 export interface CompactState {
   userGoal: string;
   decisions: string[];
@@ -95,6 +132,8 @@ export interface CompactState {
   taskResults: string[];
   unresolved: string[];
   nextAction: string;
+  readonly todoSnapshot: CompactTodoSnapshot[];
+  readonly evidenceRefs: string[];
   /** §18.9 hierarchical view, which is what `renderCompactState` actually emits. */
   hierarchy: CompactHierarchy;
   /** Paths named by recent failures, for the §18.4 recent-failure weight. */
@@ -107,6 +146,7 @@ export interface CompactionResult {
   readonly tokensBefore: number;
   readonly tokensAfter: number;
   readonly eventsSummarized: number;
+  readonly capsule: CompactionCapsule;
   /** §18.9: the journal is untouched. */
   readonly journalPreserved: true;
 }
@@ -121,10 +161,25 @@ export function shouldCompact(
      * 0.7 so an unchanged product behaves exactly as before.
      */
     softBudgetRatio?: number;
+    /** Adaptive candidate-request inputs, when the runtime has compiled a pack. */
+    projectedTokens?: number;
+    requiredFreeTokens?: number;
+    emergencyRatio?: number;
   } = {},
 ): CompactionTrigger | undefined {
   if (options.userRequested === true) return "user_requested";
   if (options.providerContextErrorExpected === true) return "provider_context_error_expected";
+  if (options.projectedTokens !== undefined) {
+    const budget = Math.max(0, model.contextBudgetTokens);
+    const projected = Math.max(0, options.projectedTokens);
+    const requiredFree = Math.max(0, options.requiredFreeTokens ?? 0);
+    const emergencyRatio = options.emergencyRatio !== undefined && options.emergencyRatio > 0 && options.emergencyRatio <= 1
+      ? options.emergencyRatio
+      : COMPACTION_EMERGENCY_RATIO;
+    if (budget > 0 && model.contextUsedTokens / budget >= emergencyRatio) return "emergency_pressure";
+    if (budget > 0 && (projected > budget || projected + requiredFree > budget)) return "projected_pressure";
+    return undefined;
+  }
   const ratio = Number.isFinite(options.softBudgetRatio) &&
     (options.softBudgetRatio as number) > 0 &&
     (options.softBudgetRatio as number) <= 1
@@ -236,6 +291,16 @@ export function compact(
     todoItems.find((item) => item.status === "active")?.text ??
     todoItems.find((item) => item.status === "pending")?.text ??
     (unresolved.length > 0 ? "resolve outstanding failures" : "await user direction");
+  const todoSnapshot: CompactTodoSnapshot[] = todoItems.map((item) => ({
+    id: item.id,
+    text: item.text,
+    status: item.status,
+    ...(item.blockedReason === undefined ? {} : { blockedReason: item.blockedReason }),
+  }));
+  const evidenceRefs = dedupe([
+    ...(options.evidenceRefs ?? []),
+    ...model.timeline.flatMap((item) => item.type === "tool" ? item.artifacts ?? [] : []),
+  ]);
 
   // ---- Reflections rank above everything else that is still open (§11.2) ----
   const reflections = options.reflections ?? [];
@@ -279,21 +344,77 @@ export function compact(
       todoItems.some((item) => item.status === "active")
         ? nextAction
         : (reflections[reflections.length - 1]?.correctiveAction ?? nextAction),
+    todoSnapshot,
+    evidenceRefs,
     hierarchy,
     failurePaths,
   };
 
+  const boundedState = boundCompactState(state, estimateTokens, options.targetTokens);
   const tokensBefore = model.contextUsedTokens;
-  const tokensAfter = estimateTokens(renderCompactState(state));
+  const tokensAfter = estimateTokens(renderCompactState(boundedState));
+  const sequences = model.timeline.map((item) => item.sequence).filter((sequence) => Number.isSafeInteger(sequence));
+  const sourceRange = {
+    firstSequence: sequences.length > 0 ? Math.min(...sequences) : 0,
+    lastSequence: sequences.length > 0 ? Math.max(...sequences) : 0,
+  };
+  const generation = Math.max(1, Math.floor(options.generation ?? model.contextGeneration + 1));
+  const capsulePayload = {
+    generation,
+    sourceRange,
+    goal: boundedState.userGoal,
+    decisions: boundedState.decisions,
+    mutations: boundedState.filesChanged,
+    verification: boundedState.testEvidence,
+    unresolved: boundedState.unresolved,
+    todoSnapshot: boundedState.todoSnapshot,
+    evidenceRefs: boundedState.evidenceRefs,
+  };
+  const digest = createHash("sha256").update(JSON.stringify(capsulePayload), "utf8").digest("hex");
+  const capsule: CompactionCapsule = {
+    id: `capsule-${generation}-${digest.slice(0, 16)}`,
+    ...capsulePayload,
+    tokenCount: tokensAfter,
+    digest,
+  };
 
   return {
-    state,
+    state: boundedState,
     trigger,
     tokensBefore,
     tokensAfter,
     eventsSummarized: model.timeline.length,
+    capsule,
     journalPreserved: true,
   };
+}
+
+/** Reduce optional historical prose until a requested target is met. Pinned state stays. */
+function boundCompactState(
+  state: CompactState,
+  estimateTokens: (text: string) => number,
+  targetTokens: number | undefined,
+): CompactState {
+  if (targetTokens === undefined || !Number.isFinite(targetTokens) || targetTokens <= 0) return state;
+  if (estimateTokens(renderCompactState(state)) <= targetTokens) return state;
+  const target = Math.max(1_024, Math.floor(targetTokens));
+  for (const retain of [3, 2, 1, 0]) {
+    const candidate: CompactState = {
+      ...state,
+      decisions: state.decisions.slice(-retain),
+      filesRead: state.filesRead.slice(-Math.max(2, retain * 2)),
+      testEvidence: state.testEvidence.slice(-Math.max(2, retain * 2)),
+      taskResults: state.taskResults.slice(-retain),
+      unresolved: state.unresolved.slice(-Math.max(2, retain * 2)),
+      hierarchy: {
+        decisions: buildGroup("Decisions", state.decisions.slice(-retain), { retainPerGroup: retain, maxItemChars: 240 }),
+        diffSummary: buildGroup("Diff summary", state.filesChanged.map((file) => `${file.path} (${file.summary})`), { retainPerGroup: Math.max(1, retain), maxItemChars: 240 }),
+        unresolved: buildGroup("Unresolved", state.unresolved.slice(-Math.max(2, retain * 2)), { retainPerGroup: Math.max(1, retain), maxItemChars: 240 }),
+      },
+    };
+    if (estimateTokens(renderCompactState(candidate)) <= target) return candidate;
+  }
+  return state;
 }
 
 /**
@@ -387,6 +508,12 @@ export function renderCompactState(state: CompactState): string {
 
   lines.push(...renderGroup(state.hierarchy.unresolved));
 
+  if (state.todoSnapshot.length > 0) {
+    lines.push(`\n## TODO snapshot\n${state.todoSnapshot.map((item) => `- [${item.status}] ${item.id}: ${item.text}${item.blockedReason === undefined ? "" : ` — ${item.blockedReason}`}`).join("\n")}`);
+  }
+  if (state.evidenceRefs.length > 0) {
+    lines.push(`\n## Exact evidence\n${state.evidenceRefs.map((ref) => `- ${ref}`).join("\n")}`);
+  }
   if (state.failurePaths.length > 0) {
     lines.push(
       `\n## Files implicated by failures\n${state.failurePaths.map((p) => `- ${p}`).join("\n")}`,

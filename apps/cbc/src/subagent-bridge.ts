@@ -830,6 +830,7 @@ export class SubagentBridge {
       reserveOutputTokens: this.#options.config.model.context.reserveOutputTokens,
       parallelToolCalls: this.#options.config.agent.toolGraph.providerParallelTools,
       nativeCompaction: this.#options.config.model.context.providerCompaction,
+      nativeCompactionDynamic: true,
       compactionThresholdTokens: this.#options.config.model.context.compactionThresholdTokens,
       serviceTier: this.#options.config.provider.openai.serviceTier,
       phasePolicy: this.#options.config.model.router.phasePolicy && this.#options.config.perf.phaseRouting !== false,

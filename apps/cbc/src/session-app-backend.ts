@@ -163,6 +163,7 @@ export class SessionAppBackend implements AppServerBackend {
         status: last.report.status,
         answer: last.answer,
         report: last.report,
+        presentation: last.presentation,
       };
     }
     if (input.method === "turn.cancel") {
@@ -230,6 +231,7 @@ export class SessionAppBackend implements AppServerBackend {
         status: this.#lastTurn?.report.status ?? receipt.status,
         answer: this.#lastTurn?.answer ?? "",
         report: this.#lastTurn?.report,
+        presentation: this.#lastTurn?.presentation,
       },
     };
   }

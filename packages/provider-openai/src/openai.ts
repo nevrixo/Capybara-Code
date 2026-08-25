@@ -24,6 +24,7 @@ import {
 import { OpenAiTurnSession, type WebSocketFactory } from "./turn-session.ts";
 import {
   MODEL_REGISTRY,
+  calculateNativeCompactionThreshold,
   emptyUsage,
   findModel,
   supportsField,
@@ -497,11 +498,18 @@ export class OpenAiResponsesProvider implements ModelProvider {
       body.safety_identifier = request.safetyIdentifier;
     }
     if (this.#options.chatGpt === undefined) {
+      const dynamicThreshold = model === undefined || model.contextWindow === undefined
+        ? undefined
+        : calculateNativeCompactionThreshold({
+            modelWindowTokens: model.contextWindow,
+            outputReserveTokens: model.maxOutputTokens ?? 32_000,
+            adaptiveLocalTargetTokens: Math.floor(Math.max(1_024, model.contextWindow - (model.maxOutputTokens ?? 32_000)) * 0.76),
+          });
       const contextManagement = request.contextManagement ?? (
         this.#options.nativeCompaction === true
           ? [{
               type: "compaction" as const,
-              compactThreshold: Math.max(1_024, this.#options.compactionThresholdTokens ?? 80_000),
+              compactThreshold: Math.max(1_024, this.#options.compactionThresholdTokens ?? dynamicThreshold ?? 80_000),
             }]
           : undefined
       );

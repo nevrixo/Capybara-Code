@@ -1973,7 +1973,12 @@ export function renderCompletionEvidenceSummary(
 function renderChatFinal(
   item: Pick<TimelineFinal, "answer" | "text" | "report" | "presentation">,
   context: BlockContext,
-  options: { readonly evidenceExpanded?: boolean },
+  options: {
+    readonly evidenceExpanded?: boolean;
+    readonly style?: "chat" | "report";
+    readonly evidenceMode?: "hidden" | "collapsed" | "expanded";
+    readonly attentionDetails?: boolean;
+  },
 ): StyledLine[] {
   const presentation = item.presentation;
   if (presentation === undefined) return [];
@@ -1999,7 +2004,7 @@ function renderChatFinal(
       : (presentation.locale === "ko" ? "⚠ 확인이 남았습니다" : "⚠ Confirmation needed");
     lines.push(blank());
     lines.push(fitLine("notice", [segment(title, { fg: "accent.amber", bold: true })], innerContext));
-    for (const issue of presentation.issues.slice(0, 3)) {
+    for (const issue of (options.attentionDetails === false ? [] : presentation.issues.slice(0, 3))) {
       lines.push(fitLine("notice", [
         segment("  ", { fg: "fg.muted" }),
         segment(`${issue.message}`, { fg: issueToken(issue), bold: issue.severity !== "attention" }),
@@ -2013,8 +2018,8 @@ function renderChatFinal(
     }
   }
 
-  if (report !== undefined) {
-    const expanded = options.evidenceExpanded === true || presentation.evidenceMode === "expanded";
+  if (report !== undefined && options.evidenceMode !== "hidden") {
+    const expanded = options.evidenceExpanded === true || options.evidenceMode === "expanded" || presentation.evidenceMode === "expanded";
     if (expanded) {
       lines.push(...renderReportEvidence(report, innerContext, {
         ...(presentation.locale === undefined ? {} : { locale: presentation.locale }),
@@ -2031,7 +2036,12 @@ function renderChatFinal(
 export function renderFinal(
   item: Pick<TimelineFinal, "answer" | "text" | "report" | "presentation"> & { agentId?: string },
   context: BlockContext,
-  options: { readonly evidenceExpanded?: boolean } = {},
+  options: {
+    readonly evidenceExpanded?: boolean;
+    readonly style?: "chat" | "report";
+    readonly evidenceMode?: "hidden" | "collapsed" | "expanded";
+    readonly attentionDetails?: boolean;
+  } = {},
 ): StyledLine[] {
   // ── Subagent final: do not output any text block (notice line suffices) ─
   if (item.agentId !== undefined && item.agentId !== "root") {
@@ -2040,7 +2050,7 @@ export function renderFinal(
 
   // New kernel events carry an explicit host presentation. Legacy journal events
   // deliberately keep the report renderer below so old snapshots remain readable.
-  if (item.presentation !== undefined) {
+  if (item.presentation !== undefined && options.style !== "report") {
     return renderChatFinal(item, context, options);
   }
 
@@ -2360,8 +2370,12 @@ export interface TimelineRenderOptions {
   readonly accordionCollapsed?: boolean;
   /** Accordion collapsed summary per item id. */
   readonly accordionSummaries?: Readonly<Record<string, string>>;
+  /** Final answer compatibility mode and evidence disclosure. */
+  readonly finalAnswerStyle?: "chat" | "report";
+  readonly completionEvidenceMode?: "hidden" | "collapsed" | "expanded";
   /** Final audit evidence remains collapsed until explicitly requested. */
   readonly completionEvidenceExpanded?: boolean;
+  readonly completionAttentionDetails?: boolean;
   /** Offered scopes for pending approval card in timeline. */
   readonly offeredScopes?: readonly string[];
   /** Currently selected choice index for pending approval card in timeline. */
@@ -2471,7 +2485,10 @@ export function renderTimelineItem(
     }
     case "final":
       return renderFinal(item, context, {
+        ...(options.finalAnswerStyle === undefined ? {} : { style: options.finalAnswerStyle }),
+        ...(options.completionEvidenceMode === undefined ? {} : { evidenceMode: options.completionEvidenceMode }),
         ...(options.completionEvidenceExpanded === true ? { evidenceExpanded: true } : {}),
+        ...(options.completionAttentionDetails === undefined ? {} : { attentionDetails: options.completionAttentionDetails }),
       });
     case "tool_discovery":
       return renderToolDiscovery(item, context, {
@@ -2619,7 +2636,10 @@ export function renderTimelineItemTail(
   }
   if (item.presentation !== undefined) {
     const rendered = renderFinal(item, context, {
+      ...(options.finalAnswerStyle === undefined ? {} : { style: options.finalAnswerStyle }),
+      ...(options.completionEvidenceMode === undefined ? {} : { evidenceMode: options.completionEvidenceMode }),
       ...(options.completionEvidenceExpanded === true ? { evidenceExpanded: true } : {}),
+      ...(options.completionAttentionDetails === undefined ? {} : { attentionDetails: options.completionAttentionDetails }),
     });
     return {
       lines: rendered.slice(Math.max(0, rendered.length - rows)),

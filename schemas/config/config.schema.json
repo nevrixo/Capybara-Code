@@ -47,7 +47,8 @@
         "thinkingVisibility",
         "toolDetail",
         "subagentDetail",
-        "sidebar"
+        "sidebar",
+        "finalAnswer"
       ],
       "properties": {
         "theme": {
@@ -128,6 +129,16 @@
             "hide"
           ],
           "default": "auto"
+        },
+        "finalAnswer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["style", "evidence", "attentionDetails"],
+          "properties": {
+            "style": { "type": "string", "enum": ["chat", "report"], "default": "chat" },
+            "evidence": { "type": "string", "enum": ["hidden", "collapsed", "expanded"], "default": "collapsed" },
+            "attentionDetails": { "type": "boolean", "default": true }
+          }
         }
       }
     },
@@ -292,7 +303,11 @@
             "reserveOutputTokens",
             "orientationMode",
             "providerCompaction",
-            "compactionThresholdTokens"
+            "compactionThresholdTokens",
+            "compactionPolicy",
+            "minFreeTokens",
+            "targetFreeTokens",
+            "emergencyRatio"
           ],
           "properties": {
             "bands": {
@@ -353,6 +368,31 @@
               "type": "integer",
               "minimum": 1024,
               "default": 80000
+            },
+            "compactionPolicy": {
+              "type": "string",
+              "enum": ["off", "legacy", "adaptive"],
+              "default": "adaptive"
+            },
+            "minFreeTokens": {
+              "oneOf": [
+                { "const": "auto" },
+                { "type": "integer", "minimum": 0 }
+              ],
+              "default": "auto"
+            },
+            "targetFreeTokens": {
+              "oneOf": [
+                { "const": "auto" },
+                { "type": "integer", "minimum": 0 }
+              ],
+              "default": "auto"
+            },
+            "emergencyRatio": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 1,
+              "default": 0.9
             }
           }
         },

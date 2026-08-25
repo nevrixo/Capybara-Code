@@ -158,6 +158,9 @@ export interface InteractiveUiOptions {
   readonly uiThinkingMode?: ThinkingMode;
   readonly uiToolDetail?: ToolDetail;
   readonly uiSubagentDetail?: SubagentDetail;
+  readonly uiFinalAnswerStyle?: "chat" | "report";
+  readonly uiFinalAnswerEvidence?: "hidden" | "collapsed" | "expanded";
+  readonly uiFinalAnswerAttentionDetails?: boolean;
   readonly sidebarVisibility?: SidebarVisibility;
   readonly onSettingChange?: (
     key: "thinkingVisibility" | "thinkingMode" | "toolDetail" | "subagentDetail" | "sidebar",
@@ -297,6 +300,9 @@ export class InteractiveUi {
   #thinkingMode: ThinkingMode = "expanded";
   #toolDetail: ToolDetail = "compact";
   #subagentDetail: SubagentDetail = "drawer";
+  #finalAnswerStyle: "chat" | "report" = "chat";
+  #finalAnswerEvidence: "hidden" | "collapsed" | "expanded" = "collapsed";
+  #finalAnswerAttentionDetails = true;
   #lastNoticeText: string | undefined;
   #lastNoticeCount = 0;
   #effectiveSandbox: string | undefined;
@@ -375,6 +381,9 @@ export class InteractiveUi {
     this.#thinkingVisibility = thinkingVisibilityFromMode(this.#thinkingMode);
     this.#toolDetail = options.uiToolDetail ?? "compact";
     this.#subagentDetail = options.uiSubagentDetail ?? "drawer";
+    this.#finalAnswerStyle = options.uiFinalAnswerStyle ?? "chat";
+    this.#finalAnswerEvidence = options.uiFinalAnswerEvidence ?? "collapsed";
+    this.#finalAnswerAttentionDetails = options.uiFinalAnswerAttentionDetails ?? true;
     this.#credentialSource = options.credentialSource;
     this.#sidebarVisible =
       options.sidebarVisibility === undefined || options.sidebarVisibility === "auto"
@@ -708,6 +717,9 @@ export class InteractiveUi {
             accordionExpandedIds: liveExpandedIds(model),
           }
         : {}),
+      finalAnswerStyle: this.#finalAnswerStyle,
+      completionEvidenceMode: this.#finalAnswerEvidence,
+      completionAttentionDetails: this.#finalAnswerAttentionDetails,
       ...(this.#completionEvidenceExpanded ? { completionEvidenceExpanded: true } : {}),
     };
   }
@@ -2958,7 +2970,10 @@ export class InteractiveUi {
             ? { statusDensity: this.#options.uiStatusDensity }
             : {}),
           accordionCollapsed: this.#accordionCollapsed,
+          finalAnswerStyle: this.#finalAnswerStyle,
+          completionEvidenceMode: this.#finalAnswerEvidence,
           completionEvidenceExpanded: this.#completionEvidenceExpanded,
+          completionAttentionDetails: this.#finalAnswerAttentionDetails,
           thinkingVisibility: this.#thinkingVisibility,
           thinkingMode: this.#thinkingMode,
           toolDetail: this.#toolDetail,

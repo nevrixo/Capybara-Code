@@ -211,6 +211,34 @@ export interface ModelToolSchema {
   readonly strict: true;
 }
 
+export interface NativeCompactionThresholdInput {
+  readonly modelWindowTokens: number;
+  readonly outputReserveTokens: number;
+  readonly emergencyMarginTokens?: number;
+  readonly adaptiveLocalTargetTokens: number;
+  readonly providerHeadroomTokens?: number;
+}
+
+/** Calculate a model-relative native compaction threshold. */
+export function calculateNativeCompactionThreshold(input: NativeCompactionThresholdInput): number | undefined {
+  const window = Number.isFinite(input.modelWindowTokens) ? Math.floor(input.modelWindowTokens) : 0;
+  const reserve = Number.isFinite(input.outputReserveTokens) ? Math.max(0, Math.floor(input.outputReserveTokens)) : 0;
+  const target = Number.isFinite(input.adaptiveLocalTargetTokens) ? Math.max(0, Math.floor(input.adaptiveLocalTargetTokens)) : 0;
+  if (window <= 0 || target <= 0) return undefined;
+  const emergencyMargin = Number.isFinite(input.emergencyMarginTokens)
+    ? Math.max(1_024, Math.floor(input.emergencyMarginTokens ?? 0))
+    : Math.max(1_024, Math.floor(window * 0.02));
+  const headroom = Number.isFinite(input.providerHeadroomTokens)
+    ? Math.max(0, Math.floor(input.providerHeadroomTokens ?? 0))
+    : Math.max(2_048, Math.floor(window * 0.04));
+  const hardCeiling = window - reserve - emergencyMargin;
+  if (hardCeiling < 1_024) return 1_024;
+  return Math.max(1_024, Math.min(hardCeiling, target + headroom));
+}
+
+/** Short alias used by provider integrations. */
+export const nativeCompactionThreshold = calculateNativeCompactionThreshold;
+
 export interface ModelRequest {
   readonly requestId: string;
   readonly model: string;

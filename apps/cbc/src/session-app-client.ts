@@ -69,6 +69,7 @@ export async function submitTurnOverApp(input: {
   readonly answer: string;
   readonly status: string;
   readonly report: unknown;
+  readonly presentation?: unknown;
 }> {
   const session = input.client.session(input.sessionId);
   const onAbort = (): void => {
@@ -93,11 +94,13 @@ export async function submitTurnOverApp(input: {
       readonly answer?: string;
       readonly status?: string;
       readonly report?: unknown;
+      readonly presentation?: unknown;
     } | undefined;
     return {
       answer: typeof result?.answer === "string" ? result.answer : "",
       status: typeof result?.status === "string" ? result.status : handle.receipt.status,
       report: result?.report,
+      ...(result?.presentation === undefined ? {} : { presentation: result.presentation }),
     };
   } finally {
     input.signal.removeEventListener("abort", onAbort);

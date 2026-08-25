@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { EventSequencer, createEvent } from "@cbc/protocol";
 import { replay } from "../src/reducer.ts";
-import { TodoController, type PlanItem } from "../src/todo.ts";
+import { compileTodoTransition, TodoController, type PlanItem } from "../src/todo.ts";
 
 function controller(options: { readonly safeRebase?: boolean } = {}) {
   return new TodoController({
@@ -22,6 +22,23 @@ const implementation: PlanItem = {
 };
 
 describe("TODO recovery contract", () => {
+  test("pure transition compilation emits the same recovery trace", () => {
+    const compiled = compileTodoTransition({
+      previousItems: [implementation],
+      nextItems: [{ ...implementation, status: "done", evidence: ["verified"] }],
+      baseRevision: 1,
+      source: "model",
+      hostEvidence: { workStarted: true, changedPaths: ["src/parser.ts"], evidenceRefs: ["mutation-1"] },
+    });
+    expect(compiled.issues).toEqual([]);
+    expect(compiled.recovered).toBe(true);
+    expect(compiled.trace).toMatchObject([
+      { revision: 2, from: "pending", to: "active", source: "host_recovery" },
+      { revision: 3, from: "active", to: "done", source: "model" },
+    ]);
+    expect(compiled.normalizedItems).toMatchObject([{ status: "done" }]);
+  });
+
   test("compiles pending-to-done only with host evidence", () => {
     const todos = controller();
     expect(todos.replace({ expectedRevision: 0, reason: "track work", source: "model", items: [implementation] }).ok).toBe(true);

@@ -575,6 +575,8 @@ export function serializeModel(model: SessionViewModel): Record<string, unknown>
     todo: model.todo,
     modeState: model.modeState,
     ...(model.contextUsage === undefined ? {} : { contextUsage: model.contextUsage }),
+    ...(model.contextPressure === undefined ? {} : { contextPressure: model.contextPressure }),
+    contextGeneration: model.contextGeneration,
     usage: model.usage,
     live: model.live,
     awaitingTaskId: model.awaitingTaskId,

@@ -22,6 +22,7 @@ import {
   emptyUsage,
   findModel,
   resolveProviderGenerationBudget,
+  calculateNativeCompactionThreshold,
   clampEffortToModel,
   selectEffort,
   type ComplexityFeatures,
@@ -109,6 +110,7 @@ import {
 // P1-05: `AgentRole` is provider- and kernel-neutral; the definition lives in
 // `@cbc/inference-domain` and is re-exported here for existing call sites.
 import type { AgentRole, WorkPhase, TurnBudgetController, BudgetEnforcementMode } from "@cbc/inference-domain";
+import type { ContextPressureDecision } from "@cbc/session-domain";
 export type { AgentRole, WorkPhase };
 
 /**
@@ -494,6 +496,10 @@ export interface GeneratedImageHandle {
 /** Who owns conversation continuation between provider requests (§10.6). */
 export type ContinuationMode = "client_managed" | "previous_response";
 
+export type ContextPressureGuardResult =
+  | { readonly action: "accept"; readonly decision?: ContextPressureDecision }
+  | { readonly action: "compact" | "emergency"; readonly targetTokens: number; readonly decision: ContextPressureDecision };
+
 export interface KernelOptions {
   readonly agentId: string;
   readonly role: AgentRole;
@@ -528,6 +534,8 @@ export interface KernelOptions {
   readonly parallelToolCalls?: boolean;
   /** Enable opaque server-side compaction when the active provider supports it. */
   readonly nativeCompaction?: boolean;
+  /** Use model-relative native compaction instead of a fixed legacy threshold. */
+  readonly nativeCompactionDynamic?: boolean;
   readonly compactionThresholdTokens?: number;
   /** OpenAI Fast mode (priority processing alias). */
   readonly serviceTier?: "standard" | "fast";
@@ -545,6 +553,8 @@ export interface KernelOptions {
   readonly promptInputs: () => PromptInputs;
   /** Give the host a chance to compact before a new provider sample. */
   readonly beforeSample?: () => void | Promise<void>;
+  /** Evaluate the exact candidate request and compact at most once before sending it. */
+  readonly contextPressureGuard?: (prompt: CompiledModelRequest) => ContextPressureGuardResult | Promise<ContextPressureGuardResult>;
   /** §10.4 features for adaptive effort selection. */
   readonly complexity?: () => ComplexityFeatures;
   readonly inferencePolicy?: InferencePolicyPort;
@@ -2000,7 +2010,7 @@ export class AgentKernel {
     | { kind: "error"; error: ProviderError }
     | { kind: "cancelled" }
   > {
-    const assembled = compiledPrompt ?? await this.#compilePrompt(userInput, emit);
+    let assembled = compiledPrompt ?? await this.#compilePrompt(userInput, emit);
     if (assembled.contextProjectionMismatch !== undefined) {
       const reason = `context projection identity could not be verified: ${assembled.contextProjectionMismatch}`;
       this.#risks.push(reason);
@@ -2014,6 +2024,62 @@ export class AgentKernel {
         partialText: "",
         items: [],
       };
+    }
+
+    const guard = this.#options.contextPressureGuard;
+    if (guard !== undefined) {
+      const firstDecision = await guard(assembled);
+      emit("context.pressure_evaluated", {
+        state: firstDecision.decision?.state ?? "stable",
+        projectedTokens: firstDecision.decision?.projectedTokens ?? assembled.inputTokens,
+        requiredFreeTokens: firstDecision.decision?.requiredFreeTokens ?? 0,
+        targetTokens: firstDecision.decision?.targetTokens,
+        reasonCodes: firstDecision.decision?.reasonCodes ?? [],
+        currentRatio: firstDecision.decision?.currentRatio,
+        inputBudgetTokens: firstDecision.decision?.inputBudgetTokens,
+        requestTokens: assembled.inputTokens,
+      });
+      if (firstDecision.action !== "accept") {
+        emit("context.compaction_planned", {
+          trigger: firstDecision.action === "emergency" ? "emergency_pressure" : "projected_pressure",
+          targetTokens: firstDecision.targetTokens,
+          projectedTokens: firstDecision.decision.projectedTokens,
+          reasonCodes: firstDecision.decision.reasonCodes,
+        });
+        // The host callback performs the local compaction. Rebuild the exact
+        // candidate once; a second pressure result is a hard safety boundary.
+        assembled = await this.#compilePrompt(userInput, emit);
+        const secondDecision = await guard(assembled);
+        emit("context.pressure_evaluated", {
+          state: secondDecision.decision?.state ?? "stable",
+          projectedTokens: secondDecision.decision?.projectedTokens ?? assembled.inputTokens,
+          requiredFreeTokens: secondDecision.decision?.requiredFreeTokens ?? 0,
+          targetTokens: secondDecision.decision?.targetTokens,
+          reasonCodes: secondDecision.decision?.reasonCodes ?? [],
+          currentRatio: secondDecision.decision?.currentRatio,
+          inputBudgetTokens: secondDecision.decision?.inputBudgetTokens,
+          requestTokens: assembled.inputTokens,
+          recompilation: 1,
+        });
+        if (secondDecision.action !== "accept") {
+          emit(secondDecision.action === "emergency" ? "context.compaction_emergency" : "context.compaction_target_missed", {
+            targetTokens: secondDecision.targetTokens,
+            tokensAfter: assembled.inputTokens,
+            projectedTokens: secondDecision.decision.projectedTokens,
+            reasonCodes: secondDecision.decision.reasonCodes,
+            recompileLimit: 1,
+          });
+          return {
+            kind: "error",
+            error: {
+              kind: "context_length",
+              code: "CONTEXT_BUDGET_EXCEEDED",
+              message: "CONTEXT_BUDGET_EXCEEDED: adaptive compaction could not fit the next request after one recompile",
+              retryable: false,
+            },
+          };
+        }
+      }
     }
     this.#maybeRouteForPhase(assembled, userInput, emit);
     // The turn's single routing decision (§10.5). Sampling steps never re-decide:
@@ -2100,6 +2166,16 @@ export class AgentKernel {
         };
       }
     }
+    const modelWindowTokens = model?.contextWindow ?? assembled.inputTokens + (this.#options.reserveOutputTokens ?? 32_000) + 8_192;
+    const adaptiveLocalTargetTokens = Math.max(
+      assembled.inputTokens,
+      Math.floor(Math.max(1_024, modelWindowTokens - (this.#options.reserveOutputTokens ?? 32_000)) * 0.76),
+    );
+    const nativeThreshold = calculateNativeCompactionThreshold({
+      modelWindowTokens,
+      outputReserveTokens: this.#options.reserveOutputTokens ?? 32_000,
+      adaptiveLocalTargetTokens,
+    });
     const request: ModelRequest = {
       requestId,
       model: requestModelId,
@@ -2137,7 +2213,12 @@ export class AgentKernel {
         ? {
             contextManagement: [{
               type: "compaction" as const,
-              compactThreshold: Math.max(1_024, this.#options.compactionThresholdTokens ?? 80_000),
+              compactThreshold: Math.max(
+                1_024,
+                this.#options.nativeCompactionDynamic === true
+                  ? (nativeThreshold ?? 80_000)
+                  : (this.#options.compactionThresholdTokens ?? 80_000),
+              ),
             }],
           }
         : {}),

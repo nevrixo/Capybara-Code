@@ -14,6 +14,7 @@ import {
   InferenceUtilityController,
   MAX_RETRY_ATTEMPTS,
   MODEL_REGISTRY,
+  calculateNativeCompactionThreshold,
   MockProvider,
   OpenAiResponsesProvider,
   PRICING_REGISTRY_VERSION,
@@ -65,6 +66,19 @@ async function collect(stream: AsyncIterable<ModelEvent>): Promise<ModelEvent[]>
 }
 
 describe("model registry (§10.12)", () => {
+  test("calculates native compaction from the model window", () => {
+    const threshold = calculateNativeCompactionThreshold({
+      modelWindowTokens: 200_000,
+      outputReserveTokens: 32_000,
+      adaptiveLocalTargetTokens: 120_000,
+    });
+    expect(threshold).toBe(136_000);
+    expect(calculateNativeCompactionThreshold({
+      modelWindowTokens: 64_000,
+      outputReserveTokens: 32_000,
+      adaptiveLocalTargetTokens: 60_000,
+    })).toBeLessThan(64_000);
+  });
   test("includes the three GPT-5.6 family members", () => {
     expect(MODEL_REGISTRY.map((m) => m.id)).toEqual([
       "gpt-5.6-sol",

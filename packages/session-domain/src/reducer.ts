@@ -403,6 +403,16 @@ export interface TokenSavingViewState {
   readonly reasons: readonly string[];
 }
 
+export interface ContextPressureViewState {
+  readonly state: "stable" | "prepare" | "compact" | "emergency";
+  readonly projectedTokens: number;
+  readonly requiredFreeTokens: number;
+  readonly targetTokens?: number;
+  readonly reasonCodes: readonly string[];
+  readonly currentRatio?: number;
+  readonly inputBudgetTokens?: number;
+}
+
 export interface SessionViewModel {
   readonly sessionId: string;
   readonly timeline: TimelineItem[];
@@ -412,6 +422,8 @@ export interface SessionViewModel {
   readonly todo: TodoListState;
   readonly modeState: SessionModeState;
   readonly contextUsage?: ContextUsageSnapshot;
+  readonly contextPressure?: ContextPressureViewState;
+  readonly contextGeneration: number;
   readonly usage: UsageTotals;
   readonly live: LiveState;
   /** The exact child wait currently owned by root, independent of running tasks. */
@@ -455,6 +467,7 @@ export function emptyViewModel(sessionId: string, budgetTokens = 96_000): Sessio
       estimatedCostUsd: 0,
     },
     live: { kind: "idle", label: "" },
+    contextGeneration: 0,
     taskLive: new Map(),
     activeTasks: [],
     activeTools: [],
@@ -860,7 +873,15 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
     case "session.compacted": {
       const p = payloadOf(event);
       next.compactedAt = event.sequence;
+      next.contextGeneration = Math.max(next.contextGeneration + 1, num(p.generation, next.contextGeneration + 1));
       next.contextUsedTokens = num(p.tokensAfter, next.contextUsedTokens);
+      next.contextPressure = {
+        state: "stable",
+        projectedTokens: next.contextUsedTokens,
+        requiredFreeTokens: 0,
+        ...(typeof p.targetTokens === "number" ? { targetTokens: p.targetTokens } : {}),
+        reasonCodes: ["session_compacted"],
+      };
       next.timeline.push(
         notice(
           event,
@@ -1328,6 +1349,48 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
           : {}),
         reasons: strArray(p.reasons),
       };
+      break;
+    }
+
+    case "context.pressure_evaluated": {
+      const p = payloadOf(event);
+      const state = ["stable", "prepare", "compact", "emergency"].includes(String(p.state))
+        ? p.state as ContextPressureViewState["state"]
+        : "stable";
+      next.contextPressure = {
+        state,
+        projectedTokens: num(p.projectedTokens, next.contextUsedTokens),
+        requiredFreeTokens: num(p.requiredFreeTokens),
+        ...(typeof p.targetTokens === "number" ? { targetTokens: p.targetTokens } : {}),
+        reasonCodes: strArray(p.reasonCodes),
+        ...(typeof p.currentRatio === "number" ? { currentRatio: p.currentRatio } : {}),
+        ...(typeof p.inputBudgetTokens === "number" ? { inputBudgetTokens: p.inputBudgetTokens } : {}),
+      };
+      break;
+    }
+
+    case "context.compaction_emergency":
+    case "context.compaction_target_missed": {
+      const p = payloadOf(event);
+      next.contextPressure = {
+        state: event.kind === "context.compaction_emergency" ? "emergency" : "compact",
+        projectedTokens: num(p.projectedTokens, next.contextUsedTokens),
+        requiredFreeTokens: num(p.requiredFreeTokens),
+        ...(typeof p.targetTokens === "number" ? { targetTokens: p.targetTokens } : {}),
+        reasonCodes: strArray(p.reasonCodes),
+      };
+      next.timeline.push(notice(
+        event,
+        event.kind === "context.compaction_emergency" ? "error" : "warning",
+        event.kind === "context.compaction_emergency"
+          ? "Context pressure reached the emergency safety line."
+          : "Context compaction target was not reached.",
+        "!",
+      ));
+      break;
+    }
+
+    case "context.compaction_planned": {
       break;
     }
 

@@ -115,6 +115,30 @@ export interface TodoMutationPlan {
   readonly recovery: readonly string[];
   readonly input: TodoMutationInput;
 }
+
+/** Pure lifecycle compilation shared by model writes, host recovery, and replay. */
+export interface TodoTransitionInput {
+  readonly previousItems: readonly PlanItem[];
+  readonly nextItems: readonly PlanItem[];
+  readonly baseRevision: number;
+  readonly source: TodoTransitionSource;
+  readonly now?: string;
+  readonly hostEvidence?: TodoHostEvidence;
+}
+
+export interface TodoTransitionIssue {
+  readonly code: "TODO_INVALID_TRANSITION" | "TODO_INVALID_INPUT";
+  readonly message: string;
+  readonly itemId?: string;
+}
+
+export interface TodoTransitionCompilation {
+  readonly normalizedItems: readonly PlanItem[];
+  readonly trace: readonly TodoTransitionStep[];
+  readonly recovered: boolean;
+  readonly issues: readonly TodoTransitionIssue[];
+}
+
 export interface PlanApproval {
   readonly revision: number;
   /** `plan-sha256-<hex>`; the prefix makes accidental cross-domain use obvious. */
@@ -527,6 +551,93 @@ function isEvidenceBackedAnalysisCompletion(
 
 function scopesEqual(left: PlanItem, right: PlanItem): boolean {
   return JSON.stringify(todoScope(left)) === JSON.stringify(todoScope(right));
+}
+
+/**
+ * Compile one complete TODO replacement into explicit lifecycle steps.
+ *
+ * The result is deterministic and contains no controller state. A caller may
+ * reject the update without mutating anything, while live execution and journal
+ * replay can apply the same trace and arrive at the same statuses.
+ */
+export function compileTodoTransition(input: TodoTransitionInput): TodoTransitionCompilation {
+  const issues: TodoTransitionIssue[] = [];
+  let normalizedItems: PlanItem[];
+  try {
+    normalizedItems = normalizeTodoItems(input.nextItems, input.now ?? new Date().toISOString());
+  } catch (error) {
+    return {
+      normalizedItems: [],
+      trace: [],
+      recovered: false,
+      issues: [{
+        code: "TODO_INVALID_INPUT",
+        message: error instanceof Error ? error.message : String(error),
+      }],
+    };
+  }
+  const previousById = new Map(input.previousItems.map((item) => [item.id, item]));
+  const finalItems: PlanItem[] = [];
+  const trace: TodoTransitionStep[] = [];
+  let revision = input.baseRevision;
+  let recovered = false;
+
+  for (const rawItem of normalizedItems) {
+    const previous = previousById.get(rawItem.id);
+    let item = rawItem;
+    if (previous !== undefined &&
+      (previous.status === "done" || previous.status === "blocked" || previous.status === "skipped") &&
+      item.status !== "pending" && item.status !== "active" &&
+      !scopesEqual(previous, item) &&
+      !isEvidenceBackedAnalysisCompletion(previous, item)) {
+      const { blockedReason: _blockedReason, ...rest } = item;
+      item = { ...rest, status: "pending" };
+      revision += 1;
+      trace.push({ revision, id: item.id, from: previous.status, to: "pending", source: "host_recovery" });
+      recovered = true;
+    }
+
+    let before = previous;
+    if (previous !== undefined && previous.status === "pending" && item.status === "done" && hostEvidenceSupportsCompletion(previous, item, input.hostEvidence)) {
+      revision += 1;
+      trace.push({ revision, id: item.id, from: "pending", to: "active", source: "host_recovery" });
+      before = { ...previous, status: "active" };
+      recovered = true;
+    }
+    if (previous === undefined && item.status === "done" && !isEvidenceBackedAnalysisCompletion(undefined, item)) {
+      issues.push({ code: "TODO_INVALID_TRANSITION", itemId: item.id, message: `TODO '${item.id}' cannot be created as done; create it as pending or active first` });
+    } else {
+      const error = todoTransitionError(before, item);
+      if (error !== undefined) issues.push({ code: "TODO_INVALID_TRANSITION", itemId: item.id, message: error });
+      if (previous !== undefined && previous.status === "pending" && item.status === "done" && before?.status === "active") {
+        revision += 1;
+        trace.push({
+          revision,
+          id: item.id,
+          from: "active",
+          to: "done",
+          source: input.source,
+          ...(input.hostEvidence?.evidenceRefs === undefined ? {} : { evidenceRefs: [...input.hostEvidence.evidenceRefs] }),
+        });
+        recovered = true;
+      } else if (previous !== undefined && before?.status !== item.status && !trace.some((step) => step.id === item.id && step.to === "pending")) {
+        revision += 1;
+        trace.push({ revision, id: item.id, from: before?.status ?? previous.status, to: item.status, source: input.source });
+      }
+    }
+    finalItems.push(item);
+  }
+
+  if (input.source !== "user") {
+    const nextIds = new Set(finalItems.map((item) => item.id));
+    for (const previous of input.previousItems) {
+      if (previous.status !== "done" && !nextIds.has(previous.id)) {
+        issues.push({ code: "TODO_INVALID_TRANSITION", itemId: previous.id, message: `TODO update cannot remove unfinished item '${previous.id}'` });
+      }
+    }
+  }
+
+  return { normalizedItems: finalItems, trace, recovered, issues };
 }
 
 /** Explain an invalid model transition in terms the next todo.write can repair. */

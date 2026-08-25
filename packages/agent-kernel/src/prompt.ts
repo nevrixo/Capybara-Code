@@ -159,6 +159,8 @@ export interface PromptInputs {
   readonly planContract?: PlanPromptContract;
   /** §18.9 compact state, replacing older turns. */
   readonly compactState?: string;
+  /** Monotonic local compaction generation used for replay/loop guards. */
+  readonly contextGeneration?: number;
   /** §18.5 rendered file excerpts (legacy fallback only). */
   readonly repositoryContext?: readonly string[];
   /** Immutable compiler projection; when present it is authoritative for L6. */
@@ -857,7 +859,9 @@ export function assemblePrompt(inputs: PromptInputs, options: { readonly version
     requestDigest,
     packId: `pack-${requestDigest}`,
     historyCursor: inputs.history.length,
-    contextGeneration: 0,
+    contextGeneration: Number.isSafeInteger(inputs.contextGeneration) && (inputs.contextGeneration as number) >= 0
+      ? inputs.contextGeneration as number
+      : 0,
     ...(inputs.contextProjection === undefined ? {} : {
       providerContextDigest: inputs.contextProjection.renderedDigest,
       contextProjectionVersion: inputs.contextProjection.version,

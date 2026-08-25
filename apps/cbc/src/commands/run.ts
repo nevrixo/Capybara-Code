@@ -3,7 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { renderReport, type CompletionReport } from "@cbc/agent-kernel";
+import { renderChatResponse, renderReport, type CompletionPresentation, type CompletionReport } from "@cbc/agent-kernel";
 import type { CbcEvent } from "@cbc/protocol";
 
 import { bootstrapSession, warmContext } from "../bootstrap.ts";
@@ -81,7 +81,10 @@ export async function run(context: CommandContext, args: RunArgs): Promise<Comma
     });
     const result = boot.appClient ? boot.session.snapshotCompletionReport(submitted.answer) : undefined;
     const report = (submitted.report as CompletionReport | undefined) ?? result ?? boot.session.snapshotCompletionReport(submitted.answer);
-    finalText = renderReport(report, submitted.answer);
+    const presentation = submitted.presentation as CompletionPresentation | undefined;
+    // Headless runs default to the same chat-first contract. `--report`/legacy
+    // integrations can continue to call renderReport directly.
+    finalText = renderChatResponse(report, submitted.answer, presentation === undefined ? {} : { presentation });
     code = exitForStatus(report.status);
     payload = payloadFromReport(report, code);
   } catch (error) {

@@ -43,6 +43,9 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
   ["ui.toolDetail", { status: "wired", consumer: "tui.ts presentation policy / setting popup" }],
   ["ui.subagentDetail", { status: "wired", consumer: "tui.ts presentation policy / setting popup" }],
   ["ui.sidebar", { status: "wired", consumer: "tui.ts sidebar visibility / setting popup" }],
+  ["ui.finalAnswer.style", { status: "wired", consumer: "completion presentation / headless output policy" }],
+  ["ui.finalAnswer.evidence", { status: "wired", consumer: "completion evidence disclosure" }],
+  ["ui.finalAnswer.attentionDetails", { status: "wired", consumer: "completion attention cards" }],
 
   // ---- model: the core knobs are wired; tuning tables are not consumed yet ----
   ["model.profile", { status: "wired", consumer: "agent.ts (profile resolution / auto-route)" }],
@@ -67,7 +70,11 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
   ["model.context.premiumBandPolicy", { status: "wired", consumer: "agent.ts (utility gating)" }],
   ["model.context.orientationMode", { status: "wired", consumer: "bootstrap.ts / AgentSession progressive repository warmup" }],
   ["model.context.providerCompaction", { status: "wired", consumer: "agent-kernel provider context management" }],
-  ["model.context.compactionThresholdTokens", { status: "wired", consumer: "agent-kernel provider compaction threshold" }],
+  ["model.context.compactionThresholdTokens", { status: "wired", consumer: "agent-kernel legacy provider compaction threshold" }],
+  ["model.context.compactionPolicy", { status: "wired", consumer: "agent.ts adaptive pressure controller" }],
+  ["model.context.minFreeTokens", { status: "wired", consumer: "agent.ts adaptive pressure controller" }],
+  ["model.context.targetFreeTokens", { status: "wired", consumer: "agent.ts adaptive pressure controller" }],
+  ["model.context.emergencyRatio", { status: "wired", consumer: "agent.ts emergency pressure guard" }],
   ["model.context.bands", { status: "experimental", note: "band escalation is not implemented yet" }],
   ["model.context.premiumThresholdTokens", { status: "experimental", note: "premium band selection is not implemented yet" }],
   ["model.context.compaction", { status: "experimental", note: "compaction strategy is fixed to the evidence ledger today" }],

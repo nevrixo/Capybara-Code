@@ -25,6 +25,8 @@ export type StatusDensity = "auto" | "compact" | "full";
 export type ThinkingVisibility = "full" | "summary" | "hidden";
 export type ThinkingMode = "expanded" | "collapsed" | "off";
 export type ToolDetail = "compact" | "full";
+export type FinalAnswerStyle = "chat" | "report";
+export type FinalAnswerEvidence = "hidden" | "collapsed" | "expanded";
 export type SubagentDetail = "drawer" | "inline";
 export type SidebarVisibility = "auto" | "show" | "hide";
 
@@ -41,6 +43,11 @@ export interface UiConfig {
   toolDetail: ToolDetail;
   subagentDetail: SubagentDetail;
   sidebar: SidebarVisibility;
+  finalAnswer: {
+    style: FinalAnswerStyle;
+    evidence: FinalAnswerEvidence;
+    attentionDetails: boolean;
+  };
 }
 
 export type ModelRouterStrategy = "utility" | "latency" | "cost";
@@ -80,6 +87,11 @@ export interface ModelContextConfig {
   orientationMode: "strict" | "progressive";
   providerCompaction: boolean;
   compactionThresholdTokens: number;
+  /** Adaptive local pressure policy; legacy remains available for rollback. */
+  compactionPolicy: "off" | "legacy" | "adaptive";
+  minFreeTokens: number | "auto";
+  targetFreeTokens: number | "auto";
+  emergencyRatio: number;
 }
 
 export interface ModelCacheConfig {
@@ -446,6 +458,11 @@ export function defaultConfig(): CbcConfig {
       toolDetail: "compact",
       subagentDetail: "drawer",
       sidebar: "auto",
+      finalAnswer: {
+        style: "chat",
+        evidence: "collapsed",
+        attentionDetails: true,
+      },
     },
     model: {
       profile: "auto",
@@ -485,6 +502,10 @@ export function defaultConfig(): CbcConfig {
         orientationMode: "progressive",
         providerCompaction: true,
         compactionThresholdTokens: 80_000,
+        compactionPolicy: "adaptive",
+        minFreeTokens: "auto",
+        targetFreeTokens: "auto",
+        emergencyRatio: 0.9,
       },
       cache: {
         mode: "roi",
@@ -844,9 +865,12 @@ const ENUMS: Record<string, readonly string[]> = {
   "ui.toolDetail": ["compact", "full"],
   "ui.subagentDetail": ["drawer", "inline"],
   "ui.sidebar": ["auto", "show", "hide"],
+  "ui.finalAnswer.style": ["chat", "report"],
+  "ui.finalAnswer.evidence": ["hidden", "collapsed", "expanded"],
   "permissions.preset": ["read", "edit", "auto", "yolo"],
   "model.router.strategy": ["utility", "latency", "cost"],
   "model.context.orientationMode": ["strict", "progressive"],
+  "model.context.compactionPolicy": ["off", "legacy", "adaptive"],
   "model.context.premiumBandPolicy": ["deny", "allow", "utility-gated"],
   "model.cache.mode": ["roi", "always", "off"],
   "provider.openai.native.programmaticToolCalling": ["read-only", "disabled"],
@@ -1143,8 +1167,10 @@ export function mergeConfig(
         continue;
       }
 
+      const adaptiveContextScalar = target === "model.context.minFreeTokens" || target === "model.context.targetFreeTokens";
       if (
         existing !== undefined &&
+        !adaptiveContextScalar &&
         (Array.isArray(existing) !== Array.isArray(value) ||
           (!Array.isArray(existing) && typeof existing !== typeof value))
       ) {
@@ -1250,6 +1276,16 @@ const CONSTANT_FALSE_CONFIG_PATHS = new Set([
   "appServer.allowLoopbackWebsocket",
 ]);
 function validateDynamicValue(path: string, value: unknown): string | undefined {
+  if (path === "model.context.minFreeTokens" || path === "model.context.targetFreeTokens") {
+    return value === "auto" || (typeof value === "number" && Number.isFinite(value) && value >= 0)
+      ? undefined
+      : "expected 'auto' or a non-negative finite number";
+  }
+  if (path === "model.context.emergencyRatio") {
+    return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 1
+      ? undefined
+      : "expected a finite ratio between 0 and 1";
+  }
   if (CONSTANT_FALSE_CONFIG_PATHS.has(path)) {
     return value === false ? undefined : `'${path}' is a fixed false safety boundary`;
   }

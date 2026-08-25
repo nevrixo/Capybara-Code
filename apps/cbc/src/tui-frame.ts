@@ -106,7 +106,10 @@ export interface SessionFrameOptions extends FrameLineOptions {
   /** §21.4 `ui.statusDensity` override, forwarded to the layout plan (P1-02). */
   readonly statusDensity?: "auto" | "compact" | "full";
   readonly accordionCollapsed?: boolean;
+  readonly finalAnswerStyle?: "chat" | "report";
+  readonly completionEvidenceMode?: "hidden" | "collapsed" | "expanded";
   readonly completionEvidenceExpanded?: boolean;
+  readonly completionAttentionDetails?: boolean;
   readonly thinkingVisibility?: ThinkingVisibility;
   readonly thinkingMode?: ThinkingMode;
   readonly toolDetail?: ToolDetail;
@@ -733,7 +736,10 @@ export function renderSessionFrame(input: SessionFrameOptions): SessionFrameRend
       ...(input.accordionCollapsed === true
         ? { accordionCollapsed: true, accordionExpandedIds: liveExpandedIds(input.model) }
         : {}),
+      ...(input.finalAnswerStyle === undefined ? {} : { finalAnswerStyle: input.finalAnswerStyle }),
+      ...(input.completionEvidenceMode === undefined ? {} : { completionEvidenceMode: input.completionEvidenceMode }),
       ...(input.completionEvidenceExpanded === true ? { completionEvidenceExpanded: true } : {}),
+      ...(input.completionAttentionDetails === undefined ? {} : { completionAttentionDetails: input.completionAttentionDetails }),
       ...(input.offeredScopes !== undefined ? { offeredScopes: input.offeredScopes } : {}),
       ...(input.selectedApprovalChoice !== undefined
         ? { selectedApprovalChoice: input.selectedApprovalChoice }
