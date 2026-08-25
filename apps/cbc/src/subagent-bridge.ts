@@ -150,10 +150,13 @@ export interface SubagentBridgeOptions {
 }
 
 function fileGraphStore(
-  homeDir: string,
+  homeDir: string | undefined,
   sessionId: string,
   workspaceIdentityDigest: string,
 ): GraphSnapshotStore {
+  if (typeof homeDir !== "string" || homeDir.trim().length === 0) {
+    return new MemoryGraphStore();
+  }
   const directory = join(homeDir, ".capybara", "graphs");
   const path = join(directory, `${workspaceIdentityDigest.slice(0, 16)}_${sessionId}.json`);
   let initial: GraphPersistSnapshot | undefined;
@@ -625,23 +628,36 @@ export class SubagentBridge {
         : {}),
     };
 
+    let childRuntime = this.#options.runtime;
+    let writerSidecar: { stop(): Promise<void> } | undefined;
     if (
       this.#options.config.experimental.worktreeMultiAgent &&
       this.#options.config.worktrees.enabled &&
+      this.#options.config.worktrees.runtimePerWorktree &&
       roleDefinition(instance.role).canWrite
     ) {
       try {
-        await this.#options.runtime.createWorktree({
+        const created = await this.#options.runtime.createWorktree({
           path: join(".capybara", "worktrees", instance.id),
-          revision: "HEAD",
-        });
+          commit: "HEAD",
+          requireClean: false,
+        }) as { worktree?: { path?: string } };
+        const root = created.worktree?.path;
+        if (typeof root === "string" && root.length > 0) {
+          const parent = this.#options.runtime;
+          if (typeof parent.forkSidecar === "function") {
+            const sidecar = await parent.forkSidecar(root, join(root, ".capybara"));
+            childRuntime = sidecar;
+            writerSidecar = sidecar;
+          }
+        }
       } catch {
-        // Partition isolation still holds even if Git worktree creation is refused.
+        // Partition isolation still holds even if Git worktree or sidecar spawn is refused.
       }
     }
 
     const childExecutor = new RuntimeToolExecutor({
-      runtime: this.#options.runtime,
+      runtime: childRuntime,
       host: this.#options.host,
       sessionId: this.#options.sessionId,
       editEngineV2: this.#options.config.experimental.editEngineV2,
@@ -1025,6 +1041,13 @@ export class SubagentBridge {
         await childKernel.close();
       } catch {
         // Provider cleanup is best-effort and cannot alter the child result.
+      }
+      if (writerSidecar !== undefined) {
+        try {
+          await writerSidecar.stop();
+        } catch {
+          // Sidecar shutdown cannot rewrite the child's terminal truth.
+        }
       }
     }
   }

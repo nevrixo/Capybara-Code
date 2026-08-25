@@ -714,6 +714,27 @@ export class Runtime {
     await this.#client.stop();
   }
 
+  /**
+   * Start a second sidecar rooted at an isolated worktree. The child process
+   * has its own workspace, data dir, and write admission; it does not share
+   * the parent's FileTransaction lock.
+   */
+  async forkSidecar(workspace: string, dataDir: string): Promise<Runtime> {
+    return await Runtime.start({
+      host: this.#options.host,
+      workspace,
+      dataDir,
+      clientVersion: this.#options.clientVersion,
+      pty: this.#options.pty ?? true,
+      ...(this.#options.sandboxLevel !== undefined ? { sandboxLevel: this.#options.sandboxLevel } : {}),
+      ...(this.#options.networkForShell !== undefined ? { networkForShell: this.#options.networkForShell } : {}),
+      ...(this.#options.interactionMode !== undefined ? { interactionMode: this.#options.interactionMode } : {}),
+      ...(this.#options.spawner !== undefined ? { spawner: this.#options.spawner } : {}),
+      ...(this.#options.onHealthChange !== undefined ? { onHealthChange: this.#options.onHealthChange } : {}),
+      ...(this.#options.onStderr !== undefined ? { onStderr: this.#options.onStderr } : {}),
+    });
+  }
+
   // ---- workspace ----
 
   async inspect(): Promise<WorkspaceInspection> {

@@ -86,4 +86,24 @@ describe("typed runtime read facade", () => {
     expect(response.files[0]?.rendered).toBe("body");
     await runtime.stop();
   });
+
+  test("forkSidecar starts a second sidecar with its own workspace root", async () => {
+    const workspaces: string[] = [];
+    const spawner: import("@cbc/protocol").RuntimeSpawner = (binary) => {
+      workspaces.push(binary);
+      return createFakeRuntime().spawner(binary);
+    };
+    const runtime = await Runtime.start({
+      host: testHost(),
+      workspace: "/work",
+      dataDir: "/data",
+      clientVersion: "test",
+      spawner,
+    });
+    const sidecar = await runtime.forkSidecar("/work/.capybara/worktrees/agt_1", "/work/.capybara/worktrees/agt_1/.capybara");
+    expect(sidecar).not.toBe(runtime);
+    expect(workspaces.length).toBe(2);
+    await sidecar.stop();
+    await runtime.stop();
+  });
 });
