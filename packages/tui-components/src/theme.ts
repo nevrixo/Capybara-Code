@@ -615,6 +615,22 @@ const TOOL_ACTIONS: Readonly<Record<string, string>> = {
   "mcp.search": "MCP",
   "mcp.call": "MCP",
   "mcp.read_resource": "MCP",
+  "lsp.diagnostics": "Read",
+  "lsp.symbols": "Find",
+  "lsp.workspace_symbols": "Search",
+  "lsp.definition": "Find",
+  "lsp.declaration": "Find",
+  "lsp.type_definition": "Find",
+  "lsp.implementation": "Find",
+  "lsp.references": "Find",
+  "lsp.hover": "Read",
+  "lsp.signature_help": "Read",
+  "lsp.document_highlights": "Find",
+  "lsp.code_actions": "Read",
+  "lsp.code_action_preview": "Preview",
+  "lsp.rename_preview": "Preview",
+  "memory.search": "Search",
+  "memory.remember": "Remember",
   "todo.write": "TODO",
   "tool.discover": "Discover",
   "repo.investigate": "Search",
@@ -692,6 +708,7 @@ export function toolActionIcon(toolId: string): IconName {
     case "TODO":
       return "task";
     case "Skill":
+    case "Remember":
       return "artifact";
     case "Ask":
       return "ask";
