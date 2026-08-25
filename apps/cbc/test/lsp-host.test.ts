@@ -438,6 +438,7 @@ describe("LspHost", () => {
     await host.typeDefinition({ path: "src/widget.ts", line: 0, character: 0 });
     await host.implementation({ path: "src/widget.ts", line: 0, character: 0 });
     await host.signatureHelp({ path: "src/widget.ts", line: 0, character: 0 });
+    await host.documentHighlights({ path: "src/widget.ts", line: 0, character: 0 });
     await host.documentSymbols("src/widget.ts");
     expect(methods).toEqual(expect.arrayContaining([
       "textDocument/definition",
@@ -445,6 +446,7 @@ describe("LspHost", () => {
       "textDocument/typeDefinition",
       "textDocument/implementation",
       "textDocument/signatureHelp",
+      "textDocument/documentHighlight",
       "textDocument/documentSymbol",
     ]));
     expect(initializeCapabilities).toMatchObject({
@@ -454,6 +456,7 @@ describe("LspHost", () => {
             parameterInformation: { labelOffsetSupport: true },
           },
         },
+        documentHighlight: {},
       },
     });
     const current = await host.diagnostics("src/widget.ts");

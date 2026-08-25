@@ -299,6 +299,11 @@ export class LspHost {
     return await this.#positionQuery("textDocument/signatureHelp", input);
   }
 
+  /** Request bounded symbol highlights scoped to the supplied workspace document. */
+  async documentHighlights(input: LspTextDocumentPosition): Promise<LspQueryResult> {
+    return await this.#positionQuery("textDocument/documentHighlight", input);
+  }
+
   async documentSymbols(path: string): Promise<LspQueryResult> {
     workspaceFileUri(this.#options.workspaceRoot, path);
     const descriptor = this.#descriptorForPath(path);
@@ -481,6 +486,7 @@ export class LspHost {
       | "textDocument/references"
       | "textDocument/hover"
       | "textDocument/signatureHelp"
+      | "textDocument/documentHighlight"
       | "textDocument/rename",
     input: LspTextDocumentPosition,
     extra: Readonly<Record<string, unknown>> = {},
@@ -811,6 +817,7 @@ export class LspHost {
                 parameterInformation: { labelOffsetSupport: true },
               },
             },
+            documentHighlight: {},
             documentSymbol: {
               hierarchicalDocumentSymbolSupport: true,
             },
