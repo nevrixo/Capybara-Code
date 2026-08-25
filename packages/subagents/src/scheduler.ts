@@ -46,6 +46,7 @@ import {
   type AgentTask,
   type UpstreamResult,
 } from "./task.ts";
+import type { GraphSpawnRecord } from "./graph-authority.ts";
 
 export interface SchedulerEmitter {
   emit<T>(kind: CbcEventKind, payload: T, options?: { turnId?: string; agentId?: string; callerId?: string; taskEpochId?: string; workspaceIdentityDigest?: string }): void;
@@ -115,6 +116,10 @@ export interface AgentHandle {
 export interface SchedulerOptions {
   readonly emitter: SchedulerEmitter;
   readonly runner: ChildRunner;
+  /** When set, spawn/start/complete go through the durable graph reducer. */
+  readonly graph?: { recordSpawn(input: GraphSpawnRecord): void; recordStart(id: string): void; recordComplete(id: string, outcome: "completed" | "partial" | "failed" | "cancelled", summary?: string): void };
+  /** Writer isolation key. Default `base` preserves one writer per scheduler. */
+  readonly writerPartition?: (task: AgentTask) => string;
   /** Parent's soft context budget; children share `aggregateContextFraction` of it. */
   readonly parentContextTokens: number;
   /** Depth of the *parent*. A root is 0, so its children are depth 1. */
@@ -155,6 +160,7 @@ export class SubagentScheduler {
   #activeRunners = 0;
   #counter = 0;
   #writerLease: WriterLease | undefined;
+  readonly #writerLeases = new Map<string, WriterLease>();
   #consumedContextTokens = 0;
   #reservedContextTokens = 0;
   readonly #reservations = new Map<string, number>();
@@ -309,7 +315,8 @@ export class SubagentScheduler {
       // agent numbering the user sees in the agents drawer.
     if (definition.canWrite) {
       this.#releaseExpiredLease();
-      const held = this.#writerLease;
+      const partition = this.#writerPartition(options.task);
+      const held = this.#writerLeases.get(partition) ?? (partition === "base" ? this.#writerLease : undefined);
       if (held !== undefined) {
         // Overlap is reported before the generic busy signal because the two call
         // for different responses: an overlapping scope must be narrowed, while a
@@ -337,6 +344,7 @@ export class SubagentScheduler {
       for (const pending of this.#instances.values()) {
         if (isTerminalAgentState(pending.state)) continue;
         if (pending.task.allowedPaths.length === 0) continue;
+        if (this.#writerPartition(pending.task) !== partition) continue;
         const overlapping = overlappingGlobs(pending.task.allowedPaths, options.task.allowedPaths);
         if (overlapping.length > 0) {
           throw new SpawnRejected(
@@ -411,7 +419,18 @@ export class SubagentScheduler {
     this.#instances.set(id, instance);
     this.#reservations.set(id, reservationTokens);
     this.#reservedContextTokens += reservationTokens;
-    if (lease !== undefined) this.#writerLease = lease;
+    if (lease !== undefined) {
+      this.#writerLease = lease;
+      this.#writerLeases.set(this.#writerPartition(options.task), lease);
+    }
+    this.#options.graph?.recordSpawn({
+      id,
+      ...(this.#options.parentAgentId !== undefined ? { parentId: this.#options.parentAgentId } : {}),
+      title: instance.name,
+      role: instance.role,
+      dependencies: [...instance.task.dependencies],
+      canWrite: definition.canWrite,
+    });
 
     this.#emit("task.created", {
       taskId: id,
@@ -656,6 +675,7 @@ export class SubagentScheduler {
     const startedMs = this.#now();
     instance.state = "running";
     instance.startedAt = new Date(startedMs).toISOString();
+    this.#options.graph?.recordStart(instance.id);
     this.#emit(
       "task.started",
       { taskId: instance.id, role: instance.role, startTimeMs: startedMs },
@@ -713,6 +733,11 @@ export class SubagentScheduler {
     instance.result = result;
     instance.state = stateForResult(result);
     instance.finishedAt = new Date(this.#now()).toISOString();
+    const graphOutcome =
+      result.status === "completed" || result.status === "failed" || result.status === "cancelled"
+        ? result.status
+        : "failed";
+    this.#options.graph?.recordComplete(instance.id, graphOutcome, result.summary);
 
     const durationMs = this.#now() - startedMs;
     const kind: CbcEventKind =
@@ -880,6 +905,9 @@ export class SubagentScheduler {
 
     delete instance.writerLease;
     if (this.#writerLease?.leaseId === lease.leaseId) this.#writerLease = undefined;
+    for (const [key, held] of this.#writerLeases) {
+      if (held.leaseId === lease.leaseId) this.#writerLeases.delete(key);
+    }
 
     if (reconciliation.conflicted.length > 0) {
       this.#emit(
@@ -915,6 +943,17 @@ export class SubagentScheduler {
       const owner = this.#instances.get(lease.ownerAgentId);
       if (owner !== undefined) delete owner.writerLease;
     }
+    for (const [key, held] of this.#writerLeases) {
+      if (leaseExpired(held, this.#now())) {
+        this.#writerLeases.delete(key);
+        const owner = this.#instances.get(held.ownerAgentId);
+        if (owner !== undefined) delete owner.writerLease;
+      }
+    }
+  }
+
+  #writerPartition(task: AgentTask): string {
+    return this.#options.writerPartition?.(task) ?? "base";
   }
 
   #emit<T>(kind: CbcEventKind, payload: T, agentId: string): void {

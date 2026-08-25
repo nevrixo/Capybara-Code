@@ -13,6 +13,7 @@ export * from "./task.ts";
 export * from "./instance.ts";
 export * from "./synthesis.ts";
 export * from "./scheduler.ts";
+export * from "./graph-authority.ts";
 export * from "./discovery.ts";
 export * from "./custom.ts";
 export * from './hosted-scout.ts';

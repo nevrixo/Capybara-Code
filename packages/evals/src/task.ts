@@ -53,6 +53,17 @@ export const FEATURE_TASK_CATEGORIES = [
 
 export type FeatureTaskCategory = (typeof FEATURE_TASK_CATEGORIES)[number];
 
+export const FEATURE_TASK_PROMPTS: Readonly<Record<FeatureTaskCategory, string>> = {
+  edit_precision: "Apply an anchor edit to a shifted function without rewriting the file.",
+  full_lsp: "Rename a symbol through the language server and apply the resulting edit plan.",
+  durable_memory: "Remember a verified fact, restart, and recall it without cross-workspace leakage.",
+  session_daemon: "Detach during a turn, reattach, and confirm the turn continued.",
+  persistent_graph: "Fan-in two reader agents then dispatch one writer after both complete.",
+  worktree_multi_agent: "Run two writers in separate worktrees and merge disjoint proposals.",
+  plugin_hooks: "Deny a networked process from a before-tool hook without widening authority.",
+  app_server_sdk: "Submit a turn through the App Protocol client and resume from the cursor.",
+};
+
 /** §26.2's language coverage. */
 export const TASK_LANGUAGES = [
   "typescript",
