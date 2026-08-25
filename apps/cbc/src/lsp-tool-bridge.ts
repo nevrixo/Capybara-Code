@@ -29,6 +29,8 @@ import type { ProposedAction } from "@cbc/permissions";
 import { errorResult, okResult } from "@cbc/tool-registry";
 
 import type {
+  LspCodeActionPreview,
+  LspCodeActionPreviewRequest,
   LspDiagnosticLookup,
   LspQueryResult,
   LspReferencesRequest,
@@ -46,6 +48,7 @@ const MAX_REVISION_BYTES = 256;
 const MAX_TEXT_BYTES = 48 * 1_024;
 const MAX_SEMANTIC_PATH_BYTES = 512;
 const MAX_CODE_ACTIONS = 16;
+const MAX_CODE_ACTION_PREVIEW_INDEX = 255;
 const MAX_SEMANTIC_LOCATIONS = 32;
 const MAX_SEMANTIC_DOCUMENT_HIGHLIGHTS = 32;
 const MAX_SEMANTIC_POSITION_COMPONENT = 1_000_000;
@@ -96,6 +99,10 @@ export interface LspCodeActionsReader {
   codeActions(input: LspTextDocumentPosition): Promise<LspQueryResult>;
 }
 
+export interface LspCodeActionPreviewReader {
+  codeActionPreview(input: LspCodeActionPreviewRequest): Promise<LspCodeActionPreview>;
+}
+
 export interface LspRenamePreviewReader {
   renamePreview(input: LspRenameRequest): Promise<LspRenamePreview>;
 }
@@ -106,6 +113,7 @@ export interface LspToolReader extends
   LspWorkspaceSymbolsReader,
   LspSemanticReader,
   LspCodeActionsReader,
+  LspCodeActionPreviewReader,
   LspRenamePreviewReader {}
 
 export interface LspSemanticBridgeOptions {
@@ -249,6 +257,15 @@ export interface LspToolRenamePreviewResult {
   readonly plan: Readonly<Record<string, unknown>>;
 }
 
+/** A revision-bound code-action proposal with no raw CodeAction or command. */
+export interface LspToolCodeActionPreviewResult {
+  readonly schemaVersion: "1.0";
+  readonly kind: "code_action_preview";
+  readonly server: string;
+  readonly paths: readonly string[];
+  readonly plan: Readonly<Record<string, unknown>>;
+}
+
 type LspToolSemanticResult =
   | LspToolLocationQueryResult
   | LspToolHoverResult
@@ -260,6 +277,7 @@ export type LspDocumentSymbolsBridge = (action: ProposedAction, signal: AbortSig
 export type LspWorkspaceSymbolsBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspSemanticBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspCodeActionsBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
+export type LspCodeActionPreviewBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspRenamePreviewBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspToolBridge = LspSemanticBridge;
 
@@ -499,6 +517,46 @@ export function createLspCodeActionsBridge(
 }
 
 /**
+ * A code-action preview may contain only a revision-bound edit plan. The
+ * selected action's raw command, edit, diagnostics, and data never escape.
+ */
+export function createLspCodeActionPreviewBridge(
+  reader: LspCodeActionPreviewReader,
+): LspCodeActionPreviewBridge {
+  return async (action, signal) => {
+    const request = codeActionPreviewRequest(action);
+    if (request === undefined) {
+      return {
+        result: errorResult(
+          "INVALID_ARGUMENT",
+          "lsp.code_action_preview requires a bounded workspace-relative path, zero-based position, and action index",
+        ),
+      };
+    }
+    if (signal.aborted) return cancelledCodeActionPreview();
+
+    try {
+      const preview = await reader.codeActionPreview(request);
+      if (signal.aborted) return cancelledCodeActionPreview();
+      const result = projectCodeActionPreview(preview);
+      if (result === undefined) throw new Error("code action preview could not be projected safely");
+      return {
+        result: okResult(codeActionPreviewSummary(result), result),
+        text: renderCodeActionPreview(result),
+      };
+    } catch {
+      return {
+        result: errorResult(
+          "NOT_INITIALIZED",
+          "LSP code action preview is currently unavailable; choose an enabled edit-only action and retry after the language server is ready",
+          { retryable: true },
+        ),
+      };
+    }
+  };
+}
+
+/**
  * Rename stays proposal-only: this bridge returns a reconstructed, bounded
  * edit plan but never exposes the raw server WorkspaceEdit or writes files.
  */
@@ -541,7 +599,7 @@ export function createLspRenamePreviewBridge(
   };
 }
 
-/** Combine diagnostics, symbols, semantic queries, code-action catalog, and proposal-only rename. */
+/** Combine diagnostics, symbols, semantic queries, safe code actions, and proposal-only rename. */
 export function createLspToolBridge(
   reader: LspToolReader,
   options: LspSemanticBridgeOptions,
@@ -551,6 +609,7 @@ export function createLspToolBridge(
   const workspaceSymbols = createLspWorkspaceSymbolsBridge(reader, options);
   const semantic = createLspSemanticBridge(reader, options);
   const codeActions = createLspCodeActionsBridge(reader, options);
+  const codeActionPreview = createLspCodeActionPreviewBridge(reader);
   const renamePreview = createLspRenamePreviewBridge(reader);
   return async (action, signal) =>
     action.toolId === "lsp.diagnostics"
@@ -561,6 +620,8 @@ export function createLspToolBridge(
       ? await workspaceSymbols(action, signal)
       : action.toolId === "lsp.code_actions"
       ? await codeActions(action, signal)
+      : action.toolId === "lsp.code_action_preview"
+      ? await codeActionPreview(action, signal)
       : action.toolId === "lsp.rename_preview"
       ? await renamePreview(action, signal)
       : await semantic(action, signal);
@@ -596,6 +657,12 @@ function cancelledCodeActions(): Execution {
   };
 }
 
+function cancelledCodeActionPreview(): Execution {
+  return {
+    result: errorResult("CANCELLED", "LSP code action preview was cancelled", { retryable: true }),
+  };
+}
+
 function cancelledRenamePreview(): Execution {
   return {
     result: errorResult("CANCELLED", "LSP rename preview was cancelled", { retryable: true }),
@@ -624,6 +691,33 @@ function codeActionRequest(action: ProposedAction): LspCodeActionQueryInput | un
     return undefined;
   }
   return Object.freeze({ path, line: raw.line, character: raw.character });
+}
+
+function codeActionPreviewRequest(
+  action: ProposedAction,
+): LspCodeActionPreviewRequest | undefined {
+  if (action.toolId !== "lsp.code_action_preview") return undefined;
+  const raw = lspArguments(action);
+  if (raw === undefined) return undefined;
+  const path = lspPathFromArguments(raw, MAX_SEMANTIC_PATH_BYTES);
+  const actionIndex = raw.actionIndex;
+  if (
+    path === undefined ||
+    !isSemanticPositionComponent(raw.line) ||
+    !isSemanticPositionComponent(raw.character) ||
+    typeof actionIndex !== "number" ||
+    !Number.isSafeInteger(actionIndex) ||
+    actionIndex < 0 ||
+    actionIndex > MAX_CODE_ACTION_PREVIEW_INDEX
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    path,
+    line: raw.line,
+    character: raw.character,
+    actionIndex,
+  });
 }
 
 function renamePreviewRequest(action: ProposedAction): LspRenameRequest | undefined {
@@ -707,6 +801,18 @@ function projectRenamePreview(value: unknown): LspToolRenamePreviewResult | unde
     server,
     paths: Object.freeze(paths),
     plan,
+  });
+}
+
+function projectCodeActionPreview(value: unknown): LspToolCodeActionPreviewResult | undefined {
+  const renameProjection = projectRenamePreview(value);
+  if (renameProjection === undefined) return undefined;
+  return Object.freeze({
+    schemaVersion: "1.0" as const,
+    kind: "code_action_preview" as const,
+    server: renameProjection.server,
+    paths: renameProjection.paths,
+    plan: renameProjection.plan,
   });
 }
 
@@ -909,6 +1015,18 @@ function renderRenamePreview(result: LspToolRenamePreviewResult): string {
     "Language-server rename preview created a revision-bound plan for " +
       String(result.paths.length) + " file(s): " + result.paths.join(", "),
     "[This proposal has not written files. Run fs.edit.preview to re-preflight it; fs.edit requires its own approval and re-preflights immediately before staging.]",
+  ].join("\n"), MAX_TEXT_BYTES);
+}
+
+function codeActionPreviewSummary(result: LspToolCodeActionPreviewResult): string {
+  return "revision-bound LSP code action proposal returned for " + String(result.paths.length) + " file(s)";
+}
+
+function renderCodeActionPreview(result: LspToolCodeActionPreviewResult): string {
+  return truncateUtf8([
+    "Language-server code action preview created a revision-bound plan for " +
+      String(result.paths.length) + " file(s): " + result.paths.join(", "),
+    "[This proposal has not run a language-server command or written files. Run fs.edit.preview to re-preflight it; fs.edit requires its own approval and re-preflights immediately before staging.]",
   ].join("\n"), MAX_TEXT_BYTES);
 }
 
