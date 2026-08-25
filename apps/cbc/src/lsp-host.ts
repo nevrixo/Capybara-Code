@@ -77,6 +77,7 @@ const MAX_LSP_DIAGNOSTIC_SERVERS = 8;
 const MAX_LSP_WORKSPACE_DIAGNOSTIC_SNAPSHOTS = 32;
 const MAX_LSP_WORKSPACE_DIAGNOSTICS_PER_SNAPSHOT = 64;
 const MAX_LSP_WORKSPACE_SYMBOL_SERVERS = 8;
+const MAX_LSP_CODE_ACTIONS = 256;
 const MAX_LSP_WORKSPACE_SYMBOL_QUERY_BYTES = 512;
 const UNSAFE_LSP_QUERY_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/;
 const MAX_LSP_DOCUMENT_BYTES = 1_000_000;
@@ -147,6 +148,11 @@ export interface LspRenameRequest extends LspTextDocumentPosition {
   readonly newName: string;
 }
 
+export interface LspCodeActionPreviewRequest extends LspTextDocumentPosition {
+  /** Index from a fresh lsp.code_actions catalog; it is never an apply capability. */
+  readonly actionIndex: number;
+}
+
 export interface LspQueryResult {
   readonly server: string;
   readonly result: unknown;
@@ -168,6 +174,13 @@ const EMPTY_LSP_DIAGNOSTIC_LOOKUP: LspDiagnosticLookup = Object.freeze({
 
 /** A semantic rename proposal. Applying it still requires the fs.edit authority path. */
 export interface LspRenamePreview {
+  readonly server: string;
+  readonly workspaceEdit: LspWorkspaceEdit;
+  readonly edit: LspEditPlanResult;
+}
+
+/** A command-free, server-selected CodeAction converted into a safe EditPlan. */
+export interface LspCodeActionPreview {
   readonly server: string;
   readonly workspaceEdit: LspWorkspaceEdit;
   readonly edit: LspEditPlanResult;
@@ -198,6 +211,8 @@ export interface LspHostOptions {
   readonly readEditDocument?: (path: string) => Promise<LspEditDocument | undefined>;
   /** Semantic rename remains unavailable until both LSP and edit rollouts allow it. */
   readonly allowRenamePreview?: boolean;
+  /** Code-action preview remains unavailable until both LSP and edit rollouts allow it. */
+  readonly allowCodeActionPreview?: boolean;
   /** Mirrors the configured structured-edit operation ceiling. */
   readonly maxEditOperations?: number;
   /** Upper bound on runtime document snapshots acquired for one LSP proposal. */
@@ -326,8 +341,45 @@ export class LspHost {
     if (!process.supportsCodeActions) {
       throw new Error("configured language server does not support code actions");
     }
+    const result = await this.#requestCodeActions(process, descriptor, input, uri);
+    this.#setStatus(descriptor.name, "ready", "code action catalog ready");
+    return { server: descriptor.name, result };
+  }
+
+  /**
+   * Convert only a command-free CodeAction with an embedded WorkspaceEdit into
+   * a revision-bound proposal. It never resolves actions or executes commands.
+   */
+  async codeActionPreview(input: LspCodeActionPreviewRequest): Promise<LspCodeActionPreview> {
+    if (this.#options.allowCodeActionPreview === false) {
+      throw new Error("LSP code action preview is disabled by configuration");
+    }
+    assertLspCodeActionPreview(input);
+    const uri = workspaceFileUri(this.#options.workspaceRoot, input.path);
+    const descriptor = this.#descriptorForPath(input.path);
+    const process = await this.#startForQuery(descriptor);
+    if (!process.supportsCodeActions) {
+      throw new Error("configured language server does not support code actions");
+    }
+    const result = await this.#requestCodeActions(process, descriptor, input, uri);
+    const workspaceEdit = lspCodeActionWorkspaceEdit(result, input.actionIndex);
+    const edit = await this.#toEditPlan(workspaceEdit);
+    this.#setStatus(descriptor.name, "ready", "code action preview ready");
+    return {
+      server: descriptor.name,
+      workspaceEdit,
+      edit,
+    };
+  }
+
+  async #requestCodeActions(
+    process: LspProcess,
+    descriptor: LspServerDescriptor,
+    input: LspTextDocumentPosition,
+    uri: string,
+  ): Promise<unknown> {
     const position = { line: input.line, character: input.character };
-    const result = await this.#withOpenedDocument(
+    return await this.#withOpenedDocument(
       process,
       descriptor,
       input.path,
@@ -344,8 +396,6 @@ export class LspHost {
           descriptor.timeoutMs,
         ),
     );
-    this.#setStatus(descriptor.name, "ready", "code action catalog ready");
-    return { server: descriptor.name, result };
   }
 
   async documentSymbols(path: string): Promise<LspQueryResult> {
@@ -1553,6 +1603,20 @@ function assertLspPosition(input: LspTextDocumentPosition): void {
   }
 }
 
+function assertLspCodeActionPreview(input: LspCodeActionPreviewRequest): void {
+  assertLspPosition(input);
+  if (
+    !Number.isSafeInteger(input.actionIndex) ||
+    input.actionIndex < 0 ||
+    input.actionIndex >= MAX_LSP_CODE_ACTIONS
+  ) {
+    throw new Error(
+      "LSP code action preview requires an action index between 0 and " +
+        String(MAX_LSP_CODE_ACTIONS - 1),
+    );
+  }
+}
+
 function assertLspWorkspaceSymbolQuery(query: string): void {
   if (
     typeof query !== "string" ||
@@ -1565,6 +1629,23 @@ function assertLspWorkspaceSymbolQuery(query: string): void {
         String(MAX_LSP_WORKSPACE_SYMBOL_QUERY_BYTES) + " UTF-8 bytes",
     );
   }
+}
+
+function lspCodeActionWorkspaceEdit(result: unknown, actionIndex: number): LspWorkspaceEdit {
+  if (!Array.isArray(result) || result.length > MAX_LSP_CODE_ACTIONS) {
+    throw new Error("language server did not return a bounded code action array");
+  }
+  const action = asRecord(result[actionIndex]);
+  if (action === undefined) {
+    throw new Error("requested code action is unavailable");
+  }
+  if (action.disabled !== undefined) {
+    throw new Error("requested code action is disabled");
+  }
+  if (action.command !== undefined) {
+    throw new Error("code action commands are not eligible for preview");
+  }
+  return lspWorkspaceEdit(action.edit);
 }
 
 function lspWorkspaceEdit(value: unknown): LspWorkspaceEdit {
