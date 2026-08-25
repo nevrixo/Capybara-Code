@@ -167,4 +167,3 @@ describe("LSP range formatting preview bridge", () => {
     expect(calls).toBe(0);
   });
 });
-
