@@ -2200,6 +2200,7 @@ export class AgentSession {
       tokenSavingLevel: savingLevel,
       emergencyRatio: this.#options.config.model.context.emergencyRatio,
       ...(this.#options.config.model.context.minFreeTokens === "auto" ? {} : { minFreeTokens: this.#options.config.model.context.minFreeTokens }),
+      ...(this.#options.config.model.context.targetFreeTokens === "auto" ? {} : { targetFreeTokens: this.#options.config.model.context.targetFreeTokens }),
     });
     this.#contextPressure.observeCompiledTokens(prompt.inputTokens);
     this.#lastContextPressure = decision;

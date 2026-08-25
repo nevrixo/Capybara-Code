@@ -28,6 +28,7 @@ export interface ContextPressureInput {
   /** Model-specific minimum free space. Auto is derived from the input budget. */
   readonly modelMinFreeTokens?: number;
   readonly minFreeTokens?: number;
+  readonly targetFreeTokens?: number;
   readonly safetyMultiplier?: number;
   readonly emergencyRatio?: number;
   /** A lower target is allowed for stronger saving, but never changes safety. */
@@ -126,6 +127,7 @@ export function evaluateContextPressure(input: ContextPressureInput): ContextPre
     Math.floor(finiteNonNegative(input.modelMinFreeTokens, Math.max(1, Math.min(1_024, Math.ceil(budget * 0.05))))),
   );
   const configuredMinimum = Math.floor(finiteNonNegative(input.minFreeTokens, 0));
+  const configuredTargetFree = Math.floor(finiteNonNegative(input.targetFreeTokens, 0));
   const requiredFreeTokens = Math.min(
     budget,
     Math.max(modelMinimum, configuredMinimum, Math.ceil(growthP95 * safetyMultiplier), reservedTool),
@@ -164,7 +166,7 @@ export function evaluateContextPressure(input: ContextPressureInput): ContextPre
     reasons.push("compaction_generation_guard");
   }
 
-  const targetFree = Math.max(requiredFreeTokens, configuredMinimum);
+  const targetFree = Math.max(requiredFreeTokens, configuredMinimum, configuredTargetFree);
   const target = Math.max(1_024, Math.floor(Math.min(
     budget - targetFree,
     budget * targetRatioFor(input),
