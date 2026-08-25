@@ -79,6 +79,7 @@ const MAX_LSP_WORKSPACE_DIAGNOSTICS_PER_SNAPSHOT = 64;
 const MAX_LSP_WORKSPACE_SYMBOL_SERVERS = 8;
 const MAX_LSP_CODE_ACTIONS = 256;
 const MAX_LSP_FORMATTING_EDITS = 256;
+const MAX_LSP_FORMATTING_POSITION = 1_000_000;
 const MAX_LSP_WORKSPACE_SYMBOL_QUERY_BYTES = 512;
 const UNSAFE_LSP_QUERY_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/;
 const MAX_LSP_DOCUMENT_BYTES = 1_000_000;
@@ -121,6 +122,7 @@ interface LspProcess {
   supportsWorkspaceDiagnostics: boolean;
   supportsCodeActions: boolean;
   supportsFormatting: boolean;
+  supportsRangeFormatting: boolean;
   supportsPrepareRename: boolean;
 }
 
@@ -158,6 +160,15 @@ export interface LspCodeActionPreviewRequest extends LspTextDocumentPosition {
 /** Whole-document formatting is proposal-only and requires an exact document snapshot. */
 export interface LspFormattingPreviewRequest {
   readonly path: string;
+}
+
+/** Range formatting is also proposal-only and cannot escape the requested range. */
+export interface LspRangeFormattingPreviewRequest {
+  readonly path: string;
+  readonly startLine: number;
+  readonly startCharacter: number;
+  readonly endLine: number;
+  readonly endCharacter: number;
 }
 
 export interface LspQueryResult {
@@ -432,6 +443,61 @@ export class LspHost {
       new Map([[input.path, response.revision]]),
     );
     this.#setStatus(descriptor.name, "ready", "formatting preview ready");
+    return { server: descriptor.name, edit };
+  }
+
+  /**
+   * Convert range formatter edits into a current revision-bound plan. Server
+   * output is refused if any edit reaches beyond the explicitly requested range.
+   */
+  async rangeFormatPreview(
+    input: LspRangeFormattingPreviewRequest,
+  ): Promise<LspFormattingPreview> {
+    if (this.#options.allowFormattingPreview === false) {
+      throw new Error("LSP formatting preview is disabled by configuration");
+    }
+    assertLspRangeFormattingPreview(input);
+    const uri = workspaceFileUri(this.#options.workspaceRoot, input.path);
+    const descriptor = this.#descriptorForPath(input.path);
+    const process = await this.#startForQuery(descriptor);
+    if (!process.supportsRangeFormatting) {
+      throw new Error("configured language server does not support range formatting");
+    }
+    const response = await this.#withOpenedDocument(
+      process,
+      descriptor,
+      input.path,
+      uri,
+      async (openedUri, tracked) => {
+        if (tracked === undefined) {
+          throw new Error("LSP range formatting preview requires a runtime exact document snapshot");
+        }
+        const result = await this.#request(
+          process,
+          "textDocument/rangeFormatting",
+          {
+            textDocument: { uri: openedUri },
+            range: {
+              start: { line: input.startLine, character: input.startCharacter },
+              end: { line: input.endLine, character: input.endCharacter },
+            },
+            options: { tabSize: 2, insertSpaces: true },
+          },
+          descriptor.timeoutMs,
+        );
+        return { result, uri: openedUri, revision: tracked.document.revision };
+      },
+    );
+    const workspaceEdit = lspRangeFormattingWorkspaceEdit(response.result, response.uri, input);
+    if (workspaceEdit === undefined) {
+      this.#setStatus(descriptor.name, "ready", "range formatting preview found no changes");
+      return { server: descriptor.name };
+    }
+    const edit = await this.#toEditPlan(
+      workspaceEdit,
+      new Map([[input.path, response.revision]]),
+    );
+    this.#setStatus(descriptor.name, "ready", "range formatting preview ready");
     return { server: descriptor.name, edit };
   }
 
@@ -947,6 +1013,7 @@ export class LspHost {
       supportsWorkspaceDiagnostics: false,
       supportsCodeActions: false,
       supportsFormatting: false,
+      supportsRangeFormatting: false,
       supportsPrepareRename: false,
     };
     this.#processes.set(descriptor.name, process);
@@ -1041,6 +1108,7 @@ export class LspHost {
             },
             documentHighlight: {},
             formatting: { dynamicRegistration: false },
+            rangeFormatting: { dynamicRegistration: false },
             diagnostic: {
               dynamicRegistration: false,
               relatedDocumentSupport: false,
@@ -1062,6 +1130,7 @@ export class LspHost {
       process.supportsWorkspaceDiagnostics = diagnosticSupport.workspace;
       process.supportsCodeActions = supportsCodeActions(initializeResult);
       process.supportsFormatting = supportsFormatting(initializeResult);
+      process.supportsRangeFormatting = supportsRangeFormatting(initializeResult);
       process.supportsPrepareRename = supportsPrepareRename(initializeResult);
       await this.#notify(process, "initialized", {});
       return process;
@@ -1676,6 +1745,35 @@ function assertLspPosition(input: LspTextDocumentPosition): void {
   }
 }
 
+function assertLspRangeFormattingPreview(input: LspRangeFormattingPreviewRequest): void {
+  assertLspPosition({
+    path: input.path,
+    line: input.startLine,
+    character: input.startCharacter,
+  });
+  assertLspPosition({
+    path: input.path,
+    line: input.endLine,
+    character: input.endCharacter,
+  });
+  if (
+    input.startLine > MAX_LSP_FORMATTING_POSITION ||
+    input.startCharacter > MAX_LSP_FORMATTING_POSITION ||
+    input.endLine > MAX_LSP_FORMATTING_POSITION ||
+    input.endCharacter > MAX_LSP_FORMATTING_POSITION
+  ) {
+    throw new Error(
+      "LSP range formatting positions must not exceed " + String(MAX_LSP_FORMATTING_POSITION),
+    );
+  }
+  if (
+    input.startLine > input.endLine ||
+    (input.startLine === input.endLine && input.startCharacter > input.endCharacter)
+  ) {
+    throw new Error("LSP range formatting start must not be after its end");
+  }
+}
+
 function assertLspCodeActionPreview(input: LspCodeActionPreviewRequest): void {
   assertLspPosition(input);
   if (
@@ -1710,6 +1808,60 @@ function lspFormattingWorkspaceEdit(result: unknown, uri: string): LspWorkspaceE
   }
   if (result.length === 0) return undefined;
   return { changes: { [uri]: result } } as LspWorkspaceEdit;
+}
+
+function lspRangeFormattingWorkspaceEdit(
+  result: unknown,
+  uri: string,
+  input: LspRangeFormattingPreviewRequest,
+): LspWorkspaceEdit | undefined {
+  const workspaceEdit = lspFormattingWorkspaceEdit(result, uri);
+  if (workspaceEdit === undefined) return undefined;
+  for (const rawEdit of result) {
+    if (!lspFormattingEditStaysWithinRange(rawEdit, input)) {
+      throw new Error("language server returned a range formatting edit outside the requested range");
+    }
+  }
+  return workspaceEdit;
+}
+
+function lspFormattingEditStaysWithinRange(
+  value: unknown,
+  input: LspRangeFormattingPreviewRequest,
+): boolean {
+  const edit = asRecord(value);
+  const range = asRecord(edit?.range);
+  const start = lspFormattingPosition(range?.start);
+  const end = lspFormattingPosition(range?.end);
+  return start !== undefined &&
+    end !== undefined &&
+    lspPositionAtOrAfter(start, input.startLine, input.startCharacter) &&
+    lspPositionAtOrBefore(end, input.endLine, input.endCharacter);
+}
+
+function lspFormattingPosition(value: unknown): readonly [number, number] | undefined {
+  const position = asRecord(value);
+  const line = integer(position?.line);
+  const character = integer(position?.character);
+  return line === undefined || character === undefined || line < 0 || character < 0
+    ? undefined
+    : [line, character];
+}
+
+function lspPositionAtOrAfter(
+  position: readonly [number, number],
+  line: number,
+  character: number,
+): boolean {
+  return position[0] > line || (position[0] === line && position[1] >= character);
+}
+
+function lspPositionAtOrBefore(
+  position: readonly [number, number],
+  line: number,
+  character: number,
+): boolean {
+  return position[0] < line || (position[0] === line && position[1] <= character);
 }
 
 function lspCodeActionWorkspaceEdit(result: unknown, actionIndex: number): LspWorkspaceEdit {
@@ -1837,6 +1989,13 @@ function supportsFormatting(value: unknown): boolean {
   const initialize = asRecord(value);
   const capabilities = asRecord(initialize?.capabilities);
   const provider = capabilities?.documentFormattingProvider;
+  return provider === true || (asRecord(provider) !== undefined && !Array.isArray(provider));
+}
+
+function supportsRangeFormatting(value: unknown): boolean {
+  const initialize = asRecord(value);
+  const capabilities = asRecord(initialize?.capabilities);
+  const provider = capabilities?.documentRangeFormattingProvider;
   return provider === true || (asRecord(provider) !== undefined && !Array.isArray(provider));
 }
 
