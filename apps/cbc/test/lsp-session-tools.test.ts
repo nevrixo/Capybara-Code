@@ -44,7 +44,15 @@ function makeSession(fullLsp: boolean, includeBridge: boolean, trust: "trusted-a
 
 describe("AgentSession LSP tool gate", () => {
   test("requires fullLsp, trusted workspace, and a supplied root bridge for every LSP read tool", () => {
-    const lspTools = ["lsp.diagnostics", "lsp.definition", "lsp.references", "lsp.hover"];
+    const lspTools = [
+      "lsp.diagnostics",
+      "lsp.definition",
+      "lsp.declaration",
+      "lsp.type_definition",
+      "lsp.implementation",
+      "lsp.references",
+      "lsp.hover",
+    ];
     const disabled = makeSession(false, true);
     const missingBridge = makeSession(true, false);
     const enabled = makeSession(true, true);
