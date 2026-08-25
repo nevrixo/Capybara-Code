@@ -565,6 +565,10 @@ export class AgentSession {
         fullLspTools &&
         options.config.experimental.editEngineV2 &&
         options.config.lsp.mutations.rename,
+      lspFormattingPreview:
+        fullLspTools &&
+        options.config.experimental.editEngineV2 &&
+        options.config.lsp.mutations.formatting,
       lspCodeActionPreview:
         fullLspTools &&
         options.config.experimental.editEngineV2 &&
