@@ -15,6 +15,7 @@ import {
   buildLspEditPlan,
   collectLspWorkspaceEditPaths,
   normalizeLspDiagnostics,
+  normalizeLspPullDiagnostics,
   type LspDiagnosticSnapshot,
   type LspEditDocument,
   type LspEditPlanResult,
@@ -111,6 +112,7 @@ interface LspProcess {
   stopped: boolean;
   nextRequestId: number;
   nextDocumentVersion: number;
+  supportsPullDiagnostics: boolean;
 }
 
 interface ServiceState {
@@ -363,15 +365,24 @@ export class LspHost {
 
   /**
    * Return only diagnostics whose captured revision still matches a fresh,
-   * runtime-authoritative document read. This never starts a language server.
+   * runtime-authoritative document read. Capability-advertised pull diagnostics
+   * may start the matching configured server; unsupported or invalid replies
+   * stay unavailable rather than becoming evidence.
    */
   async diagnostics(path: string): Promise<LspDiagnosticLookup> {
     workspaceFileUri(this.#options.workspaceRoot, path);
     if (!this.#mayStart()) return EMPTY_LSP_DIAGNOSTIC_LOOKUP;
+    if (await this.#readDiagnosticDocument(path) === undefined) {
+      return EMPTY_LSP_DIAGNOSTIC_LOOKUP;
+    }
+
+    await this.#refreshPullDiagnostics(path);
+
     const document = await this.#readDiagnosticDocument(path);
-    if (document === undefined) return EMPTY_LSP_DIAGNOSTIC_LOOKUP;
     const workspaceIdentityDigest = this.#workspaceIdentityDigest();
-    if (workspaceIdentityDigest === undefined) return EMPTY_LSP_DIAGNOSTIC_LOOKUP;
+    if (document === undefined || workspaceIdentityDigest === undefined) {
+      return EMPTY_LSP_DIAGNOSTIC_LOOKUP;
+    }
 
     const snapshots: LspDiagnosticSnapshot[] = [];
     let totalServers = 0;
@@ -731,6 +742,7 @@ export class LspHost {
       stopped: false,
       nextRequestId: 1,
       nextDocumentVersion: 1,
+      supportsPullDiagnostics: false,
     };
     this.#processes.set(descriptor.name, process);
     process.unsubscribe = this.#options.runtime.subscribeNotifications((method, params) => {
@@ -800,7 +812,7 @@ export class LspHost {
       process.jobId = job.jobId;
 
       const rootUri = pathToFileURL(this.#options.workspaceRoot).href;
-      await this.#request(process, "initialize", {
+      const initializeResult = await this.#request(process, "initialize", {
         processId: null,
         clientInfo: { name: "capy", version: "0.1.0" },
         rootUri,
@@ -818,6 +830,10 @@ export class LspHost {
               },
             },
             documentHighlight: {},
+            diagnostic: {
+              dynamicRegistration: false,
+              relatedDocumentSupport: false,
+            },
             documentSymbol: {
               hierarchicalDocumentSymbolSupport: true,
             },
@@ -830,6 +846,7 @@ export class LspHost {
           },
         },
       }, descriptor.timeoutMs);
+      process.supportsPullDiagnostics = supportsPullDiagnostics(initializeResult);
       await this.#notify(process, "initialized", {});
       return process;
     } catch (error) {
@@ -859,12 +876,80 @@ export class LspHost {
     );
   }
 
+  async #refreshPullDiagnostics(path: string): Promise<void> {
+    let descriptor: LspServerDescriptor | undefined;
+    let process: LspProcess | undefined;
+    try {
+      descriptor = this.#descriptorForPath(path);
+      process = await this.#startForQuery(descriptor);
+      if (!process.supportsPullDiagnostics) {
+        this.#setStatus(descriptor.name, "ready", "pull diagnostics not supported");
+        return;
+      }
+      const captured = await this.#pullDiagnostics(process, descriptor, path);
+      this.#setStatus(
+        descriptor.name,
+        "ready",
+        captured ? "pull diagnostics ready" : "pull diagnostics yielded no fresh evidence",
+      );
+    } catch {
+      if (descriptor !== undefined && process !== undefined && this.#mayStart()) {
+        this.#setStatus(descriptor.name, "degraded", "pull diagnostics unavailable");
+      }
+    }
+  }
+
+  async #pullDiagnostics(
+    process: LspProcess,
+    descriptor: LspServerDescriptor,
+    path: string,
+  ): Promise<boolean> {
+    const uri = workspaceFileUri(this.#options.workspaceRoot, path);
+    return await this.#withOpenedDocument(
+      process,
+      descriptor,
+      path,
+      uri,
+      async (openedUri, tracked) => {
+        if (tracked === undefined) return false;
+        const result = await this.#request(
+          process,
+          "textDocument/diagnostic",
+          { textDocument: { uri: openedUri } },
+          descriptor.timeoutMs,
+        );
+        if (!this.#mayStart()) {
+          throw new Error("LSP pull diagnostics request was cancelled");
+        }
+        const workspaceIdentityDigest = this.#workspaceIdentityDigest();
+        if (workspaceIdentityDigest === undefined) return false;
+        const snapshot = normalizeLspPullDiagnostics(result, {
+          workspaceRoot: this.#options.workspaceRoot,
+          workspaceIdentityDigest,
+          server: descriptor.name,
+          uri: openedUri,
+          document: tracked.document,
+          documentVersion: tracked.version,
+          publishedAt: new Date().toISOString(),
+        });
+        if (snapshot === undefined || process.diagnosticDocuments.get(openedUri) !== tracked) {
+          return false;
+        }
+        this.#diagnosticSnapshots.set(
+          this.#diagnosticCacheKey(descriptor.name, snapshot.path),
+          snapshot,
+        );
+        return true;
+      },
+    );
+  }
+
   async #withOpenedDocument<T>(
     process: LspProcess,
     descriptor: LspServerDescriptor,
     path: string,
     uri: string,
-    request: (uri: string) => Promise<T>,
+    request: (uri: string, tracked: TrackedDiagnosticDocument | undefined) => Promise<T>,
   ): Promise<T> {
     const diagnosticDocument = await this.#readDiagnosticDocument(path);
     let text: string | undefined = diagnosticDocument?.text;
@@ -903,7 +988,7 @@ export class LspHost {
       }
     }
     try {
-      return await request(uri);
+      return await request(uri, tracked);
     } finally {
       if (opened) {
         await this.#notify(process, "textDocument/didClose", {
@@ -1349,6 +1434,13 @@ function contentLength(header: string): number | undefined {
     result = parsed;
   }
   return result;
+}
+
+function supportsPullDiagnostics(value: unknown): boolean {
+  const initialize = asRecord(value);
+  const capabilities = asRecord(initialize?.capabilities);
+  const diagnosticProvider = capabilities?.diagnosticProvider;
+  return asRecord(diagnosticProvider) !== undefined && !Array.isArray(diagnosticProvider);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
