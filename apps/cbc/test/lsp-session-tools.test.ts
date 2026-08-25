@@ -13,6 +13,7 @@ function makeSession(
   editEngineV2 = false,
   renameMutation = false,
   codeActionMutation = false,
+  formattingMutation = false,
 ): AgentSession {
   const config = structuredClone(loadConfig({ projectTrusted: true, env: {} }).config);
   config.experimental.fullLsp = fullLsp;
@@ -20,6 +21,7 @@ function makeSession(
   config.lsp.enabled = true;
   config.lsp.mutations.rename = renameMutation;
   config.lsp.mutations.codeActions = codeActionMutation;
+  config.lsp.mutations.formatting = formattingMutation;
   const runtime = {
     workspace: "/work",
     appendEvents: async (params: { events?: unknown[] }) => ({
@@ -122,5 +124,26 @@ describe("AgentSession LSP tool gate", () => {
     }
     expect(enabled.registry.has("lsp.code_action_preview")).toBe(true);
     expect(enabled.registry.activeIds()).not.toContain("lsp.code_action_preview");
+  });
+
+  test("requires the edit engine and formatting mutation gates for proposal-only formatting", () => {
+    const disabled = makeSession(false, true, "trusted-always", true, false, false, true);
+    const missingBridge = makeSession(true, false, "trusted-always", true, false, false, true);
+    const untrusted = makeSession(true, true, "untrusted", true, false, false, true);
+    const missingEditEngine = makeSession(true, true, "trusted-always", false, false, false, true);
+    const missingFormattingMutation = makeSession(true, true, "trusted-always", true, false, false);
+    const enabled = makeSession(true, true, "trusted-always", true, false, false, true);
+
+    for (const session of [
+      disabled,
+      missingBridge,
+      untrusted,
+      missingEditEngine,
+      missingFormattingMutation,
+    ]) {
+      expect(session.registry.has("lsp.format_preview")).toBe(false);
+    }
+    expect(enabled.registry.has("lsp.format_preview")).toBe(true);
+    expect(enabled.registry.activeIds()).not.toContain("lsp.format_preview");
   });
 });
