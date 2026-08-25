@@ -194,8 +194,8 @@ async function main(): Promise<number> {
     // `workspace.mode.write` add cancellation, action-bound receipts, preview
     // revision validation, live plan-mode enforcement, and Rust-authoritative
     // structured edit preview/application.
-    REQUEST_METHODS.length === 62,
-    `§20.3 plus checkpoint rollback, trust, session, cancel, capability receipts, fingerprint, live mode, structured edits, durable memory, app cursors, and replay is 62 request methods; found ${REQUEST_METHODS.length}`,
+    REQUEST_METHODS.length === 75,
+    `§20.3 plus checkpoint rollback, trust, session, cancel, capability receipts, fingerprint, live mode, structured edits, durable memory, worktree/merge primitives, memory store methods, app cursors, and replay is 75 request methods; found ${REQUEST_METHODS.length}`,
   );
 
   // ---- §20.3 notifications ----

@@ -15,6 +15,19 @@
         "vite": "^8.2.1",
       },
     },
+    "apps/capy-daemon": {
+      "name": "@cbc/capy-daemon",
+      "version": "0.1.0",
+      "bin": {
+        "capy-daemon": "./src/main.ts",
+      },
+      "dependencies": {
+        "@cbc/app-protocol": "workspace:*",
+        "@cbc/app-server": "workspace:*",
+        "@cbc/plugin-sdk": "workspace:*",
+        "@cbc/protocol": "workspace:*",
+      },
+    },
     "apps/cbc": {
       "name": "capybara-code-dev",
       "version": "0.1.0-alpha.8",
@@ -29,9 +42,31 @@
         "cbc-bench": "./src/cli.ts",
       },
     },
+    "packages/agent-graph-domain": {
+      "name": "@cbc/agent-graph-domain",
+      "version": "0.1.0",
+      "dependencies": {
+        "@cbc/protocol": "workspace:*",
+      },
+    },
     "packages/agent-kernel": {
       "name": "@cbc/agent-kernel",
       "version": "0.1.0",
+    },
+    "packages/app-protocol": {
+      "name": "@cbc/app-protocol",
+      "version": "0.1.0",
+      "dependencies": {
+        "@cbc/protocol": "workspace:*",
+      },
+    },
+    "packages/app-server": {
+      "name": "@cbc/app-server",
+      "version": "0.1.0",
+      "dependencies": {
+        "@cbc/app-protocol": "workspace:*",
+        "@cbc/protocol": "workspace:*",
+      },
     },
     "packages/config-schema": {
       "name": "@cbc/config-schema",
@@ -41,6 +76,13 @@
       "name": "@cbc/context-engine",
       "version": "0.1.0",
     },
+    "packages/edit-domain": {
+      "name": "@cbc/edit-domain",
+      "version": "0.1.0",
+      "dependencies": {
+        "@cbc/app-protocol": "workspace:*",
+      },
+    },
     "packages/evals": {
       "name": "@cbc/evals",
       "version": "0.1.0",
@@ -49,12 +91,31 @@
       "name": "@cbc/inference-domain",
       "version": "0.1.0",
     },
+    "packages/lsp-domain": {
+      "name": "@cbc/lsp-domain",
+      "version": "0.1.0",
+      "dependencies": {
+        "@cbc/edit-domain": "workspace:*",
+      },
+    },
     "packages/mcp-client": {
       "name": "@cbc/mcp-client",
       "version": "0.1.0",
     },
+    "packages/memory-service": {
+      "name": "@cbc/memory-service",
+      "version": "0.1.0",
+      "dependencies": {
+        "@cbc/context-engine": "workspace:*",
+        "@cbc/protocol": "workspace:*",
+      },
+    },
     "packages/permissions": {
       "name": "@cbc/permissions",
+      "version": "0.1.0",
+    },
+    "packages/plugin-sdk": {
+      "name": "@cbc/plugin-sdk",
       "version": "0.1.0",
     },
     "packages/protocol-ts": {
@@ -64,6 +125,13 @@
     "packages/provider-openai": {
       "name": "@cbc/provider-openai",
       "version": "0.1.0",
+    },
+    "packages/sdk-typescript": {
+      "name": "@cbc/sdk",
+      "version": "0.1.0",
+      "dependencies": {
+        "@cbc/app-protocol": "workspace:*",
+      },
     },
     "packages/session-domain": {
       "name": "@cbc/session-domain",
@@ -93,23 +161,41 @@
     "@opentui/core",
   ],
   "packages": {
+    "@cbc/agent-graph-domain": ["@cbc/agent-graph-domain@workspace:packages/agent-graph-domain"],
+
     "@cbc/agent-kernel": ["@cbc/agent-kernel@workspace:packages/agent-kernel"],
+
+    "@cbc/app-protocol": ["@cbc/app-protocol@workspace:packages/app-protocol"],
+
+    "@cbc/app-server": ["@cbc/app-server@workspace:packages/app-server"],
+
+    "@cbc/capy-daemon": ["@cbc/capy-daemon@workspace:apps/capy-daemon"],
 
     "@cbc/config-schema": ["@cbc/config-schema@workspace:packages/config-schema"],
 
     "@cbc/context-engine": ["@cbc/context-engine@workspace:packages/context-engine"],
 
+    "@cbc/edit-domain": ["@cbc/edit-domain@workspace:packages/edit-domain"],
+
     "@cbc/evals": ["@cbc/evals@workspace:packages/evals"],
 
     "@cbc/inference-domain": ["@cbc/inference-domain@workspace:packages/inference-domain"],
 
+    "@cbc/lsp-domain": ["@cbc/lsp-domain@workspace:packages/lsp-domain"],
+
     "@cbc/mcp-client": ["@cbc/mcp-client@workspace:packages/mcp-client"],
 
+    "@cbc/memory-service": ["@cbc/memory-service@workspace:packages/memory-service"],
+
     "@cbc/permissions": ["@cbc/permissions@workspace:packages/permissions"],
+
+    "@cbc/plugin-sdk": ["@cbc/plugin-sdk@workspace:packages/plugin-sdk"],
 
     "@cbc/protocol": ["@cbc/protocol@workspace:packages/protocol-ts"],
 
     "@cbc/provider-openai": ["@cbc/provider-openai@workspace:packages/provider-openai"],
+
+    "@cbc/sdk": ["@cbc/sdk@workspace:packages/sdk-typescript"],
 
     "@cbc/session-domain": ["@cbc/session-domain@workspace:packages/session-domain"],
 
