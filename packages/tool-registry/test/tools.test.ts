@@ -204,6 +204,7 @@ describe("catalog completeness (§12.2)", () => {
       "lsp.hover",
       "lsp.signature_help",
       "lsp.document_highlights",
+      "lsp.call_hierarchy",
       "lsp.code_actions",
     ];
     const disabled = nativeToolsForFeatures().map((tool) => tool.id);
@@ -246,6 +247,13 @@ describe("catalog completeness (§12.2)", () => {
       });
     }
 
+    expect(findTool("lsp.call_hierarchy")).toMatchObject({
+      authority: "read",
+      idempotency: "idempotent",
+      maxParallelism: 1,
+      resultSchemaId: "lsp.call_hierarchy.v1",
+    });
+
     const referencesSchema = findTool("lsp.references")!.parameters;
     expect(parseAndValidate(JSON.stringify({
       path: "src/widget.ts",
@@ -282,6 +290,31 @@ describe("catalog completeness (§12.2)", () => {
       character: 4,
       unexpected: true,
     }), documentHighlightsSchema).ok).toBe(false);
+
+    const callHierarchySchema = findTool("lsp.call_hierarchy")!.parameters;
+    const callHierarchyInput = {
+      path: "src/widget.ts",
+      line: 0,
+      character: 4,
+      direction: "incoming",
+    };
+    expect(parseAndValidate(JSON.stringify(callHierarchyInput), callHierarchySchema).ok).toBe(true);
+    expect(parseAndValidate(JSON.stringify({
+      ...callHierarchyInput,
+      direction: "sideways",
+    }), callHierarchySchema).ok).toBe(false);
+    expect(parseAndValidate(JSON.stringify({
+      ...callHierarchyInput,
+      offset: 257,
+    }), callHierarchySchema).ok).toBe(false);
+    expect(parseAndValidate(JSON.stringify({
+      ...callHierarchyInput,
+      limit: 33,
+    }), callHierarchySchema).ok).toBe(false);
+    expect(parseAndValidate(JSON.stringify({
+      ...callHierarchyInput,
+      unexpected: true,
+    }), callHierarchySchema).ok).toBe(false);
 
     const symbolsSchema = findTool("lsp.symbols")!.parameters;
     expect(parseAndValidate(JSON.stringify({ path: "src/widget.ts" }), symbolsSchema).ok).toBe(true);
