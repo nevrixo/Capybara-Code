@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  assertNoAmbientAuthority,
   validateNarrowing,
   type EffectivePluginOperation,
 } from "../src/index.ts";
@@ -102,5 +103,26 @@ describe("plugin authority monotonicity", () => {
     expect(result.ok).toBe(false);
     expect(original.workspaceRead).toEqual(["package.json", "src/**", "docs/**"]);
     expect(original.toolIds).toEqual(["fs.read", "fs.edit", "process.run"]);
+  });
+
+  test("rejects ambient network or extra host keys on the default isolate grant", () => {
+    const empty = {
+      workspaceRead: [],
+      workspaceWrite: [],
+      credentialScopes: [],
+      toolIds: [],
+      contextCandidateIds: [],
+      network: "deny" as const,
+      timeoutMs: 1_000,
+      outputBytes: 1_024,
+      maxNodes: 1,
+      risk: "R0" as const,
+      sandbox: "strict" as const,
+    };
+    expect(() => assertNoAmbientAuthority(empty)).not.toThrow();
+    expect(() => assertNoAmbientAuthority({ ...empty, workspaceRead: ["src/**"] })).not.toThrow();
+    expect(() => assertNoAmbientAuthority({ ...empty, network: "allow" })).toThrow(/network must be deny/);
+    expect(() => assertNoAmbientAuthority({ ...empty, workspaceWrite: ["src/**"] })).toThrow(/workspace write/);
+    expect(() => assertNoAmbientAuthority(empty, { fetch: () => undefined })).toThrow(/unexpected authority/);
   });
 });

@@ -2,9 +2,11 @@ import { describe, expect, test } from "bun:test";
 
 import {
   PluginCircuitBreaker,
+  dispatchAfterHooks,
   dispatchBeforeHooks,
   sortBeforeHooks,
   type EffectivePluginOperation,
+  type RegisteredAfterHook,
   type RegisteredBeforeHook,
 } from "../src/index.ts";
 
@@ -32,6 +34,16 @@ function hook(
   invoke: RegisteredBeforeHook["invoke"],
 ): RegisteredBeforeHook {
   return { pluginId, scope, priority, hook: "before.tool", ordinal, invoke };
+}
+
+function afterHook(
+  pluginId: string,
+  scope: RegisteredAfterHook["scope"],
+  priority: RegisteredAfterHook["priority"],
+  ordinal: number,
+  invoke: RegisteredAfterHook["invoke"],
+): RegisteredAfterHook {
+  return { pluginId, scope, priority, hook: "after.tool", ordinal, invoke };
 }
 
 describe("plugin before-hook dispatcher", () => {
@@ -277,6 +289,88 @@ describe("plugin before-hook dispatcher", () => {
       trace: [{ pluginId: "alpha/user", status: "circuit-open" }],
     });
   });
+});
 
+describe("plugin after-hook dispatcher", () => {
+  test("after hook failure does not throw and records a warning", async () => {
+    const calls: string[] = [];
+    const result = await dispatchAfterHooks([
+      afterHook("alpha/user", "user", "critical", 0, async () => {
+        calls.push("critical");
+        throw new Error("observer crashed");
+      }),
+      afterHook("beta/user", "user", "ordinary", 0, async () => {
+        calls.push("late");
+        return { action: "continue" };
+      }),
+    ], {
+      invocationId: "inv_after_failure",
+      operation: operation(),
+      result: { ok: true, durationMs: 12 },
+    });
 
+    expect(calls).toEqual(["critical", "late"]);
+    expect(result).toMatchObject({
+      warnings: [{ pluginId: "alpha/user", hook: "after.tool", code: "PLUGIN_PROTOCOL_ERROR" }],
+      trace: [
+        { pluginId: "alpha/user", status: "failed" },
+        { pluginId: "beta/user", status: "continued" },
+      ],
+    });
+  });
+
+  test("after hook timeout is fail-open and later hooks still run", async () => {
+    const calls: string[] = [];
+    const result = await dispatchAfterHooks([
+      afterHook("alpha/user", "user", "ordinary", 0, async () => {
+        calls.push("slow");
+        await new Promise((resolve) => setTimeout(resolve, 75));
+        return { action: "continue" };
+      }),
+      afterHook("beta/user", "user", "ordinary", 0, async () => {
+        calls.push("late");
+        return { action: "continue" };
+      }),
+    ], {
+      invocationId: "inv_after_timeout",
+      operation: operation(),
+      result: { ok: false, code: "INTERNAL" },
+    }, {
+      perHookTimeoutMs: 20,
+      aggregateTimeoutMs: 200,
+    });
+
+    expect(calls).toEqual(["slow", "late"]);
+    expect(result).toMatchObject({
+      warnings: [{ pluginId: "alpha/user", hook: "after.tool", code: "PLUGIN_TIMEOUT" }],
+      trace: [
+        { pluginId: "alpha/user", status: "failed" },
+        { pluginId: "beta/user", status: "continued" },
+      ],
+    });
+  });
+
+  test("invalid after-hook returns cannot change authority and become warnings", async () => {
+    let seenNetwork: string | undefined;
+    const result = await dispatchAfterHooks([
+      afterHook("alpha/user", "user", "ordinary", 0, async () => ({
+        action: "narrow",
+        reason: "attempted widening",
+        constraints: { network: "allow" },
+      })),
+      afterHook("beta/user", "user", "ordinary", 0, async (input) => {
+        seenNetwork = input.operation.network;
+        return { action: "continue" };
+      }),
+    ], {
+      invocationId: "inv_after_narrow",
+      operation: operation(),
+      result: { ok: true },
+    });
+
+    expect(seenNetwork).toBe("allow");
+    expect(result.warnings).toEqual([
+      { pluginId: "alpha/user", hook: "after.tool", code: "PLUGIN_PROTOCOL_ERROR" },
+    ]);
+  });
 });

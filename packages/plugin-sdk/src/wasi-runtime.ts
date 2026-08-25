@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { createContext, runInContext } from "node:vm";
 import { pathToFileURL } from "node:url";
 
-import type { EffectivePluginOperation } from "./authority.ts";
+import { assertNoAmbientAuthority, type EffectivePluginOperation } from "./authority.ts";
 
 export class WasiRuntimeError extends Error {
   readonly code: string;
@@ -30,6 +30,8 @@ export interface IsolatedPluginInvoke {
   readonly timeoutMs: number;
   readonly grants: EffectivePluginOperation;
   readonly sourceText?: string;
+  /** Host-supplied granted workspace read. Never ambient filesystem access. */
+  readonly readFile?: (path: string) => string;
 }
 
 export interface IsolatedPluginResult {
@@ -42,6 +44,7 @@ export interface IsolatedPluginResult {
  * Run a WASI-kind plugin with no ambient secrets or workspace access.
  */
 export async function invokeIsolatedPlugin(input: IsolatedPluginInvoke): Promise<IsolatedPluginResult> {
+  assertIsolateAuthority(input.grants);
   const started = Date.now();
   const source = input.sourceText ?? readEntrypoint(input.entrypoint);
   if (input.entrypoint.endsWith(".wasm") || source.startsWith("\0asm")) {
@@ -76,7 +79,10 @@ function invokeJsSandbox(source: string, input: IsolatedPluginInvoke): unknown {
         throw new WasiRuntimeError("PLUGIN_INVALID_PATH", "read path must be a string");
       }
       assertGrantedRead(path, input.grants);
-      throw new WasiRuntimeError("PLUGIN_CAPABILITY_DENIED", "workspace read is not wired in this isolate");
+      if (input.readFile === undefined) {
+        throw new WasiRuntimeError("PLUGIN_CAPABILITY_DENIED", "workspace read is not granted to this isolate");
+      }
+      return input.readFile(path);
     },
     write: (_path: unknown) => {
       throw new WasiRuntimeError("PLUGIN_CAPABILITY_DENIED", "workspace write is denied by default");
@@ -85,6 +91,7 @@ function invokeJsSandbox(source: string, input: IsolatedPluginInvoke): unknown {
       throw new WasiRuntimeError("PLUGIN_CAPABILITY_DENIED", "network is denied");
     },
   });
+  assertIsolateAuthority(input.grants, host);
   const context = createContext({
     capy: host,
     exports: {},
@@ -135,6 +142,9 @@ async function invokeWasm(source: string | Buffer, input: IsolatedPluginInvoke):
       fs_read: () => {
         throw new WasiRuntimeError("PLUGIN_CAPABILITY_DENIED", "wasm filesystem is denied by default");
       },
+      fs_write: () => {
+        throw new WasiRuntimeError("PLUGIN_CAPABILITY_DENIED", "wasm filesystem write is denied");
+      },
       net_connect: () => {
         throw new WasiRuntimeError("PLUGIN_CAPABILITY_DENIED", "wasm network is denied");
       },
@@ -156,7 +166,13 @@ async function invokeWasm(source: string | Buffer, input: IsolatedPluginInvoke):
   if (typeof exported !== "function") {
     throw new WasiRuntimeError("PLUGIN_PROTOCOL_ERROR", "wasm module does not export the requested method");
   }
-  return exported();
+  try {
+    return exported();
+  } catch (error) {
+    throw error instanceof WasiRuntimeError
+      ? error
+      : new WasiRuntimeError("PLUGIN_EXIT", error instanceof Error ? error.message : String(error));
+  }
 }
 
 function deniedWasi(): Record<string, () => number> {
@@ -173,6 +189,17 @@ function resolveHandler(exported: unknown, method: string): (params: unknown, ho
     return candidate as (params: unknown, host: unknown) => unknown;
   }
   throw new WasiRuntimeError("PLUGIN_PROTOCOL_ERROR", `plugin does not export '${method}'`);
+}
+
+function assertIsolateAuthority(grants: EffectivePluginOperation, host?: object): void {
+  try {
+    assertNoAmbientAuthority(grants, host);
+  } catch (error) {
+    throw new WasiRuntimeError(
+      "PLUGIN_CAPABILITY_DENIED",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
 }
 
 function assertGrantedRead(path: string, grants: EffectivePluginOperation): void {

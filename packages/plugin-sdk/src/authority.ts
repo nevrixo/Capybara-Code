@@ -48,6 +48,49 @@ export type NarrowingResult =
   | { readonly ok: true; readonly effective: EffectivePluginOperation }
   | { readonly ok: false; readonly violations: readonly NarrowingViolation[] };
 
+export const PLUGIN_ISOLATE_HOST_KEYS = [
+  "pluginId",
+  "method",
+  "params",
+  "grants",
+  "log",
+  "env",
+  "read",
+  "write",
+  "network",
+] as const;
+
+export class PluginAuthorityError extends Error {
+  readonly code = "PLUGIN_AMBIENT_AUTHORITY";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "PluginAuthorityError";
+  }
+}
+
+/**
+ * Default isolate grants are empty and network-deny. Host objects may not grow
+ * extra capability keys; workspace write and network stay denied.
+ */
+export function assertNoAmbientAuthority(
+  grants: EffectivePluginOperation,
+  host?: object,
+): void {
+  if (grants.network !== "deny") {
+    throw new PluginAuthorityError("plugin isolate network must be deny");
+  }
+  if (grants.workspaceWrite.length > 0) {
+    throw new PluginAuthorityError("plugin isolate workspace write must be empty");
+  }
+  if (host === undefined) return;
+  for (const key of Object.keys(host)) {
+    if (!(PLUGIN_ISOLATE_HOST_KEYS as readonly string[]).includes(key)) {
+      throw new PluginAuthorityError("plugin isolate host exposes unexpected authority");
+    }
+  }
+}
+
 /**
  * Apply a plugin-proposed narrowing only if every proposed field is a subset or
  * stricter bound of the host operation. A single widening invalidates the whole

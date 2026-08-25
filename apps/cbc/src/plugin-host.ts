@@ -1,26 +1,38 @@
 /**
  * In-process plugin hook bus. Isolated WASI/stdio workers live in the daemon
  * supervisor; this host only applies already-admitted, monotonic hook results
- * before a tool executes in the embedded CLI.
+ * before a tool executes in the embedded CLI. After hooks are fail-open.
  */
 
 import {
+  dispatchAfterHooks,
   dispatchBeforeHooks,
+  type AfterHookInvocation,
   type BeforeHookInvocation,
   type EffectivePluginOperation,
+  type RegisteredAfterHook,
   type RegisteredBeforeHook,
 } from "@cbc/plugin-sdk";
 import type { ProposedAction } from "@cbc/permissions";
 
 export class PluginHookBus {
   readonly #hooks: RegisteredBeforeHook[];
+  readonly #afterHooks: RegisteredAfterHook[];
 
-  constructor(hooks: readonly RegisteredBeforeHook[] = []) {
+  constructor(
+    hooks: readonly RegisteredBeforeHook[] = [],
+    afterHooks: readonly RegisteredAfterHook[] = [],
+  ) {
     this.#hooks = [...hooks];
+    this.#afterHooks = [...afterHooks];
   }
 
   register(hook: RegisteredBeforeHook): void {
     this.#hooks.push(hook);
+  }
+
+  registerAfter(hook: RegisteredAfterHook): void {
+    this.#afterHooks.push(hook);
   }
 
   async beforeTool(action: ProposedAction): Promise<void> {
@@ -36,6 +48,18 @@ export class PluginHookBus {
     if (outcome.action === "deny") {
       throw new Error(`plugin denied ${action.toolId}: ${outcome.reason}`);
     }
+  }
+
+  async afterTool(action: ProposedAction, result: AfterHookInvocation["result"]): Promise<void> {
+    if (this.#afterHooks.length === 0) return;
+    const invocation: AfterHookInvocation = {
+      invocationId: action.callId,
+      operation: operationFromAction(action),
+      result,
+    };
+    await dispatchAfterHooks(this.#afterHooks, invocation, {
+      ordinaryFailure: "open-with-warning",
+    });
   }
 }
 

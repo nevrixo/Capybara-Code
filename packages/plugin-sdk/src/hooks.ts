@@ -1,9 +1,10 @@
 /**
- * Deterministic before-hook dispatch semantics.
+ * Deterministic before- and after-hook dispatch semantics.
  *
  * This module is transport- and runtime-neutral. A WASI or stdio supervisor
  * supplies the invocation function, while this layer fixes ordering, budgets,
- * failure policy, and monotonic authority application.
+ * failure policy, and monotonic authority application. After/observation hooks
+ * are fail-open and cannot change authority or rewrite a receipt.
  */
 
 import {
@@ -43,6 +44,26 @@ export interface RegisteredBeforeHook {
   readonly hook: PluginHookKind;
   readonly ordinal: number;
   readonly invoke: (input: BeforeHookInvocation) => Promise<unknown>;
+}
+
+export interface AfterHookInvocation {
+  readonly invocationId: string;
+  readonly operation: EffectivePluginOperation;
+  readonly result: { readonly ok: boolean; readonly code?: string; readonly durationMs?: number };
+}
+
+export interface RegisteredAfterHook {
+  readonly pluginId: string;
+  readonly scope: PluginInstallScope;
+  readonly priority: PluginHookPriority;
+  readonly hook: PluginHookKind;
+  readonly ordinal: number;
+  readonly invoke: (input: AfterHookInvocation) => Promise<unknown>;
+}
+
+export interface AfterHookDispatchOutcome {
+  readonly warnings: readonly HookWarning[];
+  readonly trace: readonly HookTrace[];
 }
 
 export interface HookDispatchOptions {
@@ -90,6 +111,15 @@ export class PluginHookDispatchError extends Error {
   }
 }
 
+interface RegisteredHookIdentity {
+  readonly pluginId: string;
+  readonly scope: PluginInstallScope;
+  readonly priority: PluginHookPriority;
+  readonly hook: PluginHookKind;
+  readonly ordinal: number;
+  readonly invoke: unknown;
+}
+
 /**
  * Plan §13.14 ordering: builtin policy hooks, user critical, project critical,
  * user ordinary, project ordinary, then bytewise plugin id and manifest ordinal.
@@ -97,6 +127,18 @@ export class PluginHookDispatchError extends Error {
 export function sortBeforeHooks(
   registrations: readonly RegisteredBeforeHook[],
 ): readonly RegisteredBeforeHook[] {
+  return sortRegisteredHooks(registrations);
+}
+
+export function sortAfterHooks(
+  registrations: readonly RegisteredAfterHook[],
+): readonly RegisteredAfterHook[] {
+  return sortRegisteredHooks(registrations);
+}
+
+function sortRegisteredHooks<T extends RegisteredHookIdentity>(
+  registrations: readonly T[],
+): readonly T[] {
   const unique = new Set<string>();
   for (const registration of registrations) {
     validateRegistration(registration);
@@ -271,6 +313,68 @@ export async function dispatchBeforeHooks(
   return { action: "continue", effective, annotations, warnings, trace };
 }
 
+/**
+ * Observation hooks run after a receipt exists. Failures become warnings; the
+ * caller keeps the original result. After hooks cannot deny, ask, or narrow.
+ */
+export async function dispatchAfterHooks(
+  registrations: readonly RegisteredAfterHook[],
+  input: AfterHookInvocation,
+  options: HookDispatchOptions = {},
+): Promise<AfterHookDispatchOutcome> {
+  validateAfterInvocation(input);
+  const configuration = normalizeAfterOptions(options);
+  const ordered = sortAfterHooks(registrations);
+  const warnings: HookWarning[] = [];
+  const trace: HookTrace[] = [];
+  const startedAt = configuration.now();
+  const operation = cloneOperation(input.operation);
+  const result = freezeAfterResult(input.result);
+
+  for (const registration of ordered) {
+    const remaining = configuration.aggregateTimeoutMs - (configuration.now() - startedAt);
+    if (remaining <= 0) {
+      recordAfterFailure(registration, "PLUGIN_TIMEOUT", warnings, trace);
+      continue;
+    }
+
+    let settlement: { readonly breaker: PluginCircuitBreaker; readonly permit: PluginCircuitPermit } | undefined;
+    const circuitBreaker = configuration.circuitBreaker;
+    if (circuitBreaker !== undefined) {
+      const admission = circuitBreaker.admit(registration.pluginId);
+      if (admission.kind === "blocked") {
+        trace.push({ pluginId: registration.pluginId, hook: registration.hook, status: "circuit-open" });
+        warnings.push({ pluginId: registration.pluginId, hook: registration.hook, code: "PLUGIN_CIRCUIT_OPEN" });
+        continue;
+      }
+      settlement = { breaker: circuitBreaker, permit: admission.permit };
+    }
+
+    try {
+      parseAfterResult(await withTimeout(
+        Promise.resolve().then(() => registration.invoke({
+          invocationId: input.invocationId,
+          operation,
+          result,
+        })),
+        Math.min(configuration.perHookTimeoutMs, remaining),
+      ));
+    } catch (error) {
+      if (settlement !== undefined) {
+        settlement.breaker.recordFailure(settlement.permit);
+      }
+      const code = error instanceof HookTimeoutError ? "PLUGIN_TIMEOUT" : "PLUGIN_PROTOCOL_ERROR";
+      recordAfterFailure(registration, code, warnings, trace);
+      continue;
+    }
+
+    settleCircuitSuccess(settlement);
+    trace.push({ pluginId: registration.pluginId, hook: registration.hook, status: "continued" });
+  }
+
+  return { warnings, trace };
+}
+
 function circuitOpenOutcome(
   registration: RegisteredBeforeHook,
   effective: EffectivePluginOperation,
@@ -413,7 +517,39 @@ function parseAnnotations(value: unknown): readonly HookAnnotation[] {
   });
 }
 
-function validateRegistration(value: RegisteredBeforeHook): void {
+function recordAfterFailure(
+  registration: RegisteredAfterHook,
+  code: HookWarning["code"],
+  warnings: HookWarning[],
+  trace: HookTrace[],
+): void {
+  trace.push({ pluginId: registration.pluginId, hook: registration.hook, status: "failed" });
+  warnings.push({ pluginId: registration.pluginId, hook: registration.hook, code });
+}
+
+function parseAfterResult(value: unknown): void {
+  if (value === undefined) return;
+  const decision = record(value, "hook decision");
+  if (decision.action !== "continue") {
+    throw new PluginHookDispatchError("after hooks cannot change authority");
+  }
+  rejectUnknown(decision, ["action", "annotations"], "continue decision");
+  if (decision.annotations !== undefined) {
+    parseAnnotations(decision.annotations);
+  }
+}
+
+function freezeAfterResult(
+  result: AfterHookInvocation["result"],
+): AfterHookInvocation["result"] {
+  return Object.freeze({
+    ok: result.ok,
+    ...(result.code === undefined ? {} : { code: result.code }),
+    ...(result.durationMs === undefined ? {} : { durationMs: result.durationMs }),
+  });
+}
+
+function validateRegistration(value: RegisteredHookIdentity): void {
   if (!/^[a-z0-9][a-z0-9._-]{0,63}\/[a-z0-9][a-z0-9._-]{0,63}$/u.test(value.pluginId)) {
     throw new PluginHookDispatchError("pluginId must be a canonical publisher/name identifier");
   }
@@ -442,9 +578,33 @@ function validateInvocation(input: BeforeHookInvocation): void {
   }
 }
 
+function validateAfterInvocation(input: AfterHookInvocation): void {
+  validateInvocation(input);
+  const result = record(input.result, "after hook result");
+  rejectUnknown(result, ["ok", "code", "durationMs"], "after hook result");
+  if (typeof result.ok !== "boolean") {
+    throw new PluginHookDispatchError("after hook result.ok must be a boolean");
+  }
+  if (result.code !== undefined) {
+    boundedText(result.code, "after hook result code", 128);
+  }
+  if (result.durationMs !== undefined) {
+    if (!Number.isSafeInteger(result.durationMs) || typeof result.durationMs !== "number" || result.durationMs < 0) {
+      throw new PluginHookDispatchError("after hook result durationMs must be a bounded non-negative integer");
+    }
+  }
+}
+
 type NormalizedHookDispatchOptions = Required<Omit<HookDispatchOptions, "circuitBreaker">> & {
   readonly circuitBreaker?: PluginCircuitBreaker;
 };
+
+function normalizeAfterOptions(options: HookDispatchOptions): NormalizedHookDispatchOptions {
+  return normalizeOptions({
+    ...options,
+    perHookTimeoutMs: options.perHookTimeoutMs ?? 5_000,
+  });
+}
 
 function normalizeOptions(options: HookDispatchOptions): NormalizedHookDispatchOptions {
   if (options.circuitBreaker !== undefined && !(options.circuitBreaker instanceof PluginCircuitBreaker)) {
@@ -468,7 +628,7 @@ function normalizeOptions(options: HookDispatchOptions): NormalizedHookDispatchO
   return normalized;
 }
 
-function hookGroup(value: RegisteredBeforeHook): number {
+function hookGroup(value: RegisteredHookIdentity): number {
   if (value.scope === "builtin") return 0;
   if (value.priority === "critical" && value.scope === "user") return 1;
   if (value.priority === "critical" && value.scope === "project") return 2;
