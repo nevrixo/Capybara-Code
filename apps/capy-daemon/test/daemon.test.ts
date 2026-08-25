@@ -287,6 +287,29 @@ describe("plugin authority", () => {
       proposedConstraints: { network: "allow" },
     })).rejects.toMatchObject({ code: "PLUGIN_AUTHORITY_ESCALATION" });
   });
+
+  test("wasi plugins run without ambient secrets", async () => {
+    const dir = runtimeDir();
+    const entry = join(dir, "plugin.js");
+    writeFileSync(entry, "function handle(params, host) { return { env: host.env, method: params.ok }; }\n");
+    const supervisor = new PluginSupervisor();
+    supervisor.install({
+      pluginId: "acme/narrow-only",
+      scope: "user",
+      cwd: dir,
+      manifest: pluginManifest({
+        runtime: { kind: "wasi", entrypoint: "plugin.js", protocolVersion: "1.0.0" },
+      }),
+      command: "true",
+    });
+    const result = await supervisor.invoke({
+      pluginId: "acme/narrow-only",
+      method: "handle",
+      params: { ok: true },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.result).toEqual({ env: {}, method: true });
+  });
 });
 
 describe("CapybaraDaemon with fake backend", () => {

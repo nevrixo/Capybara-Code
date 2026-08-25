@@ -11,3 +11,4 @@ export * from "./hooks.ts";
 export * from "./circuit.ts";
 export * from "./reentrancy.ts";
 export * from "./define.ts";
+export * from "./wasi-runtime.ts";

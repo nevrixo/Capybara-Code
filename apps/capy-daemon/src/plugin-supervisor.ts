@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 
 import {
   PluginCircuitBreaker,
+  invokeIsolatedPlugin,
   validateNarrowing,
   validatePluginManifest,
   type EffectivePluginOperation,
@@ -142,7 +143,9 @@ export class PluginSupervisor {
 
     const started = this.#now();
     try {
-      const result = await this.#callWorker(managed, request, admission.permit);
+      const result = managed.spec.manifest.runtime.kind === "wasi"
+        ? await this.#callWasi(managed, request)
+        : await this.#callWorker(managed, request, admission.permit);
       this.#circuit.recordSuccess(admission.permit);
       return {
         ok: true,
@@ -162,6 +165,23 @@ export class PluginSupervisor {
     }
     this.#plugins.clear();
     return count;
+  }
+
+  async #callWasi(
+    managed: ManagedPlugin,
+    request: PluginInvokeRequest,
+  ): Promise<unknown> {
+    const invoked = await invokeIsolatedPlugin({
+      pluginId: managed.spec.pluginId,
+      entrypoint: managed.spec.cwd === undefined
+        ? managed.spec.manifest.runtime.entrypoint
+        : `${managed.spec.cwd.replace(/\\/g, "/")}/${managed.spec.manifest.runtime.entrypoint}`,
+      method: request.method,
+      params: request.params,
+      timeoutMs: request.timeoutMs ?? this.#defaultTimeoutMs,
+      grants: request.operation ?? defaultOperation(),
+    });
+    return invoked.result;
   }
 
   async #callWorker(
