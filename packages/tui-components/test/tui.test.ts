@@ -831,6 +831,7 @@ describe("timeline blocks (§6.4, §6.7–§6.12, AC-06)", () => {
     expect(toolActionLabel("lsp.code_actions")).toBe("Read");
     expect(toolActionLabel("lsp.code_action_preview")).toBe("Preview");
     expect(toolActionLabel("lsp.format_preview")).toBe("Preview");
+    expect(toolActionLabel("lsp.range_format_preview")).toBe("Preview");
     expect(toolActionLabel("lsp.rename_preview")).toBe("Preview");
     expect(toolActionLabel("memory.search")).toBe("Search");
     expect(toolActionLabel("memory.remember")).toBe("Remember");
