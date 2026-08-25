@@ -1781,6 +1781,7 @@ export class RuntimeToolExecutor implements ToolExecutor {
 
       case "lsp.diagnostics":
       case "lsp.symbols":
+      case "lsp.workspace_symbols":
       case "lsp.definition":
       case "lsp.declaration":
       case "lsp.type_definition":
