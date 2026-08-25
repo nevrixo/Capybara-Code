@@ -357,6 +357,14 @@
         "git.log",
         "git.show",
         "git.checkpoint",
+        "worktree.create",
+        "worktree.list",
+        "worktree.inspect",
+        "worktree.status",
+        "worktree.diff",
+        "worktree.remove",
+        "worktree.reconcile",
+        "merge.preview",
         "credential.store",
         "credential.lease",
         "credential.delete",
@@ -372,6 +380,11 @@
         "session.delete",
         "memory.search",
         "memory.remember",
+        "memory.list",
+        "memory.get",
+        "memory.forget",
+        "memory.resolve_contest",
+        "memory.verify",
         "app.client.upsert",
         "app.subscription.create",
         "app.subscription.ack",
@@ -418,7 +431,10 @@
         "fs.delete",
         "fs.edit",
         "fs.transaction.rollback_to_checkpoint",
-        "git.checkpoint"
+        "git.checkpoint",
+        "worktree.create",
+        "worktree.remove",
+        "worktree.reconcile"
       ]
     },
     "toolErrorCode": {

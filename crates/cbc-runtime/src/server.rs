@@ -742,6 +742,15 @@ pub fn dispatch(state: &RuntimeState, request: &RpcRequest) -> Option<Result<Val
         "git.show" => handlers::git::show(state, params),
         "git.checkpoint" => handlers::git::checkpoint(state, params),
 
+        "worktree.create" => handlers::worktree::create(state, params),
+        "worktree.list" => handlers::worktree::list(state),
+        "worktree.inspect" => handlers::worktree::inspect(state, params),
+        "worktree.status" => handlers::worktree::status(state, params),
+        "worktree.diff" => handlers::worktree::diff(state, params),
+        "worktree.remove" => handlers::worktree::remove(state, params),
+        "worktree.reconcile" => handlers::worktree::reconcile(state, params),
+        "merge.preview" => handlers::worktree::merge_preview(state, params),
+
         "credential.store" => handlers::credential::store(state, params),
         "credential.lease" => handlers::credential::lease(state, params),
         "credential.delete" => handlers::credential::delete(state, params),
@@ -2727,5 +2736,107 @@ mod tests {
         .expect("commit dispatched")
         .expect("commit succeeds");
         assert_eq!(std::fs::read_to_string(path).unwrap(), "new\n");
+    }
+
+    #[test]
+    fn edit_apply_rejects_stale_expected_plan_digest() {
+        let (_dir, state) = initialized();
+        set_trust(&state, "trusted-always");
+        let path = state
+            .require_workspace()
+            .unwrap()
+            .root()
+            .join("edit-stale.txt");
+        std::fs::write(&path, "old\n").unwrap();
+        let revision = cbc_fs::hash_bytes(b"old\n");
+        let workspace_identity = state.workspace_id.lock().expect("workspace id").clone();
+        let plan = json!({
+            "schemaVersion": "1.0",
+            "id": "edp_stale",
+            "source": "user",
+            "workspaceIdentityDigest": workspace_identity,
+            "sessionId": "test-session",
+            "operations": [{
+                "kind": "replace_range",
+                "operationId": "edo_stale",
+                "path": "edit-stale.txt",
+                "baseRevision": revision,
+                "range": {
+                    "start": { "line": 1, "column": 1 },
+                    "end": { "line": 1, "column": 4 },
+                    "encoding": "utf16"
+                },
+                "replacement": "new"
+            }],
+            "conflictPolicy": "fail",
+            "createdAt": "2026-08-24T00:00:00Z"
+        });
+
+        let begin = begin_transaction(&state).expect("transaction begins");
+        let transaction_id = begin["transactionId"].as_str().expect("transaction id");
+        let receipt = begin["capabilityReceipt"]
+            .as_str()
+            .expect("capability receipt");
+        let error = dispatch(
+            &state,
+            &request(
+                "fs.edit",
+                json!({
+                    "transactionId": transaction_id,
+                    "plan": plan,
+                    "expectedPlanDigest": "sha256:not-the-real-digest",
+                    "capabilityReceipt": receipt,
+                    "capabilitySessionId": "test-session",
+                    "capabilityActionHash": "test-action",
+                }),
+            ),
+        )
+        .expect("edit dispatched")
+        .expect_err("stale digest must fail");
+        assert_eq!(error.code, error_codes::INVALID_ARGUMENT);
+        assert_eq!(
+            error.data.as_ref().and_then(|data| data.get("taxonomy")),
+            Some(&json!("HASH_MISMATCH"))
+        );
+        assert_eq!(
+            error.data.as_ref().and_then(|data| data.get("editCode")),
+            Some(&json!("EDIT_PREVIEW_STALE"))
+        );
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "old\n");
+    }
+
+    #[test]
+    fn worktree_create_refuses_non_git_workspace() {
+        let (_dir, state) = initialized();
+        set_trust(&state, "trusted-always");
+        let data = state.data_dir.lock().expect("data").clone();
+        let target = data.join("worktrees/demo/repo");
+        let receipt = issue_capability(
+            &state,
+            "worktree.create",
+            None,
+            &[],
+            None,
+            &[&target.to_string_lossy()],
+            "deny",
+        );
+        let error = dispatch(
+            &state,
+            &request(
+                "worktree.create",
+                json!({
+                    "path": "worktrees/demo/repo",
+                    "commit": "HEAD",
+                    "requireClean": true,
+                    "allowLongPath": true,
+                    "capabilityReceipt": receipt,
+                    "capabilitySessionId": "test-session",
+                    "capabilityActionHash": "test-action",
+                }),
+            ),
+        )
+        .expect("worktree.create dispatched")
+        .expect_err("non-git must refuse");
+        assert_eq!(error.code, error_codes::NOT_FOUND);
     }
 }

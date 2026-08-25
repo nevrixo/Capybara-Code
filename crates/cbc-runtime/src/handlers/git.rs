@@ -63,6 +63,11 @@ fn git_error(state: &RuntimeState, error: cbc_git::GitError) -> RpcError {
                 }),
             )
         }
+        other => RpcError::taxonomy(
+            error_codes::INTERNAL_ERROR,
+            "INTERNAL",
+            state.safe_text(&other.to_string()),
+        ),
     }
 }
 

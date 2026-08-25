@@ -11,4 +11,5 @@ pub mod process;
 pub mod session;
 pub mod transaction;
 pub mod update;
+pub mod worktree;
 pub mod workspace;

@@ -44,6 +44,14 @@ pub const REQUEST_METHODS: &[&str] = &[
     "git.log",
     "git.show",
     "git.checkpoint",
+    "worktree.create",
+    "worktree.list",
+    "worktree.inspect",
+    "worktree.status",
+    "worktree.diff",
+    "worktree.remove",
+    "worktree.reconcile",
+    "merge.preview",
     "credential.store",
     "credential.lease",
     "credential.delete",
@@ -59,6 +67,11 @@ pub const REQUEST_METHODS: &[&str] = &[
     "session.delete",
     "memory.search",
     "memory.remember",
+    "memory.list",
+    "memory.get",
+    "memory.forget",
+    "memory.resolve_contest",
+    "memory.verify",
     "app.client.upsert",
     "app.subscription.create",
     "app.subscription.ack",
@@ -113,6 +126,9 @@ pub const MUTATING_METHODS: &[&str] = &[
     // the same reason to care either way.
     "fs.transaction.rollback_to_checkpoint",
     "git.checkpoint",
+    "worktree.create",
+    "worktree.remove",
+    "worktree.reconcile",
 ];
 
 pub fn is_mutating(method: &str) -> bool {
@@ -134,7 +150,7 @@ mod tests {
         // (P0-04) lets a client cancel an in-flight request. `fs.fingerprint`
         // validates a preview revision without promoting it to write authority;
         // fs.edit.preview and fs.edit add the Rust-authoritative structured edit path.
-        assert_eq!(REQUEST_METHODS.len(), 62);
+        assert_eq!(REQUEST_METHODS.len(), 75);
         for m in [
             "runtime.initialize",
             "workspace.mode.write",
@@ -147,11 +163,16 @@ mod tests {
             "fs.edit",
             "process.run",
             "git.checkpoint",
+            "worktree.create",
+            "worktree.list",
+            "merge.preview",
             "credential.lease",
             "session.append",
             "artifact.create",
             "memory.search",
             "memory.remember",
+            "memory.list",
+            "memory.verify",
             "app.subscription.ack",
             "app.subscription.replay",
             "update.verify",
@@ -194,8 +215,11 @@ mod tests {
         assert!(is_mutating("fs.delete"));
         assert!(is_mutating("fs.edit"));
         assert!(is_mutating("fs.transaction.rollback_to_checkpoint"));
+        assert!(is_mutating("worktree.create"));
+        assert!(is_mutating("worktree.remove"));
         assert!(!is_mutating("fs.read"));
         assert!(!is_mutating("fs.transaction.rollback"));
         assert!(!is_mutating("git.status"));
+        assert!(!is_mutating("worktree.list"));
     }
 }

@@ -154,6 +154,8 @@ export interface EditApplyRequest extends EditPreviewRequest {
   readonly capabilityReceipt: string;
   readonly capabilitySessionId: string;
   readonly capabilityActionHash: string;
+  /** Preview digest that must match the fresh Rust preflight before staging. */
+  readonly expectedPlanDigest?: string;
 }
 
 export interface StructuredEditResolution {
@@ -248,6 +250,14 @@ export const REQUEST_METHODS = [
   "git.log",
   "git.show",
   "git.checkpoint",
+  "worktree.create",
+  "worktree.list",
+  "worktree.inspect",
+  "worktree.status",
+  "worktree.diff",
+  "worktree.remove",
+  "worktree.reconcile",
+  "merge.preview",
   "credential.store",
   "credential.lease",
   "credential.delete",
@@ -263,6 +273,11 @@ export const REQUEST_METHODS = [
   "session.delete",
   "memory.search",
   "memory.remember",
+  "memory.list",
+  "memory.get",
+  "memory.forget",
+  "memory.resolve_contest",
+  "memory.verify",
   "app.client.upsert",
   "app.subscription.create",
   "app.subscription.ack",
