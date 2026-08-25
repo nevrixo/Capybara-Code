@@ -824,6 +824,15 @@ describe("timeline blocks (§6.4, §6.7–§6.12, AC-06)", () => {
     expect(toolActionLabel("process.run")).toBe("Run");
     expect(toolActionLabel("shell.run")).toBe("Shell");
     expect(toolActionLabel("mcp.call")).toBe("MCP");
+    expect(toolActionLabel("lsp.diagnostics")).toBe("Read");
+    expect(toolActionLabel("lsp.symbols")).toBe("Find");
+    expect(toolActionLabel("lsp.workspace_symbols")).toBe("Search");
+    expect(toolActionLabel("lsp.references")).toBe("Find");
+    expect(toolActionLabel("lsp.code_actions")).toBe("Read");
+    expect(toolActionLabel("lsp.code_action_preview")).toBe("Preview");
+    expect(toolActionLabel("lsp.rename_preview")).toBe("Preview");
+    expect(toolActionLabel("memory.search")).toBe("Search");
+    expect(toolActionLabel("memory.remember")).toBe("Remember");
 
     // The two the prefix heuristic used to get wrong. A search is not a write, and
     // a deletion is not an edit.
