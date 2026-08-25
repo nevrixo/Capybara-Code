@@ -10,6 +10,10 @@ const WHITESPACE = /\s+/g;
 const MAX_INPUT_DIAGNOSTICS = 4_096;
 const MAX_DIAGNOSTICS_PER_SNAPSHOT = 256;
 const DEFAULT_MAX_DIAGNOSTICS = 128;
+const MAX_INPUT_WORKSPACE_DIAGNOSTIC_REPORTS = 512;
+const MAX_WORKSPACE_DIAGNOSTIC_DOCUMENTS = 128;
+const MAX_WORKSPACE_DIAGNOSTIC_SNAPSHOTS = 64;
+const DEFAULT_MAX_WORKSPACE_DIAGNOSTIC_SNAPSHOTS = 32;
 const MAX_DIAGNOSTIC_MESSAGE_BYTES = 4_096;
 const MAX_DIAGNOSTIC_METADATA_BYTES = 256;
 const MAX_IDENTIFIER_BYTES = 256;
@@ -61,6 +65,31 @@ export interface NormalizeLspDiagnosticsOptions {
   readonly publishedAt: string;
   /** Lower a snapshot's output cap; it can never exceed the hard safety bound. */
   readonly maxDiagnostics?: number;
+}
+
+/** One exact runtime document that may receive workspace diagnostic evidence. */
+export interface LspWorkspaceDiagnosticDocument {
+  readonly uri: string;
+  readonly document: LspEditDocument;
+  readonly documentVersion: number;
+}
+
+/** Options for bounded, capability-gated workspace/diagnostic reports. */
+export interface NormalizeLspWorkspaceDiagnosticsOptions {
+  readonly workspaceRoot: string;
+  readonly workspaceIdentityDigest: string;
+  readonly server: string;
+  readonly documents: readonly LspWorkspaceDiagnosticDocument[];
+  readonly publishedAt: string;
+  readonly maxSnapshots?: number;
+  readonly maxDiagnostics?: number;
+}
+
+/** Bounded normalized workspace diagnostics, never including server result IDs. */
+export interface LspWorkspaceDiagnosticSnapshotResult {
+  readonly snapshots: readonly LspDiagnosticSnapshot[];
+  readonly totalSnapshots: number;
+  readonly truncated: boolean;
 }
 
 /** Options for a capability-gated textDocument/diagnostic response. */
@@ -157,6 +186,84 @@ export function normalizeLspDiagnostics(
 }
 
 /**
+ * Normalize a bounded workspace/diagnostic response. Only reports for exact,
+ * runtime-owned document versions are retained; untracked or stale reports do
+ * not become evidence.
+ */
+export function normalizeLspWorkspaceDiagnostics(
+  result: unknown,
+  options: NormalizeLspWorkspaceDiagnosticsOptions,
+): LspWorkspaceDiagnosticSnapshotResult {
+  const workspaceRoot = requiredWorkspaceRoot(options.workspaceRoot);
+  const workspaceIdentityDigest = requiredStableText(
+    options.workspaceIdentityDigest,
+    "workspaceIdentityDigest",
+  );
+  const server = requiredStableText(options.server, "server");
+  const publishedAt = normalizePublishedAt(options.publishedAt);
+  const maxSnapshots = normalizeMaxWorkspaceSnapshots(options.maxSnapshots);
+  const maxDiagnostics = normalizeMaxDiagnostics(options.maxDiagnostics);
+  const documents = normalizeWorkspaceDiagnosticDocuments(options.documents, workspaceRoot);
+
+  const report = requiredRecord(result, "workspace diagnostic report");
+  const rawReports = report.items;
+  if (!Array.isArray(rawReports)) {
+    throw failure("LSP_DIAGNOSTICS_INVALID", "workspace diagnostic report requires items");
+  }
+  if (rawReports.length > MAX_INPUT_WORKSPACE_DIAGNOSTIC_REPORTS) {
+    throw failure(
+      "LSP_DIAGNOSTICS_LIMIT",
+      "workspace diagnostic reports exceed the " + MAX_INPUT_WORKSPACE_DIAGNOSTIC_REPORTS + " input safety limit",
+    );
+  }
+
+  const snapshots: LspDiagnosticSnapshot[] = [];
+  const seenTrackedUris = new Set<string>();
+  for (const rawReport of rawReports) {
+    const documentReport = requiredRecord(rawReport, "workspace diagnostic document report");
+    const uri = requiredDiagnosticUri(documentReport, "uri");
+    const tracked = documents.get(uri);
+    if (tracked === undefined) continue;
+    if (seenTrackedUris.has(uri)) {
+      throw failure("LSP_DIAGNOSTICS_INVALID", "workspace diagnostic report repeats a tracked URI");
+    }
+    seenTrackedUris.add(uri);
+    if (documentReport.kind === "unchanged") continue;
+    if (documentReport.kind !== "full") {
+      throw failure(
+        "LSP_DIAGNOSTICS_INVALID",
+        "workspace diagnostic document report kind must be full or unchanged",
+        tracked.document.path,
+      );
+    }
+    if (!isDocumentVersion(documentReport.version) || documentReport.version !== tracked.documentVersion) {
+      continue;
+    }
+    const snapshot = normalizeLspPullDiagnostics(
+      { kind: "full", items: documentReport.items },
+      {
+        workspaceRoot,
+        workspaceIdentityDigest,
+        server,
+        uri,
+        document: tracked.document,
+        documentVersion: tracked.documentVersion,
+        publishedAt,
+        maxDiagnostics,
+      },
+    );
+    if (snapshot !== undefined) snapshots.push(snapshot);
+  }
+
+  snapshots.sort((left, right) => left.path.localeCompare(right.path));
+  return Object.freeze({
+    snapshots: Object.freeze(snapshots.slice(0, maxSnapshots)),
+    totalSnapshots: snapshots.length,
+    truncated: snapshots.length > maxSnapshots,
+  });
+}
+
+/**
  * Normalize a capability-gated textDocument/diagnostic response into the same
  * revision-bound evidence contract as push diagnostics. Unchanged reports carry
  * no fresh diagnostic items and therefore yield no new snapshot.
@@ -183,7 +290,7 @@ export function normalizeLspPullDiagnostics(
   );
 }
 
-function normalizeDocument(value: LspEditDocument): LspEditDocument {
+function normalizeDocument(value: unknown): LspEditDocument {
   if (!isRecord(value) || typeof value.path !== "string" || typeof value.text !== "string" || typeof value.revision !== "string") {
     throw failure("LSP_DIAGNOSTICS_INVALID", "document must be an exact LSP document snapshot");
   }
@@ -204,7 +311,6 @@ function normalizeDiagnostic(value: unknown, document: LspEditDocument): LspDiag
   const code = normalizeCode(raw.code, document.path);
   const source = normalizeOptionalMetadata(raw.source, "source", document.path);
   const message = normalizeMessage(raw.message, document.path);
-
   return Object.freeze({
     range,
     ...(severity === undefined ? {} : { severity }),
@@ -212,6 +318,15 @@ function normalizeDiagnostic(value: unknown, document: LspEditDocument): LspDiag
     ...(source === undefined ? {} : { source }),
     message,
   });
+}
+
+function requiredDiagnosticUri(record: Record<string, unknown>, key: string): string {
+  const value = requiredString(record, key);
+  assertBoundedText(value, "diagnostic " + key, MAX_WORKSPACE_ROOT_BYTES);
+  if (UNSAFE_CONTROL_CHARACTERS.test(value)) {
+    throw failure("LSP_DIAGNOSTICS_INVALID", "diagnostic " + key + " must not contain control characters");
+  }
+  return value;
 }
 
 function normalizeRange(value: unknown, document: LspEditDocument): LspRange {
@@ -310,6 +425,63 @@ function normalizeMaxDiagnostics(value: number | undefined): number {
   return maxDiagnostics;
 }
 
+function normalizeMaxWorkspaceSnapshots(value: number | undefined): number {
+  const maxSnapshots = value ?? DEFAULT_MAX_WORKSPACE_DIAGNOSTIC_SNAPSHOTS;
+  if (
+    !Number.isSafeInteger(maxSnapshots) ||
+    maxSnapshots < 1 ||
+    maxSnapshots > MAX_WORKSPACE_DIAGNOSTIC_SNAPSHOTS
+  ) {
+    throw failure(
+      "LSP_DIAGNOSTICS_LIMIT",
+      "maxSnapshots must be a positive safe integer up to " + MAX_WORKSPACE_DIAGNOSTIC_SNAPSHOTS,
+    );
+  }
+  return maxSnapshots;
+}
+
+interface NormalizedWorkspaceDiagnosticDocument {
+  readonly uri: string;
+  readonly document: LspEditDocument;
+  readonly documentVersion: number;
+}
+
+function normalizeWorkspaceDiagnosticDocuments(
+  value: unknown,
+  workspaceRoot: string,
+): ReadonlyMap<string, NormalizedWorkspaceDiagnosticDocument> {
+  if (!Array.isArray(value)) {
+    throw failure("LSP_DIAGNOSTICS_INVALID", "workspace diagnostic documents must be an array");
+  }
+  if (value.length > MAX_WORKSPACE_DIAGNOSTIC_DOCUMENTS) {
+    throw failure(
+      "LSP_DIAGNOSTICS_LIMIT",
+      "workspace diagnostic documents exceed the " + MAX_WORKSPACE_DIAGNOSTIC_DOCUMENTS + " safety limit",
+    );
+  }
+
+  const documents = new Map<string, NormalizedWorkspaceDiagnosticDocument>();
+  for (const rawDocument of value) {
+    const entry = requiredRecord(rawDocument, "workspace diagnostic document");
+    const uri = requiredDiagnosticUri(entry, "uri");
+    const document = normalizeDocument(entry.document);
+    const documentVersion = requireDocumentVersion(entry.documentVersion as number);
+    const path = pathFromUri(uri, workspaceRoot);
+    if (path !== document.path) {
+      throw failure(
+        "LSP_DIAGNOSTICS_STALE",
+        "workspace diagnostic URI does not match the exact document snapshot",
+        path,
+      );
+    }
+    if (documents.has(uri)) {
+      throw failure("LSP_DIAGNOSTICS_INVALID", "workspace diagnostic documents must not repeat a URI");
+    }
+    documents.set(uri, Object.freeze({ uri, document, documentVersion }));
+  }
+  return documents;
+}
+
 function normalizePublishedAt(value: string): string {
   if (typeof value !== "string") {
     throw failure("LSP_DIAGNOSTICS_INVALID", "publishedAt must be an ISO-8601 timestamp");
@@ -379,7 +551,7 @@ function pathFromUri(uri: string, workspaceRoot: string): string {
   }
 }
 
-function requireDocumentVersion(value: number): number {
+function requireDocumentVersion(value: unknown): number {
   if (!isDocumentVersion(value)) {
     throw failure("LSP_DIAGNOSTICS_INVALID", "documentVersion must be a non-negative safe integer");
   }
