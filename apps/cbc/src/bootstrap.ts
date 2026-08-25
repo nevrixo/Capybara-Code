@@ -412,6 +412,8 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
     workspaceIdentityDigest: () => runtime.workspaceId,
     allowRenamePreview:
       effective.experimental.editEngineV2 && effective.lsp.mutations.rename,
+    allowFormattingPreview:
+      effective.experimental.editEngineV2 && effective.lsp.mutations.formatting,
     allowCodeActionPreview:
       effective.experimental.editEngineV2 && effective.lsp.mutations.codeActions,
     maxEditOperations: effective.edit.maxOperationsPerPlan,
