@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-25T23:04:34.468Z",
+  "generatedAt": "2026-08-25T23:08:46.446Z",
   "git": {
-    "commit": "06c849f737a34a89eeb880a9e330ca3225c891cf",
+    "commit": "9e24985d54a5e774f3c21acc453927938b9f9ca7",
     "dirty": true,
-    "dirtyHash": "4cdbe1da004aab4c282578906d4adb1c75049e6419c3235f83dde969a07d1d6a"
+    "dirtyHash": "aac6640a6296760c75c0d64a687079fd8c0cc37f3578d1e05a6d1c2a17127566"
   },
   "roots": [
     "apps",
@@ -56,6 +56,21 @@
   "fileCount": 625,
   "historicalArtifacts": [],
   "files": [
+    {
+      "path": "Cargo.lock",
+      "bytes": 22010,
+      "sha256": "b38284e95d38fcaf10a7b11960b1d218870006ac280428850c08158d289f42e8"
+    },
+    {
+      "path": "Cargo.toml",
+      "bytes": 1654,
+      "sha256": "a9126098f57ae4162199eafc23df6ec9ad0ad0459135dc69fe3aba3b8fee8efc"
+    },
+    {
+      "path": "README.md",
+      "bytes": 5113,
+      "sha256": "f56253d03684c75dcf5502f589ee8fb884c9dbe5cb206adf2fceb992d3cffe50"
+    },
     {
       "path": "apps/capy-daemon/package.json",
       "bytes": 321,
@@ -154,7 +169,7 @@
     {
       "path": "apps/cbc/package.json",
       "bytes": 301,
-      "sha256": "81195c0e8449e920431ef63da3b837dafd62662ffb0cfd97724de96a297ddb3b"
+      "sha256": "22b336238e0d518f8b759795f88a9c1194bad29e604f916f6f7df702a80214d3"
     },
     {
       "path": "apps/cbc/src/account-login.ts",
@@ -304,7 +319,7 @@
     {
       "path": "apps/cbc/src/main.ts",
       "bytes": 999,
-      "sha256": "21a5f335e82ed9ceaeb6cb40a236ad780a4c5ae9d4e0441ef941dafa0dc70738"
+      "sha256": "fc61199078abbb35ca516abedf59cf3a62bcf8cdd57b80dcf522730f069136cd"
     },
     {
       "path": "apps/cbc/src/mcp-credentials.ts",
@@ -702,6 +717,11 @@
       "sha256": "6b913265b4ce56c1ded84193031c5002b3c81b67c77c10962cc53331ebc6281c"
     },
     {
+      "path": "benchmarks/cbc-bench/README.md",
+      "bytes": 7079,
+      "sha256": "4002edf775972fd6b3e1da2edbc065a69fab82a45ae80e2061451cb2e358262a"
+    },
+    {
       "path": "benchmarks/cbc-bench/cohort-manifest.json",
       "bytes": 54537,
       "sha256": "879a3bfe8a753494a2e36ec1efc5139ea09986864a6dc37f8af0bca104b43e87"
@@ -710,11 +730,6 @@
       "path": "benchmarks/cbc-bench/package.json",
       "bytes": 219,
       "sha256": "fba5516f69176747501a374031be7324b38ea442e3cb8d420910cf02eb0f6b2e"
-    },
-    {
-      "path": "benchmarks/cbc-bench/README.md",
-      "bytes": 7079,
-      "sha256": "4002edf775972fd6b3e1da2edbc065a69fab82a45ae80e2061451cb2e358262a"
     },
     {
       "path": "benchmarks/cbc-bench/src/cli.ts",
@@ -834,17 +849,7 @@
     {
       "path": "bun.lock",
       "bytes": 20752,
-      "sha256": "5dc6a7aa5e5b0d047f50d2f2d49b70b8d58c0f7e420097455de662756d980a8c"
-    },
-    {
-      "path": "Cargo.lock",
-      "bytes": 22010,
-      "sha256": "b54cc960a03182f71a5d7169d9e863aa054484a62fbada2af277df9a4fe8e785"
-    },
-    {
-      "path": "Cargo.toml",
-      "bytes": 1654,
-      "sha256": "738c86048453d19b11a727f269cffceb9a07a0eb078167e9afbd29f19b6c3e81"
+      "sha256": "614d197c038bc5ab0fbd2b5f46cb97dc24fe5caca98278caba03650357995947"
     },
     {
       "path": "crates/cbc-artifacts/Cargo.toml",
@@ -1252,6 +1257,11 @@
       "sha256": "2e98278eb0999b210625049b31daee340fb0e7ff1a5a05e6a3cf12e5a63bdbb1"
     },
     {
+      "path": "fixtures/README.md",
+      "bytes": 2395,
+      "sha256": "13345f2715b6ffe8e84018be588af10a92c8a2cbf32c1c21a9e69a3ce394b0d3"
+    },
+    {
       "path": "fixtures/agent-graph/cycle.json",
       "bytes": 443,
       "sha256": "df6ee8cbfc6aeb3b573f4d679ce9a8f2c37efd29b464eaed28d05fa1b45a7f50"
@@ -1342,19 +1352,24 @@
       "sha256": "97a937caecce5a440969fad524d5b8ebddca18494235b8fd9a20a4ad5dcd8a2d"
     },
     {
-      "path": "fixtures/malicious-workspaces/symlink-escape/inside.txt",
-      "bytes": 159,
-      "sha256": "c280b4e36cf4dbe74d8160920d40c6eb6517b7689d446abd02ddddbd668de895"
-    },
-    {
       "path": "fixtures/malicious-workspaces/symlink-escape/README.md",
       "bytes": 1171,
       "sha256": "f67697660c539b420c88e6ada8532350562f16764593ef69250bee2d210b4bab"
     },
     {
+      "path": "fixtures/malicious-workspaces/symlink-escape/inside.txt",
+      "bytes": 159,
+      "sha256": "c280b4e36cf4dbe74d8160920d40c6eb6517b7689d446abd02ddddbd668de895"
+    },
+    {
       "path": "fixtures/malicious-workspaces/terminal-escape/report.txt",
       "bytes": 429,
       "sha256": "a070da284a0b02ba1c92f1f380834305deb18b0ca708341c87825dd8abeed4db"
+    },
+    {
+      "path": "fixtures/mcp-servers/README.md",
+      "bytes": 2314,
+      "sha256": "b89ade70e4315fd624e54097024fc4bf308c2d1148d6e018fe5597c91f8d05fb"
     },
     {
       "path": "fixtures/mcp-servers/echo-stdio.ts",
@@ -1377,11 +1392,6 @@
       "sha256": "7540a95972460ef595e85223b1315d876988432c43df015063ca6bf7e888388f"
     },
     {
-      "path": "fixtures/mcp-servers/README.md",
-      "bytes": 2314,
-      "sha256": "b89ade70e4315fd624e54097024fc4bf308c2d1148d6e018fe5597c91f8d05fb"
-    },
-    {
       "path": "fixtures/mcp-servers/unknown-revision.jsonl",
       "bytes": 1987,
       "sha256": "feac24d2dacf43b9dd2517b5424ee8c7eaee992793639569d6f760a2a2582e99"
@@ -1397,6 +1407,11 @@
       "sha256": "2b69d765c1b8e463264f43bb91298ee21a9aff074fd9bbd5ec0e21e86a117d9d"
     },
     {
+      "path": "fixtures/process-trees/README.md",
+      "bytes": 1936,
+      "sha256": "801d8964ae485c6e9ee0a2c19df710cf7f3bef5c28e371f3e48bbc3a285866df"
+    },
+    {
       "path": "fixtures/process-trees/detached.sh",
       "bytes": 771,
       "sha256": "79dd9cef79196545bde37ba31293bd93cfce181d96f0d9654fe67cdcdba953d6"
@@ -1410,11 +1425,6 @@
       "path": "fixtures/process-trees/output-flood.sh",
       "bytes": 972,
       "sha256": "8fac0dc593b6cbd36a883b1e2a7c112a9b6a2c8f30b1cec4d5104cb7d4dcf997"
-    },
-    {
-      "path": "fixtures/process-trees/README.md",
-      "bytes": 1936,
-      "sha256": "801d8964ae485c6e9ee0a2c19df710cf7f3bef5c28e371f3e48bbc3a285866df"
     },
     {
       "path": "fixtures/process-trees/spawn-grandchild.cmd",
@@ -1472,11 +1482,6 @@
       "sha256": "34124bb23cf3288db7aedbec44eb5e17f081fb1696093b971ef576fd932b761b"
     },
     {
-      "path": "fixtures/README.md",
-      "bytes": 2395,
-      "sha256": "13345f2715b6ffe8e84018be588af10a92c8a2cbf32c1c21a9e69a3ce394b0d3"
-    },
-    {
       "path": "fixtures/tui-golden/narrow-terminal.json",
       "bytes": 1723,
       "sha256": "ded3907b48fa42e304b2555d7147bb18674b270c27c187a70283b6224dde074f"
@@ -1499,7 +1504,7 @@
     {
       "path": "package.json",
       "bytes": 2537,
-      "sha256": "5215778aebe3c0786631dcc9273ca2d87125ca09fac0d3681b0ed00edd0b09d1"
+      "sha256": "f4ac3f057ddcd319cc8d147e3ca493cd9724534e2b9bf67d5e1522a1f951bef4"
     },
     {
       "path": "packages/agent-graph-domain/package.json",
@@ -2512,14 +2517,14 @@
       "sha256": "c0eeacbe47a11552a5507b8c537f35f9ad85041b89c7998c76a37c27a4e575a9"
     },
     {
-      "path": "packages/sdk-typescript/package.json",
-      "bytes": 392,
-      "sha256": "c511402d8eeb37d89512877e1fa32cd69644abd16905314536f0a445c3d9fcab"
-    },
-    {
       "path": "packages/sdk-typescript/README.md",
       "bytes": 358,
       "sha256": "eac361f031f6035abcacc936587a0b8fff20f8ff3fb0ea8eede054b07635d747"
+    },
+    {
+      "path": "packages/sdk-typescript/package.json",
+      "bytes": 392,
+      "sha256": "c511402d8eeb37d89512877e1fa32cd69644abd16905314536f0a445c3d9fcab"
     },
     {
       "path": "packages/sdk-typescript/src/approvals.ts",
@@ -2977,14 +2982,19 @@
       "sha256": "e3725a6f232f1f9202c28c1acd3edefca31f30728f516868f87fb25417ca77b7"
     },
     {
-      "path": "README.md",
-      "bytes": 5113,
-      "sha256": "f56253d03684c75dcf5502f589ee8fb884c9dbe5cb206adf2fceb992d3cffe50"
-    },
-    {
       "path": "rust-toolchain.toml",
       "bytes": 86,
       "sha256": "3e18e70208ee460635e239a91c142cf67371feafb718b05617ff06f388bf96df"
+    },
+    {
+      "path": "schemas/CHANGELOG.md",
+      "bytes": 10165,
+      "sha256": "88b484fb00147c2b47eefbaab28c061cd55f46fc55826fd2595395cc083f10b3"
+    },
+    {
+      "path": "schemas/README.md",
+      "bytes": 3123,
+      "sha256": "18ba0b7a45b0318dcf7e5e6f1b27bb48016f2a2e60a6ecafaaa1e8b7c97a1dfa"
     },
     {
       "path": "schemas/agent-graph/command.schema.json",
@@ -3010,11 +3020,6 @@
       "path": "schemas/app/rpc.schema.json",
       "bytes": 627,
       "sha256": "a0c77b06c4ca3f79789238d98319ae89ef00ecdc31dda1c40e2f7b683933db04"
-    },
-    {
-      "path": "schemas/CHANGELOG.md",
-      "bytes": 10165,
-      "sha256": "88b484fb00147c2b47eefbaab28c061cd55f46fc55826fd2595395cc083f10b3"
     },
     {
       "path": "schemas/config/config.schema.json",
@@ -3075,11 +3080,6 @@
       "path": "schemas/protocol/rpc.schema.json",
       "bytes": 17629,
       "sha256": "e91ff474a0e2c3cc7401d612a7ce6f4204a8b51a8e372c15066baa07c6c2a680"
-    },
-    {
-      "path": "schemas/README.md",
-      "bytes": 3123,
-      "sha256": "18ba0b7a45b0318dcf7e5e6f1b27bb48016f2a2e60a6ecafaaa1e8b7c97a1dfa"
     },
     {
       "path": "schemas/tools/tool.schema.json",
@@ -3159,7 +3159,7 @@
     {
       "path": "scripts/release.test.ts",
       "bytes": 11019,
-      "sha256": "fde085f42df3881191f8f3361d7b1c91f5181bf3c5655d27b66918ab54d9253f"
+      "sha256": "42b67d37135e72509382ccaa4652dd2ebca0e650253f486b6135dd8b24906032"
     },
     {
       "path": "scripts/smoke-release.ts",
@@ -3168,8 +3168,8 @@
     },
     {
       "path": "scripts/source-truth.ts",
-      "bytes": 10672,
-      "sha256": "df1dbf164608acb4df1a4069633cd5142ddedabb49af8a6765482816e3db5850"
+      "bytes": 10867,
+      "sha256": "317fb132d800aff4666d63574cba6375dc88bcf05b5f739b7493f7328c482549"
     },
     {
       "path": "scripts/write-release-checksums.ts",
@@ -3182,5 +3182,5 @@
       "sha256": "3af6b7d3ec7041c90b18206fe898b904d8781a97c25369189f2733173c6d23a5"
     }
   ],
-  "digest": "3149ac4d3a6836f52600b1e71d9580b872ef3869791ac8549811f418c1a21415"
+  "digest": "da7d70372bea4b451e1d122d7605b0039948bf1ac7d07f50b2700cba1d8758c4"
 }

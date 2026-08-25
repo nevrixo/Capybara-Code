@@ -6,7 +6,7 @@ import { createBunHost } from "./bun-host.ts";
 import { CliError, EXIT, type ExitCode } from "./exit.ts";
 import { route } from "./router.ts";
 
-export const CBC_VERSION = "0.1.1-alpha.3";
+export const CBC_VERSION = "0.1.1-alpha.4";
 
 export async function main(argv: readonly string[]): Promise<ExitCode> {
   const host = createBunHost(CBC_VERSION);

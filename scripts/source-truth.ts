@@ -114,7 +114,7 @@ export async function buildSourceTruthManifest(repo = process.cwd()): Promise<So
     const bytes = canonicalFileBytes(new Uint8Array(await Bun.file(resolve(repo, relative)).arrayBuffer()));
     historicalArtifacts.push({ path: normalized, bytes: bytes.byteLength, sha256: await sha256(bytes), classification: "historical-backup" });
   }
-  historicalArtifacts.sort((left, right) => left.path.localeCompare(right.path));
+  historicalArtifacts.sort((left, right) => comparePaths(left.path, right.path));
   for (const root of ROOTS) {
     const glob = new Bun.Glob(`${root}/**/*`);
     for await (const relative of glob.scan({ cwd: repo, onlyFiles: true, dot: true })) {
@@ -123,7 +123,7 @@ export async function buildSourceTruthManifest(repo = process.cwd()): Promise<So
       files.push({ path: relative.replaceAll("\\", "/"), bytes: bytes.byteLength, sha256: await sha256(bytes) });
     }
   }
-  files.sort((left, right) => left.path.localeCompare(right.path));
+  files.sort((left, right) => comparePaths(left.path, right.path));
   for (const rootFile of ROOT_FILES) {
     try {
       const bytes = canonicalFileBytes(new Uint8Array(await Bun.file(resolve(repo, rootFile)).arrayBuffer()));
@@ -133,7 +133,7 @@ export async function buildSourceTruthManifest(repo = process.cwd()): Promise<So
       // contributes nothing; its absence is visible in the manifest's file list.
     }
   }
-  files.sort((left, right) => left.path.localeCompare(right.path));
+  files.sort((left, right) => comparePaths(left.path, right.path));
   const body = { schemaVersion: "1.0", roots: ROOTS, rootFiles: ROOT_FILES, historicalArtifacts, files };
   const digest = await sha256(new TextEncoder().encode(JSON.stringify(body)));
   const git = await readGitState(repo, digest);
@@ -189,6 +189,11 @@ export async function checkSourceTruth(repo = process.cwd()): Promise<{ ok: bool
     message: currentComparable === expectedComparable ? `source truth OK (${current.files.length} files, ${current.digest})` : `${MANIFEST_PATH} is stale; run bun run source-truth --write`,
     current,
   };
+}
+
+/** Sort repository paths by Unicode code point, independent of host locale. */
+function comparePaths(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 async function sha256(bytes: Uint8Array): Promise<string> {
