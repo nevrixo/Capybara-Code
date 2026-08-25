@@ -1179,7 +1179,9 @@ describe("LspHost", () => {
     let protocolChannel = "";
     let openedUri: string | undefined;
     let formattingParams: Record<string, unknown> | undefined;
+    let rangeFormattingParams: Record<string, unknown> | undefined;
     let formatCalls = 0;
+    let rangeFormatCalls = 0;
     let makeStale = false;
     let armedReads = 0;
     const methods: string[] = [];
@@ -1202,7 +1204,12 @@ describe("LspHost", () => {
         if (typeof message.id !== "number") return undefined;
         let result: unknown =
           message.method === "initialize"
-            ? { capabilities: { documentFormattingProvider: true } }
+            ? {
+                capabilities: {
+                  documentFormattingProvider: true,
+                  documentRangeFormattingProvider: true,
+                },
+              }
             : null;
         if (message.method === "textDocument/formatting") {
           if (openedUri === undefined) throw new Error("missing opened document URI");
@@ -1216,6 +1223,26 @@ describe("LspHost", () => {
                   end: { line: 0, character: 22 },
                 },
                 newText: "export const Widget = 1;",
+              }];
+        }
+        if (message.method === "textDocument/rangeFormatting") {
+          if (openedUri === undefined) throw new Error("missing opened document URI");
+          rangeFormattingParams = message.params as Record<string, unknown>;
+          rangeFormatCalls += 1;
+          result = rangeFormatCalls === 2
+            ? [{
+                range: {
+                  start: { line: 0, character: 0 },
+                  end: { line: 0, character: 22 },
+                },
+                newText: "export const Widget = 1;",
+              }]
+            : [{
+                range: {
+                  start: { line: 0, character: 19 },
+                  end: { line: 0, character: 21 },
+                },
+                newText: " = 1",
               }];
         }
         notification?.("lsp.stdio.output", {
@@ -1279,6 +1306,36 @@ describe("LspHost", () => {
 
     const noChange = await host.formatPreview({ path: "src/widget.ts" });
     expect(noChange.edit).toBeUndefined();
+
+    const rangePreview = await host.rangeFormatPreview({
+      path: "src/widget.ts",
+      startLine: 0,
+      startCharacter: 19,
+      endLine: 0,
+      endCharacter: 21,
+    });
+    expect(rangePreview.edit?.paths).toEqual(["src/widget.ts"]);
+    expect(rangePreview.edit?.plan.operations).toMatchObject([{
+      kind: "replace_range",
+      path: "src/widget.ts",
+      replacement: " = 1",
+    }]);
+    expect(rangeFormattingParams).toMatchObject({
+      range: {
+        start: { line: 0, character: 19 },
+        end: { line: 0, character: 21 },
+      },
+      options: { tabSize: 2, insertSpaces: true },
+    });
+    expect(methods).toContain("textDocument/rangeFormatting");
+
+    await expect(host.rangeFormatPreview({
+      path: "src/widget.ts",
+      startLine: 0,
+      startCharacter: 19,
+      endLine: 0,
+      endCharacter: 21,
+    })).rejects.toThrow("outside the requested range");
 
     makeStale = true;
     await expect(host.formatPreview({ path: "src/widget.ts" })).rejects.toThrow(
