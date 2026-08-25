@@ -148,7 +148,7 @@ describe("task contract (§15.4, SUB-002)", () => {
     expect(result.issues.some((i) => i.field === "goal")).toBe(true);
   });
 
-  test("an executor without constraints or contract is invalid (SUB-002)", () => {
+  test("an executor without constraints or contract is completed from the scoped goal (SUB-002)", () => {
     const task = buildTask(
       {
         title: "T",
@@ -158,9 +158,51 @@ describe("task contract (§15.4, SUB-002)", () => {
       "executor",
     );
     const result = validateTask(task, "executor");
-    expect(result.ok).toBe(false);
-    expect(result.issues.some((i) => i.field === "constraints")).toBe(true);
-    expect(result.issues.some((i) => i.field === "expectedOutput")).toBe(true);
+    expect(result.ok).toBe(true);
+    expect(task.constraints.length).toBeGreaterThan(0);
+    expect(task.expectedOutput.length).toBeGreaterThan(0);
+    expect(task.allowedPaths).toEqual(["src/upload.ts"]);
+  });
+
+  test("an executor spawn infers write scope from mentioned files", () => {
+    const task = buildTask(
+      {
+        title: "Landing",
+        goal: "Build the landing page UI in index.html and landing.css with a clear CTA.",
+      },
+      "executor",
+    );
+    expect(validateTask(task, "executor").ok).toBe(true);
+    expect(task.allowedPaths).toEqual(["index.html", "landing.css"]);
+  });
+
+  test("an executor spawn uses the matching Plan item files as its lease", () => {
+    const task = buildTask(
+      {
+        title: "렌딩 페이지 UI를 제작한다",
+        goal: "브랜드 히어로, 게임 소개, CTA, 반응형 스타일을 구현합니다.",
+      },
+      "executor",
+      [
+        {
+          id: "inspect",
+          text: "기존 HTML 구조와 실행 방법을 확인한다",
+          files: ["index.html"],
+          status: "done",
+        },
+        {
+          id: "landing",
+          text: "렌딩 페이지 UI를 제작한다",
+          details: "브랜드 히어로, 게임 소개, CTA, 반응형 스타일을 구현합니다.",
+          files: ["index.html", "landing.css"],
+          acceptanceCriteria: ["첫 화면에서 게임 가치 제안과 CTA가 명확함"],
+          status: "active",
+        },
+      ],
+    );
+    expect(validateTask(task, "executor").ok).toBe(true);
+    expect(task.allowedPaths).toEqual(["index.html", "landing.css"]);
+    expect(task.expectedOutput).toContain("첫 화면에서 게임 가치 제안과 CTA가 명확함");
   });
 
   test("a read-only role does not need an explicit contract", () => {
@@ -1074,7 +1116,6 @@ describe("new specialist roles (§15.2)", () => {
     const validation = validateTask(loose, "refactorer");
     expect(validation.ok).toBe(false);
     expect(validation.issues.some((i) => i.field === "allowedPaths")).toBe(true);
-    expect(validation.issues.some((i) => i.field === "expectedOutput")).toBe(true);
   });
 
   test("both new roles are discoverable in the picker (§15.6)", () => {

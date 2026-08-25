@@ -207,21 +207,173 @@ export interface TaskDraft {
   readonly dependencies?: readonly string[];
 }
 
+/**
+ * A Plan/TODO item the host can use to complete a partial spawn.
+ *
+ * Root models often restated a plan step without copying `files` into
+ * `allowedPaths`. Matching that step lets an executor spawn instead of failing
+ * §15.4 on a missing lease.
+ */
+export interface TaskContractHint {
+  readonly id?: string;
+  readonly text: string;
+  readonly details?: string;
+  readonly files?: readonly string[];
+  readonly acceptanceCriteria?: readonly string[];
+  readonly status?: string;
+}
+
 /** Fill a partial draft with role defaults, ready for validation. */
-export function buildTask(draft: TaskDraft, role: SubagentRole): AgentTask {
+export function buildTask(
+  draft: TaskDraft,
+  role: SubagentRole,
+  hints: readonly TaskContractHint[] = [],
+): AgentTask {
   const definition = roleDefinition(role);
+  const completed = completeTaskDraft(draft, role, hints);
   return {
-    title: draft.title,
-    goal: draft.goal,
-    context: [...(draft.context ?? [])],
-    constraints: [...(draft.constraints ?? [])],
-    expectedOutput: [...(draft.expectedOutput ?? [])],
-    allowedPaths: [...(draft.allowedPaths ?? [])],
-    forbiddenPaths: [...(draft.forbiddenPaths ?? [])],
-    verification: [...(draft.verification ?? [])],
-    deadlineMs: Math.min(draft.deadlineMs ?? definition.maxDurationMs, definition.maxDurationMs),
-    dependencies: [...(draft.dependencies ?? [])],
+    title: completed.title,
+    goal: completed.goal,
+    context: [...(completed.context ?? [])],
+    constraints: [...(completed.constraints ?? [])],
+    expectedOutput: [...(completed.expectedOutput ?? [])],
+    allowedPaths: [...(completed.allowedPaths ?? [])],
+    forbiddenPaths: [...(completed.forbiddenPaths ?? [])],
+    verification: [...(completed.verification ?? [])],
+    deadlineMs: Math.min(completed.deadlineMs ?? definition.maxDurationMs, definition.maxDurationMs),
+    dependencies: [...(completed.dependencies ?? [])],
   };
+}
+
+/**
+ * Complete a spawn draft so a writer child can be admitted without the parent
+ * restating an already-scoped plan item.
+ *
+ * Vague goals still fail `validateTask`. This only fills missing contract
+ * fields from the goal, mentioned paths, or a matching Plan/TODO hint.
+ */
+export function completeTaskDraft(
+  draft: TaskDraft,
+  role: SubagentRole,
+  hints: readonly TaskContractHint[] = [],
+): TaskDraft {
+  const definition = roleDefinition(role);
+  const hint = matchingContractHint(draft, hints);
+  const constraints = nonempty(draft.constraints);
+  const expectedOutput = nonempty(draft.expectedOutput);
+  const explicitPaths = nonempty(draft.allowedPaths);
+  const allowedPaths = definition.canWrite
+    ? (explicitPaths.length > 0
+        ? uniquePaths(explicitPaths)
+        : uniquePaths([...inferAllowedPaths(draft), ...nonempty(hint?.files)], { dropUnscoped: true }))
+    : nonempty(draft.allowedPaths);
+  const hintConstraints = hint?.details !== undefined && hint.details.trim().length > 0
+    ? [hint.details.trim()]
+    : [];
+  const hintOutput = nonempty(hint?.acceptanceCriteria);
+
+  return {
+    ...draft,
+    constraints: constraints.length > 0
+      ? constraints
+      : (hintConstraints.length > 0 ? hintConstraints : defaultConstraints(draft, role)),
+    expectedOutput: expectedOutput.length > 0
+      ? expectedOutput
+      : (hintOutput.length > 0 ? hintOutput : defaultExpectedOutput(role)),
+    allowedPaths,
+  };
+}
+
+function matchingContractHint(
+  draft: TaskDraft,
+  hints: readonly TaskContractHint[],
+): TaskContractHint | undefined {
+  if (hints.length === 0) return undefined;
+  const haystack = normalizeMatchText(`${draft.title}\n${draft.goal}\n${(draft.context ?? []).join("\n")}`);
+  const named = hints.find((hint) => {
+    if (hint.text.trim().length > 0 && haystack.includes(normalizeMatchText(hint.text))) return true;
+    return hint.id !== undefined && hint.id.trim().length > 0 && haystack.includes(normalizeMatchText(hint.id));
+  });
+  if (named !== undefined) return named;
+  const withFiles = (hint: TaskContractHint): boolean => nonempty(hint.files).length > 0;
+  const active = hints.filter((hint) => hint.status === "active" && withFiles(hint));
+  if (active.length === 1) return active[0];
+  const open = hints.filter((hint) =>
+    (hint.status === "active" || hint.status === "pending") && withFiles(hint),
+  );
+  if (open.length === 1) return open[0];
+  return undefined;
+}
+
+function inferAllowedPaths(draft: TaskDraft): string[] {
+  const corpus = [
+    draft.title,
+    draft.goal,
+    ...(draft.context ?? []),
+    ...(draft.constraints ?? []),
+    ...(draft.expectedOutput ?? []),
+    ...(draft.verification ?? []),
+  ].join("\n");
+  return uniquePaths(extractPathTokens(corpus), { dropUnscoped: true });
+}
+
+const FILE_TOKEN = /(?:^|[^A-Za-z0-9_./-])((?:[\w.-]+\/)*[\w.-]+\.[A-Za-z][\w-]{0,9})(?=$|[^A-Za-z0-9_./-])/g;
+
+function extractPathTokens(text: string): string[] {
+  const found: string[] = [];
+  const normalized = text.replaceAll("\\", "/");
+  for (const match of normalized.matchAll(FILE_TOKEN)) {
+    const token = (match[1] ?? "").replace(/^\.\//, "");
+    if (token.length > 0) found.push(token);
+  }
+  return found;
+}
+
+function uniquePaths(
+  paths: readonly string[],
+  options: { readonly dropUnscoped?: boolean } = {},
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of paths) {
+    const path = raw.trim().replaceAll("\\", "/").replace(/^\.\//, "");
+    if (path.length === 0 || seen.has(path)) continue;
+    if (
+      options.dropUnscoped === true &&
+      (path.includes("..") || path === "**" || path === "**/*" || path === "*")
+    ) {
+      continue;
+    }
+    seen.add(path);
+    out.push(path);
+  }
+  return out;
+}
+
+function nonempty(values: readonly string[] | undefined): string[] {
+  return (values ?? []).map((value) => value.trim()).filter((value) => value.length > 0);
+}
+
+function normalizeMatchText(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function defaultConstraints(draft: TaskDraft, role: SubagentRole): string[] {
+  const goal = draft.goal.trim();
+  if (roleDefinition(role).canWrite) {
+    return [
+      "Do not modify files outside the write scope.",
+      ...(goal.length > 0 ? [`Stay inside this goal: ${goal}`] : []),
+    ];
+  }
+  return goal.length > 0 ? [`Stay inside this goal: ${goal}`] : ["Stay inside the stated goal."];
+}
+
+function defaultExpectedOutput(role: SubagentRole): string[] {
+  if (roleDefinition(role).canWrite) {
+    return ["List the files changed.", "Report verification outcome or why it could not be run."];
+  }
+  return ["Return a scoped summary of findings with evidence paths."];
 }
 
 /**

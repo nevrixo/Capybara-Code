@@ -767,6 +767,27 @@ export class AgentSession {
       readCache,
       permissionContext: () => this.permissionContext(),
       promptInputs: () => this.promptInputs(),
+      contractHints: () => {
+        const todo = this.recorder.model.todo;
+        const hints = todo.items.map((item) => ({
+          id: item.id,
+          text: item.text,
+          ...(item.details !== undefined ? { details: item.details } : {}),
+          ...(item.files !== undefined ? { files: item.files } : {}),
+          ...(item.acceptanceCriteria !== undefined ? { acceptanceCriteria: item.acceptanceCriteria } : {}),
+          status: item.status,
+        }));
+        const critical = todo.document?.criticalFiles.map((file) => file.path) ?? [];
+        if (critical.length > 0) {
+          hints.push({
+            id: "plan-critical-files",
+            text: todo.document?.goal ?? "plan critical files",
+            files: critical,
+            status: "pending",
+          });
+        }
+        return hints;
+      },
       createContextCapsule: (childContext) => this.#createSubagentContextCapsule(childContext),
       createContextScope: (childContext, capsule) => this.#createChildContextScope(childContext, capsule),
       emit: <T>(

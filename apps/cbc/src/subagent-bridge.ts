@@ -56,6 +56,7 @@ import {
   type GraphPersistSnapshot,
   type GraphSnapshotStore,
   type SubagentRole,
+  type TaskContractHint,
 } from "@cbc/subagents";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -147,6 +148,8 @@ export interface SubagentBridgeOptions {
   /** The root runner's authoritative verification surface also applies to children. */
   readonly verificationContract?: VerificationContract;
   readonly now?: () => number;
+  /** Current Plan/TODO items used to complete a partial executor spawn. */
+  readonly contractHints?: () => readonly TaskContractHint[];
 }
 
 function fileGraphStore(
@@ -393,6 +396,7 @@ export class SubagentBridge {
         dependencies: stringList(input.dependencies),
       },
       roleValue,
+      this.#options.contractHints?.() ?? [],
     );
 
     try {

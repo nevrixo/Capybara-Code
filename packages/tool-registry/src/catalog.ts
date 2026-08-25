@@ -1325,7 +1325,8 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
     description:
       "Spawn a subagent to complete a scoped parallel task. The §15.4 contract is enforced at spawn: " +
       "the goal must be a specific, scoped objective of at least 20 characters (vague goals like 'fix the repo' are refused); " +
-      "writer roles (executor, refactorer) need allowedPaths plus explicit constraints and expectedOutput; " +
+      "writer roles (executor, refactorer) need a write scope — pass allowedPaths, or name the files in the goal so they can be inferred; " +
+      "constraints and expectedOutput are filled from the goal or matching Plan item when omitted; " +
       "read-only roles must not receive allowedPaths. " +
       "Pass facts you already collected in context so the child does not re-read them.",
     source: "native",
@@ -1362,14 +1363,14 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
         constraints: {
           type: "array",
           items: { type: "string", minLength: 1, maxLength: 500 },
-          minItems: 1,
           maxItems: 12,
+          default: [],
         },
         expectedOutput: {
           type: "array",
           items: { type: "string", minLength: 1, maxLength: 500 },
-          minItems: 1,
           maxItems: 12,
+          default: [],
         },
         context: {
           type: "array",
@@ -1392,7 +1393,7 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
         deadlineMs: { type: "integer", minimum: 1_000, maximum: 300_000, default: 300_000 },
         detached: { type: "boolean", default: false },
       },
-      ["role", "title", "goal", "constraints", "expectedOutput"],
+      ["role", "title", "goal"],
     ),
   },
   {

@@ -112,11 +112,13 @@ describe("catalog completeness (§12.2)", () => {
     expect(findTool("process.run")!.defaultRisk).toBe("R1");
   });
 
-  test("task.spawn requires goal, constraints, and contract (SUB-002)", () => {
+  test("task.spawn requires a scoped goal; contract fields may be completed at spawn", () => {
     const required = findTool("task.spawn")!.parameters.required as string[];
+    expect(required).toContain("role");
+    expect(required).toContain("title");
     expect(required).toContain("goal");
-    expect(required).toContain("constraints");
-    expect(required).toContain("expectedOutput");
+    expect(required).not.toContain("constraints");
+    expect(required).not.toContain("expectedOutput");
   });
 
   test("task.spawn goal floor matches the §15.4 validator (MIN_GOAL_LENGTH)", () => {
@@ -696,13 +698,13 @@ describe("argument validation (§12.4, AC-10)", () => {
         role: "executor",
         title: "T",
         goal: "a goal long enough to pass",
-        constraints: [],
+        constraints: Array.from({ length: 13 }, (_, index) => `c${index}`),
         expectedOutput: ["x"],
       }),
       spawnSchema,
     );
     expect(result.ok).toBe(false);
-    expect(result.errors.some((e) => e.message.includes("at least 1 item"))).toBe(true);
+    expect(result.errors.some((e) => e.message.includes("at most 12"))).toBe(true);
   });
 
   test("validates nested array element types", () => {
