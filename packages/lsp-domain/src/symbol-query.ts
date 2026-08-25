@@ -11,6 +11,7 @@ const WHITESPACE = /\s+/g;
 const MAX_WORKSPACE_ROOT_BYTES = 32 * 1_024;
 const MAX_PATH_BYTES = 4_096;
 const MAX_SERVER_BYTES = 256;
+const MAX_QUERY_BYTES = 512;
 const MAX_SYMBOL_NAME_BYTES = 512;
 const MAX_INPUT_SYMBOLS = 4_096;
 const MAX_SYMBOLS = 256;
@@ -71,6 +72,34 @@ export interface NormalizeLspDocumentSymbolsOptions {
   readonly workspaceRoot: string;
   readonly server: string;
   readonly path: string;
+  /** Lower an output cap; it can never exceed the hard safety bound. */
+  readonly maxSymbols?: number;
+}
+
+/** A bounded workspace symbol with an explicit workspace-relative location. */
+export interface LspWorkspaceSymbol {
+  readonly name: string;
+  readonly kind: LspDocumentSymbolKind;
+  readonly path: string;
+  readonly range: LspRange;
+  readonly containerName?: string;
+}
+
+/** Safe workspace-symbol evidence returned by a single language server. */
+export interface LspWorkspaceSymbolsSnapshot {
+  readonly schemaVersion: "1.0";
+  readonly kind: "workspace_symbols";
+  readonly server: string;
+  readonly query: string;
+  readonly symbols: readonly LspWorkspaceSymbol[];
+  readonly totalSymbols: number;
+  readonly truncated: boolean;
+}
+
+export interface NormalizeLspWorkspaceSymbolsOptions {
+  readonly workspaceRoot: string;
+  readonly server: string;
+  readonly query: string;
   /** Lower an output cap; it can never exceed the hard safety bound. */
   readonly maxSymbols?: number;
 }
@@ -163,6 +192,101 @@ export function normalizeLspDocumentSymbolQuery(
     totalSymbols,
     truncated: totalSymbols > maxSymbols,
   });
+}
+
+/**
+ * Normalize resolved SymbolInformation or WorkspaceSymbol responses into
+ * bounded workspace evidence. Unresolved or external locations are rejected.
+ */
+export function normalizeLspWorkspaceSymbolQuery(
+  result: unknown,
+  options: NormalizeLspWorkspaceSymbolsOptions,
+): LspWorkspaceSymbolsSnapshot {
+  const context = normalizeWorkspaceSymbolContext(options);
+  if (result === null) return emptyWorkspaceSymbolsSnapshot(context);
+  const rawSymbols = requiredArray(result, "workspace symbol response");
+  if (rawSymbols.length > MAX_INPUT_SYMBOLS) {
+    throw failure(
+      "LSP_SYMBOL_QUERY_LIMIT",
+      "workspace symbol response exceeds the " + String(MAX_INPUT_SYMBOLS) + " item input limit",
+    );
+  }
+
+  const maxSymbols = normalizeMaxSymbols(options.maxSymbols);
+  const symbols: LspWorkspaceSymbol[] = [];
+  for (const value of rawSymbols) {
+    const raw = requiredRecord(value, "workspace symbol");
+    const symbol = normalizeWorkspaceSymbol(raw, context);
+    if (symbols.length < maxSymbols) symbols.push(symbol);
+  }
+
+  return Object.freeze({
+    schemaVersion: "1.0" as const,
+    kind: "workspace_symbols" as const,
+    server: context.server,
+    query: context.query,
+    symbols: Object.freeze(symbols),
+    totalSymbols: rawSymbols.length,
+    truncated: rawSymbols.length > maxSymbols,
+  });
+}
+
+interface WorkspaceSymbolContext {
+  readonly workspaceRoot: string;
+  readonly server: string;
+  readonly query: string;
+}
+
+function emptyWorkspaceSymbolsSnapshot(
+  context: WorkspaceSymbolContext,
+): LspWorkspaceSymbolsSnapshot {
+  return Object.freeze({
+    schemaVersion: "1.0" as const,
+    kind: "workspace_symbols" as const,
+    server: context.server,
+    query: context.query,
+    symbols: Object.freeze([]),
+    totalSymbols: 0,
+    truncated: false,
+  });
+}
+
+function normalizeWorkspaceSymbolContext(options: unknown): WorkspaceSymbolContext {
+  const raw = requiredRecord(options, "workspace symbol options");
+  const workspaceRoot = requiredWorkspaceRoot(raw.workspaceRoot);
+  const server = requiredStableText(raw.server, "server", MAX_SERVER_BYTES);
+  const query = requiredWorkspaceSymbolQuery(raw.query);
+  return Object.freeze({ workspaceRoot, server, query });
+}
+
+function normalizeWorkspaceSymbol(
+  raw: Record<string, unknown>,
+  context: WorkspaceSymbolContext,
+): LspWorkspaceSymbol {
+  const name = requiredStableText(raw.name, "symbol name", MAX_SYMBOL_NAME_BYTES);
+  const location = requiredRecord(raw.location, "workspace symbol location");
+  const uri = requiredString(location, "uri", "workspace symbol location");
+  const path = pathFromUri(uri, context.workspaceRoot);
+  const range = normalizeRange(location.range, "workspace symbol location range");
+  const containerName = optionalStableText(
+    raw.containerName,
+    "symbol container name",
+    MAX_SYMBOL_NAME_BYTES,
+  );
+  const symbol: {
+    name: string;
+    kind: LspDocumentSymbolKind;
+    path: string;
+    range: LspRange;
+    containerName?: string;
+  } = {
+    name,
+    kind: symbolKind(raw.kind),
+    path,
+    range,
+  };
+  if (containerName !== undefined) symbol.containerName = containerName;
+  return Object.freeze(symbol);
 }
 
 interface SymbolContext {
@@ -324,6 +448,21 @@ function requiredWorkspaceRoot(value: unknown): string {
   }
   return value;
 }
+function requiredWorkspaceSymbolQuery(value: unknown): string {
+  if (typeof value !== "string") {
+    throw failure("LSP_SYMBOL_QUERY_INVALID", "query must be a string");
+  }
+  assertBoundedText(value, "query", MAX_QUERY_BYTES);
+  if (UNSAFE_CONTROL_CHARACTERS.test(value)) {
+    throw failure("LSP_SYMBOL_QUERY_INVALID", "query must not contain control characters");
+  }
+  const query = safeDisplayText(value);
+  if (query.length === 0) {
+    throw failure("LSP_SYMBOL_QUERY_INVALID", "query must contain displayable text");
+  }
+  return query;
+}
+
 
 function requiredWorkspacePath(value: unknown, label: string): string {
   if (typeof value !== "string") {

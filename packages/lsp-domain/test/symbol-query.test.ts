@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import {
   LspSymbolQueryDomainError,
   normalizeLspDocumentSymbolQuery,
+  normalizeLspWorkspaceSymbolQuery,
 } from "../src/index.ts";
 
 const workspaceRoot = process.platform === "win32" ? "C:\\lsp-symbol-workspace" : "/lsp-symbol-workspace";
@@ -18,6 +19,17 @@ function options(overrides: Partial<Parameters<typeof normalizeLspDocumentSymbol
     workspaceRoot,
     server: "typescript",
     path: "src/widget.ts",
+    ...overrides,
+  };
+}
+
+function workspaceOptions(
+  overrides: Partial<Parameters<typeof normalizeLspWorkspaceSymbolQuery>[1]> = {},
+) {
+  return {
+    workspaceRoot,
+    server: "typescript",
+    query: "Widget",
     ...overrides,
   };
 }
@@ -139,6 +151,89 @@ describe("normalizeLspDocumentSymbolQuery", () => {
     expectQueryError(
       () => normalizeLspDocumentSymbolQuery([], options({ path: "src/\u202ewidget.ts" })),
       "LSP_SYMBOL_QUERY_SCOPE_VIOLATION",
+    );
+  });
+});
+
+describe("normalizeLspWorkspaceSymbolQuery", () => {
+  test("projects bounded resolved workspace symbols without server metadata", () => {
+    const snapshot = normalizeLspWorkspaceSymbolQuery(
+      Array.from({ length: 3 }, (_, index) => ({
+        name: "Symbol" + String(index) + "\u001b[31m",
+        kind: 12,
+        location: {
+          uri: workspaceUri(index === 1 ? "src/card.ts" : "src/widget.ts"),
+          range: range(index),
+        },
+        containerName: "Module\u202e",
+        data: { mustNotEscape: true },
+      })),
+      workspaceOptions({ query: " Widget ", maxSymbols: 2 }),
+    );
+
+    expect(snapshot).toEqual({
+      schemaVersion: "1.0",
+      kind: "workspace_symbols",
+      server: "typescript",
+      query: "Widget",
+      symbols: [
+        {
+          name: "Symbol0 [31m",
+          kind: "function",
+          path: "src/widget.ts",
+          range: range(0),
+          containerName: "Module",
+        },
+        {
+          name: "Symbol1 [31m",
+          kind: "function",
+          path: "src/card.ts",
+          range: range(1),
+          containerName: "Module",
+        },
+      ],
+      totalSymbols: 3,
+      truncated: true,
+    });
+    expect(Object.isFrozen(snapshot)).toBe(true);
+    expect(Object.isFrozen(snapshot.symbols)).toBe(true);
+    expect(Object.isFrozen(snapshot.symbols[0])).toBe(true);
+    expect(JSON.stringify(snapshot)).not.toContain("mustNotEscape");
+  });
+
+  test("rejects external, unresolved, unsafe, and oversized workspace results", () => {
+    expectQueryError(
+      () => normalizeLspWorkspaceSymbolQuery(
+        [{
+          name: "Secret",
+          kind: 12,
+          location: { uri: workspaceUri("../secret.ts"), range: range(0) },
+        }],
+        workspaceOptions(),
+      ),
+      "LSP_SYMBOL_QUERY_SCOPE_VIOLATION",
+    );
+    expectQueryError(
+      () => normalizeLspWorkspaceSymbolQuery(
+        [{ name: "Unresolved", kind: 12, location: { uri: workspaceUri("src/widget.ts") } }],
+        workspaceOptions(),
+      ),
+      "LSP_SYMBOL_QUERY_INVALID",
+    );
+    expectQueryError(
+      () => normalizeLspWorkspaceSymbolQuery([], workspaceOptions({ query: "Widget\u202e" })),
+      "LSP_SYMBOL_QUERY_INVALID",
+    );
+    expectQueryError(
+      () => normalizeLspWorkspaceSymbolQuery(
+        Array.from({ length: 4_097 }, () => ({
+          name: "item",
+          kind: 12,
+          location: { uri: workspaceUri("src/widget.ts"), range: range(0) },
+        })),
+        workspaceOptions(),
+      ),
+      "LSP_SYMBOL_QUERY_LIMIT",
     );
   });
 });
