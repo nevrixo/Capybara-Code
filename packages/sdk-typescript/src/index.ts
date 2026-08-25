@@ -35,3 +35,17 @@ export {
   type ApprovalHooks,
   type ApprovalRequest,
 } from "./approvals.ts";
+
+export {
+  createUnixTransport,
+  type UnixJsonRpcTransport,
+} from "./unix.ts";
+
+export {
+  SDK_APP_METHODS,
+  SDK_EVENT_KINDS,
+  SDK_EVENT_SCHEMA_VERSION,
+  SDK_PROTOCOL_VERSION,
+  type SdkAppMethod,
+  type SdkEventKind,
+} from "./generated.ts";

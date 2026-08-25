@@ -33,6 +33,7 @@ import {
 } from "@cbc/protocol";
 import { defaultConfig } from "@cbc/config-schema";
 import { NATIVE_TOOLS } from "@cbc/tool-registry";
+import { checkGeneratedSdkTypes } from "./generate-sdk-types.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
 
@@ -531,6 +532,13 @@ async function main(): Promise<number> {
     changelog.includes(`events ${EVENT_SCHEMA_VERSION}`),
     `schemas/CHANGELOG.md has no entry for events ${EVENT_SCHEMA_VERSION}`,
   );
+
+  const sdkFailures = checkGeneratedSdkTypes();
+  for (const detail of sdkFailures) {
+    failures.push({ area: "sdk.generated", detail });
+    checks += 1;
+  }
+  if (sdkFailures.length === 0) checks += 1;
 
   notes.push(
     "Rust constants are read as source text, so this verifies the declared lists rather than the dispatcher that consumes them. `cargo test -p cbc-protocol` covers the dispatcher.",
