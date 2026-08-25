@@ -356,6 +356,76 @@ describe("LSP rename preview feature gate", () => {
   });
 });
 
+describe("LSP code action preview feature gate", () => {
+  test("requires full LSP, the structured edit engine, and the code action mutation gate", () => {
+    const id = "lsp.code_action_preview";
+    const disabled = nativeToolsForFeatures().map((tool) => tool.id);
+    const missingFullLsp = nativeToolsForFeatures({
+      editEngineV2: true,
+      lspCodeActionPreview: true,
+    }).map((tool) => tool.id);
+    const missingEditEngine = nativeToolsForFeatures({
+      fullLsp: true,
+      lspCodeActionPreview: true,
+    }).map((tool) => tool.id);
+    const missingCodeActionGate = nativeToolsForFeatures({
+      fullLsp: true,
+      editEngineV2: true,
+    }).map((tool) => tool.id);
+    const enabled = nativeToolsForFeatures({
+      fullLsp: true,
+      editEngineV2: true,
+      lspCodeActionPreview: true,
+    }).map((tool) => tool.id);
+
+    expect(NATIVE_TOOLS.map((tool) => tool.id)).toContain(id);
+    expect(disabled).not.toContain(id);
+    expect(missingFullLsp).not.toContain(id);
+    expect(missingEditEngine).not.toContain(id);
+    expect(missingCodeActionGate).not.toContain(id);
+    expect(enabled).toContain(id);
+    expect(findTool(id)).toMatchObject({
+      authority: "read",
+      idempotency: "idempotent",
+      maxParallelism: 1,
+      resultSchemaId: "lsp.code_action_preview.v1",
+    });
+
+    const schema = findTool(id)!.parameters;
+    expect(parseAndValidate(JSON.stringify({
+      path: "src/widget.ts",
+      line: 0,
+      character: 13,
+      actionIndex: 255,
+    }), schema).ok).toBe(true);
+    expect(parseAndValidate(JSON.stringify({
+      path: "src/widget.ts",
+      line: 0,
+      character: 13,
+      actionIndex: -1,
+    }), schema).ok).toBe(false);
+    expect(parseAndValidate(JSON.stringify({
+      path: "src/widget.ts",
+      line: 0,
+      character: 13,
+      actionIndex: 256,
+    }), schema).ok).toBe(false);
+    expect(parseAndValidate(JSON.stringify({
+      path: "src/widget.ts",
+      line: 0,
+      character: 13,
+      actionIndex: 1.5,
+    }), schema).ok).toBe(false);
+    expect(parseAndValidate(JSON.stringify({
+      path: "src/widget.ts",
+      line: 0,
+      character: 13,
+      actionIndex: 1,
+      unexpected: true,
+    }), schema).ok).toBe(false);
+  });
+});
+
 describe("argument validation (§12.4, AC-10)", () => {
   const schema = findTool("fs.read")!.parameters;
 
