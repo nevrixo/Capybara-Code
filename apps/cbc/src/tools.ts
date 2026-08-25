@@ -1792,6 +1792,7 @@ export class RuntimeToolExecutor implements ToolExecutor {
       case "lsp.document_highlights":
       case "lsp.code_actions":
       case "lsp.code_action_preview":
+      case "lsp.format_preview":
       case "lsp.rename_preview":
         return await this.#viaBridge("lsp", action, signal, "full LSP tools are not available");
 
