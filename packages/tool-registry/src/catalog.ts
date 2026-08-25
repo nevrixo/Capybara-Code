@@ -357,6 +357,57 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
     parameters: objectSchema(lspTextDocumentPosition, ["path", "line", "character"]),
   },
   {
+    id: "lsp.declaration",
+    title: "LspDeclaration",
+    description: "Find bounded workspace-local declaration locations through configured local language servers.",
+    source: "native",
+    defaultRisk: "R0",
+    maxRisk: "R0",
+    alwaysActive: false,
+    mutates: false,
+    network: false,
+    authority: "read",
+    idempotency: "idempotent",
+    maxParallelism: 2,
+    resultSchemaId: "lsp.declaration.v1",
+    keywords: ["lsp", "declaration", "go to declaration", "symbol", "language server"],
+    parameters: objectSchema(lspTextDocumentPosition, ["path", "line", "character"]),
+  },
+  {
+    id: "lsp.type_definition",
+    title: "LspTypeDefinition",
+    description: "Find bounded workspace-local type-definition locations through configured local language servers.",
+    source: "native",
+    defaultRisk: "R0",
+    maxRisk: "R0",
+    alwaysActive: false,
+    mutates: false,
+    network: false,
+    authority: "read",
+    idempotency: "idempotent",
+    maxParallelism: 2,
+    resultSchemaId: "lsp.type_definition.v1",
+    keywords: ["lsp", "type definition", "go to type", "symbol", "language server"],
+    parameters: objectSchema(lspTextDocumentPosition, ["path", "line", "character"]),
+  },
+  {
+    id: "lsp.implementation",
+    title: "LspImplementation",
+    description: "Find bounded workspace-local implementation locations through configured local language servers.",
+    source: "native",
+    defaultRisk: "R0",
+    maxRisk: "R0",
+    alwaysActive: false,
+    mutates: false,
+    network: false,
+    authority: "read",
+    idempotency: "idempotent",
+    maxParallelism: 2,
+    resultSchemaId: "lsp.implementation.v1",
+    keywords: ["lsp", "implementation", "go to implementation", "symbol", "language server"],
+    parameters: objectSchema(lspTextDocumentPosition, ["path", "line", "character"]),
+  },
+  {
     id: "lsp.references",
     title: "LspReferences",
     description: "Find bounded workspace-local references through configured local language servers.",
@@ -1223,7 +1274,15 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
 /** Experimental tools are absent from the default model catalog until enabled. */
 const EDIT_ENGINE_TOOL_IDS = new Set(["fs.edit.preview", "fs.edit"]);
 const DURABLE_MEMORY_TOOL_IDS = new Set(["memory.search", "memory.remember"]);
-const FULL_LSP_TOOL_IDS = new Set(["lsp.diagnostics", "lsp.definition", "lsp.references", "lsp.hover"]);
+const FULL_LSP_TOOL_IDS = new Set([
+  "lsp.diagnostics",
+  "lsp.definition",
+  "lsp.declaration",
+  "lsp.type_definition",
+  "lsp.implementation",
+  "lsp.references",
+  "lsp.hover",
+]);
 
 export interface NativeToolFeatures {
   readonly editEngineV2?: boolean;

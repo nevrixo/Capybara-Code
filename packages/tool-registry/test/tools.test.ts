@@ -192,7 +192,15 @@ describe("catalog completeness (§12.2)", () => {
   });
 
   test("LSP read tools are opt-in through fullLsp", () => {
-    const lspTools = ["lsp.diagnostics", "lsp.definition", "lsp.references", "lsp.hover"];
+    const lspTools = [
+      "lsp.diagnostics",
+      "lsp.definition",
+      "lsp.declaration",
+      "lsp.type_definition",
+      "lsp.implementation",
+      "lsp.references",
+      "lsp.hover",
+    ];
     const disabled = nativeToolsForFeatures().map((tool) => tool.id);
     const enabled = nativeToolsForFeatures({ fullLsp: true }).map((tool) => tool.id);
 
@@ -212,7 +220,14 @@ describe("catalog completeness (§12.2)", () => {
       maxParallelism: 2,
       resultSchemaId: "lsp.diagnostics.v1",
     });
-    for (const id of ["lsp.definition", "lsp.references", "lsp.hover"]) {
+    for (const id of [
+      "lsp.definition",
+      "lsp.declaration",
+      "lsp.type_definition",
+      "lsp.implementation",
+      "lsp.references",
+      "lsp.hover",
+    ]) {
       expect(findTool(id)).toMatchObject({
         authority: "read",
         idempotency: "idempotent",
