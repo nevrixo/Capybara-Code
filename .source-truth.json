@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-25T21:07:57.922Z",
+  "generatedAt": "2026-08-25T21:15:31.883Z",
   "git": {
-    "commit": "960540aa44c7dd4be54ce2d51adab0420dee8c36",
-    "dirty": false,
-    "dirtyHash": "235229f87673c2c54429b3dde21c57c6884cf1831f85a07aa113189d3503364f"
+    "commit": "24a8951da7a3d8127fa857bc248a6f7d1848deaa",
+    "dirty": true,
+    "dirtyHash": "83939c0eb83435787002c762988e70908cafe4b48d49a1416263d67fa1f35727"
   },
   "roots": [
     "apps",
@@ -3103,8 +3103,8 @@
     },
     {
       "path": "scripts/build-standalone.ts",
-      "bytes": 21848,
-      "sha256": "149902eb3d300ae972330e92668c013bb0fe2d3ae2dce8e731e84facb8afc19f"
+      "bytes": 22291,
+      "sha256": "ac10e18b0903355cdbd3d1a39cd757d2b638ed7f6a95ef3e7928171da5a86e68"
     },
     {
       "path": "scripts/check-no-codex-runtime.ts",
@@ -3158,8 +3158,8 @@
     },
     {
       "path": "scripts/release.test.ts",
-      "bytes": 10478,
-      "sha256": "b19b794aca97343ccae5b91341b491f9cd58b534925950d41ee134e5573fff54"
+      "bytes": 11019,
+      "sha256": "ee79d20d8949d400400ac08927cbc2d5956e013a15f8b5b26a41466b5b58645d"
     },
     {
       "path": "scripts/smoke-release.ts",
@@ -3182,5 +3182,5 @@
       "sha256": "3af6b7d3ec7041c90b18206fe898b904d8781a97c25369189f2733173c6d23a5"
     }
   ],
-  "digest": "c0428c0e7d42aeef85af284066c8031a4c89af270370ac690aa2ac56028cabdb"
+  "digest": "0a4c39d568cbc405ae196e57a003895e7d197ac94dd57fe2cafcce117f4f3eb6"
 }

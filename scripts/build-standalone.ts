@@ -31,6 +31,7 @@ import { MODEL_REGISTRY, PRICING, PRICING_REGISTRY_VERSION } from "@cbc/provider
 import { builtinSkillFiles } from "@cbc/skills";
 import { PROTOCOL_VERSION } from "@cbc/protocol";
 import { EVENT_SCHEMA_VERSION } from "@cbc/protocol";
+import { isAbsolute, join, resolve } from "node:path";
 
 import { CBC_VERSION } from "../apps/cbc/src/main.ts";
 
@@ -69,6 +70,17 @@ function defaultTarget(): string {
   if (platform === "darwin") return `darwin-${arch}`;
   if (platform === "win32") return "windows-x64";
   return `linux-${arch}`;
+}
+
+/** Resolve Cargo's standard target override the same way as the runtime build. */
+export function runtimeTargetDirectory(
+  root = ROOT,
+  cargoTargetDir = process.env.CARGO_TARGET_DIR,
+): string {
+  if (cargoTargetDir === undefined || cargoTargetDir.trim().length === 0) {
+    return join(root, "target");
+  }
+  return isAbsolute(cargoTargetDir) ? cargoTargetDir : resolve(root, cargoTargetDir);
 }
 
 function parseOptions(argv: readonly string[]): BuildOptions {
@@ -170,10 +182,10 @@ async function main(argv: readonly string[]): Promise<number> {
   // ---- libexec/cbc-runtime ----
   if (options.includeRuntime) {
     const runtimeName = `cbc-runtime${options.target.startsWith("windows") ? ".exe" : ""}`;
-    const source = `${ROOT}/target/${options.runtimeProfile}/${runtimeName}`;
+    const source = join(runtimeTargetDirectory(), options.runtimeProfile, runtimeName);
     if (await exists(source)) {
       await copy(source, `${stage}/libexec/${runtimeName}`);
-      console.log(`  libexec/${runtimeName} from target/${options.runtimeProfile}`);
+      console.log(`  libexec/${runtimeName} from ${source}`);
     } else {
       // §19.7 verifies the runtime at startup, so shipping without it would produce a
       // binary that cannot do anything. Fail rather than emit a broken archive.

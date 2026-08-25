@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createRequire } from "node:module";
 
 import { archiveNameFor } from "./archive-release.ts";
+import { runtimeTargetDirectory } from "./build-standalone.ts";
 import { expectedVersionFromArgs } from "./check-release.ts";
 import { launcherPackageManifest, platformPackageManifest } from "./package-npm.ts";
 import { runtimePathFor } from "./smoke-release.ts";
@@ -88,6 +89,16 @@ describe("Public Alpha release metadata", () => {
   test("derives the sidecar strictly relative to the packaged bin directory", () => {
     expect(runtimePathFor("/tmp/capybara-code/bin/..", "linux-x64")).toBe("/tmp/capybara-code/libexec/cbc-runtime");
     expect(runtimePathFor("/tmp/capybara-code/bin/..", "windows-x64")).toBe("/tmp/capybara-code/libexec/cbc-runtime.exe");
+  });
+
+  test("packages the runtime from Cargo's configured target directory", () => {
+    const root = join(tmpdir(), "capybara-root");
+    expect(runtimeTargetDirectory(root, undefined)).toBe(join(root, "target"));
+    expect(runtimeTargetDirectory(root, "verification-target")).toBe(
+      join(root, "verification-target"),
+    );
+    const sharedTarget = join(tmpdir(), "capybara-shared-target");
+    expect(runtimeTargetDirectory(root, sharedTarget)).toBe(sharedTarget);
   });
 
   test("seals native npm packages before artifact transport can strip execute modes", async () => {
