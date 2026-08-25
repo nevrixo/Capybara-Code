@@ -1229,16 +1229,23 @@ describe("MCP authorization (§17.9, §17.12 T7)", () => {
 // ---------------------------------------------------------------------------
 
 describe("client manager (§17.1, §22.6)", () => {
-  test("enabled servers are registered as starting and connect in the background", async () => {
-    const manager = new McpClientManager();
+  test("enabled servers stay configured until a connection actually starts", async () => {
+    const observed: string[][] = [];
+    const manager = new McpClientManager({
+      onStatus: (statuses) => observed.push(statuses.map((status) => status.state)),
+    });
     const { client } = stdioClient({ tools: [READ_TOOL] });
     manager.add({ name: "fake", client, fromProjectConfig: false, enabled: true });
-    expect(client.state).toBe("starting");
+    expect(client.state).toBe("configured");
+    expect(observed[0]).toEqual(["configured"]);
 
     const connecting = manager.connectAll();
     expect(client.state).toBe("starting");
     await connecting;
+    await Promise.resolve();
     expect(client.state).toBe("ready");
+    expect(observed.some((states) => states[0] === "starting")).toBe(true);
+    expect(observed.at(-1)).toEqual(["ready"]);
   });
 
   test("background and lazy connection callers share one handshake", async () => {

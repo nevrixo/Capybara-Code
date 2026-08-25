@@ -528,6 +528,8 @@ export interface McpManagerOptions {
   readonly emitter?: McpEmitter;
   /** §17.3 restart budget for a stdio server that exits. */
   readonly maxRestarts?: number;
+  /** Receives a fresh, sorted snapshot whenever managed connection state changes. */
+  readonly onStatus?: (statuses: readonly McpServerStatus[]) => void;
 }
 
 /**
@@ -556,7 +558,9 @@ export class McpClientManager {
   add(server: ManagedServer): void {
     this.#servers.set(server.name, server);
     this.#connections.delete(server.name);
-    if (server.enabled) server.client.markStarting();
+    // Registration alone performs no transport I/O. Keep enabled clients in the
+    // truthful configured state until connect() actually schedules a handshake.
+    this.#emitStatuses();
   }
 
   get(name: string): ManagedServer | undefined {
@@ -585,13 +589,17 @@ export class McpClientManager {
       }
     })();
     this.#connections.set(server, pending);
+    // McpClient.connect() changes the state to starting synchronously before its
+    // first transport await, so this snapshot cannot strand a deferred server in a
+    // false startup state.
+    this.#emitStatuses();
     void pending.then((result) => {
       // Keep successful readiness memoized; allow a later explicit tool call to
       // retry a transient startup failure through the client's normal safeguards.
       if (result.error !== undefined && this.#connections.get(server) === pending) {
         this.#connections.delete(server);
       }
-    });
+    }).finally(() => this.#emitStatuses());
     return await pending;
   }
 
@@ -744,12 +752,22 @@ export class McpClientManager {
   async suspendConnections(): Promise<void> {
     await Promise.all(this.list().map((managed) => managed.client.suspend()));
     this.#connections.clear();
+    this.#emitStatuses();
   }
 
   async closeAll(): Promise<void> {
     await Promise.all(this.list().map((managed) => managed.client.close().catch(() => undefined)));
     this.#servers.clear();
     this.#connections.clear();
+    this.#emitStatuses();
+  }
+
+  #emitStatuses(): void {
+    try {
+      this.#options.onStatus?.(this.statuses());
+    } catch {
+      // A display/telemetry observer must never affect MCP lifecycle decisions.
+    }
   }
 }
 

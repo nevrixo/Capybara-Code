@@ -31,10 +31,12 @@ import {
   StdioTransport,
   StreamableHttpTransport,
   type McpSearchMatch,
+  type McpServerStatus,
   type StdioChannel,
 } from "@cbc/mcp-client";
 import type { ToolResult } from "@cbc/tool-registry";
 import { actionHash, type ProposedAction } from "@cbc/permissions";
+import type { SidebarService } from "@cbc/tui-components";
 
 import type { Runtime } from "./runtime.ts";
 import type { Execution, ToolBridges } from "./tools.ts";
@@ -65,6 +67,8 @@ export interface McpHostOptions {
   readonly now?: () => number;
   /** Fast servers may finish inside this budget; slow ones continue in background. */
   readonly startupBudgetMs?: number;
+  /** Receives live manager snapshots for interactive service status surfaces. */
+  readonly onStatus?: (servers: readonly McpServerStatus[]) => void;
   /** Host-side Plan gate for starting external transports. */
   readonly canActivate?: () => boolean;
   /** Optional digest-aware activation policy; target mode connects one server only. */
@@ -83,6 +87,97 @@ export interface McpHost {
   /** Wait for in-flight startup before the runtime enters Plan mode. */
   quiesce?(): Promise<void>;
   close(): Promise<void>;
+}
+
+/** Truthful pre-bootstrap rows, before a manager has started any transport I/O. */
+export function configuredMcpSidebarServices(
+  servers: Readonly<Record<string, McpServerConfig>>,
+): SidebarService[] {
+  return Object.entries(servers)
+    .map(([name, config]): SidebarService => {
+      if (config.enabled === false) {
+        return { name, state: "disabled", detail: "disabled by global config" };
+      }
+      if (config.connectOnStartup === false) {
+        return { name, state: "idle", detail: "connects on first use" };
+      }
+      return {
+        name,
+        state: "starting",
+        detail: "starting " + config.transport,
+      };
+    })
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+/** Project MCP protocol states onto the smaller sidebar service vocabulary. */
+export function mcpSidebarServices(
+  statuses: readonly McpServerStatus[],
+  servers: Readonly<Record<string, McpServerConfig>>,
+): SidebarService[] {
+  return statuses
+    .map((status): SidebarService => {
+      const configured = servers[status.server];
+      if (status.state === "configured") {
+        return {
+          name: status.server,
+          state: "idle",
+          detail: configured?.connectOnStartup === false
+            ? "connects on first use"
+            : "waiting to connect",
+        };
+      }
+      if (status.state === "starting" || status.state === "connecting") {
+        return {
+          name: status.server,
+          state: "starting",
+          detail: status.state === "connecting"
+            ? "negotiating " + status.transport
+            : "starting " + status.transport,
+        };
+      }
+      if (status.state === "ready") {
+        const capabilities = [
+          status.toolCount > 0
+            ? `${status.toolCount} tool${status.toolCount === 1 ? "" : "s"}`
+            : undefined,
+          status.resourceCount > 0
+            ? `${status.resourceCount} resource${status.resourceCount === 1 ? "" : "s"}`
+            : undefined,
+          status.promptCount > 0
+            ? `${status.promptCount} prompt${status.promptCount === 1 ? "" : "s"}`
+            : undefined,
+        ].filter((value): value is string => value !== undefined);
+        return {
+          name: status.server,
+          state: "ready",
+          detail: capabilities.join(", ") || status.serverInfo?.name || status.transport,
+        };
+      }
+      if (status.state === "degraded") {
+        return {
+          name: status.server,
+          state: "degraded",
+          detail: status.lastError ?? "connection degraded",
+        };
+      }
+      if (status.state === "failed") {
+        return {
+          name: status.server,
+          state: "down",
+          detail: status.lastError ?? "connection failed",
+        };
+      }
+      if (status.state === "disabled") {
+        return {
+          name: status.server,
+          state: "disabled",
+          detail: "disabled by global config",
+        };
+      }
+      return { name: status.server, state: "down", detail: "stopped" };
+    })
+    .sort((left, right) => left.name.localeCompare(right.name));
 }
 
 // ---------------------------------------------------------------------------
@@ -507,7 +602,10 @@ interface AssembledMcpHost {
  * `DeferredMcpHost.activate()`.
  */
 function assembleMcpHost(options: McpHostOptions): AssembledMcpHost {
-  const manager = new McpClientManager({ catalog: options.catalog ?? new McpCatalog() });
+  const manager = new McpClientManager({
+    catalog: options.catalog ?? new McpCatalog(),
+    ...(options.onStatus !== undefined ? { onStatus: options.onStatus } : {}),
+  });
   const failures: Array<{ server: string; error: string }> = [];
 
   for (const [name, config] of Object.entries(options.servers)) {

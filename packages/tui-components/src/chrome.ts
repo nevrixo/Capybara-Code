@@ -677,7 +677,7 @@ export function layoutComposer(
 /** An external service whose reachability the sidebar reports. */
 export interface SidebarService {
   readonly name: string;
-  readonly state: "ready" | "starting" | "degraded" | "down" | "disabled";
+  readonly state: "idle" | "ready" | "starting" | "degraded" | "down" | "disabled";
   readonly detail?: string;
 }
 
@@ -946,6 +946,18 @@ export function renderRightSidebar(
     } else {
       for (const service of services) {
         lines.push(fitLine("sidebar", serviceSegments(service, context), context));
+        if (service.detail !== undefined && service.detail.trim().length > 0) {
+          lines.push(
+            fitLine(
+              "sidebar",
+              [
+                segment("    ", {}),
+                segment(sanitizeInline(service.detail, 120), { fg: "fg.muted", dim: true }),
+              ],
+              context,
+            ),
+          );
+        }
       }
     }
   }

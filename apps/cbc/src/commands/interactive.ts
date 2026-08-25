@@ -39,6 +39,7 @@ import type { ToolBridges } from "../tools.ts";
 import { EXIT, type ExitCode } from "../exit.ts";
 import { InputReader } from "../input-reader.ts";
 import { inertKeyStream } from "../keys.ts";
+import { configuredMcpSidebarServices } from "../mcp-host.ts";
 import { WorkspacePathMentionIndex } from "../path-mentions.ts";
 import { setUserConfigValue } from "../state.ts";
 import {
@@ -131,7 +132,7 @@ export async function interactive(
     writer: context.writer,
     workspacePath: context.workspacePath,
     version: context.version,
-    mcpServers: await configuredMcpServers(context),
+    mcpServers: configuredMcpSidebarServices(loaded.config.mcpServers),
     lspServers: [],
     uiTheme: uiConfig.theme,
     uiMouse: uiConfig.mouse,
@@ -285,6 +286,7 @@ export async function interactive(
             }
           : {}),
       },
+      onMcpStatus: (servers: readonly SidebarService[]) => ui.setMcpServers(servers),
       onLspStatus: (servers: readonly SidebarService[]) => ui.setLspServers(servers),
       onEvent,
     });
@@ -1139,30 +1141,6 @@ function disposeAfterPersistence(
     });
 }
 
-
-/**
- * The MCP rows the §6.21 sidebar starts with.
- *
- * Read from config rather than from a live client: §7.1 paints before anything
- * connects, and a panel that waited for a handshake would be blank for exactly the
- * seconds a user is deciding whether the tool started correctly. A disabled server
- * is listed as `disabled` for the same reason — its absence would be indistinguish-
- * able from a server that failed to start.
- */
-async function configuredMcpServers(context: CommandContext): Promise<SidebarService[]> {
-  try {
-    const loaded = await context.config();
-    return Object.entries(loaded.config.mcpServers).map(([name, config]) => ({
-      name,
-      state: config.enabled === false ? ("disabled" as const) : ("starting" as const),
-      detail: config.transport,
-    }));
-  } catch {
-    // A malformed config is reported through configuration diagnostics; it must not stop the
-    // session from painting (§7.1, AC-04).
-    return [];
-  }
-}
 
 type SlashOutcome = "continue" | "quit" | { readonly kind: "resume"; readonly id: string } | { readonly kind: "new_session" };
 type ActiveSession = Awaited<ReturnType<typeof bootstrapSession>>["session"];

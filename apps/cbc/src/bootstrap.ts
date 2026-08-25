@@ -46,6 +46,7 @@ import { builtinSkillFiles } from "@cbc/skills";
 import { APP_COMMAND_SCHEMA_VERSION } from "@cbc/app-protocol";
 import { AppServer } from "@cbc/app-server";
 import { CapybaraClient } from "@cbc/sdk";
+import type { SidebarService } from "@cbc/tui-components";
 
 import {
   AgentSession,
@@ -79,7 +80,7 @@ import { connectEmbeddedAppClient } from "./session-app-client.ts";
 import { ensureSessionDaemon, type SessionDaemonHandle } from "./commands/daemon.ts";
 import { LspHost, type LspServiceStatus } from "./lsp-host.ts";
 import { createLspToolBridge } from "./lsp-tool-bridge.ts";
-import { DeferredMcpHost } from "./mcp-host.ts";
+import { DeferredMcpHost, mcpSidebarServices } from "./mcp-host.ts";
 import {
   newSessionId,
   readSessionIndex,
@@ -96,6 +97,8 @@ export interface BootstrapOptions {
   /** Resume an existing session from the TUI. */
   readonly resume?: string;
   readonly onEvent?: (event: CbcEvent, model: SessionViewModel) => void;
+  /** Receives live configured MCP states for an interactive sidebar. */
+  readonly onMcpStatus?: (servers: readonly SidebarService[]) => void;
   /** Receives live configured LSP states for an interactive sidebar. */
   readonly onLspStatus?: (servers: readonly LspServiceStatus[]) => void;
   /** Present only for interactive runs; its absence selects the headless broker. */
@@ -495,6 +498,14 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
           sessionId,
           resolveEnv: (name) => context.host.env[name],
           now: () => context.host.now(),
+          ...(options.onMcpStatus !== undefined
+            ? {
+                onStatus: (servers) =>
+                  options.onMcpStatus?.(
+                    mcpSidebarServices(servers, effective.mcpServers),
+                  ),
+              }
+            : {}),
           // A resumed session's durable mode is not known until its journal is
           // replayed. Fail closed to Plan so resume cannot launch MCP transports
           // before we inspect the selected mode; Build resumes activate below.

@@ -15,8 +15,66 @@ import type { ProposedAction } from "@cbc/permissions";
 import {
   bootstrapMcpHost,
   buildMcpBridgeForManager,
+  configuredMcpSidebarServices,
   DeferredMcpHost,
+  mcpSidebarServices,
 } from "../src/mcp-host.ts";
+
+describe("MCP sidebar status projection", () => {
+  const servers = {
+    context7: {
+      transport: "streamable_http",
+      url: "https://mcp.context7.com/mcp",
+      connectOnStartup: false,
+    },
+  } as const;
+
+  test("a lazy configured server is idle instead of indefinitely starting", () => {
+    expect(configuredMcpSidebarServices(servers)).toEqual([
+      { name: "context7", state: "idle", detail: "connects on first use" },
+    ]);
+    expect(mcpSidebarServices([
+      {
+        server: "context7",
+        state: "configured",
+        transport: "streamable_http",
+        toolCount: 0,
+        resourceCount: 0,
+        promptCount: 0,
+        diagnostics: [],
+      },
+    ], servers)).toEqual([
+      { name: "context7", state: "idle", detail: "connects on first use" },
+    ]);
+  });
+
+  test("live readiness and failure snapshots become actionable sidebar states", () => {
+    expect(mcpSidebarServices([
+      {
+        server: "context7",
+        state: "ready",
+        transport: "streamable_http",
+        toolCount: 2,
+        resourceCount: 0,
+        promptCount: 0,
+        diagnostics: [],
+      },
+      {
+        server: "broken",
+        state: "failed",
+        transport: "stdio",
+        toolCount: 0,
+        resourceCount: 0,
+        promptCount: 0,
+        lastError: "request timed out",
+        diagnostics: [],
+      },
+    ], servers)).toEqual([
+      { name: "broken", state: "down", detail: "request timed out" },
+      { name: "context7", state: "ready", detail: "2 tools" },
+    ]);
+  });
+});
 
 describe("buildMcpBridgeForManager (P0-15)", () => {
   test("mcp.search reports no capabilities for an empty manager", async () => {
@@ -108,6 +166,7 @@ describe("startup connection policy", () => {
   test("does not start a server that opts out of session bootstrap", async () => {
     let capabilityCalls = 0;
     let environmentReads = 0;
+    const statusSnapshots: string[][] = [];
     const runtime = {
       issueCapability: async () => {
         capabilityCalls += 1;
@@ -137,11 +196,14 @@ describe("startup connection policy", () => {
         environmentReads += 1;
         return undefined;
       },
+      onStatus: (statuses) =>
+        statusSnapshots.push(statuses.map((status) => status.state)),
       startupBudgetMs: 0,
     });
 
     expect(capabilityCalls).toBe(0);
     expect(environmentReads).toBe(0);
+    expect(statusSnapshots.at(-1)).toEqual(["configured"]);
     await host.close();
   });
 });

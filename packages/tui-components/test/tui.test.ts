@@ -1914,6 +1914,31 @@ describe("right context sidebar (§6.21, AC-45)", () => {
     expect(text).toContain("typescript degraded");
   });
 
+  test("service rows distinguish idle from starting and show actionable details", () => {
+    const text = renderRightSidebar(
+      {
+        contextUsedTokens: 0,
+        contextBudgetTokens: 96_000,
+        subagents: [],
+        todo: [],
+        mcpServers: [
+          { name: "context7", state: "idle", detail: "connects on first use" },
+        ],
+        lspServers: [
+          { name: "python", state: "disabled", detail: "workspace is not trusted" },
+        ],
+      },
+      sidebarContext(40),
+    )
+      .map(lineText)
+      .join("\n");
+
+    expect(text).toContain("context7 idle");
+    expect(text).toContain("connects on first use");
+    expect(text).toContain("python disabled");
+    expect(text).toContain("workspace is not trusted");
+  });
+
   test("every panel row fits the sidebar width", () => {
     for (const width of [20, 24, 28, 33, 40]) {
       const lines = renderRightSidebar(
@@ -1925,7 +1950,11 @@ describe("right context sidebar (§6.21, AC-45)", () => {
             { role: "refactorer", state: "running", elapsedMs: 305_000, activity: "writing a/very/deep/path/file.ts" },
           ],
           todo: [{ id: "1", text: "An outstanding item with a long description", status: "pending" }],
-          mcpServers: [{ name: "a-server-with-a-long-name", state: "starting" }],
+          mcpServers: [{
+            name: "a-server-with-a-long-name",
+            state: "starting",
+            detail: "negotiating an external service with a long description",
+          }],
         },
         sidebarContext(width),
       );
