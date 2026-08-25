@@ -584,6 +584,33 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
     ),
   },
   {
+    id: "lsp.format_preview",
+    title: "LspFormatPreview",
+    description:
+      "Create a bounded current-revision formatting proposal through configured local language servers without writing files.",
+    source: "native",
+    defaultRisk: "R0",
+    maxRisk: "R0",
+    alwaysActive: false,
+    mutates: false,
+    network: false,
+    authority: "read",
+    idempotency: "idempotent",
+    maxParallelism: 1,
+    resultSchemaId: "lsp.format_preview.v1",
+    keywords: ["lsp", "format", "formatting", "preview", "language server"],
+    parameters: objectSchema(
+      {
+        path: {
+          ...relativePath,
+          maxLength: 512,
+          description: "Workspace-relative source path for a bounded formatting proposal.",
+        },
+      },
+      ["path"],
+    ),
+  },
+  {
     id: "lsp.rename_preview",
     title: "LspRenamePreview",
     description: "Create a bounded revision-bound rename proposal through configured local language servers without writing files.",
@@ -1448,10 +1475,12 @@ const FULL_LSP_TOOL_IDS = new Set([
   "lsp.document_highlights",
   "lsp.code_actions",
   "lsp.code_action_preview",
+  "lsp.format_preview",
   "lsp.rename_preview",
 ]);
 const LSP_RENAME_PREVIEW_TOOL_IDS = new Set(["lsp.rename_preview"]);
 const LSP_CODE_ACTION_PREVIEW_TOOL_IDS = new Set(["lsp.code_action_preview"]);
+const LSP_FORMAT_PREVIEW_TOOL_IDS = new Set(["lsp.format_preview"]);
 
 export interface NativeToolFeatures {
   readonly editEngineV2?: boolean;
@@ -1461,6 +1490,8 @@ export interface NativeToolFeatures {
   readonly lspRenamePreview?: boolean;
   /** Requires the command-free code-action mutation rollout and structured edit engine. */
   readonly lspCodeActionPreview?: boolean;
+  /** Requires the formatting mutation rollout and structured edit engine. */
+  readonly lspFormattingPreview?: boolean;
 }
 
 export function nativeToolsForFeatures(features: NativeToolFeatures = {}): ToolDefinition[] {
@@ -1475,6 +1506,10 @@ export function nativeToolsForFeatures(features: NativeToolFeatures = {}): ToolD
     (
       !LSP_CODE_ACTION_PREVIEW_TOOL_IDS.has(tool.id) ||
       (features.editEngineV2 === true && features.lspCodeActionPreview === true)
+    ) &&
+    (
+      !LSP_FORMAT_PREVIEW_TOOL_IDS.has(tool.id) ||
+      (features.editEngineV2 === true && features.lspFormattingPreview === true)
     ),
   );
 }
