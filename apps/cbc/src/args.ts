@@ -18,6 +18,7 @@ export type Command =
   | { readonly kind: "auth"; readonly sub: "logout"; readonly all: boolean }
   | { readonly kind: "model"; readonly sub: "refresh" }
   | { readonly kind: "config"; readonly sub: "set"; readonly path: string; readonly value: string }
+  | { readonly kind: "session-worker"; readonly sessionId?: string }
   | { readonly kind: "daemon"; readonly sub: "start" | "stop" | "status" | "logs" | "attach"; readonly sessionId?: string }
   | { readonly kind: "version" }
   | { readonly kind: "help"; readonly topic?: string };
@@ -187,6 +188,15 @@ export function parseArgs(argv: readonly string[]): ParseResult {
           ...(prompt.length > 0 ? { prompt } : {}),
           ...(typeof resultFile === "string" && resultFile.trim().length > 0 ? { resultFile } : {}),
           ...(flags.has("--no-daemon") ? { noDaemon: true } : {}),
+        },
+      };
+    }
+    case "session-worker": {
+      const sessionId = flags.get("--session-id")?.value;
+      return {
+        command: {
+          kind: "session-worker",
+          ...(typeof sessionId === "string" && sessionId.trim().length > 0 ? { sessionId } : {}),
         },
       };
     }

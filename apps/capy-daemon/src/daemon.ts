@@ -34,6 +34,7 @@ import { LocalTransport, type LocalConnection } from "./local-transport.ts";
 import { MergeCoordinator } from "./merge-coordinator.ts";
 import { PluginSupervisor } from "./plugin-supervisor.ts";
 import { persistRecoveryState, recoverDaemonState, type SessionRecoverySeed } from "./recovery.ts";
+import { SessionWorkerHost, type SessionExecutor } from "./session-worker-host.ts";
 import { gracefulShutdown } from "./shutdown.ts";
 import { WorktreeManager } from "./worktree-manager.ts";
 import { WorkspaceSupervisorRegistry } from "./workspace-supervisor.ts";
@@ -50,6 +51,7 @@ export interface CapybaraDaemonOptions {
   readonly executableDigest?: string;
   readonly maxFrameBytes?: number;
   readonly idleTimeoutMs?: number;
+  readonly sessionExecutor?: SessionExecutor | ((sessionId: string) => SessionExecutor);
 }
 
 export interface DaemonHealth {
@@ -68,6 +70,7 @@ export class CapybaraDaemon {
   readonly merges = new MergeCoordinator();
   readonly plugins = new PluginSupervisor();
   readonly hooks = new HookDispatcher();
+  readonly workers: SessionWorkerHost;
   readonly workspaces: WorkspaceSupervisorRegistry;
 
   readonly #options: CapybaraDaemonOptions;
@@ -85,6 +88,12 @@ export class CapybaraDaemon {
     this.#options = options;
     this.#daemonId = options.daemonId ?? "dmn_" + crypto.randomUUID().replaceAll("-", "");
     this.#now = options.now ?? (() => new Date().toISOString());
+    const factory = options.sessionExecutor;
+    this.workers = new SessionWorkerHost({
+      ...(factory === undefined
+        ? {}
+        : { createExecutor: typeof factory === "function" ? factory : () => factory }),
+    });
     this.workspaces = new WorkspaceSupervisorRegistry(
       options.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: options.idleTimeoutMs },
     );
@@ -186,6 +195,7 @@ export class CapybaraDaemon {
     if (this.#status === "stopped") return;
     this.#status = "shutting_down";
     this.#persistRecovery();
+    await this.workers.close();
     await gracefulShutdown({
       workspaces: this.workspaces,
       eventHub: this.eventHub,
@@ -410,12 +420,26 @@ export class CapybaraDaemon {
           const turnId = typeof params.turnId === "string"
             ? params.turnId
             : "turn_" + crypto.randomUUID().replaceAll("-", "");
-          return await actor.dispatch({
+          const prompt = typeof payload.prompt === "string" ? payload.prompt : "";
+          const actorState = await actor.dispatch({
             kind: "submit_turn",
             turnId,
             clientId: input.clientId,
-            prompt: typeof payload.prompt === "string" ? payload.prompt : "",
+            prompt,
           });
+          const executed = await daemon.workers.submit({
+            sessionId,
+            turnId,
+            prompt,
+            clientId: input.clientId,
+          });
+          return { ...actorState, turn: executed };
+        }
+        if (input.method === "session.ensure") {
+          const params = requireRecord(input.params);
+          const sessionId = requireString(params.sessionId);
+          daemon.workers.ensure(sessionId);
+          return { sessionId, owned: true };
         }
         if (input.method === "session.attach") {
           const params = requireRecord(input.params);

@@ -7,6 +7,7 @@ import { configSet } from "./commands/config.ts";
 import { CommandContext, type CommandResult } from "./commands/context.ts";
 import { interactive } from "./commands/interactive.ts";
 import { daemonCommand } from "./commands/daemon.ts";
+import { sessionWorker } from "./commands/session-worker.ts";
 import { modelRefresh } from "./commands/model.ts";
 import { run } from "./commands/run.ts";
 import type { Host } from "./host.ts";
@@ -66,6 +67,11 @@ async function dispatch(context: CommandContext, command: Command): Promise<Comm
 
     case "config":
       return await configSet(context, { path: command.path, value: command.value });
+
+    case "session-worker":
+      return await sessionWorker(context, {
+        ...(command.sessionId !== undefined ? { sessionId: command.sessionId } : {}),
+      });
 
     case "daemon":
       return await daemonCommand(context, {

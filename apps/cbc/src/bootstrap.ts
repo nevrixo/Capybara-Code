@@ -123,6 +123,7 @@ export interface Bootstrapped {
   dispose?: () => Promise<void>;
   /** Local daemon attachment when experimental.sessionDaemon is on. */
   readonly daemon?: SessionDaemonHandle;
+  readonly daemonClient?: CapybaraClient;
 }
 
 /**
@@ -792,6 +793,7 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
           kind: options.headlessPolicy !== undefined ? "cli" : "tui",
         },
       });
+      await daemonClient.request("session.ensure", { sessionId });
       await daemonClient.request("session.attach", {
         sessionId,
         workspaceIdentityDigest: runtime.workspaceId ?? sessionId,
@@ -821,6 +823,7 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
     warnings,
     ...(loadEarlierHistory !== undefined ? { loadEarlierHistory } : {}),
     ...(daemon.mode === "daemon" ? { daemon } : {}),
+    ...(daemonClient !== undefined ? { daemonClient } : {}),
     dispose: async () => {
       try {
         if (daemonClient !== undefined) {

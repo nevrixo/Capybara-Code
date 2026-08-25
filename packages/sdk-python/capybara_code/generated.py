@@ -22,6 +22,7 @@ APP_METHODS = (
     "session.get",
     "session.attach",
     "session.detach",
+    "session.ensure",
     "session.fork",
     "session.pause",
     "session.resume",

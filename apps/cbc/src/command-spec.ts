@@ -87,6 +87,13 @@ export const COMMAND_REGISTRY: readonly CommandSpec[] = [
     ],
   },
   {
+    name: "session-worker",
+    summary: "internal: own a session as a daemon child process",
+    flags: [
+      { name: "--session-id", kind: "value", summary: "session to resume or create" },
+    ],
+  },
+  {
     name: "daemon",
     summary: "manage the local session daemon",
     subcommands: [

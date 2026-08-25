@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { CapybaraDaemon } from "../../capy-daemon/src/daemon.ts";
+import { DeferredTurnExecutor } from "../../capy-daemon/src/session-worker-host.ts";
 import { CapybaraClient } from "@cbc/sdk";
 
 import { sessionDaemonMode } from "../src/commands/daemon.ts";
@@ -64,6 +65,42 @@ describe("session daemon product flow", () => {
     expect(actor.state.activeTurnId).toBe("turn_live");
     await reattached.close();
     await client.close();
+    await daemon.stop();
+  });
+
+  test("injected executor keeps running after the TUI detaches", async () => {
+    const started: string[] = [];
+    const daemon = new CapybaraDaemon({
+      runtimeDir: mkdtempSync(join(tmpdir(), "capy-daemon-exec-")),
+      listen: false,
+      sessionExecutor: new DeferredTurnExecutor({
+        delayMs: 40,
+        onSubmit: (request) => started.push(request.prompt),
+      }),
+    });
+    await daemon.start();
+    await daemon.attachSession({
+      sessionId: "ses_owned",
+      workspaceIdentityDigest: "ws_owned",
+      connectionId: "conn_tui",
+      clientId: "client_tui",
+      mode: "controller",
+    });
+    const submitted = daemon.workers.submit({
+      sessionId: "ses_owned",
+      turnId: "turn_owned",
+      prompt: "keep going after detach",
+      clientId: "client_tui",
+    });
+    await daemon.detachSession({
+      sessionId: "ses_owned",
+      workspaceIdentityDigest: "ws_owned",
+      connectionId: "conn_tui",
+    });
+    const result = await submitted;
+    expect(started).toEqual(["keep going after detach"]);
+    expect(result.status).toBe("completed");
+    expect(daemon.workspaces.get("ws_owned")!.getSession("ses_owned")!.state.attachedClients).toHaveLength(0);
     await daemon.stop();
   });
 });

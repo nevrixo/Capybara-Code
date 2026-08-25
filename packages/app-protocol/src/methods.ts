@@ -2,7 +2,7 @@
 export const APP_METHODS = [
   "server.initialize", "server.capabilities", "server.ping", "server.health", "server.version", "server.logs.tail",
   "workspace.open", "workspace.inspect", "workspace.list", "workspace.close", "workspace.trust.get", "workspace.trust.set", "workspace.services",
-  "session.create", "session.list", "session.get", "session.attach", "session.detach", "session.fork", "session.pause", "session.resume", "session.close", "session.archive", "session.export", "session.recover",
+  "session.create", "session.list", "session.get", "session.attach", "session.detach", "session.ensure", "session.fork", "session.pause", "session.resume", "session.close", "session.archive", "session.export", "session.recover",
   "turn.submit", "turn.cancel", "turn.get", "turn.list", "turn.wait",
   "events.subscribe", "events.unsubscribe", "events.replay", "events.ack", "events.getSnapshot",
   "approval.list", "approval.get", "approval.resolve", "approval.cancel",
