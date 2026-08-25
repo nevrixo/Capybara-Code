@@ -863,54 +863,28 @@ export class TodoController {
       if (planModeError !== undefined) return this.invalid(planModeError, "TODO_INVALID_TRANSITION", input.source);
     }
 
-    // Compile the narrow pending -> active -> done gap only when the host can
-    // prove that this turn actually changed the item's scope (or passed its
-    // verification). The model still supplies the final evidence and status.
-    // A completed-item rescope is the inverse: reopen through pending in this
-    // same write so the model does not have to issue a second todo.write.
-    const compiledIds = new Set<string>();
-    const reopenedIds = new Set<string>();
-    if (input.source === "model") {
-      items = items.map((item) => {
-        const previous = previousById.get(item.id);
-        if (previous === undefined) return item;
-        if (
-          previous.status === "pending" &&
-          item.status === "done" &&
-          hostEvidenceSupportsCompletion(previous, item, input.hostEvidence)
-        ) {
-          compiledIds.add(item.id);
-          return item;
-        }
-        if (
-          (previous.status === "done" || previous.status === "skipped" || previous.status === "blocked") &&
-          item.status !== "pending" &&
-          item.status !== "active" &&
-          !scopesEqual(previous, item) &&
-          !isEvidenceBackedAnalysisCompletion(previous, item)
-        ) {
-          reopenedIds.add(item.id);
-          const { blockedReason: _blockedReason, ...rest } = item;
-          return { ...rest, status: "pending" };
-        }
-        return item;
-      });
-    }
-    if (compiledIds.size > 0 && previousItems.some((item) => item.status === "active" && !compiledIds.has(item.id))) {
-      return this.invalid("host completion compiler cannot activate a second root TODO while another item is active", "TODO_INVALID_TRANSITION", input.source);
-    }
-    const transitionError = items
-      .map((item) => {
-        const previous = previousById.get(item.id);
-        const compilerPrevious = compiledIds.has(item.id) && previous !== undefined
-          ? { ...previous, status: "active" as const }
-          : previous;
-        return todoTransitionError(compilerPrevious, item);
-      })
-      .find((message): message is string => message !== undefined);
-    if (transitionError !== undefined) return this.invalid(transitionError, "TODO_INVALID_TRANSITION", input.source);
-
     const previousRevision = this.#state.revision;
+    const modelSource: TodoTransitionSource = input.source === "host" ? "host_recovery" : input.source;
+    const compilation = compileTodoTransition({
+      previousItems,
+      nextItems: items,
+      baseRevision: previousRevision,
+      source: modelSource,
+      now: this.#options.now?.() ?? new Date().toISOString(),
+      ...(input.hostEvidence === undefined ? {} : { hostEvidence: input.hostEvidence }),
+    });
+    const compilationIssue = compilation.issues[0];
+    if (compilationIssue !== undefined) {
+      if (compilationIssue.message.includes("cannot activate a second") ||
+        (compilation.trace.some((step) => step.from === "pending" && step.to === "active") && previousItems.some((item) => item.status === "active" && item.id !== compilationIssue.itemId))) {
+        return this.invalid("host completion compiler cannot activate a second root TODO while another item is active", "TODO_INVALID_TRANSITION", input.source);
+      }
+      return this.invalid(compilationIssue.message, compilationIssue.code, input.source);
+    }
+    items = [...compilation.normalizedItems];
+    const transitionTrace = [...compilation.trace];
+    const compiledLifecycle = compilation.recovered;
+
     const sameScopeAsCurrent = sameItems(items, previousItems) && sameScope(document, items, this.#state.document, previousItems);
     if (this.#state.modelMutationError !== undefined && input.source === "model" && sameScopeAsCurrent) {
       return this.invalid("an explicit user repair is required after a rejected TODO update", "TODO_INVALID_TRANSITION", input.source);
@@ -941,35 +915,7 @@ export class TodoController {
 
     this.#lastModelMutationError = undefined;
     const preserveApproval = this.#state.approval !== undefined && sameScope(document, items, this.#state.document, previousItems);
-    const compiledLifecycle = compiledIds.size > 0 || reopenedIds.size > 0;
-    const finalRevision = previousRevision + (compiledIds.size > 0 ? 2 : 1);
-    const modelSource: TodoTransitionSource = input.source === "host" ? "host_recovery" : input.source;
-    const transitionTrace: TodoTransitionStep[] = compiledLifecycle
-      ? items.flatMap((item) => {
-          const previous = previousById.get(item.id);
-          if (compiledIds.has(item.id)) {
-            return [
-              { revision: previousRevision + 1, id: item.id, from: "pending" as const, to: "active" as const, source: "host_recovery" as const },
-              {
-                revision: finalRevision,
-                id: item.id,
-                from: "active" as const,
-                to: "done" as const,
-                source: "model" as const,
-                ...(input.hostEvidence?.evidenceRefs === undefined ? {} : { evidenceRefs: [...input.hostEvidence.evidenceRefs] }),
-              },
-            ];
-          }
-          if (previous === undefined || previous.status === item.status) return [];
-          return [{
-            revision: finalRevision,
-            id: item.id,
-            from: previous.status,
-            to: item.status,
-            source: reopenedIds.has(item.id) ? "host_recovery" as const : modelSource,
-          }];
-        })
-      : transitionTraceFor(previousItems, items, finalRevision, modelSource);
+    const finalRevision = transitionTrace.at(-1)?.revision ?? previousRevision + 1;
     this.#state = {
       revision: finalRevision,
       ...(preserveApproval && this.#state.approval !== undefined ? { approval: this.#state.approval } : {}),
