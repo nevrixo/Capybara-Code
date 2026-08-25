@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-25T19:57:39.280Z",
+  "generatedAt": "2026-08-25T19:58:26.810Z",
   "git": {
-    "commit": "757644399a3a43fc1095a7ba0a6c1027b5f36658",
+    "commit": "8e94a26bc25216664304b89f2ea00669266db2ff",
     "dirty": true,
-    "dirtyHash": "601ff46969cf8d9be592cc05ad47ef89a867cb590b45924c1dd0ce977ef48ff3"
+    "dirtyHash": "9ad8395775cd9f70cf257bd839783853968074c46b5e213e5cd4163e040deae4"
   },
   "roots": [
     "apps",
@@ -163,8 +163,8 @@
     },
     {
       "path": "apps/cbc/src/agent.ts",
-      "bytes": 189126,
-      "sha256": "739b100387fa839ccf618e9b60833d72c6ab22e0654c839f298324dee8e97304"
+      "bytes": 189282,
+      "sha256": "12f49b49ca973a5987cc4faa7ecb17cf96d4abf791be93b0d8f129da972cfdff"
     },
     {
       "path": "apps/cbc/src/approvals.ts",
@@ -2568,8 +2568,8 @@
     },
     {
       "path": "packages/session-domain/src/context-pressure.ts",
-      "bytes": 9632,
-      "sha256": "a5202e678a093a4053ca4371975fea90b56ab23ab2d76127ffac97c0b3cad4f7"
+      "bytes": 9781,
+      "sha256": "5767bb274c74fcae64d0e39a926412311344860a040be265ba7bd5448850810f"
     },
     {
       "path": "packages/session-domain/src/context-usage.ts",
@@ -3177,5 +3177,5 @@
       "sha256": "3af6b7d3ec7041c90b18206fe898b904d8781a97c25369189f2733173c6d23a5"
     }
   ],
-  "digest": "12e553f0fe082713add7831649f03ebb5275eac07b742d55df00e51271a4c6e2"
+  "digest": "2d87a1e8e0b1085a49761cd4df86259dbaeb55817e4640e050d1046a7b90cb9a"
 }
