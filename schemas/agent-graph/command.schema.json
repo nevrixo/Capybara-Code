@@ -1,0 +1,26 @@
+{
+  "x-dialect": "json-schema-draft-2020-12",
+  "$id": "cbc:agent-graph/command",
+  "title": "GraphCommand",
+  "description": "Optimistic command against a persistent agent graph.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": [
+        "create_graph",
+        "add_node",
+        "add_edge",
+        "dispatch_node",
+        "complete_attempt",
+        "pause_node",
+        "resume_node",
+        "revive_node",
+        "close_graph"
+      ]
+    },
+    "expectedRevision": { "type": "integer", "minimum": 0 }
+  }
+}

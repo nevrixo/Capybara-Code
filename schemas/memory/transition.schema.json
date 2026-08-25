@@ -1,0 +1,21 @@
+{
+  "x-dialect": "json-schema-draft-2020-12",
+  "$id": "cbc:memory/transition",
+  "title": "MemoryTransition",
+  "description": "Append-only durable memory status transition.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sequence", "memoryId", "toStatus", "reason", "at"],
+  "properties": {
+    "sequence": { "type": "integer", "minimum": 1 },
+    "memoryId": { "type": "string", "minLength": 1 },
+    "fromStatus": { "type": ["string", "null"] },
+    "toStatus": {
+      "type": "string",
+      "enum": ["active", "superseded", "contested", "forgotten"]
+    },
+    "reason": { "type": "string", "minLength": 1 },
+    "evidenceIds": { "type": "array", "items": { "type": "string" } },
+    "at": { "type": "string", "minLength": 1 }
+  }
+}

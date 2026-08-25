@@ -1,0 +1,14 @@
+{
+  "x-dialect": "json-schema-draft-2020-12",
+  "$id": "cbc:plugin/hook",
+  "title": "PluginHookDecision",
+  "description": "Before-hooks may deny, ask, or narrow. They cannot widen authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["action"],
+  "properties": {
+    "action": { "type": "string", "enum": ["continue", "deny", "ask", "narrow"] },
+    "reason": { "type": "string" },
+    "riskFloor": { "type": "string" }
+  }
+}
