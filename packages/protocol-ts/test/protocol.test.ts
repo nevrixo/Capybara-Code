@@ -8,6 +8,7 @@ import {
   ALL_EVENT_KINDS,
   DEFAULT_READ_MAX_LINES,
   EVENT_KINDS,
+  RUNTIME_FEATURE_EVENT_KINDS,
   EVENT_SCHEMA_VERSION,
   EventSequencer,
   FrameDecoder,
@@ -73,12 +74,22 @@ describe("event envelope (§20.6)", () => {
 
   test("every registered kind has defaults", () => {
     expect(EVENT_KINDS.length).toBe(58);
+    expect(RUNTIME_FEATURE_EVENT_KINDS.length).toBeGreaterThan(80);
     for (const kind of ALL_EVENT_KINDS) {
       const defaults = defaultsForKind(kind);
       expect(defaults.level).toBeTruthy();
       expect(defaults.visibility).toBeTruthy();
       expect(defaults.durability).toBeTruthy();
     }
+  });
+
+  test("runtime-feature kinds are known and journaled by default except live LSP/plugin hooks", () => {
+    for (const kind of ["edit.committed", "memory.created", "graph.created", "worktree.created", "plugin.hook_denied"] as const) {
+      expect(isKnownEventKind(kind)).toBe(true);
+      expect(mustJournal(kind)).toBe(true);
+    }
+    expect(mustJournal("plugin.hook_started")).toBe(false);
+    expect(mustJournal("lsp.document_changed")).toBe(false);
   });
 
   test("Context P0 telemetry is hidden and durable", () => {
@@ -301,7 +312,7 @@ describe("method registry drift (§20.11)", () => {
     // `session.{list,resolve,set_status,export,fork,delete}` are the 44th–49th (P0-05); and
     // `runtime.cancel`, `runtime.capability.issue`, `fs.fingerprint`, and
     // `workspace.mode.write` are additions to the original PRD list.
-    expect(REQUEST_METHODS.length).toBe(62);
+    expect(REQUEST_METHODS.length).toBe(75);
     expect(REQUEST_METHODS).toContain("fs.transaction.rollback_to_checkpoint");
     expect(REQUEST_METHODS).toContain("workspace.trust.set");
     expect(REQUEST_METHODS).toContain("session.fork");
@@ -312,6 +323,10 @@ describe("method registry drift (§20.11)", () => {
     expect(new Set(REQUEST_METHODS).size).toBe(REQUEST_METHODS.length);
     expect(REQUEST_METHODS).toContain("memory.search");
     expect(REQUEST_METHODS).toContain("memory.remember");
+    expect(REQUEST_METHODS).toContain("memory.list");
+    expect(REQUEST_METHODS).toContain("memory.verify");
+    expect(REQUEST_METHODS).toContain("worktree.create");
+    expect(REQUEST_METHODS).toContain("merge.preview");
     expect(REQUEST_METHODS).toContain("app.subscription.ack");
     expect(REQUEST_METHODS).toContain("app.subscription.replay");
   });
