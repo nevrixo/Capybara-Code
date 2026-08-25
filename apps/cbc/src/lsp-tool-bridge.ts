@@ -1,9 +1,12 @@
 import {
   normalizeLspHoverQuery,
   normalizeLspLocationQuery,
+  normalizeLspDocumentSymbolQuery,
   normalizeLspSignatureHelpQuery,
   type LspDiagnostic,
   type LspDiagnosticSnapshot,
+  type LspDocumentSymbol,
+  type LspDocumentSymbolsSnapshot,
   type LspHoverQuerySnapshot,
   type LspLocationQueryKind,
   type LspLocationQuerySnapshot,
@@ -38,6 +41,8 @@ const MAX_SEMANTIC_SIGNATURES = 16;
 const MAX_SEMANTIC_SIGNATURE_PARAMETERS = 16;
 const MAX_SEMANTIC_SIGNATURE_LABEL_BYTES = 2 * 1_024;
 const MAX_SEMANTIC_PARAMETER_LABEL_BYTES = 512;
+const MAX_DOCUMENT_SYMBOLS = 32;
+const MAX_DOCUMENT_SYMBOL_NAME_BYTES = 256;
 const UNSAFE_PATH_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/;
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/g;
 const WHITESPACE = /\s+/g;
@@ -45,6 +50,10 @@ const WHITESPACE = /\s+/g;
 export interface LspDiagnosticsReader {
   diagnostics(path: string): Promise<LspDiagnosticLookup>;
 }
+export interface LspDocumentSymbolsReader {
+  documentSymbols(path: string): Promise<LspQueryResult>;
+}
+
 
 export interface LspSemanticReader {
   definition(input: LspTextDocumentPosition): Promise<LspQueryResult>;
@@ -56,7 +65,10 @@ export interface LspSemanticReader {
   signatureHelp(input: LspTextDocumentPosition): Promise<LspQueryResult>;
 }
 
-export interface LspToolReader extends LspDiagnosticsReader, LspSemanticReader {}
+export interface LspToolReader extends
+  LspDiagnosticsReader,
+  LspDocumentSymbolsReader,
+  LspSemanticReader {}
 
 export interface LspSemanticBridgeOptions {
   readonly workspaceRoot: string;
@@ -138,12 +150,25 @@ export interface LspToolSignatureHelpResult {
   readonly truncated: boolean;
 }
 
+/** A further-bounded document-symbol projection for model context. */
+export interface LspToolDocumentSymbolsResult {
+  readonly schemaVersion: "1.0";
+  readonly kind: "symbols";
+  readonly server: string;
+  readonly path: string;
+  readonly totalSymbols: number;
+  readonly returnedSymbols: number;
+  readonly symbols: readonly LspDocumentSymbol[];
+  readonly truncated: boolean;
+}
+
 type LspToolSemanticResult =
   | LspToolLocationQueryResult
   | LspToolHoverResult
   | LspToolSignatureHelpResult;
 
 export type LspDiagnosticsBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
+export type LspDocumentSymbolsBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspSemanticBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspToolBridge = LspSemanticBridge;
 
@@ -195,6 +220,62 @@ export function createLspDiagnosticsBridge(reader: LspDiagnosticsReader): LspDia
  * Semantic LSP queries are process-supervised and read-only. This boundary still
  * treats every server response as untrusted and exposes only normalized output.
  */
+/**
+ * Document-symbol lookups are process-supervised and read-only. Their output
+ * is normalized twice before reaching model context.
+ */
+export function createLspDocumentSymbolsBridge(
+  reader: LspDocumentSymbolsReader,
+  options: LspSemanticBridgeOptions,
+): LspDocumentSymbolsBridge {
+  return async (action, signal) => {
+    if (action.toolId !== "lsp.symbols") {
+      return {
+        result: errorResult("INVALID_ARGUMENT", "LSP document symbols bridge received an unsupported tool"),
+      };
+    }
+    const raw = lspArguments(action);
+    const path = raw === undefined ? undefined : lspPathFromArguments(raw, MAX_SEMANTIC_PATH_BYTES);
+    if (path === undefined) {
+      return {
+        result: errorResult(
+          "INVALID_ARGUMENT",
+          "lsp.symbols requires a bounded workspace-relative path without traversal",
+        ),
+      };
+    }
+    if (signal.aborted) return cancelledSymbols();
+
+    try {
+      const query = await reader.documentSymbols(path);
+      if (signal.aborted) return cancelledSymbols();
+      const snapshot = normalizeLspDocumentSymbolQuery(query.result, {
+        workspaceRoot: options.workspaceRoot,
+        server: query.server,
+        path,
+        maxSymbols: MAX_DOCUMENT_SYMBOLS,
+      });
+      const symbols = projectDocumentSymbols(snapshot);
+      if (symbols === undefined) throw new Error("document symbols could not be projected safely");
+      return {
+        result: okResult(
+          String(symbols.returnedSymbols) + " bounded LSP document symbol(s) returned for " + path,
+          symbols,
+        ),
+        text: renderDocumentSymbols(symbols),
+      };
+    } catch {
+      return {
+        result: errorResult(
+          "NOT_INITIALIZED",
+          "LSP document symbols are currently unavailable; retry after the language server is ready",
+          { retryable: true },
+        ),
+      };
+    }
+  };
+}
+
 export function createLspSemanticBridge(
   reader: LspSemanticReader,
   options: LspSemanticBridgeOptions,
@@ -232,16 +313,19 @@ export function createLspSemanticBridge(
   };
 }
 
-/** Combine diagnostic snapshots and normalized semantic queries behind one LSP bridge. */
+/** Combine diagnostics, document symbols, and semantic queries behind one LSP bridge. */
 export function createLspToolBridge(
   reader: LspToolReader,
   options: LspSemanticBridgeOptions,
 ): LspToolBridge {
   const diagnostics = createLspDiagnosticsBridge(reader);
+  const documentSymbols = createLspDocumentSymbolsBridge(reader, options);
   const semantic = createLspSemanticBridge(reader, options);
   return async (action, signal) =>
     action.toolId === "lsp.diagnostics"
       ? await diagnostics(action, signal)
+      : action.toolId === "lsp.symbols"
+      ? await documentSymbols(action, signal)
       : await semantic(action, signal);
 }
 
@@ -254,6 +338,12 @@ function cancelledSemantic(): Execution {
 function cancelledDiagnostics(): Execution {
   return {
     result: errorResult("CANCELLED", "LSP diagnostics request was cancelled", { retryable: true }),
+  };
+}
+
+function cancelledSymbols(): Execution {
+  return {
+    result: errorResult("CANCELLED", "LSP document symbols request was cancelled", { retryable: true }),
   };
 }
 
@@ -671,6 +761,67 @@ function visibleIndex(value: unknown, upperExclusive: number): number | undefine
     : undefined;
 }
 
+function projectDocumentSymbols(
+  snapshot: LspDocumentSymbolsSnapshot,
+): LspToolDocumentSymbolsResult | undefined {
+  const server = boundedText(snapshot.server, MAX_METADATA_BYTES);
+  const path = workspaceRelativePath(snapshot.path, MAX_SEMANTIC_PATH_BYTES);
+  if (server === undefined || path === undefined) return undefined;
+
+  const rawSymbols = Array.isArray(snapshot.symbols) ? snapshot.symbols : [];
+  const symbols: LspDocumentSymbol[] = [];
+  for (const symbol of rawSymbols.slice(0, MAX_DOCUMENT_SYMBOLS)) {
+    const projected = projectDocumentSymbol(symbol);
+    if (projected === undefined) return undefined;
+    symbols.push(projected);
+  }
+  const totalSymbols = Math.max(
+    symbols.length,
+    boundedCount(snapshot.totalSymbols, rawSymbols.length, 4_096),
+  );
+  return Object.freeze({
+    schemaVersion: "1.0" as const,
+    kind: "symbols" as const,
+    server,
+    path,
+    totalSymbols,
+    returnedSymbols: symbols.length,
+    symbols: Object.freeze(symbols),
+    truncated:
+      snapshot.truncated === true ||
+      rawSymbols.length > symbols.length ||
+      totalSymbols > symbols.length,
+  });
+}
+
+function projectDocumentSymbol(value: LspDocumentSymbol): LspDocumentSymbol | undefined {
+  const name = boundedText(value.name, MAX_DOCUMENT_SYMBOL_NAME_BYTES);
+  const range = projectSemanticRange(value.range);
+  const selectionRange = value.selectionRange === undefined
+    ? undefined
+    : projectSemanticRange(value.selectionRange);
+  const containerName = value.containerName === undefined
+    ? undefined
+    : boundedText(value.containerName, MAX_DOCUMENT_SYMBOL_NAME_BYTES);
+  if (
+    name === undefined ||
+    range === undefined ||
+    (value.selectionRange !== undefined && selectionRange === undefined) ||
+    (value.containerName !== undefined && containerName === undefined)
+  ) return undefined;
+
+  const symbol: {
+    name: string;
+    kind: LspDocumentSymbol["kind"];
+    range: LspRange;
+    selectionRange?: LspRange;
+    containerName?: string;
+  } = { name, kind: value.kind, range };
+  if (selectionRange !== undefined) symbol.selectionRange = selectionRange;
+  if (containerName !== undefined) symbol.containerName = containerName;
+  return Object.freeze(symbol);
+}
+
 function projectSemanticSource(value: LspSemanticQuerySource): LspSemanticQuerySource | undefined {
   const path = workspaceRelativePath(value.path, MAX_SEMANTIC_PATH_BYTES);
   const position = projectSemanticPosition(value.position);
@@ -796,6 +947,31 @@ function renderSignatureHelp(result: LspToolSignatureHelpResult): string {
   if (result.truncated) {
     lines.push("[Result is bounded; inspect structured fields before treating it as complete.]");
   }
+  return truncateUtf8(lines.join("\n"), MAX_TEXT_BYTES);
+}
+
+function renderDocumentSymbols(result: LspToolDocumentSymbolsResult): string {
+  const lines = [
+    "Language-server document symbols for " + result.path + ": " +
+      String(result.returnedSymbols) + " symbol(s) shown.",
+  ];
+  if (result.returnedSymbols === 0) {
+    lines.push("No usable document symbols were returned; this does not prove that the document has none.");
+  } else {
+    for (const symbol of result.symbols) {
+      const range = symbol.selectionRange ?? symbol.range;
+      const container = symbol.containerName === undefined ? "" : " in " + symbol.containerName;
+      lines.push(
+        symbol.kind + " " + symbol.name + container + " L" + String(range.start.line + 1) +
+          ":C" + String(range.start.character + 1) + "-L" + String(range.end.line + 1) +
+          ":C" + String(range.end.character + 1),
+      );
+    }
+  }
+  if (result.truncated) {
+    lines.push("[Result is bounded; inspect structured fields before treating it as exhaustive.]");
+  }
+  lines.push("[Symbols are possibly stale language-server claims; verify with current workspace reads before editing.]");
   return truncateUtf8(lines.join("\n"), MAX_TEXT_BYTES);
 }
 
