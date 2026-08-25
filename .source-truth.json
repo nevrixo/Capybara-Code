@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-25T19:50:24.301Z",
+  "generatedAt": "2026-08-25T19:51:37.831Z",
   "git": {
-    "commit": "a34bbee28ff4d234097e68d792b16b25b35c6fb1",
+    "commit": "ff81cc6f535e34a7bc140892301571218ccdd487",
     "dirty": true,
-    "dirtyHash": "8e28ed15faabcf8baaa18724b095a0f939a781ebc1ee2e88bcffbf3639323de3"
+    "dirtyHash": "e1b420ef4a2d604a64614b4658124cf7138d802c97f4a497a8e16b053221a04c"
   },
   "roots": [
     "apps",
@@ -2568,8 +2568,8 @@
     },
     {
       "path": "packages/session-domain/src/context-pressure.ts",
-      "bytes": 9570,
-      "sha256": "0fb384ee24492f6201331cba10836b6bb1f028e32897e6063856c62f26db64dc"
+      "bytes": 9632,
+      "sha256": "a5202e678a093a4053ca4371975fea90b56ab23ab2d76127ffac97c0b3cad4f7"
     },
     {
       "path": "packages/session-domain/src/context-usage.ts",
@@ -3177,5 +3177,5 @@
       "sha256": "3af6b7d3ec7041c90b18206fe898b904d8781a97c25369189f2733173c6d23a5"
     }
   ],
-  "digest": "9fd8c8adaf344615501116006dc663db5be6f55f53ce1d827764e82a373c2add"
+  "digest": "e1b7cf9229519329ac0529aa1c8590e7af1095b9617a3b77fcd9f48571b79f14"
 }
