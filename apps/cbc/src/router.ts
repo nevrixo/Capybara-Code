@@ -39,12 +39,14 @@ async function dispatch(context: CommandContext, command: Command): Promise<Comm
     case "interactive":
       return await interactive(context, {
         ...(command.prompt !== undefined ? { prompt: command.prompt } : {}),
+        ...(command.noDaemon === true ? { noDaemon: true } : {}),
       });
 
     case "run":
       return await run(context, {
         ...(command.prompt !== undefined ? { prompt: command.prompt } : {}),
         ...(command.resultFile !== undefined ? { resultFile: command.resultFile } : {}),
+        ...(command.noDaemon === true ? { noDaemon: true } : {}),
       });
 
     case "auth":

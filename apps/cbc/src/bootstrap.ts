@@ -44,7 +44,7 @@ import {
 } from "@cbc/session-domain";
 import { builtinSkillFiles } from "@cbc/skills";
 import { AppServer } from "@cbc/app-server";
-import type { CapybaraClient } from "@cbc/sdk";
+import { CapybaraClient } from "@cbc/sdk";
 
 import {
   AgentSession,
@@ -75,6 +75,7 @@ import { appendApprovalRule, readApprovalRules } from "./rules-store.ts";
 import type { Runtime, RuntimeSessionSummary } from "./runtime.ts";
 import { SessionAppBackend } from "./session-app-backend.ts";
 import { connectEmbeddedAppClient } from "./session-app-client.ts";
+import { ensureSessionDaemon, type SessionDaemonHandle } from "./commands/daemon.ts";
 import { LspHost, type LspServiceStatus } from "./lsp-host.ts";
 import { createLspToolBridge } from "./lsp-tool-bridge.ts";
 import { DeferredMcpHost } from "./mcp-host.ts";
@@ -100,6 +101,8 @@ export interface BootstrapOptions {
   readonly interactiveApprovals?: Omit<InteractiveBrokerOptions, "granted">;
   /** Optional UI-owned tool surfaces, such as a full-screen `user.ask` card. */
   readonly bridges?: ToolBridges;
+  /** Keep execution inside this process instead of attaching to the local daemon. */
+  readonly noDaemon?: boolean;
 }
 
 export interface Bootstrapped {
@@ -118,6 +121,8 @@ export interface Bootstrapped {
   readonly loadEarlierHistory?: () => Promise<readonly TimelineItem[] | undefined>;
   /** P0-15: shut down any MCP server children for this session. */
   dispose?: () => Promise<void>;
+  /** Local daemon attachment when experimental.sessionDaemon is on. */
+  readonly daemon?: SessionDaemonHandle;
 }
 
 /**
@@ -721,6 +726,41 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
     version: context.version,
   });
 
+  const daemon = await ensureSessionDaemon({
+    context,
+    noDaemon: options.noDaemon === true,
+    enabled: effective.experimental.sessionDaemon && effective.daemon.enabled,
+    autostart: effective.daemon.autostart,
+  });
+  let daemonClient: CapybaraClient | undefined;
+  if (daemon.mode === "daemon" && typeof daemon.socketPath === "string") {
+    try {
+      daemonClient = await CapybaraClient.connect({
+        transport: process.platform === "win32" ? "pipe" : "unix",
+        path: daemon.socketPath,
+        client: {
+          id: (options.headlessPolicy !== undefined ? "cli_" : "tui_") + sessionId.replace(/[^a-zA-Z0-9_]/g, "").slice(0, 24),
+          name: "capy",
+          version: context.version,
+          kind: options.headlessPolicy !== undefined ? "cli" : "tui",
+        },
+      });
+      await daemonClient.request("session.attach", {
+        sessionId,
+        workspaceIdentityDigest: runtime.workspaceId ?? sessionId,
+        mode: "controller",
+      });
+    } catch (error) {
+      warnings.push(
+        `session daemon attach failed; continuing in-process: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      await daemonClient?.close().catch(() => undefined);
+      daemonClient = undefined;
+    }
+  }
+
   return {
     session,
     appClient,
@@ -733,9 +773,19 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
     ...(resumedFrom !== undefined ? { resumedFrom } : {}),
     warnings,
     ...(loadEarlierHistory !== undefined ? { loadEarlierHistory } : {}),
+    ...(daemon.mode === "daemon" ? { daemon } : {}),
     dispose: async () => {
       try {
-        await session.close();
+        if (daemonClient !== undefined) {
+          await daemonClient.request("session.detach", {
+            sessionId,
+            workspaceIdentityDigest: runtime.workspaceId ?? sessionId,
+          }).catch(() => undefined);
+          await daemonClient.close().catch(() => undefined);
+        }
+        if (daemonClient === undefined) {
+          await session.close();
+        }
       } finally {
         await Promise.all([appClient.close(), lspHost.close(), mcpHost?.close()]);
       }

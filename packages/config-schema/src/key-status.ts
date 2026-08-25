@@ -145,6 +145,13 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
   // ---- durable runtime feature gates (implemented incrementally) ----
   ["experimental.editEngineV2", { status: "wired", consumer: "AgentSession / RuntimeToolExecutor structured edit gate" }],
   ["experimental.fullLsp", { status: "wired", consumer: "bootstrap.ts / LspHost supervised LSP gate" }],
+  ["experimental.sessionDaemon", { status: "wired", consumer: "bootstrap.ts / ensureSessionDaemon attach-detach" }],
+  ["experimental.persistentAgentGraph", { status: "wired", consumer: "SubagentBridge GraphAuthority snapshot store" }],
+  ["experimental.worktreeMultiAgent", { status: "wired", consumer: "RuntimeToolExecutor worktree and merge tools" }],
+  ["experimental.pluginRuntime", { status: "wired", consumer: "AgentSession PluginHookBus / WASI plugin supervisor" }],
+  ["experimental.appServer", { status: "wired", consumer: "bootstrap.ts embedded AppServer client" }],
+  ["daemon.autostart", { status: "wired", consumer: "ensureSessionDaemon autostart" }],
+  ["daemon.enabled", { status: "wired", consumer: "ensureSessionDaemon gate" }],
   ["edit.maxOperationsPerPlan", { status: "wired", consumer: "LspHost WorkspaceEdit adapter bound" }],
   ["edit.maxFileBytes", { status: "wired", consumer: "bootstrap.ts runtime exact edit snapshot bound" }],
   ["lsp.enabled", { status: "wired", consumer: "bootstrap.ts / LspHost startup gate" }],

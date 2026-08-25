@@ -16,6 +16,7 @@ import {
 } from "@cbc/app-protocol";
 
 import { Session } from "./session.ts";
+import { createUnixTransport } from "./unix.ts";
 
 export type TransportKind = "stdio" | "unix" | "pipe";
 
@@ -246,6 +247,9 @@ export class CapybaraClient {
 }
 
 function openTransport(options: ConnectOptions): JsonRpcTransport {
+  if ((options.transport === "unix" || options.transport === "pipe") && typeof options.path === "string") {
+    return createUnixTransport(options.path) as JsonRpcTransport;
+  }
   throw new AppProtocolError(structuredError(
     "APP_TRANSPORT_UNSUPPORTED",
     "unavailable",

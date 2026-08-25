@@ -59,6 +59,7 @@ import { ensureTrust, trustLabel } from "../workspace-trust.ts";
 
 export interface InteractiveArgs {
   readonly prompt?: string;
+  readonly noDaemon?: boolean;
 }
 
 export async function interactive(
@@ -239,6 +240,7 @@ export async function interactive(
 
     const bootstrapOptions = (resume: string | undefined) => ({
       context,
+      ...(args.noDaemon === true ? { noDaemon: true } : {}),
       ...(resume !== undefined ? { resume } : {}),
       ...(fullScreen ? { bridges: { ask: fullScreenUserAsk } } : {}),
       interactiveApprovals: {

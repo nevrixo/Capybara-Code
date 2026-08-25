@@ -20,6 +20,7 @@ export interface RunArgs {
   readonly onEvent?: (event: CbcEvent) => void;
   /** Internal cancellation signal; the public CLI installs process signal handlers. */
   readonly signal?: AbortSignal;
+  readonly noDaemon?: boolean;
 }
 
 interface FinalStatusPayload {
@@ -49,6 +50,7 @@ export async function run(context: CommandContext, args: RunArgs): Promise<Comma
   const boot = await bootstrapSession({
     context,
     headlessPolicy: "deny-on-ask",
+    ...(args.noDaemon === true ? { noDaemon: true } : {}),
     ...(args.onEvent !== undefined ? { onEvent: (event) => args.onEvent?.(event) } : {}),
   });
 
