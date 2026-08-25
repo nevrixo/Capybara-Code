@@ -60,6 +60,7 @@ import {
   type SelectionResult,
   type SelectionSignals,
 } from "./selection.ts";
+import type { MemoryBank, MemoryRecord } from "./memory.ts";
 
 /** §18.1 layer identifiers, mirroring `ContextLayer` in the kernel's prompt module. */
 export const CONTEXT_LAYERS = [
@@ -91,6 +92,9 @@ export interface ContextEngineOptions {
   readonly maxEvidenceRecords?: number;
   /** P2 retrieval controller rollout; false restores the deterministic scorer only. */
   readonly retrievalControllerV2?: boolean;
+  /** Optional durable memory bank. Contested records are never compiled. */
+  readonly memory?: MemoryBank;
+  readonly memoryRecallLimit?: number;
   readonly now?: () => number;
 }
 
@@ -236,12 +240,53 @@ export interface RecordedReflection {
  */
 export const REFLECTION_WINDOW = 8;
 
+function memoryContextItem(
+  record: MemoryRecord,
+  workspaceIdentity: string,
+  observedAt: string,
+): ContextItem {
+  const text = `${record.key}: ${record.value}`;
+  return {
+    id: record.id,
+    kind: "memory",
+    authority: "workspace_maintainer",
+    trust: "trusted",
+    scope: {
+      workspaceIdentity,
+      ...(record.validFor.sessionId === undefined ? {} : { taskEpochId: record.validFor.sessionId }),
+      ...(record.validFor.paths === undefined || record.validFor.paths.length === 0
+        ? {}
+        : { paths: [...record.validFor.paths] }),
+    },
+    provenance: {
+      source: `memory:${record.scope}`,
+      locator: record.key,
+      digest: evidenceDigest({ id: record.id, key: record.key, value: record.value, revision: record.revision }),
+      observedAt: record.lastValidatedAt || observedAt,
+      parentEvidenceIds: [...record.evidenceIds],
+    },
+    freshness: { state: "fresh" },
+    representation: { resolution: "handle", exact: true, text },
+    estimatedTokens: cachedEstimateTokens(text),
+    dependencies: [],
+    utility: {
+      relevance: 40,
+      coverage: 8,
+      novelty: 2,
+      recency: 4,
+      confidence: record.confidence,
+      verificationValue: 2,
+      riskPenalty: 0,
+    },
+  };
+}
+
 /**
  * Holds the per-session context state: the repository map, the loaded project
  * instructions, and the excerpts currently in the prompt.
  */
 export class ContextEngine {
-  readonly #options: ContextEngineOptions;
+  #options: ContextEngineOptions;
   readonly #excerpts: EvidenceExcerptStore;
   readonly #activeExcerpts: ActiveExcerptSet;
   readonly #activeExcerptBudget: number;
@@ -281,6 +326,14 @@ export class ContextEngine {
   readonly #searchMatches = new Map<string, number>();
   /** Newest last, capped at `REFLECTION_WINDOW`. */
   #reflections: RecordedReflection[] = [];
+
+  attachMemory(memory: MemoryBank, recallLimit?: number): void {
+    this.#options = {
+      ...this.#options,
+      memory,
+      ...(recallLimit === undefined ? {} : { memoryRecallLimit: recallLimit }),
+    };
+  }
 
   constructor(options: ContextEngineOptions) {
     this.#options = options;
@@ -859,6 +912,18 @@ export class ContextEngine {
         "summary",
         { source: record.kind, locator: record.locator, digest: record.digest, observedAt: record.observedAt, parentEvidenceIds: [record.id] },
       ));
+    }
+
+    const memoryBank = this.#options.memory;
+    if (memoryBank !== undefined) {
+      const recalled = memoryBank.recall({
+        statuses: ["active"],
+        workspaceIdentity,
+        now: observedAt,
+      }).slice(0, Math.max(1, this.#options.memoryRecallLimit ?? 16));
+      for (const record of recalled) {
+        add(memoryContextItem(record, workspaceIdentity, observedAt));
+      }
     }
     return items;
   }

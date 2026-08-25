@@ -31,6 +31,7 @@ import type { CbcConfig, ReasoningEffort } from "@cbc/config-schema";
 import { requestModeChange, TaskEpochManager, type InteractionMode, type ModeChangeSource } from "@cbc/session-domain";
 import {
   ContextEngine,
+  MemoryBank,
   createContextScope,
   forkContextFromCapsule,
   importContextHandoff,
@@ -101,6 +102,7 @@ import { errorResult, nativeToolsForFeatures, okResult, ToolRegistry, globMatch,
 
 import type { GrantedRules } from "./approvals.ts";
 import { ExtensionManager } from "./extensions.ts";
+import { PluginHookBus } from "./plugin-host.ts";
 import type { Host } from "./host.ts";
 import { SubagentBridge } from "./subagent-bridge.ts";
 import { HostActionNormalizer, type McpHintResolver } from "./normalizer.ts";
@@ -531,6 +533,7 @@ export class AgentSession {
   #tokenSavingContinuationRecovery = false;
   /** The most recently resolved plan, for `/status` and inspectors. */
   #tokenSavingLastPlan: ResolvedTokenSavingPlan | undefined;
+  readonly #pluginHookBus: PluginHookBus;
 
   constructor(options: AgentSessionOptions) {
     this.#options = options;
@@ -547,6 +550,7 @@ export class AgentSession {
     this.#backgroundJobsReconciled = typeof options.runtime.jobStatus !== "function";
     this.#permissionPreset = options.config.permissions.preset;
     this.#tokenSaving = new TokenSavingController(options.config.agent.tokenSaving);
+    this.#pluginHookBus = new PluginHookBus();
     const fullLspTools =
       options.config.experimental.fullLsp &&
       options.config.lsp.enabled &&
@@ -660,6 +664,37 @@ export class AgentSession {
       ...(options.workspaceIdentityDigest !== undefined ? { workspaceIdentityDigest: options.workspaceIdentityDigest } : {}),
       ...(options.now !== undefined ? { now: options.now } : {}),
     });
+    if (
+      options.config.experimental.durableMemory &&
+      options.config.memory.enabled
+    ) {
+      const workspaceIdentity = options.workspaceIdentityDigest;
+      this.context.attachMemory(
+        new MemoryBank({
+          resolveEvidence: (id) => {
+            const record = this.context.evidence.get(id as `evidence-${string}`);
+            if (record === undefined) return undefined;
+            return {
+              id: record.id,
+              freshness: record.freshness,
+              observedAt: record.observedAt,
+              exact: record.kind === "file_excerpt" || record.kind === "repository_map",
+              digest: record.digest,
+              kind: record.kind,
+              ...(record.workspaceIdentityDigest === undefined
+                ? {}
+                : { workspaceIdentityDigest: record.workspaceIdentityDigest }),
+            };
+          },
+          ...(workspaceIdentity === undefined ? {} : { workspaceIdentity }),
+          sessionId: options.sessionId,
+          allowSessionFallback: options.config.memory.allowSessionFallback,
+          confidenceThresholds: options.config.memory.confidence,
+          ...(options.now !== undefined ? { now: () => new Date(options.now!()).toISOString() } : {}),
+        }),
+        options.config.memory.recallLimit,
+      );
+    }
     this.#rootContextScope = createContextScope({
       scopeId: "ctx_root",
       agentId: "root",
@@ -881,6 +916,9 @@ export class AgentSession {
         });
       },
       beforeToolExecute: async (action) => {
+        if (options.config.experimental.pluginRuntime && options.config.plugins.enabled) {
+          await this.#pluginHookBus.beforeTool(action);
+        }
         if (options.config.agent.todo?.autoProgress === false || this.recorder.model.modeState.selected !== "build") return;
         const command = action.command === undefined
           ? undefined
