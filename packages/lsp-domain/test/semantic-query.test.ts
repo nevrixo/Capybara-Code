@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import {
   LspSemanticQueryDomainError,
   normalizeLspHoverQuery,
+  normalizeLspDocumentHighlightQuery,
   normalizeLspLocationQuery,
   normalizeLspSignatureHelpQuery,
 } from "../src/index.ts";
@@ -37,6 +38,17 @@ function hoverOptions(overrides: Partial<Parameters<typeof normalizeLspHoverQuer
 
 function signatureOptions(
   overrides: Partial<Parameters<typeof normalizeLspSignatureHelpQuery>[1]> = {},
+) {
+  return {
+    workspaceRoot,
+    server: "typescript",
+    source: { path: "src/query.ts", line: 1, character: 4 },
+    ...overrides,
+  };
+}
+
+function highlightOptions(
+  overrides: Partial<Parameters<typeof normalizeLspDocumentHighlightQuery>[1]> = {},
 ) {
   return {
     workspaceRoot,
@@ -362,6 +374,125 @@ describe("normalizeLspSignatureHelpQuery", () => {
     );
     expectQueryError(
       () => normalizeLspSignatureHelpQuery({ signatures: Array.from({ length: 257 }, () => ({ label: "call" })) }, signatureOptions()),
+      "LSP_QUERY_LIMIT",
+    );
+  });
+});
+
+describe("normalizeLspDocumentHighlightQuery", () => {
+  test("returns immutable document-local ranges and strips raw server metadata", () => {
+    const snapshot = normalizeLspDocumentHighlightQuery(
+      [
+        {
+          range: {
+            start: { line: 1, character: 4 },
+            end: { line: 1, character: 10 },
+          },
+          kind: 2,
+          data: { mustNotEscape: true },
+        },
+        {
+          range: {
+            start: { line: 4, character: 0 },
+            end: { line: 4, character: 6 },
+          },
+          data: { mustNotEscape: true },
+        },
+      ],
+      highlightOptions(),
+    );
+
+    expect(snapshot).toEqual({
+      schemaVersion: "1.0",
+      kind: "document_highlights",
+      server: "typescript",
+      source: {
+        path: "src/query.ts",
+        position: { line: 1, character: 4 },
+      },
+      highlights: [
+        {
+          range: {
+            start: { line: 1, character: 4 },
+            end: { line: 1, character: 10 },
+          },
+          kind: "read",
+        },
+        {
+          range: {
+            start: { line: 4, character: 0 },
+            end: { line: 4, character: 6 },
+          },
+          kind: "text",
+        },
+      ],
+      totalHighlights: 2,
+      truncated: false,
+    });
+    expect(Object.isFrozen(snapshot)).toBe(true);
+    expect(Object.isFrozen(snapshot.source)).toBe(true);
+    expect(Object.isFrozen(snapshot.highlights)).toBe(true);
+    expect(Object.isFrozen(snapshot.highlights[0])).toBe(true);
+    expect(JSON.stringify(snapshot)).not.toContain("mustNotEscape");
+  });
+
+  test("represents a null result and bounds document highlights deterministically", () => {
+    expect(normalizeLspDocumentHighlightQuery(null, highlightOptions())).toEqual({
+      schemaVersion: "1.0",
+      kind: "document_highlights",
+      server: "typescript",
+      source: {
+        path: "src/query.ts",
+        position: { line: 1, character: 4 },
+      },
+      highlights: [],
+      totalHighlights: 0,
+      truncated: false,
+    });
+
+    const snapshot = normalizeLspDocumentHighlightQuery(
+      Array.from({ length: 2 }, (_value, index) => ({
+        range: {
+          start: { line: index, character: 0 },
+          end: { line: index, character: 1 },
+        },
+        kind: 3,
+      })),
+      highlightOptions({ maxHighlights: 1 }),
+    );
+    expect(snapshot.highlights).toHaveLength(1);
+    expect(snapshot.highlights[0]?.kind).toBe("write");
+    expect(snapshot.totalHighlights).toBe(2);
+    expect(snapshot.truncated).toBe(true);
+  });
+
+  test("rejects malformed, out-of-bound, and oversized highlight responses", () => {
+    expectQueryError(
+      () => normalizeLspDocumentHighlightQuery({}, highlightOptions()),
+      "LSP_QUERY_INVALID",
+    );
+    expectQueryError(
+      () => normalizeLspDocumentHighlightQuery([{ range: { start: { line: 1, character: 1 }, end: { line: 0, character: 1 } } }], highlightOptions()),
+      "LSP_QUERY_INVALID",
+    );
+    expectQueryError(
+      () => normalizeLspDocumentHighlightQuery([{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, kind: 4 }], highlightOptions()),
+      "LSP_QUERY_INVALID",
+    );
+    expectQueryError(
+      () => normalizeLspDocumentHighlightQuery([], highlightOptions({ source: { path: "../private.ts", line: 0, character: 0 } })),
+      "LSP_QUERY_SCOPE_VIOLATION",
+    );
+    expectQueryError(
+      () => normalizeLspDocumentHighlightQuery(
+        Array.from({ length: 4_097 }, () => ({
+          range: {
+            start: { line: 0, character: 0 },
+            end: { line: 0, character: 1 },
+          },
+        })),
+        highlightOptions(),
+      ),
       "LSP_QUERY_LIMIT",
     );
   });

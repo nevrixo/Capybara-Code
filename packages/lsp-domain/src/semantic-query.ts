@@ -15,6 +15,9 @@ const MAX_POSITION_COMPONENT = 1_000_000;
 const MAX_INPUT_LOCATIONS = 4_096;
 const MAX_LOCATIONS_PER_QUERY = 256;
 const DEFAULT_MAX_LOCATIONS = 64;
+const MAX_INPUT_DOCUMENT_HIGHLIGHTS = 4_096;
+const MAX_DOCUMENT_HIGHLIGHTS_PER_QUERY = 256;
+const DEFAULT_MAX_DOCUMENT_HIGHLIGHTS = 64;
 const MAX_HOVER_CONTENT_ITEMS = 64;
 const MAX_HOVER_INPUT_BYTES = 64 * 1_024;
 const MAX_HOVER_TEXT_BYTES = 8 * 1_024;
@@ -94,6 +97,31 @@ export interface LspSignatureHelpSnapshot {
   readonly activeSignature?: number;
   readonly activeParameter?: number;
   readonly truncated: boolean;
+}
+
+/** A bounded highlight range in the document that supplied the query position. */
+export interface LspDocumentHighlight {
+  readonly range: LspRange;
+  readonly kind: "text" | "read" | "write";
+}
+
+/** Sanitized document-local symbol highlights. Server metadata is omitted. */
+export interface LspDocumentHighlightSnapshot {
+  readonly schemaVersion: "1.0";
+  readonly kind: "document_highlights";
+  readonly server: string;
+  readonly source: LspSemanticQuerySource;
+  readonly highlights: readonly LspDocumentHighlight[];
+  readonly totalHighlights: number;
+  readonly truncated: boolean;
+}
+
+export interface NormalizeLspDocumentHighlightQueryOptions {
+  readonly workspaceRoot: string;
+  readonly server: string;
+  readonly source: LspSemanticQueryInput;
+  /** Lower an output cap; it can never exceed the hard safety bound. */
+  readonly maxHighlights?: number;
 }
 
 export interface NormalizeLspLocationQueryOptions {
@@ -298,6 +326,51 @@ export function normalizeLspSignatureHelpQuery(
   });
 }
 
+/**
+ * Normalize document-local symbol highlights into bounded ranges. Highlight
+ * ranges are claims from an untrusted server and are scoped to the safe source.
+ */
+export function normalizeLspDocumentHighlightQuery(
+  result: unknown,
+  options: NormalizeLspDocumentHighlightQueryOptions,
+): LspDocumentHighlightSnapshot {
+  const context = normalizeContext(options);
+  const maxHighlights = normalizeMaxDocumentHighlights(options.maxHighlights);
+  if (result === null) {
+    return Object.freeze({
+      schemaVersion: "1.0" as const,
+      kind: "document_highlights" as const,
+      server: context.server,
+      source: context.source,
+      highlights: Object.freeze([]),
+      totalHighlights: 0,
+      truncated: false,
+    });
+  }
+  if (!Array.isArray(result)) {
+    throw failure("LSP_QUERY_INVALID", "document highlight response must be an array or null");
+  }
+  if (result.length > MAX_INPUT_DOCUMENT_HIGHLIGHTS) {
+    throw failure(
+      "LSP_QUERY_LIMIT",
+      "document highlight response exceeds the " + String(MAX_INPUT_DOCUMENT_HIGHLIGHTS) + " item input limit",
+    );
+  }
+
+  const highlights = result
+    .slice(0, maxHighlights)
+    .map((highlight, index) => normalizeDocumentHighlight(highlight, "document highlight " + String(index)));
+  return Object.freeze({
+    schemaVersion: "1.0" as const,
+    kind: "document_highlights" as const,
+    server: context.server,
+    source: context.source,
+    highlights: Object.freeze(highlights),
+    totalHighlights: result.length,
+    truncated: result.length > maxHighlights,
+  });
+}
+
 interface NormalizedContext {
   readonly workspaceRoot: string;
   readonly server: string;
@@ -348,6 +421,27 @@ function normalizeLocation(value: unknown, workspaceRoot: string): LspSemanticLo
     path: pathFromUri(uri, workspaceRoot),
     range: normalizeRange(raw.range, "location range"),
   });
+}
+
+function normalizeDocumentHighlight(value: unknown, label: string): LspDocumentHighlight {
+  const raw = requiredRecord(value, label);
+  return Object.freeze({
+    range: normalizeRange(raw.range, label + " range"),
+    kind: normalizeDocumentHighlightKind(raw.kind, label + " kind"),
+  });
+}
+
+function normalizeDocumentHighlightKind(
+  value: unknown,
+  label: string,
+): LspDocumentHighlight["kind"] {
+  if (value === undefined || value === 1) return "text";
+  if (value === 2) return "read";
+  if (value === 3) return "write";
+  throw failure(
+    "LSP_QUERY_INVALID",
+    label + " must be a supported DocumentHighlightKind number",
+  );
 }
 
 function normalizeHoverContents(value: unknown): { readonly text: string | undefined; readonly truncated: boolean } {
@@ -541,6 +635,22 @@ function normalizeMaxLocations(value: unknown): number {
     );
   }
   return maxLocations;
+}
+
+function normalizeMaxDocumentHighlights(value: unknown): number {
+  const maxHighlights = value === undefined ? DEFAULT_MAX_DOCUMENT_HIGHLIGHTS : value;
+  if (
+    typeof maxHighlights !== "number" ||
+    !Number.isSafeInteger(maxHighlights) ||
+    maxHighlights < 1 ||
+    maxHighlights > MAX_DOCUMENT_HIGHLIGHTS_PER_QUERY
+  ) {
+    throw failure(
+      "LSP_QUERY_LIMIT",
+      "maxHighlights must be a positive safe integer up to " + String(MAX_DOCUMENT_HIGHLIGHTS_PER_QUERY),
+    );
+  }
+  return maxHighlights;
 }
 
 function requiredWorkspaceRoot(value: unknown): string {
