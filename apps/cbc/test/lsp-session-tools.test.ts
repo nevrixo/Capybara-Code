@@ -52,6 +52,7 @@ describe("AgentSession LSP tool gate", () => {
       "lsp.implementation",
       "lsp.references",
       "lsp.hover",
+      "lsp.signature_help",
     ];
     const disabled = makeSession(false, true);
     const missingBridge = makeSession(true, false);
