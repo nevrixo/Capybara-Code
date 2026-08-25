@@ -303,6 +303,7 @@
             "reserveOutputTokens",
             "orientationMode",
             "providerCompaction",
+            "providerCompactionMode",
             "compactionThresholdTokens",
             "compactionPolicy",
             "minFreeTokens",
@@ -363,6 +364,11 @@
             "providerCompaction": {
               "type": "boolean",
               "default": true
+            },
+            "providerCompactionMode": {
+              "type": "string",
+              "enum": ["off", "auto", "on"],
+              "default": "auto"
             },
             "compactionThresholdTokens": {
               "type": "integer",

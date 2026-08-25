@@ -1092,7 +1092,11 @@ export class AgentSession {
       maxOutputTokens: options.config.model.maxOutputTokens,
       promptCompiler: options.config.agent.promptCompiler,
       parallelToolCalls: options.config.agent.toolGraph.providerParallelTools,
-      nativeCompaction: options.config.model.context.providerCompaction,
+      nativeCompaction: options.config.model.context.providerCompactionMode === "off"
+        ? false
+        : options.config.model.context.providerCompactionMode === "on"
+          ? true
+          : options.config.model.context.providerCompaction,
       nativeCompactionDynamic: true,
       compactionThresholdTokens: options.config.model.context.compactionThresholdTokens,
       serviceTier: options.config.provider.openai.serviceTier,
@@ -2290,6 +2294,7 @@ export class AgentSession {
     try {
       const result = compact(this.recorder.model, trigger, estimateTokens, {
         ...(options.targetTokens === undefined ? {} : { targetTokens: options.targetTokens }),
+        ...(options.pressure === undefined ? {} : { currentTokens: options.pressure.projectedTokens }),
         generation: this.#contextPressure.generation + 1,
         evidenceRefs: this.context.lastMaterialization?.evidenceIds ?? [],
         reflections: this.context.reflections.map((reflection) => ({

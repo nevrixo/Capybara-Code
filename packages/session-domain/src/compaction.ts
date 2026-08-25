@@ -78,6 +78,8 @@ export interface CompactionReflection {
 export interface CompactionOptions {
   /** Desired upper bound for the rendered compact state. */
   readonly targetTokens?: number;
+  /** Exact candidate measurement when the caller already compiled the request. */
+  readonly currentTokens?: number;
   /** Monotonic capsule generation; defaults to one plus the source generation. */
   readonly generation?: number;
   /** Exact evidence handles pinned into the capsule. */
@@ -351,7 +353,9 @@ export function compact(
   };
 
   const boundedState = boundCompactState(state, estimateTokens, options.targetTokens);
-  const tokensBefore = model.contextUsedTokens;
+  const tokensBefore = options.currentTokens !== undefined && Number.isFinite(options.currentTokens)
+    ? Math.max(0, Math.floor(options.currentTokens))
+    : model.contextUsedTokens;
   const tokensAfter = estimateTokens(renderCompactState(boundedState));
   const sequences = model.timeline.map((item) => item.sequence).filter((sequence) => Number.isSafeInteger(sequence));
   const sourceRange = {
@@ -387,6 +391,46 @@ export function compact(
     capsule,
     journalPreserved: true,
   };
+}
+
+/** Merge adjacent capsules without reopening their source timeline ranges. */
+export function mergeCompactionCapsules(
+  capsules: readonly CompactionCapsule[],
+  generation = Math.max(0, ...capsules.map((capsule) => capsule.generation)) + 1,
+): CompactionCapsule | undefined {
+  if (capsules.length === 0) return undefined;
+  const ordered = [...capsules].sort((left, right) => left.generation - right.generation || left.sourceRange.firstSequence - right.sourceRange.firstSequence);
+  const latestTodo = new Map<string, CompactTodoSnapshot>();
+  const mutations = new Map<string, { path: string; summary: string }>();
+  for (const capsule of ordered) {
+    for (const item of capsule.todoSnapshot) latestTodo.set(item.id, item);
+    for (const mutation of capsule.mutations) mutations.set(mutation.path, mutation);
+  }
+  const payload = {
+    generation,
+    sourceRange: {
+      firstSequence: Math.min(...ordered.map((capsule) => capsule.sourceRange.firstSequence)),
+      lastSequence: Math.max(...ordered.map((capsule) => capsule.sourceRange.lastSequence)),
+    },
+    goal: ordered.find((capsule) => capsule.goal.length > 0)?.goal ?? "",
+    decisions: dedupe(ordered.flatMap((capsule) => [...capsule.decisions])).slice(-24),
+    mutations: [...mutations.values()],
+    verification: dedupe(ordered.flatMap((capsule) => [...capsule.verification])).slice(-24),
+    unresolved: dedupe(ordered.flatMap((capsule) => [...capsule.unresolved])).slice(-24),
+    todoSnapshot: [...latestTodo.values()],
+    evidenceRefs: dedupe(ordered.flatMap((capsule) => [...capsule.evidenceRefs])),
+  };
+  const digest = createHash("sha256").update(JSON.stringify(payload), "utf8").digest("hex");
+  return {
+    id: `capsule-${generation}-${digest.slice(0, 16)}`,
+    ...payload,
+    tokenCount: estimateTokens(renderMergedCapsule(payload)),
+    digest,
+  };
+}
+
+function renderMergedCapsule(payload: Omit<CompactionCapsule, "id" | "tokenCount" | "digest" | "narrativeHint">): string {
+  return JSON.stringify(payload);
 }
 
 /** Reduce optional historical prose until a requested target is met. Pinned state stays. */

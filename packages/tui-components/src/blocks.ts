@@ -2050,7 +2050,7 @@ export function renderFinal(
 
   // New kernel events carry an explicit host presentation. Legacy journal events
   // deliberately keep the report renderer below so old snapshots remain readable.
-  if (item.presentation !== undefined && options.style !== "report") {
+  if (item.presentation !== undefined && item.presentation.legacy !== true && options.style !== "report") {
     return renderChatFinal(item, context, options);
   }
 
@@ -2634,7 +2634,7 @@ export function renderTimelineItemTail(
   if (item.type !== "final" || (item.agentId !== undefined && item.agentId !== "root")) {
     return undefined;
   }
-  if (item.presentation !== undefined) {
+  if (item.presentation !== undefined && item.presentation.legacy !== true) {
     const rendered = renderFinal(item, context, {
       ...(options.finalAnswerStyle === undefined ? {} : { style: options.finalAnswerStyle }),
       ...(options.completionEvidenceMode === undefined ? {} : { evidenceMode: options.completionEvidenceMode }),

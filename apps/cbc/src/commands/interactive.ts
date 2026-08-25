@@ -451,7 +451,7 @@ export async function interactive(
         return;
       }
       if (name === "context") {
-        ui.openOverlay("context", renderContextUsage(model.contextUsage, ui.blockContext));
+        ui.openOverlay("context", renderContextUsage(model.contextUsage, ui.blockContext, model.contextPressure === undefined ? {} : { pressure: model.contextPressure }));
         return;
       }
       if (name === "todo") {
@@ -1798,7 +1798,7 @@ async function handleOverlay(
       const inspection = session.inspectContext();
       ui.openOverlay(
         "context",
-        renderContextUsage(session.viewModel.contextUsage, ui.blockContext, { inspection }),
+        renderContextUsage(session.viewModel.contextUsage, ui.blockContext, { inspection, ...(session.viewModel.contextPressure === undefined ? {} : { pressure: session.viewModel.contextPressure }) }),
       );
       return "continue";
     }

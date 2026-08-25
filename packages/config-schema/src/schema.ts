@@ -85,7 +85,10 @@ export interface ModelContextConfig {
   compaction: "evidence-ledger";
   reserveOutputTokens: number;
   orientationMode: "strict" | "progressive";
+  /** Legacy boolean toggle retained for SDK compatibility. */
   providerCompaction: boolean;
+  /** `auto` is model-relative; `off` disables the provider safety aid. */
+  providerCompactionMode: "off" | "auto" | "on";
   compactionThresholdTokens: number;
   /** Adaptive local pressure policy; legacy remains available for rollback. */
   compactionPolicy: "off" | "legacy" | "adaptive";
@@ -501,6 +504,7 @@ export function defaultConfig(): CbcConfig {
         reserveOutputTokens: 32_000,
         orientationMode: "progressive",
         providerCompaction: true,
+        providerCompactionMode: "auto",
         compactionThresholdTokens: 80_000,
         compactionPolicy: "adaptive",
         minFreeTokens: "auto",
@@ -871,6 +875,7 @@ const ENUMS: Record<string, readonly string[]> = {
   "model.router.strategy": ["utility", "latency", "cost"],
   "model.context.orientationMode": ["strict", "progressive"],
   "model.context.compactionPolicy": ["off", "legacy", "adaptive"],
+  "model.context.providerCompactionMode": ["off", "auto", "on"],
   "model.context.premiumBandPolicy": ["deny", "allow", "utility-gated"],
   "model.cache.mode": ["roi", "always", "off"],
   "provider.openai.native.programmaticToolCalling": ["read-only", "disabled"],
@@ -1139,6 +1144,18 @@ export function mergeConfig(
       }
 
       const existing = readPath(config, target);
+      if (target === "model.context.providerCompaction" && typeof value === "string") {
+        if (!["off", "auto", "on"].includes(String(value))) {
+          issues.push({ severity: "error", path: target, source: layer.source, message: `expected provider compaction mode 'off', 'auto', or 'on'` });
+          continue;
+        }
+        const mode = value as "off" | "auto" | "on";
+        writePath(config, "model.context.providerCompactionMode", mode);
+        writePath(config, "model.context.providerCompaction", mode !== "off");
+        provenance["model.context.providerCompactionMode"] = layer.source;
+        provenance[target] = layer.source;
+        continue;
+      }
       if (
         existing === undefined &&
         target !== "permissions.preset" &&

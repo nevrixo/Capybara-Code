@@ -216,6 +216,14 @@ describe("defaults (§21.4)", () => {
     expect(profiles.economy?.model).toBe("gpt-5.6-luna");
     expect(profiles.review?.reasoningMode).toBe("pro");
   });
+
+  test("default to chat-first adaptive context policies", () => {
+    const config = defaultConfig();
+    expect(config.ui.finalAnswer).toEqual({ style: "chat", evidence: "collapsed", attentionDetails: true });
+    expect(config.model.context.compactionPolicy).toBe("adaptive");
+    expect(config.model.context.providerCompactionMode).toBe("auto");
+    expect(config.model.context.emergencyRatio).toBe(0.9);
+  });
 });
 
 describe("CLI config paths", () => {
@@ -223,6 +231,23 @@ describe("CLI config paths", () => {
     expect(normalizeConfigPath("model.reasoning_effort")).toBe("model.reasoningEffort");
     expect(normalizeConfigPath("model.reasoning.summary")).toBe("model.reasoning.summary");
     expect(normalizeConfigPath("model.max_output_tokens")).toBe("model.maxOutputTokens");
+  });
+});
+
+describe("completion and compaction configuration", () => {
+  test("accepts providerCompaction = auto as a compatibility mode", () => {
+    const merged = mergeConfig([{
+      source: "user",
+      values: {
+        "ui.finalAnswer.style": "report",
+        "model.context.compactionPolicy": "legacy",
+        "model.context.providerCompaction": "auto",
+      },
+    }]);
+    expect(merged.issues.filter((issue) => issue.severity === "error")).toEqual([]);
+    expect(merged.config.ui.finalAnswer.style).toBe("report");
+    expect(merged.config.model.context.compactionPolicy).toBe("legacy");
+    expect(merged.config.model.context.providerCompactionMode).toBe("auto");
   });
 });
 

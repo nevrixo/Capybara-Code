@@ -130,6 +130,8 @@ export interface CompletionPresentationView {
   readonly issues: readonly CompletionIssueView[];
   readonly evidenceMode: "summary" | "expanded";
   readonly locale?: "en" | "ko";
+  /** Set only for pre-presentation journal events; the legacy renderer remains available. */
+  readonly legacy?: true;
 }
 
 export interface TimelineFinal {
@@ -566,6 +568,21 @@ function terminalCompletionStatus(value: unknown): TerminalCompletionStatus {
     default:
       return "completed";
   }
+}
+
+function legacyCompletionPresentation(report: CompletionReportView): CompletionPresentationView {
+  return {
+    disposition: report.status === "completed"
+      ? "success"
+      : report.status === "partial"
+        ? "attention"
+        : report.status === "failed"
+          ? "failure"
+          : "cancelled",
+    issues: [],
+    evidenceMode: report.status === "completed" ? "summary" : "expanded",
+    legacy: true,
+  };
 }
 
 function num(value: unknown, fallback = 0): number {
@@ -1131,8 +1148,12 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
         ...(event.correlationId !== undefined ? { correlationId: event.correlationId } : {}),
       };
       if (answer.length > 0) item.answer = answer;
-      if (p.report) item.report = p.report as CompletionReportView;
-      if (p.presentation) item.presentation = p.presentation as CompletionPresentationView;
+      if (p.report) {
+        item.report = p.report as CompletionReportView;
+        item.presentation = p.presentation
+          ? p.presentation as CompletionPresentationView
+          : legacyCompletionPresentation(item.report);
+      }
       next.timeline.push(item as TimelineFinal);
       next.turnStatus = "verifying";
       break;

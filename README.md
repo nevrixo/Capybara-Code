@@ -93,6 +93,25 @@ Use `/setting` in the TUI to update interactive settings, or use `capy config se
 - Capybara Code creates a single global `config.toml` on first use; it does not read project-local Capybara configuration files.
 - MCP and LSP service definitions stay visible in that file. Missing external executables are reported but never installed automatically.
 - Root agent turns run until completion or cancellation. Sub-agent budgets and process/protocol resource limits remain in place as safety boundaries.
+- Final responses are chat-first by default. Verified file changes and checks remain available as collapsed evidence; failures, permission blocks, and security-sensitive findings expand automatically.
+- `partial` is a machine status, not a failure label: the UI classifies it as success, attention, blocked, or failure based on the recorded evidence. Exit codes and `CompletionReport` remain compatible.
+- Local context compaction uses the next compiled request's projected pressure. It performs lossless output externalization before semantic compaction, preserves TODO/evidence capsules, and allows at most one recompile per provider sample. The original journal is never deleted.
+
+Example global settings:
+
+```toml
+[ui.final_answer]
+style = "chat"             # chat | report
+evidence = "collapsed"     # hidden | collapsed | expanded
+attention_details = true
+
+[model.context]
+compaction_policy = "adaptive"  # off | legacy | adaptive
+provider_compaction_mode = "auto" # off | auto | on
+emergency_ratio = 0.90
+```
+
+Use `/compact` for an explicit compaction. It reports before/after usage and the preserved TODO/evidence counts.
 
 ## Verification
 

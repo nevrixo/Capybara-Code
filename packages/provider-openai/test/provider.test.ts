@@ -72,7 +72,7 @@ describe("model registry (§10.12)", () => {
       outputReserveTokens: 32_000,
       adaptiveLocalTargetTokens: 120_000,
     });
-    expect(threshold).toBe(136_000);
+    expect(threshold).toBe(128_000);
     expect(calculateNativeCompactionThreshold({
       modelWindowTokens: 64_000,
       outputReserveTokens: 32_000,

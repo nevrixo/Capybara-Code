@@ -1,5 +1,6 @@
 import type {
   ContextUsageCategory,
+  ContextPressureViewState,
   ContextUsageSnapshot,
 } from "@cbc/session-domain";
 
@@ -59,6 +60,7 @@ export interface ContextInspectionLike {
 export interface ContextUsageRenderOptions {
   readonly details?: readonly StyledLine[];
   readonly inspection?: ContextInspectionLike;
+  readonly pressure?: ContextPressureViewState;
 }
 
 export function renderContextUsage(
@@ -93,6 +95,11 @@ export function renderContextUsage(
   const source = snapshot.source === "provider_reconciled" ? "provider-reconciled" : snapshot.source;
 
   const lines: StyledLine[] = [
+    ...(options.pressure === undefined ? [] : [fitLine("notice", [
+      segment("  Pressure: ", { fg: "fg.muted", bold: true }),
+      segment(options.pressure.state, { fg: options.pressure.state === "emergency" ? "accent.red" : options.pressure.state === "compact" ? "accent.amber" : "accent.cyan", bold: true }),
+      ...(options.pressure.reasonCodes.length > 0 ? [segment(` · ${options.pressure.reasonCodes.join(", ")}`, { fg: "fg.muted" })] : []),
+    ], context)]),
     fitLine(
       "header",
       [
