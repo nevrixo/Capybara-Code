@@ -5326,6 +5326,23 @@ describe("tool execution helpers", () => {
       expect(locationQuery.result.summary).toContain(toolId);
     }
 
+    const renamePreview = await executor.execute(
+      {
+        callId: "lsp-rename-preview",
+        toolId: "lsp.rename_preview",
+        arguments: {
+          path: "src/widget.ts",
+          line: 0,
+          character: 0,
+          newName: "Renamed",
+        },
+        display: "lsp.rename_preview src/widget.ts Renamed",
+      },
+      new AbortController().signal,
+    );
+    expect(renamePreview.result.ok).toBe(true);
+    expect(renamePreview.result.summary).toContain("lsp.rename_preview");
+
     const unknown = await executor.execute(
       {
         callId: "unknown-1",
@@ -5347,6 +5364,7 @@ describe("tool execution helpers", () => {
       "lsp.implementation",
       "lsp.signature_help",
       "lsp.document_highlights",
+      "lsp.rename_preview",
     ]);
   });
 

@@ -6,10 +6,18 @@ import { MockProvider } from "@cbc/provider-openai";
 import { AgentSession } from "../src/agent.ts";
 import { GrantedRules } from "../src/approvals.ts";
 
-function makeSession(fullLsp: boolean, includeBridge: boolean, trust: "trusted-always" | "untrusted" = "trusted-always"): AgentSession {
+function makeSession(
+  fullLsp: boolean,
+  includeBridge: boolean,
+  trust: "trusted-always" | "untrusted" = "trusted-always",
+  editEngineV2 = false,
+  renameMutation = false,
+): AgentSession {
   const config = structuredClone(loadConfig({ projectTrusted: true, env: {} }).config);
   config.experimental.fullLsp = fullLsp;
+  config.experimental.editEngineV2 = editEngineV2;
   config.lsp.enabled = true;
+  config.lsp.mutations.rename = renameMutation;
   const runtime = {
     workspace: "/work",
     appendEvents: async (params: { events?: unknown[] }) => ({
@@ -69,5 +77,26 @@ describe("AgentSession LSP tool gate", () => {
       expect(untrusted.registry.has(toolId)).toBe(false);
       expect(enabled.registry.activeIds()).not.toContain(toolId);
     }
+  });
+
+  test("requires the edit engine and rename mutation gates for proposal-only rename", () => {
+    const disabled = makeSession(false, true, "trusted-always", true, true);
+    const missingBridge = makeSession(true, false, "trusted-always", true, true);
+    const untrusted = makeSession(true, true, "untrusted", true, true);
+    const missingEditEngine = makeSession(true, true, "trusted-always", false, true);
+    const missingRenameMutation = makeSession(true, true, "trusted-always", true, false);
+    const enabled = makeSession(true, true, "trusted-always", true, true);
+
+    for (const session of [
+      disabled,
+      missingBridge,
+      untrusted,
+      missingEditEngine,
+      missingRenameMutation,
+    ]) {
+      expect(session.registry.has("lsp.rename_preview")).toBe(false);
+    }
+    expect(enabled.registry.has("lsp.rename_preview")).toBe(true);
+    expect(enabled.registry.activeIds()).not.toContain("lsp.rename_preview");
   });
 });

@@ -297,6 +297,63 @@ describe("catalog completeness (§12.2)", () => {
   });
 });
 
+describe("LSP rename preview feature gate", () => {
+  test("requires full LSP, the structured edit engine, and its dedicated mutation gate", () => {
+    const id = "lsp.rename_preview";
+    const disabled = nativeToolsForFeatures().map((tool) => tool.id);
+    const missingFullLsp = nativeToolsForFeatures({
+      editEngineV2: true,
+      lspRenamePreview: true,
+    }).map((tool) => tool.id);
+    const missingEditEngine = nativeToolsForFeatures({
+      fullLsp: true,
+      lspRenamePreview: true,
+    }).map((tool) => tool.id);
+    const missingRenameGate = nativeToolsForFeatures({
+      fullLsp: true,
+      editEngineV2: true,
+    }).map((tool) => tool.id);
+    const enabled = nativeToolsForFeatures({
+      fullLsp: true,
+      editEngineV2: true,
+      lspRenamePreview: true,
+    }).map((tool) => tool.id);
+
+    expect(disabled).not.toContain(id);
+    expect(missingFullLsp).not.toContain(id);
+    expect(missingEditEngine).not.toContain(id);
+    expect(missingRenameGate).not.toContain(id);
+    expect(enabled).toContain(id);
+    expect(findTool(id)).toMatchObject({
+      authority: "read",
+      idempotency: "idempotent",
+      maxParallelism: 1,
+      resultSchemaId: "lsp.rename_preview.v1",
+    });
+
+    const schema = findTool(id)!.parameters;
+    expect(parseAndValidate(JSON.stringify({
+      path: "src/widget.ts",
+      line: 0,
+      character: 13,
+      newName: "Renamed",
+    }), schema).ok).toBe(true);
+    expect(parseAndValidate(JSON.stringify({
+      path: "src/widget.ts",
+      line: 0,
+      character: 13,
+      newName: "",
+    }), schema).ok).toBe(false);
+    expect(parseAndValidate(JSON.stringify({
+      path: "src/widget.ts",
+      line: 0,
+      character: 13,
+      newName: "Renamed",
+      unexpected: true,
+    }), schema).ok).toBe(false);
+  });
+});
+
 describe("argument validation (§12.4, AC-10)", () => {
   const schema = findTool("fs.read")!.parameters;
 
