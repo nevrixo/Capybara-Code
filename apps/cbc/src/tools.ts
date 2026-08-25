@@ -110,6 +110,12 @@ export interface ToolExecutorOptions {
   readonly durableMemory?: boolean;
   /** Enables isolated Git worktree and merge-preview tools. */
   readonly worktreeMultiAgent?: boolean;
+  readonly pluginRuntime?: boolean;
+  readonly pluginInvoke?: (input: {
+    readonly pluginId: string;
+    readonly method: string;
+    readonly params: unknown;
+  }) => Promise<unknown>;
   /** Per-scope gates are enforced again at execution, not only in the catalog. */
   readonly memoryScopes?: Readonly<{
     workspace: boolean;
@@ -1931,6 +1937,34 @@ export class RuntimeToolExecutor implements ToolExecutor {
           return { result: errorResult("INVALID_ARGUMENT", "merge.resolve produced no operations") };
         }
         return await this.#applyMergeFiles(action, [{ path: operation.path, content: operation.content }]);
+      }
+
+      case "plugin.invoke": {
+        if (this.#options.pluginRuntime !== true) {
+          return {
+            result: errorResult(
+              "NOT_FOUND",
+              "plugin runtime is disabled; enable experimental.pluginRuntime",
+              { retryable: false },
+            ),
+          };
+        }
+        const pluginId = str(action, "pluginId");
+        const method = str(action, "method");
+        if (pluginId === undefined || method === undefined) {
+          return { result: errorResult("INVALID_ARGUMENT", "plugin.invoke requires pluginId and method") };
+        }
+        if (this.#options.pluginInvoke === undefined) {
+          return {
+            result: errorResult("NOT_INITIALIZED", "plugin host is not available", { retryable: false }),
+          };
+        }
+        const data = await this.#options.pluginInvoke({
+          pluginId,
+          method,
+          params: args(action).params ?? {},
+        });
+        return { result: okResult(`invoked ${pluginId}.${method}`, data) };
       }
 
       case "git.checkpoint": {

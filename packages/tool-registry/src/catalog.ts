@@ -1432,6 +1432,27 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
     ),
   },
   {
+    id: "plugin.invoke",
+    title: "PluginInvoke",
+    description:
+      "Invoke an admitted plugin tool. The call still goes through ToolRegistry, permission policy, and the runtime; plugins cannot widen authority.",
+    source: "native",
+    defaultRisk: "R1",
+    maxRisk: "R2",
+    alwaysActive: false,
+    mutates: false,
+    network: false,
+    keywords: ["plugin", "hook", "extension", "invoke"],
+    parameters: objectSchema(
+      {
+        pluginId: { type: "string", minLength: 1, maxLength: 200 },
+        method: { type: "string", minLength: 1, maxLength: 200 },
+        params: { type: "object" },
+      },
+      ["pluginId", "method"],
+    ),
+  },
+  {
     id: "skill.search",
     title: "SkillSearch",
     description: "Find Skill metadata matching a piece of work.",
@@ -1673,6 +1694,7 @@ const WORKTREE_TOOL_IDS = new Set([
   "merge.apply",
   "merge.resolve",
 ]);
+const PLUGIN_TOOL_IDS = new Set(["plugin.invoke"]);
 const FULL_LSP_TOOL_IDS = new Set([
   "lsp.diagnostics",
   "lsp.symbols",
@@ -1710,6 +1732,7 @@ export interface NativeToolFeatures {
   readonly lspCodeActionPreview?: boolean;
   /** Requires the formatting mutation rollout and structured edit engine. */
   readonly lspFormattingPreview?: boolean;
+  readonly pluginRuntime?: boolean;
 }
 
 export function nativeToolsForFeatures(features: NativeToolFeatures = {}): ToolDefinition[] {
@@ -1718,6 +1741,7 @@ export function nativeToolsForFeatures(features: NativeToolFeatures = {}): ToolD
     (!DURABLE_MEMORY_TOOL_IDS.has(tool.id) || features.durableMemory === true) &&
     (!WORKTREE_TOOL_IDS.has(tool.id) || features.worktreeMultiAgent === true) &&
     (!FULL_LSP_TOOL_IDS.has(tool.id) || features.fullLsp === true) &&
+    (!PLUGIN_TOOL_IDS.has(tool.id) || features.pluginRuntime === true) &&
     (
       !LSP_RENAME_PREVIEW_TOOL_IDS.has(tool.id) ||
       (features.editEngineV2 === true && features.lspRenamePreview === true)

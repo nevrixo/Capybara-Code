@@ -176,6 +176,15 @@ describe("catalog completeness (§12.2)", () => {
     );
   });
 
+  test("plugin.invoke is opt-in through pluginRuntime and stays in the registry", () => {
+    const disabled = nativeToolsForFeatures().map((tool) => tool.id);
+    const enabled = nativeToolsForFeatures({ pluginRuntime: true }).map((tool) => tool.id);
+    expect(disabled).not.toContain("plugin.invoke");
+    expect(enabled).toContain("plugin.invoke");
+    const registry = new ToolRegistry(nativeToolsForFeatures({ pluginRuntime: true }));
+    expect(registry.has("plugin.invoke")).toBe(true);
+  });
+
   test("durable memory is opt-in through durableMemory", () => {
     const disabled = nativeToolsForFeatures().map((tool) => tool.id);
     const enabled = nativeToolsForFeatures({ durableMemory: true }).map((tool) => tool.id);

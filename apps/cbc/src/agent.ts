@@ -587,6 +587,9 @@ export class AgentSession {
       worktreeMultiAgent:
         options.config.experimental.worktreeMultiAgent &&
         options.config.worktrees.enabled,
+      pluginRuntime:
+        options.config.experimental.pluginRuntime &&
+        options.config.plugins.enabled,
     }).filter((tool) =>
       options.config.agent.compoundTools ||
       (tool.id !== "repo.investigate" && tool.id !== "verification.run_many"),
@@ -851,6 +854,9 @@ export class AgentSession {
       worktreeMultiAgent:
         options.config.experimental.worktreeMultiAgent &&
         options.config.worktrees.enabled,
+      pluginRuntime:
+        options.config.experimental.pluginRuntime &&
+        options.config.plugins.enabled,
       memoryScopes: {
         workspace: options.config.memory.workspaceEnabled,
         session: options.config.memory.sessionEnabled,
