@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   OAuthNetworkError,
-  createPinnedLookup,
+  createPinnedRequestOptions,
   isPublicOAuthAddress,
   safeOAuthRequest,
   validateOAuthEndpoint,
@@ -53,25 +53,22 @@ describe("hardened OAuth networking", () => {
     expect(isPublicOAuthAddress("::ffff:8.8.8.8")).toBe(true);
   });
 
-  test("a pinned lookup honors both single and all-address callback shapes", () => {
-    const lookup = createPinnedLookup({ address: "93.184.216.34", family: 4 });
-    let singleResult: unknown;
-    let singleFamily: number | undefined;
-    lookup("auth.example.com", { all: false }, (error, result, family) => {
-      expect(error).toBeNull();
-      singleResult = result;
-      singleFamily = family;
-    });
-    expect(singleResult).toBe("93.184.216.34");
-    expect(singleFamily).toBe(4);
+  test("a pinned request dials the validated IP while preserving SNI and Host", () => {
+    const options = createPinnedRequestOptions(
+      new URL("https://auth.example.com:8443/token?source=test"),
+      { address: "93.184.216.34", family: 4 },
+      {
+        method: "POST",
+        headers: { accept: "application/json", Host: "attacker.example" },
+      },
+    );
 
-    let allResults: unknown;
-    lookup("auth.example.com", { all: true }, (error, results, family) => {
-      expect(error).toBeNull();
-      allResults = results;
-      expect(family).toBeUndefined();
-    });
-    expect(allResults).toEqual([{ address: "93.184.216.34", family: 4 }]);
+    expect(options.hostname).toBe("93.184.216.34");
+    expect(options.port).toBe(8443);
+    expect(options.servername).toBe("auth.example.com");
+    expect(options.path).toBe("/token?source=test");
+    expect(options.headers).toEqual({ accept: "application/json", host: "auth.example.com:8443" });
+    expect(options.lookup).toBeUndefined();
   });
 
   test("rejects a hostname when any pinned DNS answer is non-public", async () => {
@@ -89,6 +86,58 @@ describe("hardened OAuth networking", () => {
       }),
     ).rejects.toMatchObject({ kind: "policy" });
     expect(contacted).toBe(false);
+  });
+
+  test("falls back to the next validated address after a connection refusal", async () => {
+    const attempts: string[] = [];
+    let resolutions = 0;
+    const body = "grant_type=authorization_code&code=one-time";
+
+    const response = await safeOAuthRequest("https://auth.example.com/token", {
+      method: "POST",
+      body,
+      resolver: async () => {
+        resolutions += 1;
+        return [
+          { address: "93.184.216.34", family: 4 },
+          { address: "93.184.216.34", family: 4 },
+          { address: "1.1.1.1", family: 4 },
+        ];
+      },
+      requester: async (_url, address, options) => {
+        attempts.push(address.address);
+        expect(options.method).toBe("POST");
+        expect(options.body).toBe(body);
+        if (address.address === "93.184.216.34") throw new Error("ECONNREFUSED");
+        return { status: 200, headers: {}, body: "ok" };
+      },
+    });
+
+    expect(response.body).toBe("ok");
+    expect(attempts).toEqual(["93.184.216.34", "1.1.1.1"]);
+    expect(resolutions).toBe(1);
+  });
+
+  test("does not replay a token request after an ambiguous network failure", async () => {
+    const attempts: string[] = [];
+    const reset = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+
+    await expect(
+      safeOAuthRequest("https://auth.example.com/token", {
+        method: "POST",
+        body: "grant_type=authorization_code&code=one-time",
+        resolver: async () => [
+          { address: "93.184.216.34", family: 4 },
+          { address: "1.1.1.1", family: 4 },
+        ],
+        requester: async (_url, address) => {
+          attempts.push(address.address);
+          throw reset;
+        },
+      }),
+    ).rejects.toBe(reset);
+
+    expect(attempts).toEqual(["93.184.216.34"]);
   });
 
   test("refuses cross-origin redirects before sending a second request", async () => {

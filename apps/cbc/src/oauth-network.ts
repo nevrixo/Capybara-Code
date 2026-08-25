@@ -8,7 +8,7 @@
 
 import { lookup as dnsLookup } from "node:dns/promises";
 import { request as httpsRequest, type RequestOptions } from "node:https";
-import { isIP, type LookupFunction } from "node:net";
+import { isIP } from "node:net";
 
 export const OAUTH_REQUEST_TIMEOUT_MS = 15_000;
 export const OAUTH_MAX_RESPONSE_BYTES = 1024 * 1024;
@@ -25,33 +25,29 @@ export type OAuthNetworkErrorKind =
 export class OAuthNetworkError extends Error {
   readonly kind: OAuthNetworkErrorKind;
   readonly transient: boolean;
+  /** Stable socket error code when the runtime supplied one. */
+  readonly code?: string;
+  /** The validated address used for the failed connection attempt. */
+  readonly address?: string;
 
-  constructor(kind: OAuthNetworkErrorKind, message: string, transient = false) {
+  constructor(
+    kind: OAuthNetworkErrorKind,
+    message: string,
+    transient = false,
+    details: { readonly code?: string; readonly address?: string } = {},
+  ) {
     super(message);
     this.name = "OAuthNetworkError";
     this.kind = kind;
     this.transient = transient;
+    if (details.code !== undefined) this.code = details.code;
+    if (details.address !== undefined) this.address = details.address;
   }
 }
 
 export interface ResolvedAddress {
   readonly address: string;
   readonly family: 4 | 6;
-}
-
-/**
- * Adapt one validated, pinned address to the lookup callback shapes used by
- * Node and Bun. Bun requests all addresses while racing address families;
- * returning the scalar Node shape there makes Bun attempt to sort a string.
- */
-export function createPinnedLookup(address: ResolvedAddress): LookupFunction {
-  return (_hostname, options, callback) => {
-    if (options.all === true) {
-      callback(null, [{ address: address.address, family: address.family }]);
-      return;
-    }
-    callback(null, address.address, address.family);
-  };
 }
 
 export type OAuthResolver = (hostname: string) => Promise<readonly ResolvedAddress[]>;
@@ -200,10 +196,10 @@ async function defaultResolver(hostname: string): Promise<readonly ResolvedAddre
 async function resolveAndValidate(
   url: URL,
   resolver: OAuthResolver,
-): Promise<ResolvedAddress> {
+): Promise<readonly ResolvedAddress[]> {
   const hostname = stripIpv6Brackets(url.hostname);
   if (isIP(hostname) !== 0) {
-    return { address: hostname, family: isIP(hostname) as 4 | 6 };
+    return [{ address: hostname, family: isIP(hostname) as 4 | 6 }];
   }
 
   let addresses: readonly ResolvedAddress[];
@@ -219,6 +215,7 @@ async function resolveAndValidate(
   if (addresses.length === 0) {
     throw new OAuthNetworkError("dns", `OAuth endpoint '${hostname}' resolved to no addresses`, true);
   }
+  const unique = new Map<string, ResolvedAddress>();
   for (const entry of addresses) {
     if ((entry.family !== 4 && entry.family !== 6) || !isPublicOAuthAddress(entry.address)) {
       throw new OAuthNetworkError(
@@ -226,8 +223,9 @@ async function resolveAndValidate(
         `OAuth endpoint '${hostname}' resolved to a non-public address (${entry.address})`,
       );
     }
+    unique.set(`${entry.family}:${entry.address}`, entry);
   }
-  return addresses[0] as ResolvedAddress;
+  return [...unique.values()];
 }
 
 export interface OAuthRawResponse {
@@ -242,6 +240,39 @@ export type OAuthPinnedRequester = (
   options: SafeOAuthRequestOptions,
 ) => Promise<OAuthRawResponse>;
 
+/**
+ * Build an HTTPS request that dials only the validated address while preserving
+ * the OAuth origin for HTTP routing and certificate verification.
+ *
+ * A custom `lookup` callback would normally provide DNS pinning, but Bun 1.3 on
+ * Windows can report `ECONNREFUSED` for that path even when the same address is
+ * reachable. Dialling the IP directly avoids a second DNS lookup and works in both
+ * Node and Bun. The original hostname remains authoritative through SNI and Host.
+ */
+export function createPinnedRequestOptions(
+  url: URL,
+  address: ResolvedAddress,
+  options: SafeOAuthRequestOptions,
+): RequestOptions {
+  const originHostname = stripIpv6Brackets(url.hostname);
+  const headers: Record<string, string> = {};
+  for (const [name, value] of Object.entries(options.headers ?? {})) {
+    if (name.toLowerCase() !== "host") headers[name] = value;
+  }
+  headers.host = url.host;
+
+  return {
+    protocol: "https:",
+    hostname: stripIpv6Brackets(address.address),
+    port: url.port.length > 0 ? Number(url.port) : 443,
+    path: `${url.pathname}${url.search}`,
+    method: options.method ?? "GET",
+    headers,
+    ...(isIP(originHostname) === 0 ? { servername: originHostname } : {}),
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
+  };
+}
+
 async function requestPinned(
   url: URL,
   address: ResolvedAddress,
@@ -249,8 +280,6 @@ async function requestPinned(
 ): Promise<OAuthRawResponse> {
   const timeoutMs = options.timeoutMs ?? OAUTH_REQUEST_TIMEOUT_MS;
   const maxBytes = options.maxResponseBytes ?? OAUTH_MAX_RESPONSE_BYTES;
-  const hostname = stripIpv6Brackets(url.hostname);
-
   return await new Promise<OAuthRawResponse>((resolve, reject) => {
     let timedOut = false;
     let settled = false;
@@ -260,20 +289,23 @@ async function requestPinned(
       if (error instanceof OAuthNetworkError) reject(error);
       else if (timedOut) reject(new OAuthNetworkError("timeout", `OAuth request to ${url.origin} timed out`, true));
       else if (options.signal?.aborted === true) reject(new OAuthNetworkError("network", "OAuth request was cancelled", true));
-      else reject(new OAuthNetworkError("network", `OAuth request to ${url.origin} failed: ${error instanceof Error ? error.message : String(error)}`, true));
+      else {
+        const code = networkErrorCode(error);
+        reject(
+          new OAuthNetworkError(
+            "network",
+            `OAuth request to ${url.origin} failed: ${error instanceof Error ? error.message : String(error)}`,
+            true,
+            {
+              ...(code !== undefined ? { code } : {}),
+              address: address.address,
+            },
+          ),
+        );
+      }
     };
 
-    const requestOptions: RequestOptions = {
-      protocol: "https:",
-      hostname,
-      path: `${url.pathname}${url.search}`,
-      method: options.method ?? "GET",
-      headers: { ...(options.headers ?? {}) },
-      lookup: createPinnedLookup(address),
-      ...(url.port.length > 0 ? { port: Number(url.port) } : {}),
-      ...(isIP(hostname) === 0 ? { servername: hostname } : {}),
-      ...(options.signal !== undefined ? { signal: options.signal } : {}),
-    };
+    const requestOptions = createPinnedRequestOptions(url, address, options);
 
     const request = httpsRequest(requestOptions, (response) => {
       const chunks: Uint8Array[] = [];
@@ -317,6 +349,73 @@ async function requestPinned(
   });
 }
 
+/**
+ * Connection errors that prove the request never reached an HTTP peer.
+ *
+ * OAuth authorization codes and rotating refresh tokens must not be replayed after
+ * an ambiguous failure. These codes are safe because the socket could not connect,
+ * so Node/Bun could not have transmitted the queued request body.
+ */
+const ADDRESS_FALLBACK_CODES = new Set([
+  "ECONNREFUSED",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "EADDRNOTAVAIL",
+  "EAFNOSUPPORT",
+]);
+
+function networkErrorCode(error: unknown, depth = 0): string | undefined {
+  if (depth > 2 || typeof error !== "object" || error === null) return undefined;
+  const record = error as { readonly code?: unknown; readonly cause?: unknown; readonly message?: unknown };
+  if (typeof record.code === "string" && record.code.length > 0) return record.code.toUpperCase();
+  if (record.cause !== undefined && record.cause !== error) {
+    const causeCode = networkErrorCode(record.cause, depth + 1);
+    if (causeCode !== undefined) return causeCode;
+  }
+  if (typeof record.message !== "string") return undefined;
+  return record.message
+    .match(/\b(E(?:CONNREFUSED|NETUNREACH|HOSTUNREACH|ADDRNOTAVAIL|AFNOSUPPORT))\b/i)?.[1]
+    ?.toUpperCase();
+}
+
+function mayTryNextAddress(error: unknown): boolean {
+  if (error instanceof OAuthNetworkError && error.kind !== "network") return false;
+  const code = networkErrorCode(error);
+  return code !== undefined && ADDRESS_FALLBACK_CODES.has(code);
+}
+
+async function requestValidatedAddresses(
+  url: URL,
+  addresses: readonly ResolvedAddress[],
+  options: SafeOAuthRequestOptions,
+  requester: OAuthPinnedRequester,
+): Promise<OAuthRawResponse> {
+  const timeoutMs = options.timeoutMs ?? OAUTH_REQUEST_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
+
+  for (let index = 0; index < addresses.length; index += 1) {
+    if (options.signal?.aborted === true) {
+      throw new OAuthNetworkError("network", "OAuth request was cancelled", true);
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw new OAuthNetworkError("timeout", `OAuth request to ${url.origin} timed out`, true);
+    }
+
+    const address = addresses[index] as ResolvedAddress;
+    try {
+      return await requester(url, address, { ...options, timeoutMs: remainingMs });
+    } catch (error) {
+      const hasAnotherAddress = index + 1 < addresses.length;
+      if (!hasAnotherAddress || !mayTryNextAddress(error)) throw error;
+    }
+  }
+
+  // Resolution guarantees a non-empty array. Keep a defensive terminal error in
+  // case an injected resolver or future refactor violates that invariant.
+  throw new OAuthNetworkError("dns", `OAuth endpoint '${url.hostname}' resolved to no addresses`, true);
+}
+
 function redirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
 }
@@ -334,12 +433,17 @@ export async function safeOAuthRequest(
   let body = options.body;
 
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
-    const address = await resolveAndValidate(current, resolver);
-    const response = await requester(current, address, {
-      ...options,
-      method,
-      ...(body !== undefined ? { body } : {}),
-    });
+    const addresses = await resolveAndValidate(current, resolver);
+    const response = await requestValidatedAddresses(
+      current,
+      addresses,
+      {
+        ...options,
+        method,
+        ...(body !== undefined ? { body } : {}),
+      },
+      requester,
+    );
     const maxBytes = options.maxResponseBytes ?? OAUTH_MAX_RESPONSE_BYTES;
     if (Buffer.byteLength(response.body, "utf8") > maxBytes) {
       throw new OAuthNetworkError("response-too-large", `OAuth response exceeded ${maxBytes} bytes`);
