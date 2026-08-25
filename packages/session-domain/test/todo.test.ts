@@ -380,16 +380,36 @@ describe("TodoController completion integrity", () => {
       source: "model",
       items: [{ ...pendingItem(), text: "a new unfinished parser scope", status: "done", evidence: ["claimed"] }],
     });
-    expect(rescope.ok).toBe(false);
-    expect(todos.current().items[0]?.text).toBe(pendingItem().text);
+    expect(rescope.ok).toBe(true);
+    expect(todos.current().items[0]).toMatchObject({
+      text: "a new unfinished parser scope",
+      status: "pending",
+    });
+    if (rescope.ok) {
+      expect(rescope.transitionTrace).toMatchObject([
+        { id: "parser", from: "done", to: "pending", source: "host_recovery" },
+      ]);
+    }
 
-    const skippedRescope = todos.replace({
-      expectedRevision: 3,
+    const skipped = controller();
+    expect(skipped.replace({ expectedRevision: 0, reason: "track work", source: "model", items: [pendingItem()] }).ok).toBe(true);
+    expect(skipped.replace({
+      expectedRevision: 1,
+      reason: "skip work",
+      source: "model",
+      items: [{ ...pendingItem(), status: "skipped" }],
+    }).ok).toBe(true);
+    const skippedRescope = skipped.replace({
+      expectedRevision: 2,
       reason: "try to skip a new scope",
       source: "model",
       items: [{ ...pendingItem(), text: "another new scope", status: "skipped" }],
     });
-    expect(skippedRescope.ok).toBe(false);
+    expect(skippedRescope.ok).toBe(true);
+    expect(skipped.current().items[0]).toMatchObject({
+      text: "another new scope",
+      status: "pending",
+    });
   });
 
   test("a model cannot erase an unfinished item, while an explicit user clear can", () => {
@@ -499,6 +519,56 @@ describe("TodoController completion integrity", () => {
     });
     expect(completed.ok).toBe(true);
     expect(todos.current().items).toMatchObject([{ id: "inspect-workspace", status: "done" }]);
+  });
+
+  test("a completed analysis item can record additional observations in one write", () => {
+    const todos = controller();
+    expect(todos.replace({
+      expectedRevision: 0,
+      reason: "begin repository inspection",
+      source: "model",
+      items: [{
+        id: "inspect",
+        text: "Inspect the workspace",
+        status: "active",
+        kind: "analysis",
+      }],
+    }).ok).toBe(true);
+    expect(todos.replace({
+      expectedRevision: 1,
+      reason: "record the inspection evidence",
+      source: "model",
+      items: [{
+        id: "inspect",
+        text: "Inspect the workspace",
+        status: "done",
+        kind: "analysis",
+        evidence: ["Reviewed the repository root"],
+      }],
+    }).ok).toBe(true);
+
+    const enriched = todos.replace({
+      expectedRevision: 2,
+      reason: "record additional inspection findings",
+      source: "model",
+      items: [{
+        id: "inspect",
+        text: "Inspect the workspace and package scripts",
+        details: "Recorded the repository layout and package scripts",
+        files: ["package.json"],
+        status: "done",
+        kind: "analysis",
+        evidence: ["Reviewed the repository root and package manifest"],
+      }],
+    });
+    expect(enriched.ok).toBe(true);
+    expect(todos.current().items[0]).toMatchObject({
+      id: "inspect",
+      status: "done",
+      text: "Inspect the workspace and package scripts",
+      details: "Recorded the repository layout and package scripts",
+      files: ["package.json"],
+    });
   });
 
   test("does not let blocked analysis bypass the reopen requirement", () => {

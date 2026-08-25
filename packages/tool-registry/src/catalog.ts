@@ -1533,7 +1533,7 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
   {
     id: "todo.write",
     title: "TodoWrite",
-    description: "Update the root session TODO checklist with a revision and evidence. Valid lifecycle: new->pending/active, pending->active, active->done with evidence. One request may hand off an active item to done and a different pending item to active; preserve item scope during completion.",
+    description: "Update the root session TODO checklist with a revision and evidence. Valid lifecycle: new->pending/active, pending->active, active->done with evidence. One request may hand off an active item to done and a different pending item to active. A completed analysis item may record additional observations while staying done; rescoping a completed implementation item reopens it as pending in the same write.",
     source: "native",
     defaultRisk: "R0",
     maxRisk: "R0",

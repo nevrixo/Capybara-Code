@@ -505,19 +505,28 @@ function transitionTraceFor(
  * Planning often discovers an analysis result before the first durable TODO
  * write. Unlike implementation work, that observation has already happened
  * in the read-only turn, so it can be recorded atomically when it carries
- * concrete evidence. Keep this deliberately narrow: an implementation item
- * can never use this shortcut to claim work was performed.
+ * concrete evidence. A later write may add observations to an already-done
+ * analysis item without reopening it. Keep this deliberately narrow: an
+ * implementation item can never use this shortcut to claim work was performed.
  */
 function isEvidenceBackedAnalysisCompletion(
   previous: PlanItem | undefined,
   next: PlanItem,
 ): boolean {
-  return (previous === undefined ||
-    (previous.kind === "analysis" &&
-      (previous.status === "pending" || previous.status === "active"))) &&
-    next.kind === "analysis" &&
-    next.status === "done" &&
-    (next.evidence?.some((entry) => entry.trim().length > 0) ?? false);
+  if (next.kind !== "analysis" || next.status !== "done") return false;
+  if (previous === undefined) {
+    return next.evidence?.some((entry) => entry.trim().length > 0) ?? false;
+  }
+  if (previous.kind !== "analysis") return false;
+  // An already-completed analysis may record additional observations without
+  // reopening. First-time completion still needs concrete evidence.
+  if (previous.status === "done") return true;
+  if (previous.status !== "pending" && previous.status !== "active") return false;
+  return next.evidence?.some((entry) => entry.trim().length > 0) ?? false;
+}
+
+function scopesEqual(left: PlanItem, right: PlanItem): boolean {
+  return JSON.stringify(todoScope(left)) === JSON.stringify(todoScope(right));
 }
 
 /** Explain an invalid model transition in terms the next todo.write can repair. */
@@ -746,18 +755,35 @@ export class TodoController {
     // Compile the narrow pending -> active -> done gap only when the host can
     // prove that this turn actually changed the item's scope (or passed its
     // verification). The model still supplies the final evidence and status.
+    // A completed-item rescope is the inverse: reopen through pending in this
+    // same write so the model does not have to issue a second todo.write.
     const compiledIds = new Set<string>();
-    for (const item of items) {
-      const previous = previousById.get(item.id);
-      if (
-        input.source === "model" &&
-        previous !== undefined &&
-        previous.status === "pending" &&
-        item.status === "done" &&
-        hostEvidenceSupportsCompletion(previous, item, input.hostEvidence)
-      ) {
-        compiledIds.add(item.id);
-      }
+    const reopenedIds = new Set<string>();
+    if (input.source === "model") {
+      items = items.map((item) => {
+        const previous = previousById.get(item.id);
+        if (previous === undefined) return item;
+        if (
+          previous.status === "pending" &&
+          item.status === "done" &&
+          hostEvidenceSupportsCompletion(previous, item, input.hostEvidence)
+        ) {
+          compiledIds.add(item.id);
+          return item;
+        }
+        if (
+          (previous.status === "done" || previous.status === "skipped" || previous.status === "blocked") &&
+          item.status !== "pending" &&
+          item.status !== "active" &&
+          !scopesEqual(previous, item) &&
+          !isEvidenceBackedAnalysisCompletion(previous, item)
+        ) {
+          reopenedIds.add(item.id);
+          const { blockedReason: _blockedReason, ...rest } = item;
+          return { ...rest, status: "pending" };
+        }
+        return item;
+      });
     }
     if (compiledIds.size > 0 && previousItems.some((item) => item.status === "active" && !compiledIds.has(item.id))) {
       return this.invalid("host completion compiler cannot activate a second root TODO while another item is active", "TODO_INVALID_TRANSITION", input.source);
@@ -804,23 +830,35 @@ export class TodoController {
 
     this.#lastModelMutationError = undefined;
     const preserveApproval = this.#state.approval !== undefined && sameScope(document, items, this.#state.document, previousItems);
+    const compiledLifecycle = compiledIds.size > 0 || reopenedIds.size > 0;
     const finalRevision = previousRevision + (compiledIds.size > 0 ? 2 : 1);
-    const transitionTrace: TodoTransitionStep[] = compiledIds.size > 0
+    const modelSource: TodoTransitionSource = input.source === "host" ? "host_recovery" : input.source;
+    const transitionTrace: TodoTransitionStep[] = compiledLifecycle
       ? items.flatMap((item) => {
-          if (!compiledIds.has(item.id)) return [];
-          return [
-            { revision: previousRevision + 1, id: item.id, from: "pending" as const, to: "active" as const, source: "host_recovery" as const },
-            {
-              revision: previousRevision + 2,
-              id: item.id,
-              from: "active" as const,
-              to: "done" as const,
-              source: "model" as const,
-              ...(input.hostEvidence?.evidenceRefs === undefined ? {} : { evidenceRefs: [...input.hostEvidence.evidenceRefs] }),
-            },
-          ];
+          const previous = previousById.get(item.id);
+          if (compiledIds.has(item.id)) {
+            return [
+              { revision: previousRevision + 1, id: item.id, from: "pending" as const, to: "active" as const, source: "host_recovery" as const },
+              {
+                revision: finalRevision,
+                id: item.id,
+                from: "active" as const,
+                to: "done" as const,
+                source: "model" as const,
+                ...(input.hostEvidence?.evidenceRefs === undefined ? {} : { evidenceRefs: [...input.hostEvidence.evidenceRefs] }),
+              },
+            ];
+          }
+          if (previous === undefined || previous.status === item.status) return [];
+          return [{
+            revision: finalRevision,
+            id: item.id,
+            from: previous.status,
+            to: item.status,
+            source: reopenedIds.has(item.id) ? "host_recovery" as const : modelSource,
+          }];
         })
-      : transitionTraceFor(previousItems, items, finalRevision, input.source === "host" ? "host_recovery" : input.source);
+      : transitionTraceFor(previousItems, items, finalRevision, modelSource);
     this.#state = {
       revision: finalRevision,
       ...(preserveApproval && this.#state.approval !== undefined ? { approval: this.#state.approval } : {}),
@@ -841,7 +879,7 @@ export class TodoController {
       ...(this.#state.approval === undefined ? {} : { approval: this.#state.approval }),
       ...(this.digest() === undefined ? {} : { digest: this.digest() }),
       ...(transitionTrace.length === 0 ? {} : { transitionTrace }),
-      ...((safeRebase || compiledIds.size > 0) ? { recovery: [...(safeRebase ? ["safe_rebase"] : []), ...(compiledIds.size > 0 ? ["lifecycle_compiled"] : [])] } : {}),
+      ...((safeRebase || compiledLifecycle) ? { recovery: [...(safeRebase ? ["safe_rebase"] : []), ...(compiledLifecycle ? ["lifecycle_compiled"] : [])] } : {}),
     });
     return { ok: true, changed: true, state: this.current(), ...(transitionTrace.length === 0 ? {} : { transitionTrace }) };
   }  clear(input: { readonly expectedRevision: number; readonly reason: string; readonly source: "user" | "model" }): TodoUpdateResult { return this.replace({ ...input, items: [], clearDocument: true }); }

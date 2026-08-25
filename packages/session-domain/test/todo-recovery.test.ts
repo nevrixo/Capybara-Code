@@ -105,6 +105,41 @@ describe("TODO recovery contract", () => {
     expect(model.todo.items).toMatchObject([{ id: "impl", status: "done" }]);
   });
 
+  test("compiles a completed-item rescope into a pending reopen", () => {
+    const todos = controller();
+    expect(todos.replace({ expectedRevision: 0, reason: "track work", source: "model", items: [implementation] }).ok).toBe(true);
+    expect(todos.replace({
+      expectedRevision: 1,
+      reason: "start work",
+      source: "model",
+      items: [{ ...implementation, status: "active" }],
+    }).ok).toBe(true);
+    expect(todos.replace({
+      expectedRevision: 2,
+      reason: "finish work",
+      source: "model",
+      items: [{ ...implementation, status: "done", evidence: ["verified"] }],
+    }).ok).toBe(true);
+
+    const reopened = todos.replace({
+      expectedRevision: 3,
+      reason: "rescope completed work",
+      source: "model",
+      items: [{ ...implementation, text: "implement the parser and formatter", status: "done", evidence: ["claimed"] }],
+    });
+    expect(reopened.ok).toBe(true);
+    if (reopened.ok) {
+      expect(reopened.state.items).toMatchObject([{
+        id: "impl",
+        text: "implement the parser and formatter",
+        status: "pending",
+      }]);
+      expect(reopened.transitionTrace).toMatchObject([
+        { revision: 4, id: "impl", from: "done", to: "pending", source: "host_recovery" },
+      ]);
+    }
+  });
+
   test("does not use unrelated delegated paths for completion", () => {
     const todos = controller();
     expect(todos.replace({ expectedRevision: 0, reason: "track work", source: "model", items: [implementation] }).ok).toBe(true);
