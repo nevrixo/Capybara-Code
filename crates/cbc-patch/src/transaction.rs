@@ -1633,12 +1633,17 @@ fn apply_hunks(
     let mut deletions = 0usize;
 
     for (hunk_index, hunk) in hunks.iter().enumerate() {
-        let start = hunk.old_start.saturating_sub(1);
+        let start = if hunk.locate_by_context {
+            locate_hunk_start(path, hunk_index, cursor, &original_lines, hunk)?
+        } else {
+            hunk.old_start.saturating_sub(1)
+        };
+        let at_line = start + 1;
         if start < cursor {
             return Err(TransactionError::HunkMismatch {
                 path: path.to_string(),
                 hunk_index,
-                at_line: hunk.old_start,
+                at_line,
                 expected: "non-overlapping hunks".into(),
                 actual: "hunk overlaps a previous hunk".into(),
             });
@@ -1647,8 +1652,8 @@ fn apply_hunks(
             return Err(TransactionError::HunkMismatch {
                 path: path.to_string(),
                 hunk_index,
-                at_line: hunk.old_start,
-                expected: format!("file with at least {} lines", hunk.old_start),
+                at_line,
+                expected: format!("file with at least {at_line} lines"),
                 actual: format!("file has {} lines", original_lines.len()),
             });
         }
@@ -1695,6 +1700,46 @@ fn apply_hunks(
         result.push('\n');
     }
     Ok((result, additions, deletions))
+}
+
+fn locate_hunk_start(
+    path: &str,
+    hunk_index: usize,
+    cursor: usize,
+    original_lines: &[&str],
+    hunk: &Hunk,
+) -> Result<usize, TransactionError> {
+    let old_side = hunk
+        .lines
+        .iter()
+        .filter(|line| line.in_old())
+        .map(HunkLine::text)
+        .collect::<Vec<_>>();
+    let mismatch = |actual: &str| TransactionError::HunkMismatch {
+        path: path.to_string(),
+        hunk_index,
+        at_line: cursor + 1,
+        expected: "one exact match for the unnumbered hunk's old-side context".into(),
+        actual: actual.into(),
+    };
+
+    if old_side.is_empty() {
+        return Err(mismatch("the hunk has no context or removed lines"));
+    }
+    if old_side.len() > original_lines.len().saturating_sub(cursor) {
+        return Err(mismatch("no matching context was found"));
+    }
+
+    let last_start = original_lines.len() - old_side.len();
+    let mut matches = (cursor..=last_start)
+        .filter(|start| original_lines[*start..*start + old_side.len()] == old_side);
+    let Some(first) = matches.next() else {
+        return Err(mismatch("no matching context was found"));
+    };
+    if matches.next().is_some() {
+        return Err(mismatch("the context matched more than once"));
+    }
+    Ok(first)
 }
 
 fn count_lines(content: &str) -> usize {

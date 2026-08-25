@@ -41,7 +41,7 @@ impl std::fmt::Display for PatchParseError {
                 )
             }
             PatchParseError::MalformedHunkHeader { line, text } => {
-                write!(f, "line {line}: malformed hunk header: {text:?} (expected '@@ -<start>,<lines> +<start>,<lines> @@', e.g. '@@ -0,0 +1,3 @@'; bare '@@' is not valid)")
+                write!(f, "line {line}: malformed hunk header: {text:?} (use '@@ -<start>,<lines> +<start>,<lines> @@', e.g. '@@ -0,0 +1,3 @@', or bare '@@' with exact old-side context)")
             }
             PatchParseError::HunkOutsideFile { line } => {
                 write!(f, "line {line}: hunk appears before any file header")
@@ -77,8 +77,17 @@ pub struct Hunk {
     /// 1-based start line in the new file.
     pub new_start: usize,
     pub new_lines: usize,
+    /// Resolve the old-side lines against the current file instead of trusting
+    /// a model-authored line number. This is used for a bare `@@` header and is
+    /// accepted only when the complete old-side context has one exact match.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locate_by_context: bool,
     /// Context and change lines, in order, each tagged with its operation.
     pub lines: Vec<HunkLine>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -240,6 +249,7 @@ pub fn parse_unified_diff(input: &str) -> Result<Patch, PatchParseError> {
                     || body.starts_with("--- ")
                     || body.starts_with("+++ ")
                     || body.starts_with("diff --git ")
+                    || body == "*** End Patch"
                 {
                     break;
                 }
@@ -277,26 +287,12 @@ pub fn parse_unified_diff(input: &str) -> Result<Patch, PatchParseError> {
                 i += 1;
             }
 
-            if old_count != header.old_lines {
-                return Err(PatchParseError::HunkLineCountMismatch {
-                    line: lineno,
-                    expected: header.old_lines,
-                    actual: old_count,
-                });
-            }
-            if new_count != header.new_lines {
-                return Err(PatchParseError::HunkLineCountMismatch {
-                    line: lineno,
-                    expected: header.new_lines,
-                    actual: new_count,
-                });
-            }
-
             file.hunks.push(Hunk {
                 old_start: header.old_start,
-                old_lines: header.old_lines,
+                old_lines: old_count,
                 new_start: header.new_start,
-                new_lines: header.new_lines,
+                new_lines: new_count,
+                locate_by_context: header.locate_by_context,
                 lines: hunk_lines,
             });
             continue;
@@ -349,9 +345,8 @@ fn strip_diff_prefix(path: &str) -> String {
 
 struct HunkHeader {
     old_start: usize,
-    old_lines: usize,
     new_start: usize,
-    new_lines: usize,
+    locate_by_context: bool,
 }
 
 fn parse_hunk_header(raw: &str, lineno: usize) -> Result<HunkHeader, PatchParseError> {
@@ -359,6 +354,13 @@ fn parse_hunk_header(raw: &str, lineno: usize) -> Result<HunkHeader, PatchParseE
         line: lineno,
         text: raw.to_string(),
     };
+    if raw.trim() == "@@" {
+        return Ok(HunkHeader {
+            old_start: 0,
+            new_start: 0,
+            locate_by_context: true,
+        });
+    }
     let body = raw.strip_prefix("@@").ok_or_else(malformed)?;
     let end = body.find("@@").ok_or_else(malformed)?;
     let ranges = body[..end].trim();
@@ -367,13 +369,12 @@ fn parse_hunk_header(raw: &str, lineno: usize) -> Result<HunkHeader, PatchParseE
     let new = parts.next().ok_or_else(malformed)?;
     let old = old.strip_prefix('-').ok_or_else(malformed)?;
     let new = new.strip_prefix('+').ok_or_else(malformed)?;
-    let (old_start, old_lines) = parse_range(old).ok_or_else(malformed)?;
-    let (new_start, new_lines) = parse_range(new).ok_or_else(malformed)?;
+    let (old_start, _) = parse_range(old).ok_or_else(malformed)?;
+    let (new_start, _) = parse_range(new).ok_or_else(malformed)?;
     Ok(HunkHeader {
         old_start,
-        old_lines,
         new_start,
-        new_lines,
+        locate_by_context: false,
     })
 }
 
@@ -464,14 +465,36 @@ mod tests {
     }
 
     #[test]
-    fn rejects_hunk_line_count_mismatch() {
-        // Declares 3 old lines but only provides 1.
+    fn derives_hunk_counts_from_the_body() {
+        // Counts are redundant metadata and are easy for a model to miscount.
+        // The transaction still verifies every old-side line against the file.
         let diff = "--- a/a.txt\n+++ b/a.txt\n@@ -1,3 +1,1 @@\n-a\n+b\n";
-        let err = parse_unified_diff(diff).unwrap_err();
-        assert!(
-            matches!(err, PatchParseError::HunkLineCountMismatch { .. }),
-            "{err:?}"
+        let patch = parse_unified_diff(diff).expect("parse");
+        let hunk = &patch.files[0].hunks[0];
+        assert_eq!(hunk.old_lines, 1);
+        assert_eq!(hunk.new_lines, 1);
+    }
+
+    #[test]
+    fn accepts_bare_hunk_header_for_context_location() {
+        let diff = "--- a/a.txt\n+++ b/a.txt\n@@\n before\n-old\n+new\n after\n";
+        let patch = parse_unified_diff(diff).expect("parse");
+        let hunk = &patch.files[0].hunks[0];
+        assert!(hunk.locate_by_context);
+        assert_eq!(hunk.old_start, 0);
+        assert_eq!(hunk.old_lines, 3);
+        assert_eq!(hunk.new_lines, 3);
+    }
+
+    #[test]
+    fn accepts_apply_patch_end_marker() {
+        let diff = concat!(
+            "*** Begin Patch\n",
+            "--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n",
+            "*** End Patch\n",
         );
+        let patch = parse_unified_diff(diff).expect("parse");
+        assert_eq!(patch.files[0].hunks[0].lines.len(), 2);
     }
 
     #[test]

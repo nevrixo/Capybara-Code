@@ -639,7 +639,7 @@ function friendlyToolSummary(item: ToolCallView): string | undefined {
   const lower = raw.toLowerCase();
   if (item.status === "failed" && lower.includes("patch could not be parsed")) {
     if (lower.includes("hunk declares") || lower.includes("hunk header")) return "Failed to patch (Invalid hunk header)";
-    return "Patch format invalid. Retrying via standard file overwrite...";
+    return "Patch format invalid. Retrying with exact file context...";
   }
   if (raw.length > 180) return raw.slice(0, 177) + "…";
   return raw;

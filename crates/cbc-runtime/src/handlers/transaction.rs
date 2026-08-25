@@ -215,7 +215,7 @@ pub fn patch(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
         RpcError::taxonomy(
             error_codes::INVALID_ARGUMENT,
             "INVALID_ARGUMENT",
-            format!("patch could not be parsed: {e}. Use fs.write with intent=create for a new file, or provide a unified diff with --- a/path and +++ b/path headers plus a valid hunk header like '@@ -0,0 +1,3 @@' (bare '@@' is not valid)."),
+            format!("patch could not be parsed: {e}. Provide --- a/path and +++ b/path headers, then use either a numbered hunk like '@@ -0,0 +1,3 @@' or bare '@@' with enough exact old-side context to match one location. Hunk counts are derived from the body. Use fs.write with intent=create for a new file."),
         )
     })?;
 

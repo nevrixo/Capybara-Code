@@ -77,6 +77,53 @@ fn applies_single_file_patch() {
 }
 
 #[test]
+fn applies_unnumbered_hunk_when_old_context_is_unique() {
+    let fx = Fixture::new();
+    fx.write(
+        "src/main.js",
+        "const untouched = true;\nsetTimeout(() => {\n  oldCall();\n}, 10);\n",
+    );
+
+    let diff = concat!(
+        "--- a/src/main.js\n+++ b/src/main.js\n@@\n",
+        " setTimeout(() => {\n",
+        "-  oldCall();\n",
+        "+  newCall();\n",
+        " }, 10);\n",
+        "*** End Patch\n",
+    );
+    let patch = parse_unified_diff(diff).expect("parse");
+
+    let mut tx = FileTransaction::begin("tx_context", None, None);
+    tx.stage_patch(&patch, &fx.resolver()).expect("stage");
+    tx.commit().expect("commit");
+
+    assert_eq!(
+        fx.read("src/main.js"),
+        "const untouched = true;\nsetTimeout(() => {\n  newCall();\n}, 10);\n"
+    );
+}
+
+#[test]
+fn rejects_unnumbered_hunk_when_old_context_is_ambiguous() {
+    let fx = Fixture::new();
+    fx.write("repeated.txt", "same\nold\nsame\nold\n");
+
+    let diff = "--- a/repeated.txt\n+++ b/repeated.txt\n@@\n same\n-old\n+new\n";
+    let patch = parse_unified_diff(diff).expect("parse");
+
+    let mut tx = FileTransaction::begin("tx_ambiguous_context", None, None);
+    let err = tx.stage_patch(&patch, &fx.resolver()).unwrap_err();
+
+    assert!(
+        matches!(err, TransactionError::HunkMismatch { .. }),
+        "{err}"
+    );
+    assert!(err.to_string().contains("matched more than once"), "{err}");
+    assert_eq!(fx.read("repeated.txt"), "same\nold\nsame\nold\n");
+}
+
+#[test]
 fn ac14_multi_hunk_failure_applies_nothing() {
     // AC-14: when one hunk fails, the whole operation fails with no partial
     // application.

@@ -798,7 +798,7 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
   {
     id: "fs.apply_patch",
     title: "ApplyPatch",
-    description: "Apply a structured unified diff as one all-or-nothing transaction.",
+    description: "Apply an exact-context patch as one all-or-nothing transaction.",
     source: "native",
     defaultRisk: "R2",
     maxRisk: "R2",
@@ -808,7 +808,12 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
     keywords: ["patch", "diff", "edit", "modify", "apply", "change", "fix"],
     parameters: objectSchema(
       {
-        diff: { type: "string", minLength: 1, maxLength: 2_000_000 },
+        diff: {
+          type: "string",
+          minLength: 1,
+          maxLength: 2_000_000,
+          description: "Patch with --- a/path and +++ b/path headers. Prefer bare @@ plus exact, unique old-side context; numbered unified-diff hunks are also accepted and their counts are derived from the body.",
+        },
         // §12.5: expected hashes give optimistic concurrency per file.
         expectedHashes: {
           type: "object",

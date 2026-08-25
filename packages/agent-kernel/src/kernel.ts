@@ -4437,7 +4437,7 @@ export function renderReflectionPrompt(analysis: ReflectionAnalysis): string {
   } else if (analysis.toolId === "fs.apply_patch") {
     lines.push(
       "",
-      "fs.apply_patch correction: send a complete unified diff with --- a/path and +++ b/path headers plus a valid hunk header like '@@ -0,0 +1,3 @@' (bare '@@' is not valid). The hunk header must contain '-<start>,<lines> +<start>,<lines>'. For a new file, use fs.write with intent=create instead of a patch.",
+      "fs.apply_patch correction: re-read the current file, then send one complete patch with --- a/path and +++ b/path headers. Prefer bare '@@' plus enough unchanged/removed old-side lines to identify exactly one location; numbered headers like '@@ -1,3 +1,4 @@' also work. Hunk counts are derived from the body, so do not hand-count them or append wrapper markers. For a new file, use fs.write with intent=create instead.",
     );
   } else if (analysis.toolId === "fs.read" && analysis.errorCategory === "logic_bug") {
     lines.push(
