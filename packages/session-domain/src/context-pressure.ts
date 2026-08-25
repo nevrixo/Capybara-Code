@@ -157,7 +157,7 @@ export function evaluateContextPressure(input: ContextPressureInput): ContextPre
     reasons.push("within_adaptive_budget");
   }
 
-  if (input.lastCompaction !== undefined && input.lastCompaction.newTokensSince < Math.max(256, Math.floor(requiredFreeTokens / 2)) && state === "compact") {
+  if (input.lastCompaction !== undefined && input.lastCompaction.newTokensSince < Math.max(256, Math.floor(requiredFreeTokens / 2)) && state === "compact" && projectedTokens <= budget && currentRatio < emergencyRatio) {
     // A generation guard prevents a compile/compact callback from spinning when
     // a compaction did not materially change the next candidate.
     state = "prepare";
