@@ -14,6 +14,15 @@ import {
   RuntimeRpcError,
   type FingerprintRequest,
   type FingerprintResponse,
+  type MemoryForgetRequest,
+  type MemoryListResponse,
+  type MemoryRecordResponse,
+  type MemoryRememberProposal,
+  type MemoryRememberResponse,
+  type MemoryResolveContestRequest,
+  type MemorySearchRequest,
+  type MemorySearchResponse,
+  type MemoryVerifyResponse,
   type ReadManyRequest,
   type ReadManyResponse,
   type ReadRequest,
@@ -318,6 +327,37 @@ export class RuntimeClient {
     params: FingerprintRequest & Record<string, unknown>,
   ): Promise<FingerprintResponse> {
     return (await this.request("fs.fingerprint", params)) as FingerprintResponse;
+  }
+
+  async searchMemory(params: MemorySearchRequest = {}): Promise<MemorySearchResponse> {
+    return (await this.request("memory.search", { ...params })) as MemorySearchResponse;
+  }
+
+  async rememberMemory(proposal: MemoryRememberProposal): Promise<MemoryRememberResponse> {
+    return (await this.request("memory.remember", { ...proposal })) as MemoryRememberResponse;
+  }
+
+  async listMemory(params: MemorySearchRequest = {}): Promise<MemoryListResponse> {
+    return (await this.request("memory.list", { ...params })) as MemoryListResponse;
+  }
+
+  async getMemory(id: string): Promise<MemoryRecordResponse> {
+    return (await this.request("memory.get", { id })) as MemoryRecordResponse;
+  }
+
+  async forgetMemory(params: MemoryForgetRequest): Promise<MemoryRecordResponse> {
+    return (await this.request("memory.forget", { ...params })) as MemoryRecordResponse;
+  }
+
+  async resolveMemoryContest(params: MemoryResolveContestRequest): Promise<MemoryRecordResponse> {
+    return (await this.request("memory.resolve_contest", {
+      ...params,
+      loserIds: [...params.loserIds],
+    })) as MemoryRecordResponse;
+  }
+
+  async verifyMemory(id: string): Promise<MemoryVerifyResponse> {
+    return (await this.request("memory.verify", { id })) as MemoryVerifyResponse;
   }
 
   /** Graceful shutdown: ask the runtime to stop, then close the pipes. */

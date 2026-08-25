@@ -5,16 +5,20 @@
 //! result through FileTransaction. The TypeScript preflight therefore never
 //! becomes write authority.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use cbc_patch::{
-    preflight_edit_plan, EditError, EditOperation, EditPlan, EditableDocument, PreparedEditPlan,
-    PreparedFileKind, TransactionError,
+    preflight_edit_plan, ConflictPolicy, EditAnchor, EditError, EditOperation, EditPlan,
+    EditSource, EditableDocument, PreparedEditPlan, PreparedFileKind, TransactionError,
 };
 use cbc_protocol::{error_codes, RpcError};
+use cbc_session_store::{
+    EditOperationRecord, EditPlanRecord, EditReceiptRecord, SessionStore, StoreError,
+};
 use cbc_workspace::{PathIntent, ResolveOptions, Workspace};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use crate::handlers::transaction;
 use crate::server::{
@@ -32,6 +36,7 @@ pub fn preview(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
             .map_err(guard_error)
     })?;
     let prepared = preflight_for_workspace(state, &plan, &documents)?;
+    persist_preview(state, &plan, &prepared)?;
     Ok(public_prepared(state, &prepared))
 }
 
@@ -118,6 +123,8 @@ pub fn apply(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
             .map_err(transaction_error)?;
         transaction.staged_paths()
     };
+
+    persist_apply(state, &plan, &prepared, &transaction_id)?;
 
     let mut response = public_prepared(state, &prepared);
     response["transactionId"] = json!(transaction_id);
@@ -264,7 +271,32 @@ fn edit_error(error: EditError) -> RpcError {
 }
 
 fn public_prepared(state: &RuntimeState, prepared: &PreparedEditPlan) -> Value {
-    let files = prepared
+    let files = public_prepared_files(prepared);
+    let resolved_operations = public_resolved_operations(prepared);
+    let diff_preview = prepared
+        .diff_preview
+        .iter()
+        .map(|line| {
+            json!({
+                "path": line.path,
+                "kind": serde_json::to_value(line.kind).expect("diff kind serializes"),
+                "text": state.safe_text(&line.text),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    json!({
+        "status": serde_json::to_value(prepared.status).expect("preflight status serializes"),
+        "planId": prepared.plan_id,
+        "planDigest": prepared.plan_digest,
+        "resolvedOperations": resolved_operations,
+        "files": files,
+        "diffPreview": diff_preview,
+    })
+}
+
+fn public_prepared_files(prepared: &PreparedEditPlan) -> Vec<Value> {
+    prepared
         .files
         .iter()
         .map(|change| {
@@ -286,8 +318,11 @@ fn public_prepared(state: &RuntimeState, prepared: &PreparedEditPlan) -> Value {
             }
             value
         })
-        .collect::<Vec<_>>();
-    let resolved_operations = prepared
+        .collect()
+}
+
+fn public_resolved_operations(prepared: &PreparedEditPlan) -> Vec<Value> {
+    prepared
         .resolved_operations
         .iter()
         .map(|edit| {
@@ -302,27 +337,208 @@ fn public_prepared(state: &RuntimeState, prepared: &PreparedEditPlan) -> Value {
                     .expect("resolution evidence serializes"),
             })
         })
-        .collect::<Vec<_>>();
-    let diff_preview = prepared
-        .diff_preview
+        .collect()
+}
+
+fn persist_preview(
+    state: &RuntimeState,
+    plan: &EditPlan,
+    prepared: &PreparedEditPlan,
+) -> Result<(), RpcError> {
+    if plan.session_id.trim().is_empty() {
+        return Ok(());
+    }
+    let record = plan_record(plan, prepared, "previewed", None);
+    let operations = operation_records(plan, prepared, "previewed")?;
+    with_store(state, |store| store.record_edit_plan(&record, &operations))
+}
+
+fn persist_apply(
+    state: &RuntimeState,
+    plan: &EditPlan,
+    prepared: &PreparedEditPlan,
+    transaction_id: &str,
+) -> Result<(), RpcError> {
+    if plan.session_id.trim().is_empty() {
+        return Ok(());
+    }
+    let created_at = cbc_patch::now_iso8601();
+    let receipt_id = edit_receipt_id(&plan.id, transaction_id, &created_at);
+    let receipt = EditReceiptRecord {
+        id: receipt_id.clone(),
+        plan_id: plan.id.clone(),
+        transaction_id: Some(transaction_id.to_owned()),
+        receipt_json: json!({
+            "schemaVersion": "1.0",
+            "id": receipt_id,
+            "planId": plan.id,
+            "planDigest": prepared.plan_digest,
+            "status": "staged",
+            "createdAt": created_at,
+            "transactionId": transaction_id,
+            "files": public_prepared_files(prepared),
+            "resolvedOperations": public_resolved_operations(prepared),
+        }),
+        created_at: created_at.clone(),
+    };
+    let record = plan_record(plan, prepared, "staged", Some(&created_at));
+    let operations = operation_records(plan, prepared, "staged")?;
+    with_store(state, |store| {
+        if store.edit_plan(&plan.id)?.is_none() {
+            store.record_edit_plan(&record, &operations)?;
+        }
+        store.record_edit_receipt(&receipt)?;
+        store.complete_edit_plan(&plan.id, "staged", &created_at)?;
+        Ok(())
+    })
+}
+
+fn with_store(
+    state: &RuntimeState,
+    f: impl FnOnce(&mut SessionStore) -> Result<(), StoreError>,
+) -> Result<(), RpcError> {
+    let mut guard = state.store.lock().expect("store lock");
+    let Some(store) = guard.as_mut() else {
+        return Ok(());
+    };
+    f(store).map_err(|error| {
+        RpcError::internal(format!("cannot persist edit plan or receipt: {error}"))
+    })
+}
+
+fn plan_record(
+    plan: &EditPlan,
+    prepared: &PreparedEditPlan,
+    status: &str,
+    completed_at: Option<&str>,
+) -> EditPlanRecord {
+    EditPlanRecord {
+        id: plan.id.clone(),
+        session_id: plan.session_id.clone(),
+        turn_id: plan.turn_id.clone(),
+        agent_id: plan.agent_id.clone(),
+        source: edit_source_label(plan.source).to_owned(),
+        workspace_identity_digest: plan.workspace_identity_digest.clone(),
+        worktree_id: plan.worktree_id.clone(),
+        base_workspace_revision: plan.base_workspace_revision.clone(),
+        plan_digest: prepared.plan_digest.clone(),
+        conflict_policy: conflict_policy_label(plan.conflict_policy).to_owned(),
+        status: status.to_owned(),
+        created_at: plan.created_at.clone(),
+        completed_at: completed_at.map(str::to_owned),
+    }
+}
+
+fn operation_records(
+    plan: &EditPlan,
+    prepared: &PreparedEditPlan,
+    status: &str,
+) -> Result<Vec<EditOperationRecord>, RpcError> {
+    let resolved = prepared
+        .resolved_operations
         .iter()
-        .map(|line| {
-            json!({
-                "path": line.path,
-                "kind": serde_json::to_value(line.kind).expect("diff kind serializes"),
-                "text": state.safe_text(&line.text),
+        .map(|edit| (edit.operation_id.as_str(), edit))
+        .collect::<BTreeMap<_, _>>();
+    plan.operations
+        .iter()
+        .enumerate()
+        .map(|(index, operation)| {
+            let resolved = resolved.get(operation.operation_id());
+            Ok(EditOperationRecord {
+                id: operation.operation_id().to_owned(),
+                plan_id: plan.id.clone(),
+                ordinal: i64::try_from(index).unwrap_or(i64::MAX),
+                kind: operation_kind(operation).to_owned(),
+                path: operation.path().to_owned(),
+                base_revision: operation_base_revision(operation),
+                operation_json: serde_json::to_value(operation).map_err(|error| {
+                    RpcError::internal(format!("cannot serialize edit operation: {error}"))
+                })?,
+                resolved_range_json: resolved.map(|edit| {
+                    json!({
+                        "start": edit.byte_range.start,
+                        "end": edit.byte_range.end,
+                    })
+                }),
+                resolution_evidence_json: resolved
+                    .map(|edit| {
+                        serde_json::to_value(&edit.resolution).map_err(|error| {
+                            RpcError::internal(format!(
+                                "cannot serialize resolution evidence: {error}"
+                            ))
+                        })
+                    })
+                    .transpose()?,
+                status: status.to_owned(),
+                error_code: None,
             })
         })
-        .collect::<Vec<_>>();
+        .collect()
+}
 
-    json!({
-        "status": serde_json::to_value(prepared.status).expect("preflight status serializes"),
-        "planId": prepared.plan_id,
-        "planDigest": prepared.plan_digest,
-        "resolvedOperations": resolved_operations,
-        "files": files,
-        "diffPreview": diff_preview,
-    })
+fn edit_receipt_id(plan_id: &str, transaction_id: &str, created_at: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(plan_id.as_bytes());
+    hasher.update(b"\x1f");
+    hasher.update(transaction_id.as_bytes());
+    hasher.update(b"\x1f");
+    hasher.update(created_at.as_bytes());
+    format!("edr_{:x}", hasher.finalize())
+}
+
+fn edit_source_label(source: EditSource) -> &'static str {
+    match source {
+        EditSource::Model => "model",
+        EditSource::Lsp => "lsp",
+        EditSource::Plugin => "plugin",
+        EditSource::Merge => "merge",
+        EditSource::User => "user",
+    }
+}
+
+fn conflict_policy_label(policy: ConflictPolicy) -> &'static str {
+    match policy {
+        ConflictPolicy::Fail => "fail",
+        ConflictPolicy::SafeRebase => "safe_rebase",
+    }
+}
+
+fn operation_kind(operation: &EditOperation) -> &'static str {
+    match operation {
+        EditOperation::ReplaceAnchor { .. } => "replace_anchor",
+        EditOperation::ReplaceRange { .. } => "replace_range",
+        EditOperation::InsertBefore { .. } => "insert_before",
+        EditOperation::InsertAfter { .. } => "insert_after",
+        EditOperation::DeleteAnchor { .. } => "delete_anchor",
+        EditOperation::CreateFile { .. } => "create_file",
+        EditOperation::MoveFile { .. } => "move_file",
+        EditOperation::DeleteFile { .. } => "delete_file",
+    }
+}
+
+fn operation_base_revision(operation: &EditOperation) -> Option<String> {
+    match operation {
+        EditOperation::ReplaceAnchor { anchor, .. }
+        | EditOperation::InsertBefore { anchor, .. }
+        | EditOperation::InsertAfter { anchor, .. }
+        | EditOperation::DeleteAnchor { anchor, .. } => Some(anchor_base_revision(anchor)),
+        EditOperation::ReplaceRange { base_revision, .. } => Some(base_revision.clone()),
+        EditOperation::MoveFile {
+            expected_revision, ..
+        }
+        | EditOperation::DeleteFile {
+            expected_revision, ..
+        } => expected_revision.clone(),
+        EditOperation::CreateFile { .. } => None,
+    }
+}
+
+fn anchor_base_revision(anchor: &EditAnchor) -> String {
+    match anchor {
+        EditAnchor::ExactText(anchor) => anchor.base_revision.clone(),
+        EditAnchor::Context(anchor) => anchor.base_revision.clone(),
+        EditAnchor::Symbol(anchor) => anchor.base_revision.clone(),
+    }
 }
 
 fn missing_transaction(id: &str) -> RpcError {

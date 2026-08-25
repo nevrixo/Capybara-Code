@@ -15,7 +15,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::server::{optional_str, optional_usize, RuntimeState};
+use crate::server::{optional_str, optional_usize, required_str, RuntimeState};
 
 fn store_error(error: StoreError) -> RpcError {
     let (code, taxonomy) = match &error {
@@ -76,6 +76,116 @@ fn bounded_limit(params: &Value) -> Result<usize, RpcError> {
         return Err(RpcError::invalid_params("limit must be greater than zero"));
     }
     Ok(limit.min(cbc_session_store::MAX_MEMORY_RECALL_LIMIT))
+}
+
+fn reject_injected_workspace_identity(params: &Value) -> Result<(), RpcError> {
+    if params
+        .as_object()
+        .is_some_and(|object| object.contains_key("workspaceIdentityDigest"))
+    {
+        return Err(RpcError::invalid_params(
+            "workspaceIdentityDigest is bound by the runtime and cannot be supplied",
+        ));
+    }
+    Ok(())
+}
+
+fn require_string_array(params: &Value, key: &str) -> Result<Vec<String>, RpcError> {
+    match params.get(key) {
+        None | Some(Value::Null) => Err(RpcError::invalid_params(format!(
+            "missing required array param '{key}'"
+        ))),
+        Some(Value::Array(items)) => {
+            let mut values = Vec::with_capacity(items.len());
+            for item in items {
+                let Some(value) = item.as_str() else {
+                    return Err(RpcError::invalid_params(format!(
+                        "{key} must be an array of strings"
+                    )));
+                };
+                values.push(value.to_string());
+            }
+            Ok(values)
+        }
+        Some(_) => Err(RpcError::invalid_params(format!(
+            "{key} must be an array of strings"
+        ))),
+    }
+}
+
+fn require_workspace_memory(
+    store: &SessionStore,
+    id: &str,
+    workspace_identity_digest: &str,
+) -> Result<StoredMemoryRecord, RpcError> {
+    let memory = store.memory(id).map_err(store_error)?.ok_or_else(|| {
+        RpcError::taxonomy(
+            error_codes::NOT_FOUND,
+            "NOT_FOUND",
+            format!("memory not found: {id}"),
+        )
+    })?;
+    if memory.workspace_identity_digest != workspace_identity_digest {
+        return Err(RpcError::taxonomy(
+            error_codes::INVALID_ARGUMENT,
+            "INVALID_ARGUMENT",
+            format!("memory {id} belongs to another workspace"),
+        ));
+    }
+    Ok(memory)
+}
+
+fn recall_query(
+    workspace_identity_digest: String,
+    params: &Value,
+    now: String,
+    default_statuses: Vec<MemoryStatus>,
+    require_fresh_evidence: bool,
+) -> Result<MemoryRecallQuery, RpcError> {
+    let mut statuses = optional_enum_array::<MemoryStatus>(params, "statuses")?;
+    if statuses.is_empty() {
+        statuses = default_statuses;
+    }
+    Ok(MemoryRecallQuery {
+        workspace_identity_digest,
+        key: optional_str(params, "key"),
+        text: optional_str(params, "query"),
+        statuses,
+        scopes: optional_enum_array::<MemoryScope>(params, "scopes")?,
+        session_id: optional_str(params, "sessionId"),
+        task_id: optional_str(params, "taskId"),
+        worktree_id: optional_str(params, "worktreeId"),
+        path: optional_str(params, "path"),
+        now,
+        limit: bounded_limit(params)?,
+        require_fresh_evidence,
+    })
+}
+
+fn evidence_is_fresh(
+    store: &SessionStore,
+    evidence_id: &str,
+    workspace_identity_digest: &str,
+    now: &str,
+) -> Result<bool, RpcError> {
+    let Some(evidence) = store.evidence(evidence_id).map_err(store_error)? else {
+        return Ok(false);
+    };
+    if evidence.input.workspace_identity_digest != workspace_identity_digest {
+        return Ok(false);
+    }
+    if evidence.invalidated_at.is_some() || evidence.input.freshness != EvidenceFreshness::Fresh {
+        return Ok(false);
+    }
+    if evidence
+        .input
+        .expires_at
+        .as_deref()
+        .is_some_and(|expires_at| expires_at <= now)
+    {
+        return Ok(false);
+    }
+    Ok(true)
 }
 /// Model-facing input deliberately omits all authority-owned fields. The runtime
 /// binds the claim to its initialized workspace and derives timestamps from the
@@ -333,22 +443,16 @@ fn require_fresh_evidence(
 /// override the workspace digest or opt into stale evidence through this model
 /// facing method.
 pub fn search(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
+    reject_injected_workspace_identity(&params)?;
     let workspace_identity_digest = workspace_identity(state)?;
     let now = cbc_patch::now_iso8601();
-    let query = MemoryRecallQuery {
-        workspace_identity_digest: workspace_identity_digest.clone(),
-        key: optional_str(&params, "key"),
-        text: optional_str(&params, "query"),
-        statuses: optional_enum_array::<MemoryStatus>(&params, "statuses")?,
-        scopes: optional_enum_array::<MemoryScope>(&params, "scopes")?,
-        session_id: optional_str(&params, "sessionId"),
-        task_id: optional_str(&params, "taskId"),
-        worktree_id: optional_str(&params, "worktreeId"),
-        path: optional_str(&params, "path"),
-        now: now.clone(),
-        limit: bounded_limit(&params)?,
-        require_fresh_evidence: true,
-    };
+    let query = recall_query(
+        workspace_identity_digest.clone(),
+        &params,
+        now.clone(),
+        Vec::new(),
+        true,
+    )?;
     let (records, limit) = with_store(state, |store| {
         let records = store.recall_memory(&query).map_err(store_error)?;
         if !records.is_empty() {
@@ -367,6 +471,109 @@ pub fn search(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
         "freshEvidenceRequired": true,
         "limit": limit,
         "memories": records,
+    }))
+}
+
+/// Inspect workspace memory without marking access. Defaults to active and
+/// contested records; forgotten rows are returned only when requested.
+pub fn list(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
+    reject_injected_workspace_identity(&params)?;
+    let workspace_identity_digest = workspace_identity(state)?;
+    let now = cbc_patch::now_iso8601();
+    let query = recall_query(
+        workspace_identity_digest.clone(),
+        &params,
+        now,
+        vec![MemoryStatus::Active, MemoryStatus::Contested],
+        false,
+    )?;
+    let records = with_store(state, |store| {
+        store.recall_memory(&query).map_err(store_error)
+    })?;
+    Ok(json!({
+        "workspaceIdentityDigest": workspace_identity_digest,
+        "memories": records,
+    }))
+}
+
+/// Return one workspace-bound memory record by id, including forgotten rows.
+pub fn get(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
+    reject_injected_workspace_identity(&params)?;
+    let workspace_identity_digest = workspace_identity(state)?;
+    let id = required_str(&params, "id")?;
+    let memory = with_store(state, |store| {
+        require_workspace_memory(store, &id, &workspace_identity_digest)
+    })?;
+    Ok(json!({
+        "workspaceIdentityDigest": workspace_identity_digest,
+        "memory": memory,
+    }))
+}
+
+/// Logical forget: keep the row and transition history, hide it from default recall.
+pub fn forget(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
+    reject_injected_workspace_identity(&params)?;
+    let workspace_identity_digest = workspace_identity(state)?;
+    let id = required_str(&params, "id")?;
+    let reason = optional_str(&params, "reason").unwrap_or_else(|| "logical forget".into());
+    let at = cbc_patch::now_iso8601();
+    let memory = with_store(state, |store| {
+        store
+            .forget_memory(&id, &workspace_identity_digest, &reason, &at)
+            .map_err(store_error)
+    })?;
+    Ok(json!({
+        "workspaceIdentityDigest": workspace_identity_digest,
+        "memory": memory,
+    }))
+}
+
+/// Activate the winner and supersede each loser in the current workspace.
+pub fn resolve_contest(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
+    reject_injected_workspace_identity(&params)?;
+    let workspace_identity_digest = workspace_identity(state)?;
+    let winner_id = required_str(&params, "winnerId")?;
+    let loser_ids = require_string_array(&params, "loserIds")?;
+    let reason = required_str(&params, "reason")?;
+    let at = cbc_patch::now_iso8601();
+    let memory = with_store(state, |store| {
+        store
+            .resolve_memory_contest(
+                &winner_id,
+                &loser_ids,
+                &workspace_identity_digest,
+                &reason,
+                &at,
+            )
+            .map_err(store_error)
+    })?;
+    Ok(json!({
+        "workspaceIdentityDigest": workspace_identity_digest,
+        "memory": memory,
+    }))
+}
+
+/// Re-check whether every linked evidence record is still fresh.
+pub fn verify(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
+    reject_injected_workspace_identity(&params)?;
+    let workspace_identity_digest = workspace_identity(state)?;
+    let id = required_str(&params, "id")?;
+    let now = cbc_patch::now_iso8601();
+    let (memory, fresh) = with_store(state, |store| {
+        let memory = require_workspace_memory(store, &id, &workspace_identity_digest)?;
+        let mut fresh = !memory.evidence_ids.is_empty();
+        for evidence_id in &memory.evidence_ids {
+            if !evidence_is_fresh(store, evidence_id, &workspace_identity_digest, &now)? {
+                fresh = false;
+                break;
+            }
+        }
+        Ok((memory, fresh))
+    })?;
+    Ok(json!({
+        "workspaceIdentityDigest": workspace_identity_digest,
+        "memory": memory,
+        "fresh": fresh,
     }))
 }
 

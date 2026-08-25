@@ -768,6 +768,11 @@ pub fn dispatch(state: &RuntimeState, request: &RpcRequest) -> Option<Result<Val
 
         "memory.search" => handlers::memory::search(state, params),
         "memory.remember" => handlers::memory::remember(state, params),
+        "memory.list" => handlers::memory::list(state, params),
+        "memory.get" => handlers::memory::get(state, params),
+        "memory.forget" => handlers::memory::forget(state, params),
+        "memory.resolve_contest" => handlers::memory::resolve_contest(state, params),
+        "memory.verify" => handlers::memory::verify(state, params),
 
         "artifact.create" => handlers::artifact::create(state, params),
         "artifact.read" => handlers::artifact::read(state, params),
@@ -2578,6 +2583,154 @@ mod tests {
             .expect("search dispatched")
             .expect("search succeeds");
         assert!(hidden["memories"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn memory_list_get_forget_resolve_and_verify() {
+        let (dir, state) = initialized();
+        let workspace = dir.path().join("ws");
+        std::fs::write(workspace.join("left.txt"), "prettier\n").unwrap();
+        std::fs::write(workspace.join("right.txt"), "biome\n").unwrap();
+
+        let left_evidence = dispatch(
+            &state,
+            &request(
+                "fs.read",
+                json!({ "path": "left.txt", "recordEvidence": true }),
+            ),
+        )
+        .expect("left read dispatched")
+        .expect("left exact read succeeds")["evidenceId"]
+            .as_str()
+            .expect("left evidence id")
+            .to_string();
+        let right_evidence = dispatch(
+            &state,
+            &request(
+                "fs.read",
+                json!({ "path": "right.txt", "recordEvidence": true }),
+            ),
+        )
+        .expect("right read dispatched")
+        .expect("right exact read succeeds")["evidenceId"]
+            .as_str()
+            .expect("right evidence id")
+            .to_string();
+        let workspace_identity = state.require_workspace().unwrap().fingerprint();
+
+        let left = dispatch(
+            &state,
+            &request(
+                "memory.remember",
+                json!({
+                    "key": "formatter",
+                    "value": "prettier",
+                    "paths": ["left.txt"],
+                    "evidenceIds": [left_evidence],
+                }),
+            ),
+        )
+        .expect("left remember dispatched")
+        .expect("left remember succeeds");
+        let left_id = left["memory"]["id"].as_str().unwrap().to_string();
+        let right = dispatch(
+            &state,
+            &request(
+                "memory.remember",
+                json!({
+                    "key": "formatter.alt",
+                    "value": "biome",
+                    "paths": ["right.txt"],
+                    "evidenceIds": [right_evidence],
+                }),
+            ),
+        )
+        .expect("right remember dispatched")
+        .expect("right remember succeeds");
+        let right_id = right["memory"]["id"].as_str().unwrap().to_string();
+
+        let listed = dispatch(&state, &request("memory.list", json!({})))
+            .expect("list dispatched")
+            .expect("list succeeds");
+        assert_eq!(listed["memories"].as_array().unwrap().len(), 2);
+        assert_eq!(listed["workspaceIdentityDigest"], workspace_identity);
+
+        let fetched = dispatch(&state, &request("memory.get", json!({ "id": left_id })))
+            .expect("get dispatched")
+            .expect("get succeeds");
+        assert_eq!(fetched["memory"]["id"], left_id);
+        assert_eq!(fetched["memory"]["status"], "active");
+
+        let verified = dispatch(&state, &request("memory.verify", json!({ "id": left_id })))
+            .expect("verify dispatched")
+            .expect("verify succeeds");
+        assert_eq!(verified["fresh"], true);
+        assert_eq!(verified["memory"]["id"], left_id);
+
+        let resolved = dispatch(
+            &state,
+            &request(
+                "memory.resolve_contest",
+                json!({
+                    "winnerId": left_id,
+                    "loserIds": [right_id],
+                    "reason": "checked-in config wins",
+                }),
+            ),
+        )
+        .expect("resolve dispatched")
+        .expect("resolve succeeds");
+        assert_eq!(resolved["memory"]["status"], "active");
+        let superseded = dispatch(&state, &request("memory.get", json!({ "id": right_id })))
+            .expect("loser get dispatched")
+            .expect("loser get succeeds");
+        assert_eq!(superseded["memory"]["status"], "superseded");
+        let active_only = dispatch(&state, &request("memory.search", json!({})))
+            .expect("search dispatched")
+            .expect("search succeeds");
+        assert_eq!(active_only["memories"].as_array().unwrap().len(), 1);
+        assert_eq!(active_only["memories"][0]["id"], left_id);
+
+        let forgotten = dispatch(
+            &state,
+            &request(
+                "memory.forget",
+                json!({ "id": left_id, "reason": "no longer relevant" }),
+            ),
+        )
+        .expect("forget dispatched")
+        .expect("forget succeeds");
+        assert_eq!(forgotten["memory"]["status"], "forgotten");
+        let hidden = dispatch(&state, &request("memory.search", json!({})))
+            .expect("search dispatched")
+            .expect("search succeeds");
+        assert!(hidden["memories"].as_array().unwrap().is_empty());
+        let inspect = dispatch(
+            &state,
+            &request("memory.list", json!({ "statuses": ["forgotten"] })),
+        )
+        .expect("forgotten list dispatched")
+        .expect("forgotten list succeeds");
+        assert_eq!(inspect["memories"].as_array().unwrap().len(), 1);
+        assert_eq!(inspect["memories"][0]["id"], left_id);
+        let still_there = dispatch(&state, &request("memory.get", json!({ "id": left_id })))
+            .expect("forgotten get dispatched")
+            .expect("forgotten get succeeds");
+        assert_eq!(still_there["memory"]["status"], "forgotten");
+
+        let injected = dispatch(
+            &state,
+            &request(
+                "memory.forget",
+                json!({
+                    "id": right_id,
+                    "workspaceIdentityDigest": workspace_identity,
+                }),
+            ),
+        )
+        .expect("injected forget dispatched")
+        .expect_err("injected workspace identity is refused");
+        assert_eq!(injected.code, error_codes::INVALID_PARAMS);
     }
 
     #[test]

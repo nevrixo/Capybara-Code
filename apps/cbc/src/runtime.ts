@@ -269,6 +269,7 @@ export interface FingerprintResponse {
 }
 
 export type DurableMemoryScope = "workspace" | "session" | "task";
+export type DurableMemoryStatus = "active" | "superseded" | "contested" | "forgotten";
 
 export interface RuntimeMemoryRecord {
   readonly id: string;
@@ -279,7 +280,7 @@ export interface RuntimeMemoryRecord {
   readonly worktreeId?: string;
   readonly key: string;
   readonly value: string;
-  readonly status: "active" | "superseded" | "contested";
+  readonly status: DurableMemoryStatus;
   readonly confidence: number;
   readonly validFor: Record<string, unknown>;
   readonly evidenceIds: readonly string[];
@@ -330,6 +331,31 @@ export interface MemoryRememberResponse {
   readonly workspaceIdentityDigest: string;
   readonly idempotent: boolean;
   readonly memory: RuntimeMemoryRecord;
+}
+
+export interface MemoryListResponse {
+  readonly workspaceIdentityDigest: string;
+  readonly memories: RuntimeMemoryRecord[];
+}
+
+export interface MemoryRecordResponse {
+  readonly workspaceIdentityDigest: string;
+  readonly memory: RuntimeMemoryRecord;
+}
+
+export interface MemoryForgetRequest {
+  readonly id: string;
+  readonly reason?: string;
+}
+
+export interface MemoryResolveContestRequest {
+  readonly winnerId: string;
+  readonly loserIds: readonly string[];
+  readonly reason: string;
+}
+
+export interface MemoryVerifyResponse extends MemoryRecordResponse {
+  readonly fresh: boolean;
 }
 
 type LegacyReadOptions = ReadRequest & Record<string, unknown>;
@@ -750,7 +776,7 @@ export class Runtime {
    * timed-out write must never be replayed without an idempotency key.
    */
   async #stableRead(
-     method: "fs.list" | "fs.glob" | "fs.search" | "fs.read" | "fs.read_many" | "fs.fingerprint" | "git.status" | "git.diff" | "git.log" | "git.show" | "memory.search",
+     method: "fs.list" | "fs.glob" | "fs.search" | "fs.read" | "fs.read_many" | "fs.fingerprint" | "git.status" | "git.diff" | "git.log" | "git.show" | "memory.search" | "memory.list" | "memory.get" | "memory.verify",
     params: Record<string, unknown>,
   ): Promise<unknown> {
     let delayMs = 25;
@@ -894,6 +920,30 @@ export class Runtime {
    */
   async rememberMemory(proposal: MemoryRememberProposal): Promise<MemoryRememberResponse> {
     return await this.#client.request("memory.remember", { ...proposal }) as MemoryRememberResponse;
+  }
+
+  /** Inspect active and contested memory; pass statuses to include forgotten rows. */
+  async listMemory(request: MemorySearchRequest = {}): Promise<MemoryListResponse> {
+    return await this.#stableRead("memory.list", { ...request }) as MemoryListResponse;
+  }
+
+  async getMemory(id: string): Promise<MemoryRecordResponse> {
+    return await this.#stableRead("memory.get", { id }) as MemoryRecordResponse;
+  }
+
+  async forgetMemory(request: MemoryForgetRequest): Promise<MemoryRecordResponse> {
+    return await this.#client.request("memory.forget", { ...request }) as MemoryRecordResponse;
+  }
+
+  async resolveMemoryContest(request: MemoryResolveContestRequest): Promise<MemoryRecordResponse> {
+    return await this.#client.request("memory.resolve_contest", {
+      ...request,
+      loserIds: [...request.loserIds],
+    }) as MemoryRecordResponse;
+  }
+
+  async verifyMemory(id: string): Promise<MemoryVerifyResponse> {
+    return await this.#stableRead("memory.verify", { id }) as MemoryVerifyResponse;
   }
 
   /** Preflight a structured edit plan without opening a write transaction. */

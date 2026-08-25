@@ -138,6 +138,90 @@ export interface FingerprintResponse {
   readonly authoritativeForWrite: boolean;
 }
 
+export type DurableMemoryScope = "workspace" | "session" | "task";
+export type DurableMemoryStatus = "active" | "superseded" | "contested" | "forgotten";
+
+export interface RuntimeMemoryRecord {
+  readonly id: string;
+  readonly workspaceIdentityDigest: string;
+  readonly scope: DurableMemoryScope;
+  readonly status: DurableMemoryStatus;
+  readonly key: string;
+  readonly value: string;
+  readonly confidence: number;
+  readonly validFor: Record<string, unknown>;
+  readonly evidenceIds: readonly string[];
+  readonly revision: number;
+  readonly createdAt: string;
+  readonly lastValidatedAt: string;
+  readonly evidenceObservedAt: string;
+  readonly exactEvidenceObservedAt?: string;
+  readonly expiresAt?: string;
+  readonly [key: string]: unknown;
+}
+
+export interface MemorySearchRequest {
+  readonly key?: string;
+  readonly query?: string;
+  readonly statuses?: readonly DurableMemoryStatus[];
+  readonly scopes?: readonly DurableMemoryScope[];
+  readonly sessionId?: string;
+  readonly taskId?: string;
+  readonly worktreeId?: string;
+  readonly path?: string;
+  readonly limit?: number;
+}
+
+export interface MemorySearchResponse {
+  readonly workspaceIdentityDigest: string;
+  readonly freshEvidenceRequired: boolean;
+  readonly limit: number;
+  readonly memories: RuntimeMemoryRecord[];
+}
+
+export interface MemoryListResponse {
+  readonly workspaceIdentityDigest: string;
+  readonly memories: RuntimeMemoryRecord[];
+}
+
+export interface MemoryRememberProposal {
+  readonly key: string;
+  readonly value: string;
+  readonly evidenceIds: readonly string[];
+  readonly scope?: DurableMemoryScope;
+  readonly sessionId?: string;
+  readonly taskId?: string;
+  readonly worktreeId?: string;
+  readonly paths?: readonly string[];
+  readonly confidence?: number;
+  readonly reason?: string;
+  readonly agentId?: string;
+}
+
+export interface MemoryRecordResponse {
+  readonly workspaceIdentityDigest: string;
+  readonly memory: RuntimeMemoryRecord;
+}
+
+export interface MemoryRememberResponse extends MemoryRecordResponse {
+  readonly idempotent: boolean;
+}
+
+export interface MemoryForgetRequest {
+  readonly id: string;
+  readonly reason?: string;
+}
+
+export interface MemoryResolveContestRequest {
+  readonly winnerId: string;
+  readonly loserIds: readonly string[];
+  readonly reason: string;
+}
+
+export interface MemoryVerifyResponse extends MemoryRecordResponse {
+  readonly fresh: boolean;
+}
+
 
 /**
  * Structured edit requests carry the versioned edit-domain wire object without

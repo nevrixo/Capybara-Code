@@ -136,6 +136,7 @@ export interface ToolExecutorOptions {
   readonly onJobStarted?: (job: { jobId: string; display: string }) => void;
   readonly onArtifactSpilled?: (artifact: ArtifactRef, action: ProposedAction) => void;
   readonly onPathsTouched?: (paths: readonly string[]) => void;
+  readonly onEditEvent?: (kind: "edit.preview_completed" | "edit.staged" | "edit.conflicted", payload: Record<string, unknown>) => void;
   /** Process/shell tools may mutate paths they cannot enumerate statically. */
   readonly onWorkspacePotentiallyChanged?: (
     toolId: string,
@@ -1454,6 +1455,11 @@ export class RuntimeToolExecutor implements ToolExecutor {
           };
         }
         const preview = await runtime.previewEdit({ plan });
+        this.#options.onEditEvent?.("edit.preview_completed", {
+          planId: preview.planId,
+          planDigest: preview.planDigest,
+          status: preview.status,
+        });
         return {
           result: okResult(`previewed structured edit ${preview.planId}`, preview),
           text: renderStructuredEditResponse(preview),
@@ -1487,6 +1493,12 @@ export class RuntimeToolExecutor implements ToolExecutor {
             capabilityReceipt: capability.id,
             capabilitySessionId: capability.sessionId,
             capabilityActionHash: capability.actionHash,
+          });
+          this.#options.onEditEvent?.("edit.staged", {
+            planId: staged.planId,
+            planDigest: staged.planDigest,
+            transactionId,
+            status: staged.status,
           });
           return { ...staged } as Record<string, unknown>;
         });
