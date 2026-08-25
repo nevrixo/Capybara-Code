@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import struct
+import sys
 import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -192,7 +193,7 @@ class CapybaraClient:
             transport = stream
         else:
             socket_path = path or default_socket_path()
-            reader, writer = await asyncio.open_unix_connection(socket_path)
+            reader, writer = await open_local_connection(socket_path)
             stream = StreamTransport(reader, writer, mode=mode)
             stream.start()
             transport = stream
@@ -326,8 +327,23 @@ def default_socket_path() -> str:
     explicit = os.environ.get("CAPY_DAEMON_SOCK")
     if explicit:
         return explicit
+    if sys.platform == "win32":
+        uid = os.environ.get("USERNAME", "user")
+        return rf"\\.\pipe\capybara-code-{uid}"
     xdg = os.environ.get("XDG_RUNTIME_DIR")
     if xdg:
         return str(Path(xdg) / "capybara-code" / "daemon.sock")
     uid = os.getuid() if hasattr(os, "getuid") else 0
     return str(Path("/tmp") / f"capybara-{uid}" / "daemon.sock")
+
+
+async def open_local_connection(path: str) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    """Unix domain socket, or a Windows named pipe."""
+    if sys.platform != "win32":
+        return await asyncio.open_unix_connection(path)
+    loop = asyncio.get_running_loop()
+    reader = asyncio.StreamReader()
+    protocol = asyncio.StreamReaderProtocol(reader)
+    transport, _ = await loop.create_pipe_connection(lambda: protocol, path)
+    writer = asyncio.StreamWriter(transport, protocol, reader, loop)
+    return reader, writer

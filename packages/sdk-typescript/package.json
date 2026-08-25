@@ -1,7 +1,11 @@
 {
   "name": "@cbc/sdk",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
+  "files": ["src"],
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "description": "Client-facing App Protocol SDK for Capybara Code",
   "exports": {
