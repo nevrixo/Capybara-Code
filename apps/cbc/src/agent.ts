@@ -547,6 +547,11 @@ export class AgentSession {
     this.#backgroundJobsReconciled = typeof options.runtime.jobStatus !== "function";
     this.#permissionPreset = options.config.permissions.preset;
     this.#tokenSaving = new TokenSavingController(options.config.agent.tokenSaving);
+    const fullLspDiagnostics =
+      options.config.experimental.fullLsp &&
+      options.config.lsp.enabled &&
+      (options.trust === "trusted-always" || options.trust === "trusted-once") &&
+      options.bridges?.lsp !== undefined;
     const sessionTools = nativeToolsForFeatures({
       editEngineV2: options.config.experimental.editEngineV2,
       durableMemory:
@@ -555,6 +560,7 @@ export class AgentSession {
         (options.config.memory.workspaceEnabled ||
           options.config.memory.sessionEnabled ||
           options.config.memory.taskEnabled),
+      fullLsp: fullLspDiagnostics,
     }).filter((tool) =>
       options.config.agent.compoundTools ||
       (tool.id !== "repo.investigate" && tool.id !== "verification.run_many"),
@@ -746,6 +752,7 @@ export class AgentSession {
       skill: options.bridges?.skill ?? extensions.bridges.skill,
       ask: options.bridges?.ask ?? extensions.bridges.ask,
       mcp: options.bridges?.mcp ?? options.mcpBridge ?? extensions.bridges.mcp,
+      ...(options.bridges?.lsp !== undefined ? { lsp: options.bridges.lsp } : {}),
       todo: async (action) => this.#executeTodoWrite(action),
     };
 

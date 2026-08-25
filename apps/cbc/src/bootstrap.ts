@@ -72,6 +72,7 @@ import {
 import { appendApprovalRule, readApprovalRules } from "./rules-store.ts";
 import type { Runtime, RuntimeSessionSummary } from "./runtime.ts";
 import { LspHost, type LspServiceStatus } from "./lsp-host.ts";
+import { createLspDiagnosticsBridge } from "./lsp-tool-bridge.ts";
 import { DeferredMcpHost } from "./mcp-host.ts";
 import {
   newSessionId,
@@ -510,6 +511,21 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
       }
     });
   }
+  const lspDiagnosticsEnabled =
+    effective.experimental.fullLsp &&
+    effective.lsp.enabled &&
+    (trust === "trusted-always" || trust === "trusted-once");
+  const sessionBridges: ToolBridges | undefined =
+    options.bridges !== undefined || lspDiagnosticsEnabled
+      ? {
+          ...(options.bridges ?? {}),
+          ...(options.bridges?.lsp !== undefined
+            ? {}
+            : lspDiagnosticsEnabled
+              ? { lsp: createLspDiagnosticsBridge(lspHost) }
+              : {}),
+        }
+      : undefined;
 
   const session = new AgentSession({
     host: context.host,
@@ -532,7 +548,7 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
     ...(executableCapabilities !== undefined
       ? { executableCapabilities }
       : {}),
-    ...(options.bridges !== undefined ? { bridges: options.bridges } : {}),
+    ...(sessionBridges !== undefined ? { bridges: sessionBridges } : {}),
     ...(mcpHost !== undefined
       ? {
           mcpBridge: mcpHost.bridge,
