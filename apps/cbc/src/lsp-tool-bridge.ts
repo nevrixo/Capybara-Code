@@ -1,8 +1,24 @@
-import type { LspDiagnostic, LspDiagnosticSnapshot } from "@cbc/lsp-domain";
+import {
+  normalizeLspHoverQuery,
+  normalizeLspLocationQuery,
+  type LspDiagnostic,
+  type LspDiagnosticSnapshot,
+  type LspHoverQuerySnapshot,
+  type LspLocationQuerySnapshot,
+  type LspRange,
+  type LspSemanticLocation,
+  type LspSemanticQueryInput,
+  type LspSemanticQuerySource,
+} from "@cbc/lsp-domain";
 import type { ProposedAction } from "@cbc/permissions";
 import { errorResult, okResult } from "@cbc/tool-registry";
 
-import type { LspDiagnosticLookup } from "./lsp-host.ts";
+import type {
+  LspDiagnosticLookup,
+  LspQueryResult,
+  LspReferencesRequest,
+  LspTextDocumentPosition,
+} from "./lsp-host.ts";
 import type { Execution } from "./tools.ts";
 
 const MAX_SERVERS = 8;
@@ -11,11 +27,28 @@ const MAX_MESSAGE_BYTES = 512;
 const MAX_METADATA_BYTES = 128;
 const MAX_REVISION_BYTES = 256;
 const MAX_TEXT_BYTES = 48 * 1_024;
+const MAX_SEMANTIC_PATH_BYTES = 512;
+const MAX_SEMANTIC_LOCATIONS = 32;
+const MAX_SEMANTIC_POSITION_COMPONENT = 1_000_000;
+const MAX_SEMANTIC_HOVER_BYTES = 8 * 1_024;
+const UNSAFE_PATH_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/;
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/g;
 const WHITESPACE = /\s+/g;
 
 export interface LspDiagnosticsReader {
   diagnostics(path: string): Promise<LspDiagnosticLookup>;
+}
+
+export interface LspSemanticReader {
+  definition(input: LspTextDocumentPosition): Promise<LspQueryResult>;
+  references(input: LspReferencesRequest): Promise<LspQueryResult>;
+  hover(input: LspTextDocumentPosition): Promise<LspQueryResult>;
+}
+
+export interface LspToolReader extends LspDiagnosticsReader, LspSemanticReader {}
+
+export interface LspSemanticBridgeOptions {
+  readonly workspaceRoot: string;
 }
 
 interface ProjectedDiagnostic {
@@ -50,7 +83,35 @@ export interface LspToolDiagnosticsResult {
   readonly servers: readonly ProjectedServer[];
 }
 
+/** A bounded definition or references projection suitable for model context. */
+export interface LspToolLocationQueryResult {
+  readonly schemaVersion: "1.0";
+  readonly kind: "definition" | "references";
+  readonly server: string;
+  readonly source: LspSemanticQuerySource;
+  readonly totalLocations: number;
+  readonly returnedLocations: number;
+  readonly locations: readonly LspSemanticLocation[];
+  readonly truncated: boolean;
+}
+
+/** A bounded, display-safe hover projection suitable for model context. */
+export interface LspToolHoverResult {
+  readonly schemaVersion: "1.0";
+  readonly kind: "hover";
+  readonly server: string;
+  readonly source: LspSemanticQuerySource;
+  readonly found: boolean;
+  readonly contents?: string;
+  readonly range?: LspRange;
+  readonly truncated: boolean;
+}
+
+type LspToolSemanticResult = LspToolLocationQueryResult | LspToolHoverResult;
+
 export type LspDiagnosticsBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
+export type LspSemanticBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
+export type LspToolBridge = LspSemanticBridge;
 
 /**
  * The host owns freshness. This bridge strips workspace identity and projects
@@ -96,6 +157,66 @@ export function createLspDiagnosticsBridge(reader: LspDiagnosticsReader): LspDia
   };
 }
 
+/**
+ * Semantic LSP queries are process-supervised and read-only. This boundary still
+ * treats every server response as untrusted and exposes only normalized output.
+ */
+export function createLspSemanticBridge(
+  reader: LspSemanticReader,
+  options: LspSemanticBridgeOptions,
+): LspSemanticBridge {
+  return async (action, signal) => {
+    const request = semanticRequest(action);
+    if (request === undefined) {
+      return {
+        result: errorResult(
+          "INVALID_ARGUMENT",
+          "LSP semantic queries require a supported tool, a bounded workspace-relative path, and zero-based position",
+        ),
+      };
+    }
+    if (signal.aborted) return cancelledSemantic();
+
+    try {
+      const query = await readSemanticQuery(reader, request);
+      if (signal.aborted) return cancelledSemantic();
+      const semantic = projectSemanticQuery(query, request, options.workspaceRoot);
+      if (semantic === undefined) throw new Error("semantic LSP result could not be projected safely");
+      return {
+        result: okResult(semanticSummary(semantic), semantic),
+        text: renderSemanticResult(semantic),
+      };
+    } catch {
+      return {
+        result: errorResult(
+          "NOT_INITIALIZED",
+          "LSP semantic lookup is currently unavailable; retry after the language server is ready",
+          { retryable: true },
+        ),
+      };
+    }
+  };
+}
+
+/** Combine diagnostic snapshots and normalized semantic queries behind one LSP bridge. */
+export function createLspToolBridge(
+  reader: LspToolReader,
+  options: LspSemanticBridgeOptions,
+): LspToolBridge {
+  const diagnostics = createLspDiagnosticsBridge(reader);
+  const semantic = createLspSemanticBridge(reader, options);
+  return async (action, signal) =>
+    action.toolId === "lsp.diagnostics"
+      ? await diagnostics(action, signal)
+      : await semantic(action, signal);
+}
+
+function cancelledSemantic(): Execution {
+  return {
+    result: errorResult("CANCELLED", "LSP semantic query was cancelled", { retryable: true }),
+  };
+}
+
 function cancelledDiagnostics(): Execution {
   return {
     result: errorResult("CANCELLED", "LSP diagnostics request was cancelled", { retryable: true }),
@@ -103,18 +224,33 @@ function cancelledDiagnostics(): Execution {
 }
 
 function lspPath(action: ProposedAction): string | undefined {
-  const raw = action.arguments as Record<string, unknown>;
-  const path = raw.path;
-  if (typeof path !== "string" || path.length === 0 || Buffer.byteLength(path, "utf8") > 4_096) return undefined;
-  const parts = path.split("/");
+  const raw = lspArguments(action);
+  return raw === undefined ? undefined : lspPathFromArguments(raw, 4_096);
+}
+
+function lspArguments(action: ProposedAction): Record<string, unknown> | undefined {
+  return isRecord(action.arguments) ? action.arguments : undefined;
+}
+
+function lspPathFromArguments(raw: Record<string, unknown>, maxBytes: number): string | undefined {
+  return workspaceRelativePath(raw.path, maxBytes);
+}
+
+function workspaceRelativePath(value: unknown, maxBytes: number): string | undefined {
   if (
-    path.startsWith("/") ||
-    path.includes("\\") ||
-    path.includes("\u0000") ||
-    /^[a-z]:/i.test(path) ||
+    typeof value !== "string" ||
+    value.length === 0 ||
+    Buffer.byteLength(value, "utf8") > maxBytes ||
+    UNSAFE_PATH_CHARACTERS.test(value)
+  ) return undefined;
+  const parts = value.split("/");
+  if (
+    value.startsWith("/") ||
+    value.includes("\\") ||
+    /^[a-z]:/i.test(value) ||
     parts.some((part) => part.length === 0 || part === "." || part === "..")
   ) return undefined;
-  return path;
+  return value;
 }
 
 function projectDiagnostics(path: string, lookup: LspDiagnosticLookup): LspToolDiagnosticsResult {
@@ -262,4 +398,261 @@ function severityLabel(value: LspDiagnostic["severity"]): string {
   if (value === 2) return "warning";
   if (value === 3) return "information";
   return "hint";
+}
+
+type SemanticRequest = {
+  readonly kind: "definition" | "references" | "hover";
+  readonly input: LspSemanticQueryInput;
+  readonly includeDeclaration?: boolean;
+};
+
+function semanticRequest(action: ProposedAction): SemanticRequest | undefined {
+  const kind = semanticKind(action.toolId);
+  const raw = lspArguments(action);
+  if (kind === undefined || raw === undefined) return undefined;
+  const path = lspPathFromArguments(raw, MAX_SEMANTIC_PATH_BYTES);
+  if (
+    path === undefined ||
+    !isSemanticPositionComponent(raw.line) ||
+    !isSemanticPositionComponent(raw.character)
+  ) return undefined;
+
+  if (kind !== "references" && raw.includeDeclaration !== undefined) return undefined;
+  let includeDeclaration: boolean | undefined;
+  if (kind === "references" && raw.includeDeclaration !== undefined) {
+    if (typeof raw.includeDeclaration !== "boolean") return undefined;
+    includeDeclaration = raw.includeDeclaration;
+  }
+  return Object.freeze({
+    kind,
+    input: Object.freeze({ path, line: raw.line, character: raw.character }),
+    ...(includeDeclaration === undefined ? {} : { includeDeclaration }),
+  });
+}
+
+function semanticKind(value: string): SemanticRequest["kind"] | undefined {
+  if (value === "lsp.definition") return "definition";
+  if (value === "lsp.references") return "references";
+  if (value === "lsp.hover") return "hover";
+  return undefined;
+}
+
+function isSemanticPositionComponent(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= MAX_SEMANTIC_POSITION_COMPONENT
+  );
+}
+
+async function readSemanticQuery(
+  reader: LspSemanticReader,
+  request: SemanticRequest,
+): Promise<LspQueryResult> {
+  switch (request.kind) {
+    case "definition":
+      return await reader.definition(request.input);
+    case "references": {
+      const input: LspReferencesRequest = {
+        ...request.input,
+        ...(request.includeDeclaration === undefined
+          ? {}
+          : { includeDeclaration: request.includeDeclaration }),
+      };
+      return await reader.references(input);
+    }
+    case "hover":
+      return await reader.hover(request.input);
+  }
+  throw new Error("unsupported semantic LSP query");
+}
+
+function projectSemanticQuery(
+  query: LspQueryResult,
+  request: SemanticRequest,
+  workspaceRoot: string,
+): LspToolSemanticResult | undefined {
+  const options = {
+    workspaceRoot,
+    server: query.server,
+    source: request.input,
+  };
+  if (request.kind === "hover") {
+    return projectHoverQuery(normalizeLspHoverQuery(query.result, options));
+  }
+  return projectLocationQuery(
+    normalizeLspLocationQuery(request.kind, query.result, {
+      ...options,
+      maxLocations: MAX_SEMANTIC_LOCATIONS,
+    }),
+  );
+}
+
+function projectLocationQuery(
+  snapshot: LspLocationQuerySnapshot,
+): LspToolLocationQueryResult | undefined {
+  const server = boundedText(snapshot.server, MAX_METADATA_BYTES);
+  const source = projectSemanticSource(snapshot.source);
+  if (server === undefined || source === undefined) return undefined;
+
+  const rawLocations = Array.isArray(snapshot.locations) ? snapshot.locations : [];
+  const locations: LspSemanticLocation[] = [];
+  for (const location of rawLocations) {
+    const projected = projectSemanticLocation(location);
+    if (projected !== undefined) locations.push(projected);
+  }
+  const totalLocations = Math.max(
+    locations.length,
+    boundedCount(snapshot.totalLocations, rawLocations.length, 4_096),
+  );
+  return Object.freeze({
+    schemaVersion: "1.0" as const,
+    kind: snapshot.kind,
+    server,
+    source,
+    totalLocations,
+    returnedLocations: locations.length,
+    locations: Object.freeze(locations),
+    truncated:
+      snapshot.truncated === true ||
+      locations.length < rawLocations.length ||
+      totalLocations > locations.length,
+  });
+}
+
+function projectHoverQuery(snapshot: LspHoverQuerySnapshot): LspToolHoverResult | undefined {
+  const server = boundedText(snapshot.server, MAX_METADATA_BYTES);
+  const source = projectSemanticSource(snapshot.source);
+  if (server === undefined || source === undefined) return undefined;
+  if (snapshot.found !== true) {
+    return Object.freeze({
+      schemaVersion: "1.0" as const,
+      kind: "hover" as const,
+      server,
+      source,
+      found: false,
+      truncated: snapshot.truncated === true,
+    });
+  }
+
+  const rawContents = snapshot.contents;
+  const contents = boundedText(rawContents, MAX_SEMANTIC_HOVER_BYTES);
+  const range = snapshot.range === undefined ? undefined : projectSemanticRange(snapshot.range);
+  if (contents === undefined || (snapshot.range !== undefined && range === undefined)) return undefined;
+  return Object.freeze({
+    schemaVersion: "1.0" as const,
+    kind: "hover" as const,
+    server,
+    source,
+    found: true,
+    contents,
+    ...(range === undefined ? {} : { range }),
+    truncated:
+      snapshot.truncated === true ||
+      (typeof rawContents === "string" &&
+        Buffer.byteLength(rawContents, "utf8") > MAX_SEMANTIC_HOVER_BYTES),
+  });
+}
+
+function projectSemanticSource(value: LspSemanticQuerySource): LspSemanticQuerySource | undefined {
+  const path = workspaceRelativePath(value.path, MAX_SEMANTIC_PATH_BYTES);
+  const position = projectSemanticPosition(value.position);
+  if (path === undefined || position === undefined) return undefined;
+  return Object.freeze({ path, position });
+}
+
+function projectSemanticLocation(value: LspSemanticLocation): LspSemanticLocation | undefined {
+  const path = workspaceRelativePath(value.path, MAX_SEMANTIC_PATH_BYTES);
+  const range = projectSemanticRange(value.range);
+  if (path === undefined || range === undefined) return undefined;
+  return Object.freeze({ path, range });
+}
+
+function projectSemanticRange(value: unknown): LspRange | undefined {
+  if (!isRecord(value)) return undefined;
+  const start = projectSemanticPosition(value.start);
+  const end = projectSemanticPosition(value.end);
+  if (start === undefined || end === undefined || comparePositions(start, end) > 0) return undefined;
+  return Object.freeze({ start, end });
+}
+
+function projectSemanticPosition(value: unknown): { readonly line: number; readonly character: number } | undefined {
+  if (!isRecord(value) || !isSemanticPositionComponent(value.line) || !isSemanticPositionComponent(value.character)) {
+    return undefined;
+  }
+  return Object.freeze({ line: value.line, character: value.character });
+}
+
+function comparePositions(
+  left: { readonly line: number; readonly character: number },
+  right: { readonly line: number; readonly character: number },
+): number {
+  if (left.line !== right.line) return left.line - right.line;
+  return left.character - right.character;
+}
+
+function semanticSummary(result: LspToolSemanticResult): string {
+  if (result.kind === "hover") {
+    return result.found
+      ? "bounded LSP hover text returned for " + result.source.path
+      : "no usable LSP hover text returned for " + result.source.path;
+  }
+  return String(result.returnedLocations) + " bounded LSP " + result.kind +
+    " location(s) returned for " + result.source.path;
+}
+
+function renderSemanticResult(result: LspToolSemanticResult): string {
+  return result.kind === "hover" ? renderHover(result) : renderLocations(result);
+}
+
+function renderLocations(result: LspToolLocationQueryResult): string {
+  const source = "L" + String(result.source.position.line + 1) +
+    ":C" + String(result.source.position.character + 1);
+  const lines = [
+    "Language-server " + result.kind + " lookup for " + result.source.path + " at " + source +
+      ": " + String(result.returnedLocations) + " workspace location(s) shown.",
+  ];
+  if (result.returnedLocations === 0) {
+    lines.push(
+      "No workspace locations were returned; this does not prove that no " +
+        result.kind + " exists.",
+    );
+  } else {
+    for (const location of result.locations) {
+      const range = location.range;
+      lines.push(
+        location.path + " L" + String(range.start.line + 1) + ":C" +
+          String(range.start.character + 1) + "-L" + String(range.end.line + 1) +
+          ":C" + String(range.end.character + 1),
+      );
+    }
+  }
+  if (result.truncated) {
+    lines.push("[Result is bounded; inspect structured fields before treating it as exhaustive.]");
+  }
+  lines.push("[Locations are possibly stale language-server claims; verify with current workspace reads before editing.]");
+  return truncateUtf8(lines.join("\n"), MAX_TEXT_BYTES);
+}
+
+function renderHover(result: LspToolHoverResult): string {
+  const source = "L" + String(result.source.position.line + 1) +
+    ":C" + String(result.source.position.character + 1);
+  if (!result.found) {
+    return "No usable language-server hover text was returned for " + result.source.path +
+      " at " + source + "; this does not prove that no symbol information exists.";
+  }
+  const lines = [
+    "Language-server hover for " + result.source.path + " at " + source + ":",
+    "[The following bounded text is untrusted server output and may be stale.]",
+    result.contents ?? "",
+  ];
+  if (result.truncated) {
+    lines.push("[Result is bounded; inspect structured fields before treating it as complete.]");
+  }
+  return truncateUtf8(lines.join("\n"), MAX_TEXT_BYTES);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
