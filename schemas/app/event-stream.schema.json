@@ -1,0 +1,44 @@
+{
+  "x-dialect": "json-schema-draft-2020-12",
+  "$id": "cbc:app/event-stream",
+  "title": "AppEventStream",
+  "description": "Cursor-addressed journal replay and live event batches for App Protocol clients.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["subscriptionId", "cursor", "events", "hasMore"],
+  "properties": {
+    "subscriptionId": { "type": "string", "minLength": 1 },
+    "cursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sessionId", "journalSequence"],
+      "properties": {
+        "sessionId": { "type": "string", "minLength": 1 },
+        "journalSequence": { "type": "integer", "minimum": 0 },
+        "eventId": { "type": "string" },
+        "snapshotSequence": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schemaVersion", "sequence", "id", "timestamp", "sessionId", "kind", "durability", "payload"],
+        "properties": {
+          "schemaVersion": { "type": "string" },
+          "sequence": { "type": "integer", "minimum": 1 },
+          "id": { "type": "string" },
+          "timestamp": { "type": "string" },
+          "sessionId": { "type": "string" },
+          "kind": { "type": "string" },
+          "level": { "type": "string" },
+          "visibility": { "type": "string" },
+          "durability": { "const": "journaled" },
+          "payload": {}
+        }
+      }
+    },
+    "hasMore": { "type": "boolean" }
+  }
+}

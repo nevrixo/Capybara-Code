@@ -430,6 +430,17 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
     maxEditPaths: effective.lsp.mutations.maxFiles,
     maxEditChangedBytes: effective.lsp.mutations.maxChangedBytes,
     maxPendingRequests: effective.lsp.maxPendingRequestsPerServer,
+    onDiagnostics: (snapshot) => {
+      sessionForLsp?.emit("lsp.diagnostics_updated", {
+        server: snapshot.server,
+        path: snapshot.path,
+        documentRevision: snapshot.documentRevision,
+        documentVersion: snapshot.documentVersion,
+        errorCount: snapshot.diagnostics.filter((item) => item.severity === 1).length,
+        warningCount: snapshot.diagnostics.filter((item) => item.severity === 2).length,
+        total: snapshot.totalDiagnostics,
+      });
+    },
     readEditDocument: async (path) => {
       const response = await runtime.read({
         path,
@@ -711,8 +722,44 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
     }
   }
 
+  if (effective.experimental.durableMemory && effective.memory.enabled) {
+    try {
+      await session.hydrateDurableMemory(runtime);
+    } catch (error) {
+      warnings.push(
+        `durable memory could not be restored: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
   const app = new AppServer({
-    backend: new SessionAppBackend({ session, sessionId }),
+    backend: new SessionAppBackend({
+      session,
+      sessionId,
+      ...(session.memoryService === undefined
+        ? {}
+        : {
+            memory: {
+              list: async () => session.memoryService!.inspect(),
+              forget: async (id) => {
+                if (!id.startsWith("memory-")) throw new Error("invalid memory id");
+                return session.memoryService!.forget(id as `memory-${string}`);
+              },
+              resolve: async (id) => {
+                if (!id.startsWith("memory-")) throw new Error("invalid memory id");
+                const record = session.memoryService!.inspect().records.find((item) => item.id === id);
+                return session.memoryService!.resolveContest({
+                  winnerId: id as `memory-${string}`,
+                  evidenceIds: record?.evidenceIds ?? [],
+                  reason: "user resolved from App Protocol",
+                });
+              },
+            },
+          }),
+      worktrees: {
+        list: async () => await runtime.listWorktrees(),
+      },
+    }),
     daemonId: "embedded_" + sessionId.replace(/[^a-zA-Z0-9_]/g, ""),
     serverVersion: context.version,
     authorizer: {

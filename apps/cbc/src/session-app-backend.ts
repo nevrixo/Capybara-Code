@@ -20,16 +20,39 @@ import type { TurnResult } from "@cbc/agent-kernel";
 
 import type { AgentSession } from "./agent.ts";
 
+export interface SessionAppJournalEvent {
+  readonly sequence: number;
+  readonly id?: string;
+  readonly kind: string;
+  readonly timestamp?: string;
+  readonly payload?: unknown;
+}
+
 export interface SessionAppBackendOptions {
   readonly session: AgentSession;
   readonly sessionId: string;
   readonly now?: () => string;
+  /** Durable events used for cursor replay. Timeline is the fallback. */
+  readonly journal?: () => readonly SessionAppJournalEvent[];
+  readonly memory?: {
+    list(): Promise<unknown>;
+    forget?(id: string): Promise<unknown>;
+    resolve?(id: string, winner?: string): Promise<unknown>;
+  };
+  readonly worktrees?: { list(): Promise<unknown> };
+  readonly graph?: { snapshot(): unknown };
+  readonly plugins?: { list(): unknown };
 }
 
 export class SessionAppBackend implements AppServerBackend {
   readonly #session: AgentSession;
   readonly #sessionId: string;
   readonly #now: () => string;
+  readonly #journal?: () => readonly SessionAppJournalEvent[];
+  readonly #memory?: SessionAppBackendOptions["memory"];
+  readonly #worktrees?: SessionAppBackendOptions["worktrees"];
+  readonly #graph?: SessionAppBackendOptions["graph"];
+  readonly #plugins?: SessionAppBackendOptions["plugins"];
   readonly #dedupe = new CommandDeduplicator<{ prompt?: string }, TurnResult["report"]>();
   readonly #subscriptions = new Map<string, AppServerSubscription>();
   readonly #clients = new Set<string>();
@@ -40,6 +63,11 @@ export class SessionAppBackend implements AppServerBackend {
     this.#session = options.session;
     this.#sessionId = options.sessionId;
     this.#now = options.now ?? (() => new Date().toISOString());
+    if (options.journal !== undefined) this.#journal = options.journal;
+    if (options.memory !== undefined) this.#memory = options.memory;
+    if (options.worktrees !== undefined) this.#worktrees = options.worktrees;
+    if (options.graph !== undefined) this.#graph = options.graph;
+    if (options.plugins !== undefined) this.#plugins = options.plugins;
   }
 
   get lastTurn(): TurnResult | undefined {
@@ -89,12 +117,29 @@ export class SessionAppBackend implements AppServerBackend {
     input: Parameters<AppServerBackend["replaySubscription"]>[0],
   ): Promise<EventReplayResult> {
     const existing = this.requireSubscription(input.subscriptionId, input.clientId);
-    const sequence = input.afterSequence ?? existing.lastAckedSequence;
+    const after = input.afterSequence ?? existing.lastAckedSequence;
+    const maxEvents = Math.max(1, input.maxEvents ?? 256);
+    const source = this.#journalEvents();
+    const selected = source.filter((event) => event.sequence > after).slice(0, maxEvents + 1);
+    const hasMore = selected.length > maxEvents;
+    const page = hasMore ? selected.slice(0, maxEvents) : selected;
+    const last = page.at(-1)?.sequence ?? after;
     return {
       subscription: existing,
-      cursor: { sessionId: existing.sessionId, journalSequence: sequence },
-      events: [],
-      hasMore: false,
+      cursor: { sessionId: existing.sessionId, journalSequence: last },
+      events: page.map((event) => ({
+        schemaVersion: "1.0",
+        sequence: event.sequence,
+        id: event.id ?? `evt_${this.#sessionId}_${String(event.sequence)}`,
+        timestamp: event.timestamp ?? this.#now(),
+        sessionId: existing.sessionId,
+        kind: event.kind,
+        level: "info",
+        visibility: "session",
+        durability: "journaled",
+        payload: event.payload ?? {},
+      })),
+      hasMore,
     };
   }
 
@@ -123,6 +168,38 @@ export class SessionAppBackend implements AppServerBackend {
     if (input.method === "turn.cancel") {
       this.#turnAbort?.abort();
       return { cancelled: true };
+    }
+    if (input.method === "session.pause") {
+      return { sessionId: this.#sessionId, status: "paused" };
+    }
+    if (input.method === "session.resume") {
+      return { sessionId: this.#sessionId, status: "active" };
+    }
+    if (input.method === "memory.list" || input.method === "memory.search") {
+      return this.#memory?.list() ?? { memories: [] };
+    }
+    if (input.method === "memory.forget") {
+      const id = payloadString(input.params, "id");
+      if (id === undefined || this.#memory?.forget === undefined) {
+        throw new Error("memory.forget requires a memory adapter and id");
+      }
+      return await this.#memory.forget(id);
+    }
+    if (input.method === "memory.resolveContest") {
+      const id = payloadString(input.params, "id");
+      if (id === undefined || this.#memory?.resolve === undefined) {
+        throw new Error("memory.resolveContest requires a memory adapter and id");
+      }
+      return await this.#memory.resolve(id, payloadString(input.params, "winnerId"));
+    }
+    if (input.method === "worktree.list") {
+      return this.#worktrees?.list() ?? { worktrees: [] };
+    }
+    if (input.method === "graph.get") {
+      return this.#graph?.snapshot() ?? { graph: null };
+    }
+    if (input.method === "plugin.list") {
+      return this.#plugins?.list() ?? { plugins: [] };
     }
     if (input.method !== "turn.submit") {
       throw new Error(input.method + " is not available in the embedded session backend");
@@ -157,6 +234,16 @@ export class SessionAppBackend implements AppServerBackend {
     };
   }
 
+  #journalEvents(): readonly SessionAppJournalEvent[] {
+    if (this.#journal !== undefined) return this.#journal();
+    return this.#session.viewModel.timeline.map((item) => ({
+      sequence: item.sequence,
+      id: `evt_timeline_${String(item.sequence)}`,
+      kind: `timeline.${item.type}`,
+      payload: { type: item.type },
+    }));
+  }
+
   private requireSubscription(id: string, clientId: string): AppServerSubscription {
     const existing = this.#subscriptions.get(id);
     if (existing === undefined || existing.clientId !== clientId) {
@@ -171,6 +258,12 @@ function commandEnvelope(params: unknown): CommandEnvelope<{ prompt?: string }> 
     throw new Error("turn.submit requires a command envelope");
   }
   return (params as { command: CommandEnvelope<{ prompt?: string }> }).command;
+}
+
+function payloadString(params: unknown, key: string): string | undefined {
+  if (typeof params !== "object" || params === null || !(key in params)) return undefined;
+  const value = (params as Record<string, unknown>)[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 function mapStatus(status: string): OperationReceipt["status"] {

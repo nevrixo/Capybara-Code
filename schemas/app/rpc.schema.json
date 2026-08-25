@@ -1,0 +1,18 @@
+{
+  "x-dialect": "json-schema-draft-2020-12",
+  "$id": "cbc:app/rpc",
+  "title": "AppProtocolRpc",
+  "description": "Client-facing App Protocol JSON-RPC envelope. Distinct from the Rust runtime RPC.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["jsonrpc", "id", "method"],
+  "properties": {
+    "jsonrpc": { "const": "2.0" },
+    "id": { "type": ["string", "number"] },
+    "method": {
+      "type": "string",
+      "pattern": "^(server|workspace|session|turn|events|approval|graph|task|memory|lsp|edit|diff|worktree|merge|plugin|artifact)\\.[A-Za-z.]+$"
+    },
+    "params": { "type": "object" }
+  }
+}
