@@ -18,6 +18,8 @@ import {
   type AppServerSubscription,
 } from "@cbc/app-server";
 
+import { join } from "node:path";
+
 import { ApprovalManager } from "./approval-manager.ts";
 import { EventHub } from "./event-hub.ts";
 import { HookDispatcher } from "./hook-dispatcher.ts";
@@ -31,7 +33,7 @@ import {
 import { LocalTransport, type LocalConnection } from "./local-transport.ts";
 import { MergeCoordinator } from "./merge-coordinator.ts";
 import { PluginSupervisor } from "./plugin-supervisor.ts";
-import { recoverDaemonState, type SessionRecoverySeed } from "./recovery.ts";
+import { persistRecoveryState, recoverDaemonState, type SessionRecoverySeed } from "./recovery.ts";
 import { gracefulShutdown } from "./shutdown.ts";
 import { WorktreeManager } from "./worktree-manager.ts";
 import { WorkspaceSupervisorRegistry } from "./workspace-supervisor.ts";
@@ -134,6 +136,7 @@ export class CapybaraDaemon {
       workspaces: this.workspaces,
       approvals: this.approvals,
       eventHub: this.eventHub,
+      persistedPath: join(paths.runtimeDir, "recovery.json"),
       ...(this.#options.recoverySessions !== undefined
         ? { sessions: this.#options.recoverySessions }
         : {}),
@@ -182,6 +185,7 @@ export class CapybaraDaemon {
   async stop(): Promise<void> {
     if (this.#status === "stopped") return;
     this.#status = "shutting_down";
+    this.#persistRecovery();
     await gracefulShutdown({
       workspaces: this.workspaces,
       eventHub: this.eventHub,
@@ -234,6 +238,32 @@ export class CapybaraDaemon {
     return await actor.dispatch({
       kind: "detach_client",
       connectionId: input.connectionId,
+    });
+  }
+
+  #persistRecovery(): void {
+    const runtimeDir = this.#lock?.paths.runtimeDir ?? this.#options.runtimeDir;
+    if (runtimeDir === undefined) return;
+    const sessions: SessionRecoverySeed[] = [];
+    for (const workspace of this.workspaces.list()) {
+      const supervisor = this.workspaces.get(workspace.workspaceIdentityDigest);
+      for (const sessionId of workspace.sessionIds) {
+        const actor = supervisor?.getSession(sessionId);
+        if (actor === undefined) continue;
+        const state = actor.state;
+        sessions.push({
+          sessionId: state.sessionId,
+          workspaceIdentityDigest: state.workspaceIdentityDigest,
+          lastJournalSequence: state.lastJournalSequence,
+          hadOpenTurn: state.activeTurnId !== undefined,
+          pendingApprovalIds: [...state.pendingApprovalIds],
+        });
+      }
+    }
+    persistRecoveryState(join(runtimeDir, "recovery.json"), {
+      schemaVersion: "1",
+      sessions,
+      eventHub: this.eventHub.exportSnapshot(),
     });
   }
 
@@ -366,6 +396,27 @@ export class CapybaraDaemon {
         return { ...daemon.health() };
       },
       async dispatch(input) {
+        if (input.method === "turn.submit") {
+          const params = requireRecord(input.params);
+          const command = isRecord(params.command) ? params.command : params;
+          const payload = isRecord(command.payload) ? command.payload : command;
+          const sessionId = requireString(
+            params.sessionId ?? payload.sessionId ?? "ses_daemon",
+          );
+          const workspaceIdentityDigest = typeof params.workspaceIdentityDigest === "string"
+            ? params.workspaceIdentityDigest
+            : sessionId;
+          const actor = daemon.workspaces.getOrCreate(workspaceIdentityDigest).getOrCreateSession(sessionId);
+          const turnId = typeof params.turnId === "string"
+            ? params.turnId
+            : "turn_" + crypto.randomUUID().replaceAll("-", "");
+          return await actor.dispatch({
+            kind: "submit_turn",
+            turnId,
+            clientId: input.clientId,
+            prompt: typeof payload.prompt === "string" ? payload.prompt : "",
+          });
+        }
         if (input.method === "session.attach") {
           const params = requireRecord(input.params);
           const sessionId = requireString(params.sessionId);

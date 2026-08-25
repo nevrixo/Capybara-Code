@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 
 import { ApprovalManager } from "../src/approval-manager.ts";
 import { EventHub } from "../src/event-hub.ts";
-import { recoverDaemonState } from "../src/recovery.ts";
+import { persistRecoveryState, recoverDaemonState } from "../src/recovery.ts";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { WorkspaceSupervisorRegistry } from "../src/workspace-supervisor.ts";
 
 describe("daemon crash recovery", () => {
@@ -68,5 +71,39 @@ describe("daemon crash recovery", () => {
     expect(recovered.recovered.find((session) => session.sessionId === "ses_idle")?.classification).toBe(
       "safe_idle",
     );
+  });
+
+  test("reloads persisted session seeds and event-hub journals", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "capy-recovery-"));
+    const path = join(dir, "recovery.json");
+    const hub = new EventHub();
+    hub.publish("ses_persisted", {
+      schemaVersion: "1.0",
+      id: "evt_1",
+      kind: "turn.started",
+      payload: { prompt: "keep going" },
+    });
+    persistRecoveryState(path, {
+      schemaVersion: "1",
+      sessions: [{
+        sessionId: "ses_persisted",
+        workspaceIdentityDigest: "ws_1",
+        hadOpenTurn: true,
+        lastJournalSequence: 1,
+      }],
+      eventHub: hub.exportSnapshot(),
+    });
+    const restoredHub = new EventHub();
+    const recovered = await recoverDaemonState({
+      workspaces: new WorkspaceSupervisorRegistry(),
+      approvals: new ApprovalManager(),
+      eventHub: restoredHub,
+      persistedPath: path,
+      now: () => "2026-08-25T00:00:00.000Z",
+    });
+    expect(JSON.parse(readFileSync(path, "utf8")).schemaVersion).toBe("1");
+    expect(recovered.recovered[0]?.sessionId).toBe("ses_persisted");
+    expect(recovered.interruptedTurns).toBe(1);
+    expect(restoredHub.cursor("ses_persisted")).toBeGreaterThanOrEqual(1);
   });
 });

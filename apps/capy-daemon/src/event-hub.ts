@@ -240,6 +240,35 @@ export class EventHub {
     return this.#sequences.get(sessionId) ?? 0;
   }
 
+  exportSnapshot(): {
+    readonly sequences: Readonly<Record<string, number>>;
+    readonly journals: Readonly<Record<string, readonly HubEvent[]>>;
+  } {
+    const sequences: Record<string, number> = {};
+    for (const [sessionId, sequence] of this.#sequences) sequences[sessionId] = sequence;
+    const journals: Record<string, readonly HubEvent[]> = {};
+    for (const [sessionId, events] of this.#journals) journals[sessionId] = [...events];
+    return { sequences, journals };
+  }
+
+  restoreSnapshot(snapshot: {
+    readonly sequences?: Readonly<Record<string, number>>;
+    readonly journals?: Readonly<Record<string, readonly HubEvent[]>>;
+  }): void {
+    this.#sequences.clear();
+    this.#journals.clear();
+    for (const [sessionId, sequence] of Object.entries(snapshot.sequences ?? {})) {
+      this.#sequences.set(sessionId, sequence);
+    }
+    for (const [sessionId, events] of Object.entries(snapshot.journals ?? {})) {
+      this.#journals.set(sessionId, [...events]);
+      const last = events.at(-1)?.sequence;
+      if (last !== undefined && (this.#sequences.get(sessionId) ?? 0) < last) {
+        this.#sequences.set(sessionId, last);
+      }
+    }
+  }
+
   subscription(subscriptionId: string): EventSubscriptionState {
     return snapshot(this.#require(subscriptionId));
   }

@@ -2,6 +2,9 @@
  * Startup recovery: interrupt open work, restore session actors, bump owner epoch.
  */
 
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+
 import type { ApprovalManager } from "./approval-manager.ts";
 import type { EventHub } from "./event-hub.ts";
 import type { SessionActor } from "./session-actor.ts";
@@ -36,7 +39,17 @@ export interface RecoveryOptions {
   readonly approvals: ApprovalManager;
   readonly eventHub: EventHub;
   readonly sessions?: readonly SessionRecoverySeed[];
+  readonly persistedPath?: string;
   readonly now?: () => string;
+}
+
+export interface PersistedDaemonRecovery {
+  readonly schemaVersion: "1";
+  readonly sessions: readonly SessionRecoverySeed[];
+  readonly eventHub?: {
+    readonly sequences?: Readonly<Record<string, number>>;
+    readonly journals?: Readonly<Record<string, readonly import("./event-hub.ts").HubEvent[]>>;
+  };
 }
 
 export interface RecoveryReport {
@@ -49,13 +62,35 @@ export interface RecoveryReport {
  * Runs the daemon-local half of startup reconciliation. Durable store work stays
  * behind the injected backend; this layer only rebuilds in-memory actors.
  */
+export function loadPersistedRecovery(path: string): PersistedDaemonRecovery | undefined {
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf8")) as PersistedDaemonRecovery;
+    if (raw.schemaVersion !== "1" || !Array.isArray(raw.sessions)) return undefined;
+    return raw;
+  } catch {
+    return undefined;
+  }
+}
+
+export function persistRecoveryState(path: string, state: PersistedDaemonRecovery): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(path, JSON.stringify(state), { encoding: "utf8", mode: 0o600 });
+}
+
 export async function recoverDaemonState(options: RecoveryOptions): Promise<RecoveryReport> {
   const now = options.now ?? (() => new Date().toISOString());
   const recovered: RecoveredSession[] = [];
   let interruptedTurns = 0;
   let ownerEpochBump = 0;
+  const persisted = options.persistedPath === undefined
+    ? undefined
+    : loadPersistedRecovery(options.persistedPath);
+  if (persisted?.eventHub !== undefined) {
+    options.eventHub.restoreSnapshot(persisted.eventHub);
+  }
+  const seeds = options.sessions ?? persisted?.sessions ?? [];
 
-  for (const seed of options.sessions ?? []) {
+  for (const seed of seeds) {
     const workspace = options.workspaces.getOrCreate(seed.workspaceIdentityDigest);
     const actor = workspace.getOrCreateSession(seed.sessionId);
     const epoch = actor.bumpOwnerEpoch();
