@@ -25,7 +25,8 @@ function action(
     | "lsp.type_definition"
     | "lsp.implementation"
     | "lsp.references"
-    | "lsp.hover",
+    | "lsp.hover"
+    | "lsp.signature_help",
   argumentsValue: Record<string, unknown>,
 ) {
   return {
@@ -48,6 +49,7 @@ function reader(overrides: Partial<LspSemanticReader> = {}): LspSemanticReader {
     implementation: async (_input: LspTextDocumentPosition) => queryResult(null),
     references: async (_input: LspReferencesRequest) => queryResult([]),
     hover: async (_input: LspTextDocumentPosition) => queryResult(null),
+    signatureHelp: async (_input: LspTextDocumentPosition) => queryResult(null),
     ...overrides,
   };
 }
@@ -248,6 +250,60 @@ describe("LSP semantic bridge", () => {
       contents: "Widget docs [31m text",
     });
     expect(JSON.stringify(data)).not.toContain("mustNotEscape");
+    expect(execution.text).toContain("untrusted server output");
+  });
+
+  test("projects bounded signature labels without documentation or raw metadata", async () => {
+    let received: LspTextDocumentPosition | undefined;
+    const bridge = createLspSemanticBridge(
+      reader({
+        signatureHelp: async (input) => {
+          received = input;
+          return queryResult({
+            signatures: Array.from({ length: 20 }, (_, index) => ({
+              label: "call" + String(index) + "(value)",
+              parameters: Array.from({ length: 20 }, (_parameter, parameterIndex) => ({
+                label: "value" + String(parameterIndex),
+                documentation: "not exposed",
+                data: { mustNotEscape: true },
+              })),
+              documentation: "not exposed",
+              data: { mustNotEscape: true },
+            })),
+            activeSignature: 0,
+            activeParameter: 1,
+            data: { mustNotEscape: true },
+          });
+        },
+      }),
+      { workspaceRoot },
+    );
+
+    const execution = await bridge(
+      action("lsp.signature_help", { path: "src/query.ts", line: 3, character: 2 }),
+      new AbortController().signal,
+    );
+
+    expect(execution.result.ok).toBe(true);
+    expect(received).toEqual({ path: "src/query.ts", line: 3, character: 2 });
+    const data = execution.result.data as {
+      readonly kind: string;
+      readonly totalSignatures: number;
+      readonly returnedSignatures: number;
+      readonly signatures: readonly { readonly parameters: readonly string[] }[];
+      readonly activeSignature?: number;
+      readonly activeParameter?: number;
+      readonly truncated: boolean;
+    };
+    expect(data.kind).toBe("signature_help");
+    expect(data.totalSignatures).toBe(20);
+    expect(data.returnedSignatures).toBe(16);
+    expect(data.signatures[0]?.parameters).toHaveLength(16);
+    expect(data.activeSignature).toBe(0);
+    expect(data.activeParameter).toBe(1);
+    expect(data.truncated).toBe(true);
+    expect(JSON.stringify(data)).not.toContain("mustNotEscape");
+    expect(JSON.stringify(data)).not.toContain("not exposed");
     expect(execution.text).toContain("untrusted server output");
   });
 

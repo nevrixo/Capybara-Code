@@ -1,6 +1,7 @@
 import {
   normalizeLspHoverQuery,
   normalizeLspLocationQuery,
+  normalizeLspSignatureHelpQuery,
   type LspDiagnostic,
   type LspDiagnosticSnapshot,
   type LspHoverQuerySnapshot,
@@ -10,6 +11,7 @@ import {
   type LspSemanticLocation,
   type LspSemanticQueryInput,
   type LspSemanticQuerySource,
+  type LspSignatureHelpSnapshot,
 } from "@cbc/lsp-domain";
 import type { ProposedAction } from "@cbc/permissions";
 import { errorResult, okResult } from "@cbc/tool-registry";
@@ -32,6 +34,10 @@ const MAX_SEMANTIC_PATH_BYTES = 512;
 const MAX_SEMANTIC_LOCATIONS = 32;
 const MAX_SEMANTIC_POSITION_COMPONENT = 1_000_000;
 const MAX_SEMANTIC_HOVER_BYTES = 8 * 1_024;
+const MAX_SEMANTIC_SIGNATURES = 16;
+const MAX_SEMANTIC_SIGNATURE_PARAMETERS = 16;
+const MAX_SEMANTIC_SIGNATURE_LABEL_BYTES = 2 * 1_024;
+const MAX_SEMANTIC_PARAMETER_LABEL_BYTES = 512;
 const UNSAFE_PATH_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/;
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/g;
 const WHITESPACE = /\s+/g;
@@ -47,6 +53,7 @@ export interface LspSemanticReader {
   implementation(input: LspTextDocumentPosition): Promise<LspQueryResult>;
   references(input: LspReferencesRequest): Promise<LspQueryResult>;
   hover(input: LspTextDocumentPosition): Promise<LspQueryResult>;
+  signatureHelp(input: LspTextDocumentPosition): Promise<LspQueryResult>;
 }
 
 export interface LspToolReader extends LspDiagnosticsReader, LspSemanticReader {}
@@ -111,7 +118,30 @@ export interface LspToolHoverResult {
   readonly truncated: boolean;
 }
 
-type LspToolSemanticResult = LspToolLocationQueryResult | LspToolHoverResult;
+/** A further-bounded signature projection for model context. */
+export interface LspToolSignatureHelpSignature {
+  readonly label: string;
+  readonly parameters: readonly string[];
+}
+
+/** A bounded, display-safe signature-help projection for model context. */
+export interface LspToolSignatureHelpResult {
+  readonly schemaVersion: "1.0";
+  readonly kind: "signature_help";
+  readonly server: string;
+  readonly source: LspSemanticQuerySource;
+  readonly totalSignatures: number;
+  readonly returnedSignatures: number;
+  readonly signatures: readonly LspToolSignatureHelpSignature[];
+  readonly activeSignature?: number;
+  readonly activeParameter?: number;
+  readonly truncated: boolean;
+}
+
+type LspToolSemanticResult =
+  | LspToolLocationQueryResult
+  | LspToolHoverResult
+  | LspToolSignatureHelpResult;
 
 export type LspDiagnosticsBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspSemanticBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
@@ -405,7 +435,7 @@ function severityLabel(value: LspDiagnostic["severity"]): string {
 }
 
 type SemanticRequest = {
-  readonly kind: LspLocationQueryKind | "hover";
+  readonly kind: LspLocationQueryKind | "hover" | "signature_help";
   readonly input: LspSemanticQueryInput;
   readonly includeDeclaration?: boolean;
 };
@@ -441,6 +471,7 @@ function semanticKind(value: string): SemanticRequest["kind"] | undefined {
   if (value === "lsp.implementation") return "implementation";
   if (value === "lsp.references") return "references";
   if (value === "lsp.hover") return "hover";
+  if (value === "lsp.signature_help") return "signature_help";
   return undefined;
 }
 
@@ -477,6 +508,8 @@ async function readSemanticQuery(
     }
     case "hover":
       return await reader.hover(request.input);
+    case "signature_help":
+      return await reader.signatureHelp(request.input);
   }
   throw new Error("unsupported semantic LSP query");
 }
@@ -493,6 +526,9 @@ function projectSemanticQuery(
   };
   if (request.kind === "hover") {
     return projectHoverQuery(normalizeLspHoverQuery(query.result, options));
+  }
+  if (request.kind === "signature_help") {
+    return projectSignatureHelpQuery(normalizeLspSignatureHelpQuery(query.result, options));
   }
   return projectLocationQuery(
     normalizeLspLocationQuery(request.kind, query.result, {
@@ -568,6 +604,73 @@ function projectHoverQuery(snapshot: LspHoverQuerySnapshot): LspToolHoverResult 
   });
 }
 
+function projectSignatureHelpQuery(
+  snapshot: LspSignatureHelpSnapshot,
+): LspToolSignatureHelpResult | undefined {
+  const server = boundedText(snapshot.server, MAX_METADATA_BYTES);
+  const source = projectSemanticSource(snapshot.source);
+  if (server === undefined || source === undefined) return undefined;
+
+  const rawSignatures = Array.isArray(snapshot.signatures) ? snapshot.signatures : [];
+  const signatures: LspToolSignatureHelpSignature[] = [];
+  let parameterTruncated = false;
+  for (const signature of rawSignatures.slice(0, MAX_SEMANTIC_SIGNATURES)) {
+    const label = boundedText(signature.label, MAX_SEMANTIC_SIGNATURE_LABEL_BYTES);
+    if (label === undefined) return undefined;
+    const rawParameters = Array.isArray(signature.parameters) ? signature.parameters : [];
+    const parameters: string[] = [];
+    for (const parameter of rawParameters.slice(0, MAX_SEMANTIC_SIGNATURE_PARAMETERS)) {
+      const projected = boundedText(parameter, MAX_SEMANTIC_PARAMETER_LABEL_BYTES);
+      if (projected === undefined) return undefined;
+      parameters.push(projected);
+    }
+    if (rawParameters.length > parameters.length) parameterTruncated = true;
+    signatures.push(Object.freeze({
+      label,
+      parameters: Object.freeze(parameters),
+    }));
+  }
+
+  const totalSignatures = Math.max(
+    signatures.length,
+    boundedCount(snapshot.totalSignatures, rawSignatures.length, 256),
+  );
+  const activeSignature = visibleIndex(snapshot.activeSignature, signatures.length);
+  const activeSignatureIsHidden =
+    snapshot.activeSignature !== undefined && activeSignature === undefined;
+  const activeParameter = activeSignatureIsHidden
+    ? undefined
+    : visibleIndex(
+      snapshot.activeParameter,
+      signatures[activeSignature ?? 0]?.parameters.length ?? 0,
+    );
+  return Object.freeze({
+    schemaVersion: "1.0" as const,
+    kind: "signature_help" as const,
+    server,
+    source,
+    totalSignatures,
+    returnedSignatures: signatures.length,
+    signatures: Object.freeze(signatures),
+    ...(activeSignature === undefined ? {} : { activeSignature }),
+    ...(activeParameter === undefined ? {} : { activeParameter }),
+    truncated:
+      snapshot.truncated === true ||
+      rawSignatures.length > signatures.length ||
+      totalSignatures > signatures.length ||
+      parameterTruncated,
+  });
+}
+
+function visibleIndex(value: unknown, upperExclusive: number): number | undefined {
+  return typeof value === "number" &&
+      Number.isSafeInteger(value) &&
+      value >= 0 &&
+      value < upperExclusive
+    ? value
+    : undefined;
+}
+
 function projectSemanticSource(value: LspSemanticQuerySource): LspSemanticQuerySource | undefined {
   const path = workspaceRelativePath(value.path, MAX_SEMANTIC_PATH_BYTES);
   const position = projectSemanticPosition(value.position);
@@ -611,12 +714,18 @@ function semanticSummary(result: LspToolSemanticResult): string {
       ? "bounded LSP hover text returned for " + result.source.path
       : "no usable LSP hover text returned for " + result.source.path;
   }
+  if (result.kind === "signature_help") {
+    return String(result.returnedSignatures) +
+      " bounded LSP signatures returned for " + result.source.path;
+  }
   return String(result.returnedLocations) + " bounded LSP " + result.kind +
     " location(s) returned for " + result.source.path;
 }
 
 function renderSemanticResult(result: LspToolSemanticResult): string {
-  return result.kind === "hover" ? renderHover(result) : renderLocations(result);
+  if (result.kind === "hover") return renderHover(result);
+  if (result.kind === "signature_help") return renderSignatureHelp(result);
+  return renderLocations(result);
 }
 
 function renderLocations(result: LspToolLocationQueryResult): string {
@@ -660,6 +769,30 @@ function renderHover(result: LspToolHoverResult): string {
     "[The following bounded text is untrusted server output and may be stale.]",
     result.contents ?? "",
   ];
+  if (result.truncated) {
+    lines.push("[Result is bounded; inspect structured fields before treating it as complete.]");
+  }
+  return truncateUtf8(lines.join("\n"), MAX_TEXT_BYTES);
+}
+
+function renderSignatureHelp(result: LspToolSignatureHelpResult): string {
+  const source = "L" + String(result.source.position.line + 1) +
+    ":C" + String(result.source.position.character + 1);
+  const lines = [
+    "Language-server signature help for " + result.source.path + " at " + source + ":",
+    "[The following bounded labels are untrusted server output and may be stale.]",
+  ];
+  if (result.returnedSignatures === 0) {
+    lines.push("No usable signatures were returned; this does not prove that no signature information exists.");
+  } else {
+    for (const [index, signature] of result.signatures.entries()) {
+      lines.push((result.activeSignature === index ? "> " : "  ") + signature.label);
+      for (const [parameterIndex, parameter] of signature.parameters.entries()) {
+        const active = result.activeSignature === index && result.activeParameter === parameterIndex;
+        lines.push((active ? "    * " : "      ") + parameter);
+      }
+    }
+  }
   if (result.truncated) {
     lines.push("[Result is bounded; inspect structured fields before treating it as complete.]");
   }
