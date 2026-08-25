@@ -117,6 +117,7 @@ interface LspProcess {
   nextDocumentVersion: number;
   supportsPullDiagnostics: boolean;
   supportsWorkspaceDiagnostics: boolean;
+  supportsCodeActions: boolean;
   supportsPrepareRename: boolean;
 }
 
@@ -311,6 +312,40 @@ export class LspHost {
   /** Request bounded symbol highlights scoped to the supplied workspace document. */
   async documentHighlights(input: LspTextDocumentPosition): Promise<LspQueryResult> {
     return await this.#positionQuery("textDocument/documentHighlight", input);
+  }
+
+  /**
+   * Read a non-executable code-action catalog at a cursor. Raw edit, command,
+   * diagnostics, and data payloads stay behind the LSP bridge boundary.
+   */
+  async codeActions(input: LspTextDocumentPosition): Promise<LspQueryResult> {
+    assertLspPosition(input);
+    const uri = workspaceFileUri(this.#options.workspaceRoot, input.path);
+    const descriptor = this.#descriptorForPath(input.path);
+    const process = await this.#startForQuery(descriptor);
+    if (!process.supportsCodeActions) {
+      throw new Error("configured language server does not support code actions");
+    }
+    const position = { line: input.line, character: input.character };
+    const result = await this.#withOpenedDocument(
+      process,
+      descriptor,
+      input.path,
+      uri,
+      async (openedUri) =>
+        await this.#request(
+          process,
+          "textDocument/codeAction",
+          {
+            textDocument: { uri: openedUri },
+            range: { start: position, end: position },
+            context: { diagnostics: [] },
+          },
+          descriptor.timeoutMs,
+        ),
+    );
+    this.#setStatus(descriptor.name, "ready", "code action catalog ready");
+    return { server: descriptor.name, result };
   }
 
   async documentSymbols(path: string): Promise<LspQueryResult> {
@@ -790,6 +825,7 @@ export class LspHost {
       nextDocumentVersion: 1,
       supportsPullDiagnostics: false,
       supportsWorkspaceDiagnostics: false,
+      supportsCodeActions: false,
       supportsPrepareRename: false,
     };
     this.#processes.set(descriptor.name, process);
@@ -902,6 +938,7 @@ export class LspHost {
       const diagnosticSupport = diagnosticCapabilitySupport(initializeResult);
       process.supportsPullDiagnostics = diagnosticSupport.document;
       process.supportsWorkspaceDiagnostics = diagnosticSupport.workspace;
+      process.supportsCodeActions = supportsCodeActions(initializeResult);
       process.supportsPrepareRename = supportsPrepareRename(initializeResult);
       await this.#notify(process, "initialized", {});
       return process;
@@ -1625,6 +1662,13 @@ function supportsPrepareRename(value: unknown): boolean {
   return provider !== undefined &&
     !Array.isArray(renameProvider) &&
     provider.prepareProvider === true;
+}
+
+function supportsCodeActions(value: unknown): boolean {
+  const initialize = asRecord(value);
+  const capabilities = asRecord(initialize?.capabilities);
+  const provider = capabilities?.codeActionProvider;
+  return provider === true || (asRecord(provider) !== undefined && !Array.isArray(provider));
 }
 
 function renamePreparationAllowsPosition(
