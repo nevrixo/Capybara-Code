@@ -1,0 +1,15 @@
+{
+  "name": "@cbc/capy-daemon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "capy-daemon": "./src/main.ts"
+  },
+  "dependencies": {
+    "@cbc/app-protocol": "workspace:*",
+    "@cbc/app-server": "workspace:*",
+    "@cbc/plugin-sdk": "workspace:*",
+    "@cbc/protocol": "workspace:*"
+  }
+}
