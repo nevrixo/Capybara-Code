@@ -1,7 +1,7 @@
 /** Pure agent-graph domain types. No I/O, no runtime handles. */
 
 export const GRAPH_SCHEMA_VERSION = "1.0" as const;
-export const MAX_GRAPH_NODES = 1000;
+export const MAX_GRAPH_NODES = 10_000;
 export const MAX_GRAPH_DEPTH = 3;
 
 export type GraphId = `grf_${string}`;

@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
+import { MAX_GRAPH_NODES } from "@cbc/agent-graph-domain";
+
 import { emptyChildResult } from "../src/instance.ts";
 import { GraphAuthority } from "../src/graph-authority.ts";
+import { MemoryGraphStore } from "../src/graph-store.ts";
 import { SubagentScheduler } from "../src/scheduler.ts";
 import { buildTask } from "../src/task.ts";
 
@@ -64,5 +67,41 @@ describe("durable graph authority", () => {
         }, "executor"),
       }),
     ).not.toThrow();
+  });
+
+  test("restores graph and mailbox from a snapshot store after a crash", async () => {
+    const store = new MemoryGraphStore();
+    const first = new GraphAuthority({
+      sessionId: "ses_persist",
+      workspaceIdentityDigest: "ws_persist",
+      now: () => 1,
+      store,
+    });
+    first.recordSpawn({
+      id: "reader",
+      title: "scan",
+      role: "explore",
+      dependencies: [],
+      canWrite: false,
+    });
+    first.postMessage({ from: "root", to: "reader", kind: "hint", body: { text: "auth" } });
+    const snapshot = first.persistSnapshot();
+    expect(snapshot.state?.revision).toBeGreaterThan(0);
+
+    const restored = new GraphAuthority({
+      sessionId: "ses_persist",
+      workspaceIdentityDigest: "ws_persist",
+      now: () => 2,
+      store,
+    });
+    expect(restored.snapshot()?.revision).toBe(snapshot.state?.revision);
+    expect(restored.mailbox()).toHaveLength(1);
+    const delivered = restored.takeUndelivered("reader");
+    expect(delivered[0]?.body).toEqual({ text: "auth" });
+    expect(restored.takeUndelivered("reader")).toHaveLength(0);
+  });
+
+  test("hard-caps the domain node budget at 10k", () => {
+    expect(MAX_GRAPH_NODES).toBe(10_000);
   });
 });

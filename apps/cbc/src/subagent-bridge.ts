@@ -44,6 +44,7 @@ import {
   SUBAGENT_ROLES,
   SpawnRejected,
   GraphAuthority,
+  MemoryGraphStore,
   SubagentScheduler,
   buildTask,
   renderAgentCandidates,
@@ -52,8 +53,12 @@ import {
   type AgentInstance,
   type ChildAgentResult,
   type ChildRunContext,
+  type GraphPersistSnapshot,
+  type GraphSnapshotStore,
   type SubagentRole,
 } from "@cbc/subagents";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 import type { Host } from "./host.ts";
 import { HostActionNormalizer, type McpHintResolver } from "./normalizer.ts";
@@ -144,6 +149,30 @@ export interface SubagentBridgeOptions {
   readonly now?: () => number;
 }
 
+function fileGraphStore(
+  homeDir: string,
+  sessionId: string,
+  workspaceIdentityDigest: string,
+): GraphSnapshotStore {
+  const directory = join(homeDir, ".capybara", "graphs");
+  const path = join(directory, `${workspaceIdentityDigest.slice(0, 16)}_${sessionId}.json`);
+  let initial: GraphPersistSnapshot | undefined;
+  try {
+    initial = JSON.parse(readFileSync(path, "utf8")) as GraphPersistSnapshot;
+  } catch {
+    initial = undefined;
+  }
+  const memory = new MemoryGraphStore(initial);
+  return {
+    load: () => memory.load(),
+    save: (snapshot) => {
+      memory.save(snapshot);
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(path, JSON.stringify(snapshot), { encoding: "utf8", mode: 0o600 });
+    },
+  };
+}
+
 export class SubagentBridge {
   readonly scheduler: SubagentScheduler;
   readonly #options: SubagentBridgeOptions;
@@ -161,7 +190,8 @@ export class SubagentBridge {
         ? {
             graph: new GraphAuthority({
               sessionId: options.sessionId,
-              workspaceIdentityDigest: options.sessionId,
+              workspaceIdentityDigest: options.runtime.workspaceId ?? options.sessionId,
+              store: fileGraphStore(options.host.homeDir, options.sessionId, options.runtime.workspaceId ?? options.sessionId),
               ...(options.now !== undefined ? { now: options.now } : {}),
             }),
           }

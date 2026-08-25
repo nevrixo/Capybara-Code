@@ -666,7 +666,7 @@ export function defaultConfig(): CbcConfig {
     agentGraph: {
       enabled: true,
       maxDepth: 3,
-      maxNodes: 1_000,
+      maxNodes: 10_000,
       maxConcurrentNodes: 8,
       maxConcurrentReaders: 8,
       maxConcurrentWriters: 4,

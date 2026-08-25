@@ -3,7 +3,8 @@
  *
  * The reducer is the source of truth for node identity, depth, and terminal
  * state. The scheduler still runs children; it may not invent a node the graph
- * has not admitted.
+ * has not admitted. Snapshots and the mailbox are restored from the injected
+ * store so a crash does not lose admitted work.
  */
 
 import {
@@ -12,6 +13,14 @@ import {
   type GraphState,
   type NodeId,
 } from "@cbc/agent-graph-domain";
+
+import {
+  GRAPH_SNAPSHOT_SCHEMA_VERSION,
+  MAX_GRAPH_MAILBOX,
+  type GraphMailboxMessage,
+  type GraphPersistSnapshot,
+  type GraphSnapshotStore,
+} from "./graph-store.ts";
 
 export interface GraphSpawnRecord {
   readonly id: string;
@@ -32,26 +41,96 @@ function iso(now: () => number): string {
 
 export class GraphAuthority {
   #state: GraphState | null = null;
+  #mailbox: GraphMailboxMessage[] = [];
   readonly #now: () => number;
   readonly #sessionId: string;
   readonly #workspaceIdentityDigest: string;
   readonly #graphId: GraphId;
   readonly #rootNodeId: NodeId;
+  readonly #store: GraphSnapshotStore | undefined;
 
   constructor(options: {
     readonly sessionId: string;
     readonly workspaceIdentityDigest: string;
     readonly now?: () => number;
+    readonly store?: GraphSnapshotStore;
+    readonly snapshot?: GraphPersistSnapshot;
   }) {
     this.#sessionId = options.sessionId;
     this.#workspaceIdentityDigest = options.workspaceIdentityDigest;
     this.#now = options.now ?? (() => Date.now());
     this.#graphId = `grf_${options.sessionId}` as GraphId;
     this.#rootNodeId = "agt_root";
+    this.#store = options.store;
+    const loaded = options.snapshot ?? options.store?.load();
+    if (loaded?.state !== undefined && loaded.state !== null) {
+      if (loaded.state.workspaceIdentityDigest !== options.workspaceIdentityDigest) {
+        throw new Error("graph snapshot workspace identity does not match this session");
+      }
+      this.#state = loaded.state;
+    }
+    if (loaded?.mailbox !== undefined) {
+      this.#mailbox = [...loaded.mailbox];
+    }
   }
 
   snapshot(): GraphState | null {
     return this.#state;
+  }
+
+  persistSnapshot(): GraphPersistSnapshot {
+    const snapshot: GraphPersistSnapshot = {
+      schemaVersion: GRAPH_SNAPSHOT_SCHEMA_VERSION,
+      state: this.#state,
+      mailbox: [...this.#mailbox],
+    };
+    this.#store?.save(snapshot);
+    return snapshot;
+  }
+
+  mailbox(): readonly GraphMailboxMessage[] {
+    return this.#mailbox;
+  }
+
+  postMessage(input: {
+    readonly from: string;
+    readonly to: string;
+    readonly kind: string;
+    readonly body?: unknown;
+  }): GraphMailboxMessage {
+    if (this.#mailbox.length >= MAX_GRAPH_MAILBOX) {
+      throw new Error(`graph mailbox is capped at ${MAX_GRAPH_MAILBOX} messages`);
+    }
+    const message: GraphMailboxMessage = {
+      id: `msg_${this.#mailbox.length + 1}`,
+      from: nodeId(input.from),
+      to: nodeId(input.to),
+      kind: input.kind,
+      body: input.body ?? {},
+      createdAt: iso(this.#now),
+    };
+    this.#mailbox = [...this.#mailbox, message];
+    this.persistSnapshot();
+    return message;
+  }
+
+  takeUndelivered(to: string): GraphMailboxMessage[] {
+    const target = nodeId(to);
+    const pending: GraphMailboxMessage[] = [];
+    const next: GraphMailboxMessage[] = [];
+    const at = iso(this.#now);
+    for (const message of this.#mailbox) {
+      if (message.to === target && message.deliveredAt === undefined) {
+        const delivered: GraphMailboxMessage = { ...message, deliveredAt: at };
+        pending.push(delivered);
+        next.push(delivered);
+      } else {
+        next.push(message);
+      }
+    }
+    this.#mailbox = next;
+    if (pending.length > 0) this.persistSnapshot();
+    return pending;
   }
 
   recordSpawn(input: GraphSpawnRecord): void {
@@ -134,6 +213,7 @@ export class GraphAuthority {
       rootRole: "root",
     });
     this.#state = created.state;
+    this.persistSnapshot();
   }
 
   #revision(): number {
@@ -143,5 +223,6 @@ export class GraphAuthority {
   #apply(command: Parameters<typeof applyGraphCommand>[1]): void {
     const result = applyGraphCommand(this.#state, command);
     this.#state = result.state;
+    this.persistSnapshot();
   }
 }
