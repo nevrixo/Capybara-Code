@@ -4,9 +4,10 @@
  */
 
 import { mkdirSync, appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { CapybaraDaemon, daemonStatus } from "./daemon.ts";
+import { spawnStdioWorker } from "./session-worker-host.ts";
 import { resolveInstanceLockPaths } from "./instance-lock.ts";
 
 const DEFAULT_COMMAND = "start";
@@ -18,9 +19,19 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
 
   switch (command) {
     case "start": {
+      const capyEntry = join(dirname(import.meta.dir), "..", "cbc", "src", "main.ts");
       const daemon = new CapybaraDaemon({
         ...(runtimeDir !== undefined ? { runtimeDir } : {}),
         listen: true,
+        ...(existsSync(capyEntry)
+          ? {
+              spawnSessionWorker: (sessionId: string) => spawnStdioWorker(
+                process.execPath,
+                [capyEntry, "session-worker", "--session-id", sessionId],
+                { ...process.env, CBC_DAEMON: "0" },
+              ),
+            }
+          : {}),
       });
       const health = await daemon.start();
       writePidFiles(paths.runtimeDir, health.daemonId);

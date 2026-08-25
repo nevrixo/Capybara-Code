@@ -52,6 +52,7 @@ export interface CapybaraDaemonOptions {
   readonly maxFrameBytes?: number;
   readonly idleTimeoutMs?: number;
   readonly sessionExecutor?: SessionExecutor | ((sessionId: string) => SessionExecutor);
+  readonly spawnSessionWorker?: (sessionId: string) => SessionExecutor;
 }
 
 export interface DaemonHealth {
@@ -93,6 +94,9 @@ export class CapybaraDaemon {
       ...(factory === undefined
         ? {}
         : { createExecutor: typeof factory === "function" ? factory : () => factory }),
+      ...(options.spawnSessionWorker === undefined
+        ? {}
+        : { spawnWorker: options.spawnSessionWorker }),
     });
     this.workspaces = new WorkspaceSupervisorRegistry(
       options.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: options.idleTimeoutMs },
