@@ -329,6 +329,120 @@ describe("LspHost", () => {
     expect(stops).toBe(1);
   });
 
+  test("preflights capability-advertised rename requests before producing a proposal", async () => {
+    let notification:
+      | ((method: string, params: unknown) => void)
+      | undefined;
+    let protocolChannel = "";
+    const methods: string[] = [];
+    const documentText = "export const Widget = 1;\n";
+    let preparation: unknown = {
+      range: {
+        start: { line: 0, character: 13 },
+        end: { line: 0, character: 19 },
+      },
+      placeholder: "Widget",
+    };
+    const runtime = {
+      issueCapability: async () => ({ id: "cap", sessionId: "session-1", actionHash: "hash" }),
+      startJob: async (params: Record<string, unknown>) => {
+        protocolChannel = String(params.protocolChannel);
+        return { jobId: "job-1", display: "fake LSP" };
+      },
+      sendInput: async (params: Record<string, unknown>) => {
+        const data = params.data;
+        if (typeof data !== "string") throw new Error("expected framed LSP input");
+        const message = messageFromFrame(data);
+        if (typeof message.method === "string") methods.push(message.method);
+        if (typeof message.id !== "number") return undefined;
+
+        const request = message.params as {
+          readonly newName?: unknown;
+          readonly textDocument?: { readonly uri?: unknown };
+        };
+        const uri = typeof request.textDocument?.uri === "string" ? request.textDocument.uri : "";
+        const result =
+          message.method === "initialize"
+            ? { capabilities: { renameProvider: { prepareProvider: true } } }
+            : message.method === "textDocument/prepareRename"
+              ? preparation
+              : message.method === "textDocument/rename"
+                ? {
+                    changes: {
+                      [uri]: [{
+                        range: {
+                          start: { line: 0, character: 13 },
+                          end: { line: 0, character: 19 },
+                        },
+                        newText: request.newName,
+                      }],
+                    },
+                  }
+                : { capabilities: {} };
+        notification?.("lsp.stdio.output", {
+          protocolChannel,
+          text: lspFrame({ jsonrpc: "2.0", id: message.id, result }),
+        });
+        return undefined;
+      },
+      stopJob: async () => undefined,
+      subscribeNotifications: (handler: (method: string, params: unknown) => void) => {
+        notification = handler;
+        return () => {
+          if (notification === handler) notification = undefined;
+        };
+      },
+    };
+    const host = new LspHost({
+      runtime: runtime as never,
+      servers: {
+        typescript: {
+          command: "typescript-language-server",
+          args: ["--stdio"],
+          extensions: [".ts"],
+          languageId: "typescript",
+          timeoutMs: 1_000,
+        },
+      },
+      sessionId: "session-1",
+      workspaceRoot: "/work",
+      workspaceTrusted: true,
+      enabled: true,
+      allowRenamePreview: true,
+      workspaceIdentityDigest: () => "ws_1",
+      readFile: async () => documentText,
+      readEditDocument: async (path) =>
+        path === "src/widget.ts"
+          ? { path, text: documentText, revision: "sha256:widget" }
+          : undefined,
+      isBuildMode: () => true,
+      resolveExecutable: () => "fake-lsp",
+    });
+
+    const preview = await host.renamePreview({
+      path: "src/widget.ts",
+      line: 0,
+      character: 13,
+      newName: "Renamed",
+    });
+
+    expect(preview.edit.paths).toEqual(["src/widget.ts"]);
+    expect(methods.indexOf("textDocument/prepareRename"))
+      .toBeLessThan(methods.indexOf("textDocument/rename"));
+
+    const renameRequests = methods.filter((method) => method === "textDocument/rename").length;
+    preparation = null;
+    await expect(host.renamePreview({
+      path: "src/widget.ts",
+      line: 0,
+      character: 13,
+      newName: "Blocked",
+    })).rejects.toThrow("LSP server does not allow rename at this position");
+    expect(methods.filter((method) => method === "textDocument/rename")).toHaveLength(renameRequests);
+
+    await host.close();
+  });
+
   test("keeps only diagnostics bound to the latest runtime document revision", async () => {
     let notification:
       | ((method: string, params: unknown) => void)
