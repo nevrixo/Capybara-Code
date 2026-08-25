@@ -1,0 +1,15 @@
+{
+  "name": "@cbc/agent-graph-domain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure agent graph reducer: nodes, edges, attempts, cycle detection, optimistic concurrency",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@cbc/protocol": "workspace:*"
+  }
+}
