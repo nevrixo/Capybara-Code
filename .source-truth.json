@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-25T19:55:16.090Z",
+  "generatedAt": "2026-08-25T19:56:22.863Z",
   "git": {
-    "commit": "f5d4d77db242de9dab633be23058b4e17ab2d80b",
+    "commit": "338aac38f6d3b5e66b5380028864f2a203c223a2",
     "dirty": true,
-    "dirtyHash": "23e8ff24a77014c54f45a4fff7cdfd4fd01dfef3bc2db4fad714261a286554a7"
+    "dirtyHash": "c757f2336ee7cf3c761d706da508ee1dde1735c01f28d33d3e64b366d209cb1e"
   },
   "roots": [
     "apps",
@@ -2898,8 +2898,8 @@
     },
     {
       "path": "packages/tui-components/src/theme.ts",
-      "bytes": 23903,
-      "sha256": "b22fa7b74f52db53d98addb66fa0b0300a5936610c7beab58be2c84319f7bce3"
+      "bytes": 23972,
+      "sha256": "db656acdd2cb166dbf132f8953fdf3089ea453ca3c776230879ddaac002471c4"
     },
     {
       "path": "packages/tui-components/src/timeline-store.ts",
@@ -3177,5 +3177,5 @@
       "sha256": "3af6b7d3ec7041c90b18206fe898b904d8781a97c25369189f2733173c6d23a5"
     }
   ],
-  "digest": "d3145bbacbbb31c11d50d728e983aceefd9c8af7641148056ec6e509a34d35b2"
+  "digest": "ccbc583beae59c34e8e45e58484ed0163aba1bdb1ff2e87b9e7bbebe6e04d4fe"
 }
