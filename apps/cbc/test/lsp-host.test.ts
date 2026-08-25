@@ -953,6 +953,106 @@ describe("LspHost", () => {
     await host.close();
   });
 
+  test("requests code action metadata at a zero-width cursor only after capability negotiation", async () => {
+    let notification:
+      | ((method: string, params: unknown) => void)
+      | undefined;
+    let protocolChannel = "";
+    let codeActionParams: Record<string, unknown> | undefined;
+    const methods: string[] = [];
+    const runtime = {
+      issueCapability: async () => ({ id: "cap", sessionId: "session-1", actionHash: "hash" }),
+      startJob: async (params: Record<string, unknown>) => {
+        protocolChannel = String(params.protocolChannel);
+        return { jobId: "job-1", display: "fake LSP" };
+      },
+      sendInput: async (params: Record<string, unknown>) => {
+        const data = params.data;
+        if (typeof data !== "string") throw new Error("expected framed LSP input");
+        const message = messageFromFrame(data);
+        if (typeof message.method === "string") methods.push(message.method);
+        if (typeof message.id !== "number") return undefined;
+        if (
+          message.method === "textDocument/codeAction" &&
+          typeof message.params === "object" &&
+          message.params !== null &&
+          !Array.isArray(message.params)
+        ) {
+          codeActionParams = message.params as Record<string, unknown>;
+        }
+        const result =
+          message.method === "initialize"
+            ? { capabilities: { codeActionProvider: { resolveProvider: true } } }
+            : message.method === "textDocument/codeAction"
+              ? [
+                  {
+                    title: "Fix Widget",
+                    kind: "quickfix",
+                    edit: { changes: { "file:///private-edit.ts": [] } },
+                    command: { title: "private command", command: "private.command" },
+                    data: { mustNotEscape: true },
+                  },
+                ]
+              : null;
+        notification?.("lsp.stdio.output", {
+          protocolChannel,
+          text: lspFrame({ jsonrpc: "2.0", id: message.id, result }),
+        });
+        return undefined;
+      },
+      stopJob: async () => undefined,
+      subscribeNotifications: (handler: (method: string, params: unknown) => void) => {
+        notification = handler;
+        return () => {
+          if (notification === handler) notification = undefined;
+        };
+      },
+    };
+    const host = new LspHost({
+      runtime: runtime as never,
+      servers: {
+        typescript: {
+          command: "typescript-language-server",
+          args: ["--stdio"],
+          extensions: [".ts"],
+          languageId: "typescript",
+          timeoutMs: 1_000,
+        },
+      },
+      sessionId: "session-1",
+      workspaceRoot: "/work",
+      workspaceTrusted: true,
+      enabled: true,
+      readFile: async () => "export const Widget = 1;\n",
+      isBuildMode: () => true,
+      resolveExecutable: () => "fake-lsp",
+    });
+
+    const query = await host.codeActions({ path: "src/widget.ts", line: 0, character: 13 });
+
+    expect(query).toEqual({
+      server: "typescript",
+      result: [
+        expect.objectContaining({
+          title: "Fix Widget",
+          kind: "quickfix",
+        }),
+      ],
+    });
+    expect(methods.filter((method) => method === "textDocument/codeAction")).toHaveLength(1);
+    expect(codeActionParams).toMatchObject({
+      range: {
+        start: { line: 0, character: 13 },
+        end: { line: 0, character: 13 },
+      },
+      context: { diagnostics: [] },
+    });
+    const textDocument = codeActionParams?.textDocument as Record<string, unknown> | undefined;
+    expect(String(textDocument?.uri)).toMatch(/src\/widget\.ts$/);
+
+    await host.close();
+  });
+
   test("does not start a server while the full LSP rollout gate is disabled", async () => {
     let starts = 0;
     const host = new LspHost({
