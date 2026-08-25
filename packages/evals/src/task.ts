@@ -53,6 +53,17 @@ export const FEATURE_TASK_CATEGORIES = [
 
 export type FeatureTaskCategory = (typeof FEATURE_TASK_CATEGORIES)[number];
 
+/** Plan §23.5 paired profiles. Flags are experimental.* keys. */
+export const FEATURE_PAIRED_PROFILES = [
+  { id: "legacy-edit-vs-anchor-edit", flag: "editEngineV2" },
+  { id: "lsp-query-off-vs-full-lsp-query", flag: "fullLsp" },
+  { id: "memory-off-vs-durable-memory", flag: "durableMemory" },
+  { id: "scheduler-v1-vs-persistent-graph", flag: "persistentAgentGraph" },
+  { id: "single-writer-base-vs-worktree-multi-agent", flag: "worktreeMultiAgent" },
+  { id: "plugin-off-vs-representative-hooks", flag: "pluginRuntime" },
+  { id: "embedded-vs-daemon-app-server", flag: "sessionDaemon" },
+] as const;
+
 export const FEATURE_TASK_PROMPTS: Readonly<Record<FeatureTaskCategory, string>> = {
   edit_precision: "Apply an anchor edit to a shifted function without rewriting the file.",
   full_lsp: "Rename a symbol through the language server and apply the resulting edit plan.",
