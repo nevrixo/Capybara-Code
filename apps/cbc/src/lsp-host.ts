@@ -17,6 +17,7 @@ import {
   normalizeLspDiagnostics,
   normalizeLspPullDiagnostics,
   normalizeLspWorkspaceDiagnostics,
+  type LspCallHierarchyDirection,
   type LspDiagnosticSnapshot,
   type LspEditDocument,
   type LspEditPlanResult,
@@ -78,6 +79,8 @@ const MAX_LSP_WORKSPACE_DIAGNOSTIC_SNAPSHOTS = 32;
 const MAX_LSP_WORKSPACE_DIAGNOSTICS_PER_SNAPSHOT = 64;
 const MAX_LSP_WORKSPACE_SYMBOL_SERVERS = 8;
 const MAX_LSP_CODE_ACTIONS = 256;
+const MAX_LSP_CALL_HIERARCHY_PREPARED_ITEMS = 16;
+const MAX_LSP_CALL_HIERARCHY_CALLS = 256;
 const MAX_LSP_FORMATTING_EDITS = 256;
 const MAX_LSP_FORMATTING_POSITION = 1_000_000;
 const MAX_LSP_WORKSPACE_SYMBOL_QUERY_BYTES = 512;
@@ -123,6 +126,7 @@ interface LspProcess {
   supportsCodeActions: boolean;
   supportsFormatting: boolean;
   supportsRangeFormatting: boolean;
+  supportsCallHierarchy: boolean;
   supportsPrepareRename: boolean;
 }
 
@@ -146,6 +150,19 @@ export interface LspTextDocumentPosition {
 
 export interface LspReferencesRequest extends LspTextDocumentPosition {
   readonly includeDeclaration?: boolean;
+}
+
+/** One direction of a call hierarchy is always queried from a fresh source position. */
+export interface LspCallHierarchyRequest extends LspTextDocumentPosition {
+  readonly direction: LspCallHierarchyDirection;
+}
+
+/** Opaque server call-hierarchy data stays private until the LSP bridge projects it. */
+export interface LspCallHierarchyResult {
+  readonly server: string;
+  readonly direction: LspCallHierarchyDirection;
+  readonly root?: unknown;
+  readonly result: unknown;
 }
 
 export interface LspRenameRequest extends LspTextDocumentPosition {
@@ -353,6 +370,62 @@ export class LspHost {
   /** Request bounded symbol highlights scoped to the supplied workspace document. */
   async documentHighlights(input: LspTextDocumentPosition): Promise<LspQueryResult> {
     return await this.#positionQuery("textDocument/documentHighlight", input);
+  }
+
+  /**
+   * Resolve one incoming or outgoing call-hierarchy page from a fresh document
+   * position. The opaque prepared item is returned only to the local bridge.
+   */
+  async callHierarchy(input: LspCallHierarchyRequest): Promise<LspCallHierarchyResult> {
+    assertLspCallHierarchyRequest(input);
+    const uri = workspaceFileUri(this.#options.workspaceRoot, input.path);
+    const descriptor = this.#descriptorForPath(input.path);
+    const process = await this.#startForQuery(descriptor);
+    if (!process.supportsCallHierarchy) {
+      throw new Error("configured language server does not support call hierarchy");
+    }
+    const response = await this.#withOpenedDocument(
+      process,
+      descriptor,
+      input.path,
+      uri,
+      async (openedUri) => {
+        const prepared = await this.#request(
+          process,
+          "textDocument/prepareCallHierarchy",
+          {
+            textDocument: { uri: openedUri },
+            position: { line: input.line, character: input.character },
+          },
+          descriptor.timeoutMs,
+        );
+        const root = lspPreparedCallHierarchyItem(prepared);
+        if (root === undefined) return { result: [] };
+        const result = lspCallHierarchyCalls(
+          await this.#request(
+            process,
+            input.direction === "incoming"
+              ? "callHierarchy/incomingCalls"
+              : "callHierarchy/outgoingCalls",
+            { item: root },
+            descriptor.timeoutMs,
+          ),
+        );
+        return { root, result };
+      },
+    );
+    this.#setStatus(
+      descriptor.name,
+      "ready",
+      response.root === undefined
+        ? "call hierarchy found no item"
+        : input.direction + " call hierarchy ready",
+    );
+    return {
+      server: descriptor.name,
+      direction: input.direction,
+      ...response,
+    };
   }
 
   /**
@@ -1014,6 +1087,7 @@ export class LspHost {
       supportsCodeActions: false,
       supportsFormatting: false,
       supportsRangeFormatting: false,
+      supportsCallHierarchy: false,
       supportsPrepareRename: false,
     };
     this.#processes.set(descriptor.name, process);
@@ -1109,6 +1183,7 @@ export class LspHost {
             documentHighlight: {},
             formatting: { dynamicRegistration: false },
             rangeFormatting: { dynamicRegistration: false },
+            callHierarchy: { dynamicRegistration: false },
             diagnostic: {
               dynamicRegistration: false,
               relatedDocumentSupport: false,
@@ -1131,6 +1206,7 @@ export class LspHost {
       process.supportsCodeActions = supportsCodeActions(initializeResult);
       process.supportsFormatting = supportsFormatting(initializeResult);
       process.supportsRangeFormatting = supportsRangeFormatting(initializeResult);
+      process.supportsCallHierarchy = supportsCallHierarchy(initializeResult);
       process.supportsPrepareRename = supportsPrepareRename(initializeResult);
       await this.#notify(process, "initialized", {});
       return process;
@@ -1745,6 +1821,13 @@ function assertLspPosition(input: LspTextDocumentPosition): void {
   }
 }
 
+function assertLspCallHierarchyRequest(input: LspCallHierarchyRequest): void {
+  assertLspPosition(input);
+  if (input.direction !== "incoming" && input.direction !== "outgoing") {
+    throw new Error("LSP call hierarchy direction must be incoming or outgoing");
+  }
+}
+
 function assertLspRangeFormattingPreview(input: LspRangeFormattingPreviewRequest): void {
   assertLspPosition({
     path: input.path,
@@ -1772,6 +1855,33 @@ function assertLspRangeFormattingPreview(input: LspRangeFormattingPreviewRequest
   ) {
     throw new Error("LSP range formatting start must not be after its end");
   }
+}
+
+function lspPreparedCallHierarchyItem(value: unknown): Record<string, unknown> | undefined {
+  if (value === null) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error("language server returned malformed call hierarchy preparation");
+  }
+  if (value.length === 0) return undefined;
+  if (value.length > MAX_LSP_CALL_HIERARCHY_PREPARED_ITEMS) {
+    throw new Error("language server returned too many call hierarchy preparation items");
+  }
+  const item = asRecord(value[0]);
+  if (item === undefined || Array.isArray(value[0])) {
+    throw new Error("language server returned malformed call hierarchy preparation item");
+  }
+  return item;
+}
+
+function lspCallHierarchyCalls(value: unknown): readonly unknown[] {
+  if (value === null) return [];
+  if (!Array.isArray(value)) {
+    throw new Error("language server returned malformed call hierarchy response");
+  }
+  if (value.length > MAX_LSP_CALL_HIERARCHY_CALLS) {
+    throw new Error("language server returned too many call hierarchy calls");
+  }
+  return value;
 }
 
 function assertLspCodeActionPreview(input: LspCodeActionPreviewRequest): void {
@@ -2001,6 +2111,13 @@ function supportsRangeFormatting(value: unknown): boolean {
   const initialize = asRecord(value);
   const capabilities = asRecord(initialize?.capabilities);
   const provider = capabilities?.documentRangeFormattingProvider;
+  return provider === true || (asRecord(provider) !== undefined && !Array.isArray(provider));
+}
+
+function supportsCallHierarchy(value: unknown): boolean {
+  const initialize = asRecord(value);
+  const capabilities = asRecord(initialize?.capabilities);
+  const provider = capabilities?.callHierarchyProvider;
   return provider === true || (asRecord(provider) !== undefined && !Array.isArray(provider));
 }
 
