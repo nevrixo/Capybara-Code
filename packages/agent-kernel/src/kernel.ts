@@ -555,6 +555,8 @@ export interface KernelOptions {
   readonly beforeSample?: () => void | Promise<void>;
   /** Evaluate the exact candidate request and compact at most once before sending it. */
   readonly contextPressureGuard?: (prompt: CompiledModelRequest) => ContextPressureGuardResult | Promise<ContextPressureGuardResult>;
+  /** One-shot local recovery hook for a provider context-length response. */
+  readonly onProviderContextError?: () => void | Promise<void>;
   /** §10.4 features for adaptive effort selection. */
   readonly complexity?: () => ComplexityFeatures;
   readonly inferencePolicy?: InferencePolicyPort;
@@ -719,6 +721,7 @@ export class AgentKernel {
   #observations: Observation[] = [];
   #continuationSignature: string | undefined;
   #previousResponseFallbackUsed = false;
+  #providerContextRecoveryUsed = false;
 
   #changedFiles = new Map<string, { additions: number; deletions: number; purpose: string }>();
   #verification: CompletionReport["verification"] = [];
@@ -1021,6 +1024,7 @@ export class AgentKernel {
     this.#turnAllowedActions.clear();
     this.#budgetNudged = false;
     this.#previousResponseFallbackUsed = false;
+    this.#providerContextRecoveryUsed = false;
 
     const taskEpochId = this.#options.taskEpochId?.();
     const workspaceIdentityDigest = this.#options.workspaceIdentityDigest?.();
@@ -1187,6 +1191,24 @@ export class AgentKernel {
             break;
           }
           if (stepResult.kind === "error") {
+            if (
+              stepResult.error.kind === "context_length" &&
+              !this.#providerContextRecoveryUsed &&
+              this.#options.onProviderContextError !== undefined
+            ) {
+              this.#providerContextRecoveryUsed = true;
+              machine.apply("provider_error");
+              await this.#options.onProviderContextError();
+              emit("context.compaction_emergency", {
+                trigger: "provider_context_error",
+                reasonCodes: ["provider_context_error"],
+                recompileLimit: 1,
+              });
+              this.resetProviderContinuation("provider context length error");
+              machine.apply("retry_ready");
+              pendingCompiledPrompt = undefined;
+              break;
+            }
             if (
               this.#options.continuationMode === "previous_response" &&
               !this.#previousResponseFallbackUsed &&

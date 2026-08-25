@@ -1184,6 +1184,17 @@ export class AgentSession {
         await this.#prepareContextPack();
       },
       contextPressureGuard: (prompt) => this.#guardContextPressure(prompt),
+      onProviderContextError: () => {
+        const pressure = this.#lastContextPressure ?? {
+          state: "emergency" as const,
+          projectedTokens: this.recorder.model.contextUsedTokens,
+          requiredFreeTokens: 0,
+          reasonCodes: ["provider_context_error"],
+          currentRatio: 1,
+          inputBudgetTokens: this.recorder.model.contextBudgetTokens,
+        };
+        this.compactContext({ pressure: { ...pressure, state: "emergency", reasonCodes: [...pressure.reasonCodes, "provider_context_error"] } });
+      },
       testCommandFor: (paths) => testCommandFor(paths, options.config.perf.verificationPlannerV2 !== false),
       ...(options.verificationContract !== undefined
         ? {
