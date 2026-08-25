@@ -117,6 +117,7 @@ interface LspProcess {
   nextDocumentVersion: number;
   supportsPullDiagnostics: boolean;
   supportsWorkspaceDiagnostics: boolean;
+  supportsPrepareRename: boolean;
 }
 
 interface ServiceState {
@@ -416,18 +417,48 @@ export class LspHost {
     if (this.#options.allowRenamePreview === false) {
       throw new Error("LSP rename preview is disabled by configuration");
     }
-    if (input.newName.trim().length === 0 || Buffer.byteLength(input.newName, "utf8") > 1_024) {
+    if (
+      typeof input.newName !== "string" ||
+      input.newName.trim().length === 0 ||
+      Buffer.byteLength(input.newName, "utf8") > 1_024
+    ) {
       throw new Error("LSP rename requires a non-empty name up to 1024 UTF-8 bytes");
     }
-    const query = await this.#positionQuery(
-      "textDocument/rename",
-      input,
-      { newName: input.newName },
+    assertLspPosition(input);
+    const uri = workspaceFileUri(this.#options.workspaceRoot, input.path);
+    const descriptor = this.#descriptorForPath(input.path);
+    const process = await this.#startForQuery(descriptor);
+    const result = await this.#withOpenedDocument(
+      process,
+      descriptor,
+      input.path,
+      uri,
+      async (openedUri) => {
+        const position = { line: input.line, character: input.character };
+        if (process.supportsPrepareRename) {
+          const prepared = await this.#request(
+            process,
+            "textDocument/prepareRename",
+            { textDocument: { uri: openedUri }, position },
+            descriptor.timeoutMs,
+          );
+          if (!renamePreparationAllowsPosition(prepared, input)) {
+            throw new Error("LSP server does not allow rename at this position");
+          }
+        }
+        return await this.#request(
+          process,
+          "textDocument/rename",
+          { textDocument: { uri: openedUri }, position, newName: input.newName },
+          descriptor.timeoutMs,
+        );
+      },
     );
-    const workspaceEdit = lspWorkspaceEdit(query.result);
+    this.#setStatus(descriptor.name, "ready", "rename preview ready");
+    const workspaceEdit = lspWorkspaceEdit(result);
     const edit = await this.#toEditPlan(workspaceEdit);
     return {
-      server: query.server,
+      server: descriptor.name,
       workspaceEdit,
       edit,
     };
@@ -748,6 +779,7 @@ export class LspHost {
       nextDocumentVersion: 1,
       supportsPullDiagnostics: false,
       supportsWorkspaceDiagnostics: false,
+      supportsPrepareRename: false,
     };
     this.#processes.set(descriptor.name, process);
     process.unsubscribe = this.#options.runtime.subscribeNotifications((method, params) => {
@@ -859,6 +891,7 @@ export class LspHost {
       const diagnosticSupport = diagnosticCapabilitySupport(initializeResult);
       process.supportsPullDiagnostics = diagnosticSupport.document;
       process.supportsWorkspaceDiagnostics = diagnosticSupport.workspace;
+      process.supportsPrepareRename = supportsPrepareRename(initializeResult);
       await this.#notify(process, "initialized", {});
       return process;
     } catch (error) {
@@ -1552,6 +1585,57 @@ function diagnosticCapabilitySupport(value: unknown): {
     document: true,
     workspace: provider.workspaceDiagnostics === true,
   };
+}
+
+function supportsPrepareRename(value: unknown): boolean {
+  const initialize = asRecord(value);
+  const capabilities = asRecord(initialize?.capabilities);
+  const renameProvider = capabilities?.renameProvider;
+  const provider = asRecord(renameProvider);
+  return provider !== undefined &&
+    !Array.isArray(renameProvider) &&
+    provider.prepareProvider === true;
+}
+
+function renamePreparationAllowsPosition(
+  value: unknown,
+  input: LspTextDocumentPosition,
+): boolean {
+  const result = asRecord(value);
+  if (result === undefined || Array.isArray(value)) return false;
+  if (result.defaultBehavior === true) return true;
+
+  const rawRange = result.range ?? result;
+  const range = asRecord(rawRange);
+  if (range === undefined || Array.isArray(rawRange)) return false;
+  const start = asRecord(range.start);
+  const end = asRecord(range.end);
+  const startLine = integer(start?.line);
+  const startCharacter = integer(start?.character);
+  const endLine = integer(end?.line);
+  const endCharacter = integer(end?.character);
+  if (
+    startLine === undefined ||
+    startCharacter === undefined ||
+    endLine === undefined ||
+    endCharacter === undefined ||
+    startLine < 0 ||
+    startCharacter < 0 ||
+    endLine < 0 ||
+    endCharacter < 0
+  ) {
+    return false;
+  }
+  const startBeforeOrAt =
+    startLine < input.line ||
+    (startLine === input.line && startCharacter <= input.character);
+  const endAfterOrAt =
+    endLine > input.line ||
+    (endLine === input.line && endCharacter >= input.character);
+  const rangeIsOrdered =
+    endLine > startLine ||
+    (endLine === startLine && endCharacter >= startCharacter);
+  return startBeforeOrAt && endAfterOrAt && rangeIsOrdered;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
