@@ -118,6 +118,19 @@ describe("normalizeLspLocationQuery", () => {
     expect(JSON.stringify(snapshot)).not.toContain("mustNotEscape");
   });
 
+  test("accepts every supported location query kind under the same bounds", () => {
+    for (const kind of ["declaration", "type_definition", "implementation"] as const) {
+      const snapshot = normalizeLspLocationQuery(kind, null, locationOptions());
+      expect(snapshot).toMatchObject({
+        schemaVersion: "1.0",
+        kind,
+        locations: [],
+        totalLocations: 0,
+        truncated: false,
+      });
+    }
+  });
+
   test("rejects external paths and malformed location ranges", () => {
     expectQueryError(
       () =>

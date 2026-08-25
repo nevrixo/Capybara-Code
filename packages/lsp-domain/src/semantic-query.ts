@@ -19,7 +19,12 @@ const MAX_HOVER_CONTENT_ITEMS = 64;
 const MAX_HOVER_INPUT_BYTES = 64 * 1_024;
 const MAX_HOVER_TEXT_BYTES = 8 * 1_024;
 
-export type LspLocationQueryKind = "definition" | "references";
+export type LspLocationQueryKind =
+  | "definition"
+  | "declaration"
+  | "type_definition"
+  | "implementation"
+  | "references";
 
 /** Raw query coordinates supplied to the local language server. */
 export interface LspSemanticQueryInput {
@@ -96,7 +101,7 @@ export class LspSemanticQueryDomainError extends Error {
 }
 
 /**
- * Normalize an LSP definition or references response into small, immutable
+ * Normalize an LSP location-query response into small, immutable
  * workspace-only evidence. This performs no I/O and never preserves server data.
  */
 export function normalizeLspLocationQuery(
@@ -104,7 +109,13 @@ export function normalizeLspLocationQuery(
   result: unknown,
   options: NormalizeLspLocationQueryOptions,
 ): LspLocationQuerySnapshot {
-  if (kind !== "definition" && kind !== "references") {
+  if (
+    kind !== "definition" &&
+    kind !== "declaration" &&
+    kind !== "type_definition" &&
+    kind !== "implementation" &&
+    kind !== "references"
+  ) {
     throw failure("LSP_QUERY_INVALID", "location query kind is unsupported");
   }
   const context = normalizeContext(options);

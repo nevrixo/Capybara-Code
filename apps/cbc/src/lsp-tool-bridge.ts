@@ -4,6 +4,7 @@ import {
   type LspDiagnostic,
   type LspDiagnosticSnapshot,
   type LspHoverQuerySnapshot,
+  type LspLocationQueryKind,
   type LspLocationQuerySnapshot,
   type LspRange,
   type LspSemanticLocation,
@@ -86,7 +87,7 @@ export interface LspToolDiagnosticsResult {
 /** A bounded definition or references projection suitable for model context. */
 export interface LspToolLocationQueryResult {
   readonly schemaVersion: "1.0";
-  readonly kind: "definition" | "references";
+  readonly kind: LspLocationQueryKind;
   readonly server: string;
   readonly source: LspSemanticQuerySource;
   readonly totalLocations: number;
