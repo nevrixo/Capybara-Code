@@ -203,6 +203,7 @@ describe("catalog completeness (§12.2)", () => {
       "lsp.references",
       "lsp.hover",
       "lsp.signature_help",
+      "lsp.document_highlights",
     ];
     const disabled = nativeToolsForFeatures().map((tool) => tool.id);
     const enabled = nativeToolsForFeatures({ fullLsp: true }).map((tool) => tool.id);
@@ -233,6 +234,7 @@ describe("catalog completeness (§12.2)", () => {
       "lsp.references",
       "lsp.hover",
       "lsp.signature_help",
+      "lsp.document_highlights",
     ]) {
       expect(findTool(id)).toMatchObject({
         authority: "read",
@@ -260,6 +262,24 @@ describe("catalog completeness (§12.2)", () => {
       character: 4,
       unexpected: true,
     }), referencesSchema).ok).toBe(false);
+
+    const documentHighlightsSchema = findTool("lsp.document_highlights")!.parameters;
+    expect(parseAndValidate(JSON.stringify({
+      path: "src/widget.ts",
+      line: 0,
+      character: 4,
+    }), documentHighlightsSchema).ok).toBe(true);
+    expect(parseAndValidate(JSON.stringify({
+      path: "src/widget.ts",
+      line: -1,
+      character: 4,
+    }), documentHighlightsSchema).ok).toBe(false);
+    expect(parseAndValidate(JSON.stringify({
+      path: "src/widget.ts",
+      line: 0,
+      character: 4,
+      unexpected: true,
+    }), documentHighlightsSchema).ok).toBe(false);
 
     const symbolsSchema = findTool("lsp.symbols")!.parameters;
     expect(parseAndValidate(JSON.stringify({ path: "src/widget.ts" }), symbolsSchema).ok).toBe(true);

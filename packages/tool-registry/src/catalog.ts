@@ -522,6 +522,23 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
     parameters: objectSchema(lspTextDocumentPosition, ["path", "line", "character"]),
   },
   {
+    id: "lsp.document_highlights",
+    title: "LspDocumentHighlights",
+    description: "Read bounded document-local symbol highlights through configured local language servers.",
+    source: "native",
+    defaultRisk: "R0",
+    maxRisk: "R0",
+    alwaysActive: false,
+    mutates: false,
+    network: false,
+    authority: "read",
+    idempotency: "idempotent",
+    maxParallelism: 2,
+    resultSchemaId: "lsp.document_highlights.v1",
+    keywords: ["lsp", "highlights", "symbol occurrences", "read write", "language server"],
+    parameters: objectSchema(lspTextDocumentPosition, ["path", "line", "character"]),
+  },
+  {
     id: "memory.search",
     title: "RecallMemory",
     description: "Recall bounded, fresh, evidence-backed memory from this workspace only.",
@@ -1355,6 +1372,7 @@ const FULL_LSP_TOOL_IDS = new Set([
   "lsp.references",
   "lsp.hover",
   "lsp.signature_help",
+  "lsp.document_highlights",
 ]);
 
 export interface NativeToolFeatures {
