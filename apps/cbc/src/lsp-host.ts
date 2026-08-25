@@ -78,6 +78,7 @@ const MAX_LSP_WORKSPACE_DIAGNOSTIC_SNAPSHOTS = 32;
 const MAX_LSP_WORKSPACE_DIAGNOSTICS_PER_SNAPSHOT = 64;
 const MAX_LSP_WORKSPACE_SYMBOL_SERVERS = 8;
 const MAX_LSP_CODE_ACTIONS = 256;
+const MAX_LSP_FORMATTING_EDITS = 256;
 const MAX_LSP_WORKSPACE_SYMBOL_QUERY_BYTES = 512;
 const UNSAFE_LSP_QUERY_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/;
 const MAX_LSP_DOCUMENT_BYTES = 1_000_000;
@@ -119,6 +120,7 @@ interface LspProcess {
   supportsPullDiagnostics: boolean;
   supportsWorkspaceDiagnostics: boolean;
   supportsCodeActions: boolean;
+  supportsFormatting: boolean;
   supportsPrepareRename: boolean;
 }
 
@@ -151,6 +153,11 @@ export interface LspRenameRequest extends LspTextDocumentPosition {
 export interface LspCodeActionPreviewRequest extends LspTextDocumentPosition {
   /** Index from a fresh lsp.code_actions catalog; it is never an apply capability. */
   readonly actionIndex: number;
+}
+
+/** Whole-document formatting is proposal-only and requires an exact document snapshot. */
+export interface LspFormattingPreviewRequest {
+  readonly path: string;
 }
 
 export interface LspQueryResult {
@@ -186,6 +193,12 @@ export interface LspCodeActionPreview {
   readonly edit: LspEditPlanResult;
 }
 
+/** A formatter response converted to a current revision-bound plan, if it changed the document. */
+export interface LspFormattingPreview {
+  readonly server: string;
+  readonly edit?: LspEditPlanResult;
+}
+
 export interface LspHostOptions {
   readonly runtime: LspRuntime;
   /** The complete server catalog from the one global configuration file. */
@@ -213,6 +226,8 @@ export interface LspHostOptions {
   readonly allowRenamePreview?: boolean;
   /** Code-action preview remains unavailable until both LSP and edit rollouts allow it. */
   readonly allowCodeActionPreview?: boolean;
+  /** Formatting preview remains unavailable until both LSP and edit rollouts allow it. */
+  readonly allowFormattingPreview?: boolean;
   /** Mirrors the configured structured-edit operation ceiling. */
   readonly maxEditOperations?: number;
   /** Upper bound on runtime document snapshots acquired for one LSP proposal. */
@@ -370,6 +385,54 @@ export class LspHost {
       workspaceEdit,
       edit,
     };
+  }
+
+  /**
+   * Convert whole-document formatter edits into a current revision-bound plan.
+   * The formatter never writes files; an empty edit list is a successful no-op.
+   */
+  async formatPreview(input: LspFormattingPreviewRequest): Promise<LspFormattingPreview> {
+    if (this.#options.allowFormattingPreview === false) {
+      throw new Error("LSP formatting preview is disabled by configuration");
+    }
+    const uri = workspaceFileUri(this.#options.workspaceRoot, input.path);
+    const descriptor = this.#descriptorForPath(input.path);
+    const process = await this.#startForQuery(descriptor);
+    if (!process.supportsFormatting) {
+      throw new Error("configured language server does not support document formatting");
+    }
+    const response = await this.#withOpenedDocument(
+      process,
+      descriptor,
+      input.path,
+      uri,
+      async (openedUri, tracked) => {
+        if (tracked === undefined) {
+          throw new Error("LSP formatting preview requires a runtime exact document snapshot");
+        }
+        const result = await this.#request(
+          process,
+          "textDocument/formatting",
+          {
+            textDocument: { uri: openedUri },
+            options: { tabSize: 2, insertSpaces: true },
+          },
+          descriptor.timeoutMs,
+        );
+        return { result, uri: openedUri, revision: tracked.document.revision };
+      },
+    );
+    const workspaceEdit = lspFormattingWorkspaceEdit(response.result, response.uri);
+    if (workspaceEdit === undefined) {
+      this.#setStatus(descriptor.name, "ready", "formatting preview found no changes");
+      return { server: descriptor.name };
+    }
+    const edit = await this.#toEditPlan(
+      workspaceEdit,
+      new Map([[input.path, response.revision]]),
+    );
+    this.#setStatus(descriptor.name, "ready", "formatting preview ready");
+    return { server: descriptor.name, edit };
   }
 
   async #requestCodeActions(
@@ -691,7 +754,10 @@ export class LspHost {
     }
   }
 
-  async #toEditPlan(workspaceEdit: LspWorkspaceEdit): Promise<LspEditPlanResult> {
+  async #toEditPlan(
+    workspaceEdit: LspWorkspaceEdit,
+    expectedDocumentRevisions?: ReadonlyMap<string, string>,
+  ): Promise<LspEditPlanResult> {
     let workspaceIdentityDigest: string | undefined = undefined;
     try {
       workspaceIdentityDigest = this.#options.workspaceIdentityDigest?.();
@@ -717,6 +783,10 @@ export class LspHost {
       if (document === undefined) continue;
       if (document.path !== path) {
         throw new Error("runtime edit snapshot path did not match " + path);
+      }
+      const expectedRevision = expectedDocumentRevisions?.get(path);
+      if (expectedRevision !== undefined && document.revision !== expectedRevision) {
+        throw new Error("LSP formatting preview document changed before plan construction");
       }
       documents.push(document);
     }
@@ -876,6 +946,7 @@ export class LspHost {
       supportsPullDiagnostics: false,
       supportsWorkspaceDiagnostics: false,
       supportsCodeActions: false,
+      supportsFormatting: false,
       supportsPrepareRename: false,
     };
     this.#processes.set(descriptor.name, process);
@@ -969,6 +1040,7 @@ export class LspHost {
               },
             },
             documentHighlight: {},
+            formatting: { dynamicRegistration: false },
             diagnostic: {
               dynamicRegistration: false,
               relatedDocumentSupport: false,
@@ -989,6 +1061,7 @@ export class LspHost {
       process.supportsPullDiagnostics = diagnosticSupport.document;
       process.supportsWorkspaceDiagnostics = diagnosticSupport.workspace;
       process.supportsCodeActions = supportsCodeActions(initializeResult);
+      process.supportsFormatting = supportsFormatting(initializeResult);
       process.supportsPrepareRename = supportsPrepareRename(initializeResult);
       await this.#notify(process, "initialized", {});
       return process;
@@ -1631,6 +1704,14 @@ function assertLspWorkspaceSymbolQuery(query: string): void {
   }
 }
 
+function lspFormattingWorkspaceEdit(result: unknown, uri: string): LspWorkspaceEdit | undefined {
+  if (!Array.isArray(result) || result.length > MAX_LSP_FORMATTING_EDITS) {
+    throw new Error("language server did not return a bounded formatting edit array");
+  }
+  if (result.length === 0) return undefined;
+  return { changes: { [uri]: result } } as LspWorkspaceEdit;
+}
+
 function lspCodeActionWorkspaceEdit(result: unknown, actionIndex: number): LspWorkspaceEdit {
   if (!Array.isArray(result) || result.length > MAX_LSP_CODE_ACTIONS) {
     throw new Error("language server did not return a bounded code action array");
@@ -1749,6 +1830,13 @@ function supportsCodeActions(value: unknown): boolean {
   const initialize = asRecord(value);
   const capabilities = asRecord(initialize?.capabilities);
   const provider = capabilities?.codeActionProvider;
+  return provider === true || (asRecord(provider) !== undefined && !Array.isArray(provider));
+}
+
+function supportsFormatting(value: unknown): boolean {
+  const initialize = asRecord(value);
+  const capabilities = asRecord(initialize?.capabilities);
+  const provider = capabilities?.documentFormattingProvider;
   return provider === true || (asRecord(provider) !== undefined && !Array.isArray(provider));
 }
 
