@@ -1172,6 +1172,122 @@ describe("LspHost", () => {
     await host.close();
   });
 
+  test("converts formatter edits into current revision-bound proposals without writing files", async () => {
+    let notification:
+      | ((method: string, params: unknown) => void)
+      | undefined;
+    let protocolChannel = "";
+    let openedUri: string | undefined;
+    let formattingParams: Record<string, unknown> | undefined;
+    let formatCalls = 0;
+    let makeStale = false;
+    let armedReads = 0;
+    const methods: string[] = [];
+    const documentText = "export const Widget=1;\n";
+    const runtime = {
+      issueCapability: async () => ({ id: "cap", sessionId: "session-1", actionHash: "hash" }),
+      startJob: async (params: Record<string, unknown>) => {
+        protocolChannel = String(params.protocolChannel);
+        return { jobId: "job-1", display: "fake LSP" };
+      },
+      sendInput: async (params: Record<string, unknown>) => {
+        const data = params.data;
+        if (typeof data !== "string") throw new Error("expected framed LSP input");
+        const message = messageFromFrame(data);
+        if (typeof message.method === "string") methods.push(message.method);
+        if (message.method === "textDocument/didOpen") {
+          const rawParams = message.params as { textDocument?: { uri?: unknown } } | undefined;
+          if (typeof rawParams?.textDocument?.uri === "string") openedUri = rawParams.textDocument.uri;
+        }
+        if (typeof message.id !== "number") return undefined;
+        let result: unknown =
+          message.method === "initialize"
+            ? { capabilities: { documentFormattingProvider: true } }
+            : null;
+        if (message.method === "textDocument/formatting") {
+          if (openedUri === undefined) throw new Error("missing opened document URI");
+          formattingParams = message.params as Record<string, unknown>;
+          formatCalls += 1;
+          result = formatCalls === 2
+            ? []
+            : [{
+                range: {
+                  start: { line: 0, character: 0 },
+                  end: { line: 0, character: 22 },
+                },
+                newText: "export const Widget = 1;",
+              }];
+        }
+        notification?.("lsp.stdio.output", {
+          protocolChannel,
+          text: lspFrame({ jsonrpc: "2.0", id: message.id, result }),
+        });
+        return undefined;
+      },
+      stopJob: async () => undefined,
+      subscribeNotifications: (handler: (method: string, params: unknown) => void) => {
+        notification = handler;
+        return () => {
+          if (notification === handler) notification = undefined;
+        };
+      },
+    };
+    const host = new LspHost({
+      runtime: runtime as never,
+      servers: {
+        typescript: {
+          command: "typescript-language-server",
+          args: ["--stdio"],
+          extensions: [".ts"],
+          languageId: "typescript",
+          timeoutMs: 1_000,
+        },
+      },
+      sessionId: "session-1",
+      workspaceRoot: "/work",
+      workspaceTrusted: true,
+      enabled: true,
+      allowFormattingPreview: true,
+      workspaceIdentityDigest: () => "ws_format",
+      readEditDocument: async (path) => {
+        const revision = makeStale && ++armedReads > 1
+          ? "sha256:format-2"
+          : "sha256:format-1";
+        return path === "src/widget.ts"
+          ? { path, text: documentText, revision }
+          : undefined;
+      },
+      isBuildMode: () => true,
+      resolveExecutable: () => "fake-lsp",
+    });
+
+    const preview = await host.formatPreview({ path: "src/widget.ts" });
+
+    expect(preview.edit?.paths).toEqual(["src/widget.ts"]);
+    expect(preview.edit?.plan.operations).toMatchObject([{
+      kind: "replace_range",
+      path: "src/widget.ts",
+      replacement: "export const Widget = 1;",
+    }]);
+    expect(formattingParams).toMatchObject({
+      options: { tabSize: 2, insertSpaces: true },
+    });
+    const textDocument = formattingParams?.textDocument as Record<string, unknown> | undefined;
+    expect(String(textDocument?.uri)).toMatch(/src\/widget\.ts$/);
+    expect(methods).toContain("textDocument/formatting");
+    expect(methods).not.toContain("workspace/executeCommand");
+
+    const noChange = await host.formatPreview({ path: "src/widget.ts" });
+    expect(noChange.edit).toBeUndefined();
+
+    makeStale = true;
+    await expect(host.formatPreview({ path: "src/widget.ts" })).rejects.toThrow(
+      "document changed before plan construction",
+    );
+
+    await host.close();
+  });
+
   test("does not start a server while the full LSP rollout gate is disabled", async () => {
     let starts = 0;
     const host = new LspHost({
