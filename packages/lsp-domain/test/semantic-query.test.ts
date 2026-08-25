@@ -6,6 +6,7 @@ import {
   LspSemanticQueryDomainError,
   normalizeLspHoverQuery,
   normalizeLspLocationQuery,
+  normalizeLspSignatureHelpQuery,
 } from "../src/index.ts";
 
 const workspaceRoot = process.platform === "win32" ? "C:\\lsp-query-workspace" : "/lsp-query-workspace";
@@ -26,6 +27,17 @@ function locationOptions(
 }
 
 function hoverOptions(overrides: Partial<Parameters<typeof normalizeLspHoverQuery>[1]> = {}) {
+  return {
+    workspaceRoot,
+    server: "typescript",
+    source: { path: "src/query.ts", line: 1, character: 4 },
+    ...overrides,
+  };
+}
+
+function signatureOptions(
+  overrides: Partial<Parameters<typeof normalizeLspSignatureHelpQuery>[1]> = {},
+) {
   return {
     workspaceRoot,
     server: "typescript",
@@ -253,6 +265,103 @@ describe("normalizeLspHoverQuery", () => {
 
     expectQueryError(
       () => normalizeLspHoverQuery({ contents: "x".repeat(64 * 1_024 + 1) }, hoverOptions()),
+      "LSP_QUERY_LIMIT",
+    );
+  });
+});
+describe("normalizeLspSignatureHelpQuery", () => {
+  test("keeps only bounded display labels and valid active indexes", () => {
+    const snapshot = normalizeLspSignatureHelpQuery(
+      {
+        signatures: [
+          {
+            label: "fn add(a: number, b: number)",
+            parameters: [
+              { label: [7, 16], documentation: "not exposed" },
+              { label: "b: number", data: { mustNotEscape: true } },
+            ],
+            documentation: "not exposed",
+            data: { mustNotEscape: true },
+          },
+        ],
+        activeSignature: 0,
+        activeParameter: 1,
+        data: { mustNotEscape: true },
+      },
+      signatureOptions(),
+    );
+
+    expect(snapshot).toEqual({
+      schemaVersion: "1.0",
+      kind: "signature_help",
+      server: "typescript",
+      source: {
+        path: "src/query.ts",
+        position: { line: 1, character: 4 },
+      },
+      signatures: [{
+        label: "fn add(a: number, b: number)",
+        parameters: ["a: number", "b: number"],
+      }],
+      totalSignatures: 1,
+      activeSignature: 0,
+      activeParameter: 1,
+      truncated: false,
+    });
+    expect(Object.isFrozen(snapshot)).toBe(true);
+    expect(Object.isFrozen(snapshot.signatures)).toBe(true);
+    expect(Object.isFrozen(snapshot.signatures[0])).toBe(true);
+    expect(Object.isFrozen(snapshot.signatures[0]?.parameters)).toBe(true);
+    expect(JSON.stringify(snapshot)).not.toContain("mustNotEscape");
+    expect(JSON.stringify(snapshot)).not.toContain("not exposed");
+  });
+
+  test("represents a null result and bounds visible signatures and parameters", () => {
+    expect(normalizeLspSignatureHelpQuery(null, signatureOptions())).toEqual({
+      schemaVersion: "1.0",
+      kind: "signature_help",
+      server: "typescript",
+      source: {
+        path: "src/query.ts",
+        position: { line: 1, character: 4 },
+      },
+      signatures: [],
+      totalSignatures: 0,
+      truncated: false,
+    });
+
+    const snapshot = normalizeLspSignatureHelpQuery(
+      {
+        signatures: Array.from({ length: 33 }, (_, index) => ({
+          label: "call" + String(index),
+          parameters: Array.from({ length: 33 }, (_parameter, parameterIndex) => ({
+            label: "p" + String(parameterIndex),
+          })),
+        })),
+        activeSignature: 32,
+        activeParameter: 32,
+      },
+      signatureOptions(),
+    );
+    expect(snapshot.signatures).toHaveLength(32);
+    expect(snapshot.signatures[0]?.parameters).toHaveLength(32);
+    expect(snapshot.totalSignatures).toBe(33);
+    expect(snapshot.activeSignature).toBeUndefined();
+    expect(snapshot.activeParameter).toBeUndefined();
+    expect(snapshot.truncated).toBe(true);
+  });
+
+  test("rejects invalid signature response shapes and indexes", () => {
+    expectQueryError(
+      () => normalizeLspSignatureHelpQuery({ signatures: [{ label: "call" }], activeSignature: 1 }, signatureOptions()),
+      "LSP_QUERY_INVALID",
+    );
+    expectQueryError(
+      () => normalizeLspSignatureHelpQuery({ signatures: [{ label: "call", parameters: [{ label: [3, 2] }] }] }, signatureOptions()),
+      "LSP_QUERY_INVALID",
+    );
+    expectQueryError(
+      () => normalizeLspSignatureHelpQuery({ signatures: Array.from({ length: 257 }, () => ({ label: "call" })) }, signatureOptions()),
       "LSP_QUERY_LIMIT",
     );
   });

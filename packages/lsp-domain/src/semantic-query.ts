@@ -18,6 +18,12 @@ const DEFAULT_MAX_LOCATIONS = 64;
 const MAX_HOVER_CONTENT_ITEMS = 64;
 const MAX_HOVER_INPUT_BYTES = 64 * 1_024;
 const MAX_HOVER_TEXT_BYTES = 8 * 1_024;
+const MAX_SIGNATURES = 32;
+const MAX_INPUT_SIGNATURES = 256;
+const MAX_SIGNATURE_PARAMETERS = 32;
+const MAX_INPUT_SIGNATURE_PARAMETERS = 128;
+const MAX_SIGNATURE_LABEL_BYTES = 8 * 1_024;
+const MAX_PARAMETER_LABEL_BYTES = 2 * 1_024;
 
 export type LspLocationQueryKind =
   | "definition"
@@ -71,6 +77,25 @@ export interface LspHoverQuerySnapshot {
   readonly truncated: boolean;
 }
 
+/** A display-safe signature and its bounded parameter labels. */
+export interface LspSignatureHelpSignature {
+  readonly label: string;
+  readonly parameters: readonly string[];
+}
+
+/** Sanitized signature-help output. Documentation and server metadata are omitted. */
+export interface LspSignatureHelpSnapshot {
+  readonly schemaVersion: "1.0";
+  readonly kind: "signature_help";
+  readonly server: string;
+  readonly source: LspSemanticQuerySource;
+  readonly signatures: readonly LspSignatureHelpSignature[];
+  readonly totalSignatures: number;
+  readonly activeSignature?: number;
+  readonly activeParameter?: number;
+  readonly truncated: boolean;
+}
+
 export interface NormalizeLspLocationQueryOptions {
   readonly workspaceRoot: string;
   readonly server: string;
@@ -80,6 +105,12 @@ export interface NormalizeLspLocationQueryOptions {
 }
 
 export interface NormalizeLspHoverQueryOptions {
+  readonly workspaceRoot: string;
+  readonly server: string;
+  readonly source: LspSemanticQueryInput;
+}
+
+export interface NormalizeLspSignatureHelpQueryOptions {
   readonly workspaceRoot: string;
   readonly server: string;
   readonly source: LspSemanticQueryInput;
@@ -192,6 +223,81 @@ export function normalizeLspHoverQuery(
   });
 }
 
+/**
+ * Normalize LSP signature help into bounded display labels. Documentation,
+ * commands, and arbitrary server metadata are never preserved.
+ */
+export function normalizeLspSignatureHelpQuery(
+  result: unknown,
+  options: NormalizeLspSignatureHelpQueryOptions,
+): LspSignatureHelpSnapshot {
+  const context = normalizeContext(options);
+  if (result === null) {
+    return Object.freeze({
+      schemaVersion: "1.0" as const,
+      kind: "signature_help" as const,
+      server: context.server,
+      source: context.source,
+      signatures: Object.freeze([]),
+      totalSignatures: 0,
+      truncated: false,
+    });
+  }
+
+  const raw = requiredRecord(result, "signature help response");
+  if (!Array.isArray(raw.signatures)) {
+    throw failure("LSP_QUERY_INVALID", "signature help response requires signatures");
+  }
+  if (raw.signatures.length > MAX_INPUT_SIGNATURES) {
+    throw failure(
+      "LSP_QUERY_LIMIT",
+      "signature help response exceeds the " + String(MAX_INPUT_SIGNATURES) + " signature input limit",
+    );
+  }
+
+  const normalized = raw.signatures.map((signature, index) =>
+    normalizeSignature(signature, "signature " + String(index)),
+  );
+  const activeSignature = optionalIndex(
+    raw.activeSignature,
+    "signature help activeSignature",
+    normalized.length,
+  );
+  const activeSignatureIndex = activeSignature ?? 0;
+  const activeParameter = raw.activeParameter === undefined
+    ? undefined
+    : optionalIndex(
+      raw.activeParameter,
+      "signature help activeParameter",
+      normalized[activeSignatureIndex]?.totalParameters ?? 0,
+    );
+
+  const visible = normalized.slice(0, MAX_SIGNATURES);
+  const visibleActiveSignature =
+    activeSignature !== undefined && activeSignature < visible.length ? activeSignature : undefined;
+  const visibleActiveParameter =
+    activeParameter !== undefined &&
+      activeSignatureIndex < visible.length &&
+      activeParameter < (visible[activeSignatureIndex]?.signature.parameters.length ?? 0)
+      ? activeParameter
+      : undefined;
+  const truncated =
+    raw.signatures.length > MAX_SIGNATURES ||
+    normalized.some((signature) => signature.truncated);
+
+  return Object.freeze({
+    schemaVersion: "1.0" as const,
+    kind: "signature_help" as const,
+    server: context.server,
+    source: context.source,
+    signatures: Object.freeze(visible.map((signature) => signature.signature)),
+    totalSignatures: raw.signatures.length,
+    ...(visibleActiveSignature === undefined ? {} : { activeSignature: visibleActiveSignature }),
+    ...(visibleActiveParameter === undefined ? {} : { activeParameter: visibleActiveParameter }),
+    truncated,
+  });
+}
+
 interface NormalizedContext {
   readonly workspaceRoot: string;
   readonly server: string;
@@ -270,6 +376,98 @@ function normalizeHoverContents(value: unknown): { readonly text: string | undef
   }
   if (items.length === 0) return { text: undefined, truncated: false };
   return truncateUtf8(items.join("\n"), MAX_HOVER_TEXT_BYTES);
+}
+
+interface NormalizedSignature {
+  readonly signature: LspSignatureHelpSignature;
+  readonly totalParameters: number;
+  readonly truncated: boolean;
+}
+
+function normalizeSignature(value: unknown, label: string): NormalizedSignature {
+  const raw = requiredRecord(value, label);
+  const rawLabel = requiredSignatureLabel(raw.label, label + " label");
+  const rawParameters = raw.parameters === undefined
+    ? []
+    : requiredArray(raw.parameters, label + " parameters");
+  if (rawParameters.length > MAX_INPUT_SIGNATURE_PARAMETERS) {
+    throw failure(
+      "LSP_QUERY_LIMIT",
+      label + " exceeds the " + String(MAX_INPUT_SIGNATURE_PARAMETERS) + " parameter input limit",
+    );
+  }
+
+  const parameters: string[] = [];
+  for (const parameter of rawParameters.slice(0, MAX_SIGNATURE_PARAMETERS)) {
+    parameters.push(normalizeParameterLabel(parameter, rawLabel, label + " parameter"));
+  }
+  return Object.freeze({
+    signature: Object.freeze({
+      label: displayText(rawLabel, label + " label", MAX_SIGNATURE_LABEL_BYTES),
+      parameters: Object.freeze(parameters),
+    }),
+    totalParameters: rawParameters.length,
+    truncated: rawParameters.length > MAX_SIGNATURE_PARAMETERS,
+  });
+}
+
+function normalizeParameterLabel(value: unknown, signatureLabel: string, label: string): string {
+  const raw = requiredRecord(value, label);
+  if (typeof raw.label === "string") {
+    return displayText(raw.label, label + " label", MAX_PARAMETER_LABEL_BYTES);
+  }
+  if (
+    Array.isArray(raw.label) &&
+    raw.label.length === 2 &&
+    isStringIndex(raw.label[0]) &&
+    isStringIndex(raw.label[1]) &&
+    raw.label[0] <= raw.label[1] &&
+    raw.label[1] <= signatureLabel.length
+  ) {
+    return displayText(
+      signatureLabel.slice(raw.label[0], raw.label[1]),
+      label + " label range",
+      MAX_PARAMETER_LABEL_BYTES,
+    );
+  }
+  throw failure("LSP_QUERY_INVALID", label + " label must be a string or a signature-label range");
+}
+
+function requiredSignatureLabel(value: unknown, label: string): string {
+  if (typeof value !== "string") {
+    throw failure("LSP_QUERY_INVALID", label + " must be a string");
+  }
+  assertBoundedText(value, label, MAX_SIGNATURE_LABEL_BYTES);
+  if (safeDisplayText(value).length === 0) {
+    throw failure("LSP_QUERY_INVALID", label + " must contain displayable text");
+  }
+  return value;
+}
+
+function displayText(value: string, label: string, maxBytes: number): string {
+  assertBoundedText(value, label, maxBytes);
+  const display = safeDisplayText(value);
+  if (display.length === 0) {
+    throw failure("LSP_QUERY_INVALID", label + " must contain displayable text");
+  }
+  return display;
+}
+
+function optionalIndex(value: unknown, label: string, upperExclusive: number): number | undefined {
+  if (value === undefined) return undefined;
+  if (!isStringIndex(value) || value >= upperExclusive) {
+    throw failure("LSP_QUERY_INVALID", label + " must be a valid returned index");
+  }
+  return value;
+}
+
+function isStringIndex(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function requiredArray(value: unknown, label: string): readonly unknown[] {
+  if (!Array.isArray(value)) throw failure("LSP_QUERY_INVALID", label + " must be an array");
+  return value;
 }
 
 function hoverItemText(value: unknown): string {
