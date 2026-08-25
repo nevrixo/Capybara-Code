@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-25T22:48:44.037Z",
+  "generatedAt": "2026-08-25T22:53:30.638Z",
   "git": {
-    "commit": "e4ab52957188747989a74d16e5363787b1b9cc09",
+    "commit": "1c18faab9c0037927bfd3d69f87ca6db57297a9d",
     "dirty": true,
-    "dirtyHash": "28b0edeef84a02a06f63af8941f66b9b278875bf4a9daa904663de22a916065c"
+    "dirtyHash": "08921fe87bb7659f7e90053a7ed31bb0911e654b3b765cd87f3870a2b3baec96"
   },
   "roots": [
     "apps",
@@ -1543,8 +1543,8 @@
     },
     {
       "path": "packages/agent-kernel/src/kernel.ts",
-      "bytes": 197863,
-      "sha256": "bc1e8b7d9db357eb0a3dc6c63c8483b230102a50fbd634724d175ef34c16be09"
+      "bytes": 198408,
+      "sha256": "490c912e316b90f196cc932edb38b11b55d2f5b356d0a8680d4ebd1d46a2fbec"
     },
     {
       "path": "packages/agent-kernel/src/observation.ts",
@@ -1588,8 +1588,8 @@
     },
     {
       "path": "packages/agent-kernel/test/kernel.test.ts",
-      "bytes": 140002,
-      "sha256": "5e35a59fcd026b4ebc1e26e2c0c0c01332df5ac0ad3770a7a60bb60a36b224d5"
+      "bytes": 141522,
+      "sha256": "d51ead5ac0b08925fc39d140fed2d89e125f2db2e117484e339f0320ea35df84"
     },
     {
       "path": "packages/agent-kernel/test/patch-recovery.test.ts",
@@ -3182,5 +3182,5 @@
       "sha256": "3af6b7d3ec7041c90b18206fe898b904d8781a97c25369189f2733173c6d23a5"
     }
   ],
-  "digest": "d4c2096c311fc9e5801d75431ad191c6ffda2a3b43cca780ace4331d586ac298"
+  "digest": "fd2c3259bbb3134b6a3953901c55f6c8d9328e82310b117d143681b65696a40a"
 }

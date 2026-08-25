@@ -1878,11 +1878,12 @@ describe("invalid tool calls (AC-10)", () => {
   });
 
   test("tool.discover activates schemas so the next step can use them (AC-09)", async () => {
-    const { kernel, events, registry } = harness({
+    const { kernel, events, provider, registry } = harness({
+      continuationMode: "previous_response",
       steps: [
         {
           toolCalls: [
-            { callId: "c1", name: "tool.discover", arguments: { query: "spawn a subagent to explore" } },
+            { callId: "discover-call", name: "tool.discover", arguments: { query: "spawn a subagent to explore" } },
           ],
         },
         { text: "activated" },
@@ -1892,6 +1893,18 @@ describe("invalid tool calls (AC-10)", () => {
     const discovery = payloadsOf(events, "tool.discovery")[0] as { activated: string[] };
     expect(discovery.activated.length).toBeGreaterThan(0);
     expect(registry.activeIds()).toContain(discovery.activated[0]!);
+    const second = provider.requests[1];
+    expect(second?.previousResponseId).toBeUndefined();
+    expect(
+      second?.input.some(
+        (item) => item.type === "function_call" && item.callId === "discover-call",
+      ),
+    ).toBe(true);
+    expect(
+      second?.input.some(
+        (item) => item.type === "function_call_output" && item.callId === "discover-call",
+      ),
+    ).toBe(true);
   });
 });
 
@@ -2624,6 +2637,38 @@ describe("explicit provider continuation modes (§10.6)", () => {
     expect(secondInput).not.toContain("PRIOR_USER_SENTINEL");
     expect(second?.input.some((item) => item.type === "function_call")).toBe(false);
     expect(second?.input.some((item) => item.type === "function_call_output")).toBe(true);
+  });
+
+  test("a phase change that resets previous_response recompiles complete tool history", async () => {
+    const { kernel, provider } = harness({
+      continuationMode: "previous_response",
+      phasePolicy: true,
+      steps: [
+        { toolCalls: [{ callId: "phase-call", name: "fs.read", arguments: { path: "a.ts" } }] },
+        { text: "Done." },
+      ],
+      toolResults: {
+        "fs.read": { result: okResult("ok"), text: "PHASE_TOOL_OUTPUT_SENTINEL" },
+      },
+    });
+
+    await kernel.runTurn("PHASE_USER_SENTINEL", new AbortController().signal);
+
+    const second = provider.requests[1];
+    expect(second?.previousResponseId).toBeUndefined();
+    expect(
+      second?.input.some(
+        (item) => item.type === "function_call" && item.callId === "phase-call",
+      ),
+    ).toBe(true);
+    expect(
+      second?.input.some(
+        (item) =>
+          item.type === "function_call_output" &&
+          item.callId === "phase-call" &&
+          item.output.includes("PHASE_TOOL_OUTPUT_SENTINEL"),
+      ),
+    ).toBe(true);
   });
 
   test("replays full local history when the provider does not support previous_response", async () => {

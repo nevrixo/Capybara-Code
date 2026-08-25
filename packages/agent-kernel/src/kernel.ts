@@ -2140,8 +2140,19 @@ export class AgentKernel {
       this.#phase,
       String(this.#routeEpoch),
     ].join(":");
-    if (this.#previousResponseId !== undefined && this.#continuationSignature !== undefined && this.#continuationSignature !== continuationSignature) {
+    if (
+      this.#previousResponseId !== undefined &&
+      this.#continuationSignature !== undefined &&
+      this.#continuationSignature !== continuationSignature
+    ) {
       this.resetProviderContinuation("model, task epoch, toolset, or policy changed");
+      this.#continuationSignature = continuationSignature;
+      // The prompt was compiled while the old continuation cursor was still
+      // active, so it contains only the incremental suffix. Once that provider
+      // link is reset, sending the suffix as a full request can separate a
+      // function call from its output. Re-enter preparation before any request or
+      // budget reservation so the complete local history is compiled together.
+      return await this.#sample(userInput, turnId, signal, emit);
     }
     this.#continuationSignature = continuationSignature;
     const requestId = turnId + "_step_" + (this.#observations.length + 1);
