@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1.0",
+  "graphId": "graph_cycle_fixture",
+  "nodes": [
+    { "id": "node_a", "role": "planner" },
+    { "id": "node_b", "role": "implementer" },
+    { "id": "node_c", "role": "reviewer" }
+  ],
+  "edges": [
+    { "from": "node_a", "to": "node_b" },
+    { "from": "node_b", "to": "node_c" },
+    { "from": "node_c", "to": "node_a", "kind": "cycle" }
+  ],
+  "expect": {
+    "acyclic": false,
+    "admission": "reject"
+  }
+}

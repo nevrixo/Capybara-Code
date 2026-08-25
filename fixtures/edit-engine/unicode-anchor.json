@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "1.0",
+  "description": "Exact-text anchors with an ambiguous emoji run and a unique UTF-8 phrase.",
+  "document": {
+    "path": "src/greet.ts",
+    "revision": "rev_unicode_1",
+    "text": "const a = \"😀😀\";\nconst b = \"😀😀\";\nconst unique = \"café 東京\";\n"
+  },
+  "cases": [
+    {
+      "name": "ambiguous-emoji-run",
+      "anchor": {
+        "kind": "exact_text",
+        "baseRevision": "rev_unicode_1",
+        "originalText": "😀😀",
+        "originalTextDigest": "sha256:placeholder-ambiguous"
+      },
+      "expect": "ambiguous"
+    },
+    {
+      "name": "unique-exact-text",
+      "anchor": {
+        "kind": "exact_text",
+        "baseRevision": "rev_unicode_1",
+        "originalText": "café 東京",
+        "originalTextDigest": "sha256:placeholder-unique"
+      },
+      "expect": "unique"
+    }
+  ]
+}
