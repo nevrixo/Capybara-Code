@@ -19,6 +19,10 @@ export class PluginHookBus {
     this.#hooks = [...hooks];
   }
 
+  register(hook: RegisteredBeforeHook): void {
+    this.#hooks.push(hook);
+  }
+
   async beforeTool(action: ProposedAction): Promise<void> {
     if (this.#hooks.length === 0) return;
     const operation = operationFromAction(action);

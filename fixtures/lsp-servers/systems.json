@@ -1,0 +1,8 @@
+{
+  "family": "systems",
+  "languages": ["rust"],
+  "command": "rust-analyzer",
+  "args": [],
+  "extensions": [".rs"],
+  "capabilities": ["textDocument/definition", "textDocument/references", "textDocument/hover", "textDocument/rename", "textDocument/diagnostic"]
+}

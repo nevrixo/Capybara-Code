@@ -1,0 +1,8 @@
+{
+  "family": "scripting",
+  "languages": ["python"],
+  "command": "pyright-langserver",
+  "args": ["--stdio"],
+  "extensions": [".py"],
+  "capabilities": ["textDocument/definition", "textDocument/references", "textDocument/hover", "textDocument/rename", "textDocument/diagnostic"]
+}

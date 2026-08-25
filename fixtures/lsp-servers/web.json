@@ -1,0 +1,8 @@
+{
+  "family": "web",
+  "languages": ["typescript", "javascript"],
+  "command": "typescript-language-server",
+  "args": ["--stdio"],
+  "extensions": [".ts", ".tsx", ".js", ".jsx"],
+  "capabilities": ["textDocument/definition", "textDocument/references", "textDocument/hover", "textDocument/rename", "textDocument/diagnostic"]
+}
