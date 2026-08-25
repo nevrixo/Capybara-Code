@@ -626,6 +626,7 @@ const TOOL_ACTIONS: Readonly<Record<string, string>> = {
   "lsp.hover": "Read",
   "lsp.signature_help": "Read",
   "lsp.document_highlights": "Find",
+  "lsp.call_hierarchy": "Find",
   "lsp.code_actions": "Read",
   "lsp.code_action_preview": "Preview",
   "lsp.format_preview": "Preview",
