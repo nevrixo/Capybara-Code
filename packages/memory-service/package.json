@@ -1,0 +1,16 @@
+{
+  "name": "@cbc/memory-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Production facade over MemoryBank with durable recall, secret rejection, and context projection",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@cbc/context-engine": "workspace:*",
+    "@cbc/protocol": "workspace:*"
+  }
+}
