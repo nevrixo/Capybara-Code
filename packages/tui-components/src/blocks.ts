@@ -1901,21 +1901,17 @@ function planItemHeading(
 }
 
 /**
- * §6.4 / §7.4: the final answer in normal high-contrast text with structured
- * evidence — changed files, verification, delegated tasks, risks, next step.
- *
- * §11.7's report is rendered rather than the model's prose being trusted, which is
- * how AC-50's truthfulness survives to the screen.
- *
- * When `agentId` is present the final belongs to a subagent. These are abbreviated
- * to a single completion line — the full detail already lives in the task card and
- * the `✓ Background job completed` notice, so repeating it clutters the timeline.
+ * Return provider-authored final prose for current events. Structured completion
+ * reports remain available as opt-in evidence, but are not a substitute for an
+ * answer in the chat surface. Legacy events retain their historical fallback.
  */
 export function finalAnswerText(
-  item: Pick<TimelineFinal, "answer" | "text" | "report">,
+  item: Pick<TimelineFinal, "answer" | "text" | "report" | "presentation">,
 ): string {
   const answer = item.answer?.trim();
-  return answer && answer.length > 0 ? answer : (item.report?.summary ?? item.text);
+  if (answer && answer.length > 0) return answer;
+  if (item.presentation !== undefined && item.presentation.legacy !== true) return "";
+  return item.report?.summary ?? item.text;
 }
 
 /** Labels terminal reports without presenting incomplete work as a final answer. */
@@ -1985,26 +1981,30 @@ function renderChatFinal(
   const report = item.report;
   const innerContext: BlockContext = { ...context, columns: Math.max(12, context.columns - 2) };
   const lines: StyledLine[] = [];
-  const status = completionStatusLabel(presentation);
-  if (status !== undefined) {
-    lines.push(fitLine("header", [
-      segment(`${icon(status.iconName, context.capabilities)} `, { fg: status.token }),
-      segment(status.title, { fg: status.token, bold: true }),
-    ], context));
-  }
-
   const answer = finalAnswerText(item);
   if (answer.trim().length > 0) {
     lines.push(...renderMarkdown(answer, innerContext, { kind: "final", style: { fg: "fg.primary" } }));
+  } else if (presentation.disposition !== "cancelled") {
+    const status = completionStatusLabel(presentation);
+    if (status !== undefined) {
+      lines.push(fitLine("header", [
+        segment(`${icon(status.iconName, context.capabilities)} `, { fg: status.token }),
+        segment(status.title, { fg: status.token, bold: true }),
+      ], context));
+    }
   }
 
-  if (presentation.issues.length > 0 && presentation.disposition !== "success") {
+  if (
+    options.attentionDetails === true &&
+    presentation.issues.length > 0 &&
+    presentation.disposition !== "success"
+  ) {
     const title = presentation.disposition === "blocked"
       ? (presentation.locale === "ko" ? "⚠ 진행이 멈췄습니다" : "⚠ Progress is blocked")
       : (presentation.locale === "ko" ? "⚠ 확인이 남았습니다" : "⚠ Confirmation needed");
-    lines.push(blank());
+    if (lines.length > 0) lines.push(blank());
     lines.push(fitLine("notice", [segment(title, { fg: "accent.amber", bold: true })], innerContext));
-    for (const issue of (options.attentionDetails === false ? [] : presentation.issues.slice(0, 3))) {
+    for (const issue of presentation.issues.slice(0, 3)) {
       lines.push(fitLine("notice", [
         segment("  ", { fg: "fg.muted" }),
         segment(`${issue.message}`, { fg: issueToken(issue), bold: issue.severity !== "attention" }),
@@ -2018,8 +2018,8 @@ function renderChatFinal(
     }
   }
 
-  if (report !== undefined && options.evidenceMode !== "hidden") {
-    const expanded = options.evidenceExpanded === true || options.evidenceMode === "expanded" || presentation.evidenceMode === "expanded";
+  if (report !== undefined && options.evidenceMode !== undefined && options.evidenceMode !== "hidden") {
+    const expanded = options.evidenceExpanded === true || options.evidenceMode === "expanded";
     if (expanded) {
       lines.push(...renderReportEvidence(report, innerContext, {
         ...(presentation.locale === undefined ? {} : { locale: presentation.locale }),
@@ -2027,7 +2027,8 @@ function renderChatFinal(
         suppressDuplicates: true,
       }));
     } else {
-      lines.push(blank(), renderCompletionEvidenceSummary(report, presentation, innerContext));
+      if (lines.length > 0) lines.push(blank());
+      lines.push(renderCompletionEvidenceSummary(report, presentation, innerContext));
     }
   }
   return lines;
@@ -2373,7 +2374,7 @@ export interface TimelineRenderOptions {
   /** Final answer compatibility mode and evidence disclosure. */
   readonly finalAnswerStyle?: "chat" | "report";
   readonly completionEvidenceMode?: "hidden" | "collapsed" | "expanded";
-  /** Final audit evidence remains collapsed until explicitly requested. */
+  /** Final audit evidence remains hidden until explicitly requested. */
   readonly completionEvidenceExpanded?: boolean;
   readonly completionAttentionDetails?: boolean;
   /** Offered scopes for pending approval card in timeline. */

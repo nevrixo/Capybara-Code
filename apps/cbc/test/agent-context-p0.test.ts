@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { loadConfig } from "@cbc/config-schema";
 import { MockProvider } from "@cbc/provider-openai";
-import { EventSequencer, createEvent, type CbcEvent } from "@cbc/protocol";
+import { EventSequencer, RuntimeRpcError, createEvent, type CbcEvent } from "@cbc/protocol";
 
 import { AgentSession, MAX_READ_FRESHNESS_RECORDS, shouldAutoRoute } from "../src/agent.ts";
 import { GrantedRules } from "../src/approvals.ts";
@@ -725,6 +725,98 @@ describe("AgentSession Context P0 production loop", () => {
     expect(occurrenceCount(third, "REPEATED_RANGE_SENTINEL")).toBe(2);
     expect(third).toContain("exact content virtualized as excerpt-");
     expect(third).toContain("     1 | REPEATED_RANGE_SENTINEL");
+  });
+
+  test("parallel PATH_CHANGED recoveries share one dirty repository refresh", async () => {
+    const paths = ["src/a.ts", "src/b.ts"];
+    const provider = new MockProvider({
+      steps: [
+        {
+          toolCalls: paths.map((path, index) => ({
+            callId: `stale-${index}`,
+            name: "fs.read",
+            arguments: { path },
+          })),
+        },
+        { text: "Recovered." },
+      ],
+    });
+    let session!: AgentSession;
+    const readAttempts = new Map<string, number>();
+    let activeFullScans = 0;
+    let maxConcurrentFullScans = 0;
+    let fullScans = 0;
+    const runtime = {
+      workspace: "/work",
+      read: async (path: string) => {
+        const attempt = (readAttempts.get(path) ?? 0) + 1;
+        readAttempts.set(path, attempt);
+        if (attempt === 1) {
+          session.context.invalidateWorkspace("test concurrent stale reads");
+          throw new RuntimeRpcError({
+            code: -32603,
+            message: "stale read",
+            data: {
+              taxonomy: "PATH_CHANGED",
+              retryable: true,
+              path,
+              generationBefore: 0,
+              generationAfter: 0,
+            },
+          });
+        }
+        const text = `fresh:${path}`;
+        return {
+          path,
+          binary: false,
+          checksum: path.endsWith("a.ts") ? "a".repeat(64) : "b".repeat(64),
+          totalLines: 1,
+          excerpt: { path, startLine: 1, endLine: 1, totalLines: 1, text },
+          rendered: `<file path="${path}">${text}</file>`,
+        };
+      },
+      glob: async (pattern: string) => {
+        if (pattern === "**/*") {
+          fullScans += 1;
+          activeFullScans += 1;
+          maxConcurrentFullScans = Math.max(maxConcurrentFullScans, activeFullScans);
+          await new Promise<void>((resolve) => setTimeout(resolve, 15));
+          activeFullScans -= 1;
+          return { entries: paths.map((path) => ({ path, bytes: 1, binary: false })) };
+        }
+        return { entries: [{ path: pattern, bytes: 1, binary: false }] };
+      },
+      gitDiff: async () => ({ files: [] }),
+      appendEvents: async (params: { events?: unknown[] }) => ({
+        appended: params.events?.length ?? 0,
+        lastSequence: params.events?.length ?? 0,
+      }),
+      openSession: async () => ({ ok: true }),
+      snapshotSession: async () => ({ ok: true }),
+      loadSession: async () => ({ events: [] }),
+    };
+    let now = 10_500;
+    session = new AgentSession({
+      host: { now: () => ++now } as never,
+      runtime: runtime as never,
+      config: loadConfig({ projectTrusted: true, env: {} }).config,
+      workspacePath: "/work",
+      workspaceIdentityDigest: "9".repeat(64),
+      trust: "trusted-always",
+      sessionId: "parallel-stale-refresh",
+      provider,
+      approvals: { request: async () => ({ kind: "allow_once" as const }) },
+      granted: new GrantedRules(),
+      nonInteractive: false,
+      now: () => ++now,
+    });
+    session.registry.activate(["fs.read"]);
+    await session.submit("Read both files after a concurrent change", new AbortController().signal);
+
+    expect(fullScans).toBeGreaterThanOrEqual(1);
+    expect(maxConcurrentFullScans).toBe(1);
+    expect(session.context.repositoryMapDirty).toBe(false);
+    expect(JSON.stringify(provider.requests[1]?.input)).not.toContain("did not become quiescent");
   });
 
   test("a workspace mutation removes prior raw read bytes from the next provider view", async () => {

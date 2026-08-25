@@ -910,6 +910,7 @@ fn initialize(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
         git: git.is_repository(),
         sandbox_level: effective_level.label().to_string(),
         sandbox_backends: cbc_sandbox::enforce::applied_backend_labels(),
+        network_deny: cbc_sandbox::network_deny_available(),
         platform: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
         max_frame_bytes: cbc_protocol::MAX_FRAME_BYTES,
@@ -1045,6 +1046,7 @@ fn capabilities_value(state: &RuntimeState) -> Value {
         "protocolVersion": PROTOCOL_VERSION,
         "runtimeVersion": RUNTIME_VERSION,
         "sandbox": sandbox,
+        "networkDeny": cbc_sandbox::network_deny_available(),
         "keychain": keychain_label,
         "git": git,
         "platform": std::env::consts::OS,
@@ -2328,6 +2330,15 @@ mod tests {
         .expect("initialize dispatched");
         let result = outcome.expect("initialize succeeds");
         (dir, state, result)
+    }
+
+    #[test]
+    fn initialize_reports_real_network_deny_availability() {
+        let (_dir, _state, result) = initialized_with_sandbox("standard");
+        assert_eq!(
+            result["capabilities"]["networkDeny"],
+            json!(cbc_sandbox::network_deny_available())
+        );
     }
 
     #[test]

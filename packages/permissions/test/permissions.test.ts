@@ -102,6 +102,17 @@ describe("classifier: dependency install (Appendix C.2)", () => {
     expect(c.network).toBe(true);
   });
 
+  test("npm create is recognized as a package download", () => {
+    const c = classifyCommand({
+      program: "npm",
+      args: ["create", "vite@latest", ".", "--", "--template", "react"],
+      cwd: "/repo",
+    });
+    expect(c.risk).toBe("R3");
+    expect(c.network).toBe(true);
+    expect(c.sideEffects).toContain("downloads packages");
+  });
+
   test("npm publish escalates to an external side effect", () => {
     const c = classifyCommand({ program: "npm", args: ["publish"], cwd: "/repo" });
     expect(c.risk).toBe("R6");

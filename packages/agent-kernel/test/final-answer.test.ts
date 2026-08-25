@@ -26,7 +26,7 @@ describe("final answer boundary", () => {
     expect(renderReport(report())).toContain("Git prerequisite 확인 결과");
   });
 
-  test("classifies partial verification as attention instead of failure", () => {
+  test("keeps partial verification metadata out of provider-authored chat output", () => {
     const partial: CompletionReport = {
       ...report(),
       status: "partial",
@@ -38,7 +38,27 @@ describe("final answer boundary", () => {
     expect(presentation.evidenceMode).toBe("summary");
     expect(presentation.issues.some((issue) => issue.code === "verification_not_run")).toBe(true);
     expect(presentation.issues.some((issue) => issue.severity === "error")).toBe(false);
-    expect(renderChatResponse(partial, "랜딩 페이지는 반영됐습니다.", { presentation })).toContain("확인이 남았습니다");
+    expect(renderChatResponse(partial, "랜딩 페이지는 반영됐습니다.", { presentation })).toBe("랜딩 페이지는 반영됐습니다.");
+  });
+
+  test("stays silent for cancellation without a provider answer", () => {
+    const cancelled: CompletionReport = {
+      ...report(),
+      status: "cancelled",
+      summary: "The turn was cancelled.",
+    };
+
+    expect(renderChatResponse(cancelled)).toBe("");
+  });
+
+  test("shows one concise message for failure without a provider answer", () => {
+    const failed: CompletionReport = {
+      ...report(),
+      status: "failed",
+      summary: "Internal failure details",
+    };
+
+    expect(renderChatResponse(failed)).toBe("✕ The task could not be completed");
   });
 
   test("classifies a permission block as blocked and expands evidence", () => {

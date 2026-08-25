@@ -171,6 +171,9 @@ const INSTALL_SUBCOMMANDS = new Set([
   "get",
   "fetch",
   "restore",
+  "create",
+  "exec",
+  "dlx",
 ]);
 
 const PUBLISH_SUBCOMMANDS = new Set(["publish", "push", "release", "deploy", "upload"]);

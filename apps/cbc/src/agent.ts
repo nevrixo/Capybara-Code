@@ -1062,6 +1062,9 @@ export class AgentSession {
       approvals: options.approvals,
       normalizer: new HostActionNormalizer({
         defaultCwd: ".",
+        ...(options.runtime.capabilities?.networkDeny === undefined
+          ? {}
+          : { networkDenyAvailable: options.runtime.capabilities.networkDeny }),
         ...(options.mcpHint !== undefined ? { mcpHint: options.mcpHint } : {}),
       }),
       emitter,
@@ -1780,6 +1783,25 @@ export class AgentSession {
   }
 
   async #refreshRepositoryMap(): Promise<void> {
+    const pending = this.#repositoryRefresh;
+    if (pending !== undefined) {
+      await pending;
+      if (!this.context.repositoryMapDirty || this.#activeBackgroundJobs.size > 0) return;
+      // Another waiter may already have claimed the trailing refresh after the
+      // shared scan settled. Join it instead of starting a competing revision.
+      const successor = this.#repositoryRefresh;
+      if (successor !== undefined) {
+        await successor;
+        return;
+      }
+    }
+    if (this.#activeBackgroundJobs.size > 0) return;
+    const refresh = this.#performRepositoryMapRefresh();
+    this.trackRepositoryRefresh(refresh);
+    await refresh;
+  }
+
+  async #performRepositoryMapRefresh(): Promise<void> {
     if (this.#activeBackgroundJobs.size > 0) return;
     const generation = this.#workspaceGeneration;
     const revision = ++this.#repositoryRefreshRevision;
@@ -3017,9 +3039,9 @@ export class AgentSession {
   }
 
   /**
-   * Associate the startup's live repository walk with this session. A cached map
-   * may paint immediately, but the first provider sample waits for this live
-   * promotion (or performs a fallback scan) before compiling L6 evidence.
+   * Associate a live repository walk with this session. Startup promotion and
+   * post-observation refreshes share this single-flight slot so parallel stale
+   * reads cannot supersede one another with competing scan revisions.
    */
   trackRepositoryRefresh(refresh: Promise<unknown>): void {
     const tracked = refresh.then(

@@ -2879,6 +2879,25 @@ describe("action normalization", () => {
     expect(action.display).toBe("npm install sharp");
   });
 
+  test("a host without network-deny support requires explicit process approval", async () => {
+    const hostBound = new HostActionNormalizer({
+      defaultCwd: ".",
+      networkDenyAvailable: false,
+    });
+    const processAction = hostBound.normalize("c1", "process.run", {
+      program: "bun",
+      args: ["--version"],
+    });
+    const shellAction = hostBound.normalize("c2", "shell.run", {
+      script: "echo ready",
+    });
+    expect(processAction.command?.networkIntent).toMatchObject({ required: true });
+    expect(processAction.command?.networkIntent?.reason).toContain("cannot enforce network denial");
+    expect(shellAction.command?.networkIntent).toMatchObject({ required: true });
+    const { classifyCommand } = await import("@cbc/permissions");
+    expect(classifyCommand(processAction.command!).network).toBe(true);
+  });
+
   test("pwd is executed through process.run with the workspace cwd", () => {
     const action = normalizer.normalize("c1", "process.run", {
       program: "pwd",

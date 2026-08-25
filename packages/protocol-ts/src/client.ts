@@ -61,6 +61,7 @@ export interface RuntimeCapabilities {
   git: boolean;
   sandboxLevel: string;
   sandboxBackends: string[];
+  networkDeny: boolean;
   platform: string;
   arch: string;
   maxFrameBytes: number;

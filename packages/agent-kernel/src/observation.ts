@@ -830,40 +830,30 @@ export interface ChatResponseOptions {
   readonly presentation?: CompletionPresentation;
 }
 
-/** Render the user-facing chat response without discarding the report contract. */
+/**
+ * Render provider-authored prose for the chat surface. A missing provider answer
+ * produces only a concise failure/block message; cancellation stays silent.
+ * Structured evidence remains available through the explicit verbose path.
+ */
 export function renderChatResponse(
   report: CompletionReport,
   answer?: string,
   options: ChatResponseOptions = {},
 ): string {
-  const summary = answer?.trim().length ? answer.trim() : report.summary;
-  const presentation = options.presentation ?? deriveCompletionPresentation(report, summary);
+  const providerAnswer = answer?.trim() ?? "";
+  const presentation = options.presentation ?? deriveCompletionPresentation(report, providerAnswer);
   const lines: string[] = [];
-  if (summary.length > 0) lines.push(summary);
-
-  if (presentation.disposition === "failure") {
-    lines.push("", presentation.locale === "ko" ? "✕ 작업을 완료하지 못했습니다" : "✕ The task could not be completed");
+  if (providerAnswer.length > 0) {
+    lines.push(providerAnswer);
+  } else if (presentation.disposition === "failure") {
+    lines.push(presentation.locale === "ko" ? "✕ 작업을 완료하지 못했습니다" : "✕ The task could not be completed");
   } else if (presentation.disposition === "blocked") {
-    lines.push("", presentation.locale === "ko" ? "⚠ 진행이 멈췄습니다" : "⚠ Progress is blocked");
-  } else if (presentation.disposition === "attention") {
-    lines.push("", presentation.locale === "ko" ? "⚠ 확인이 남았습니다" : "⚠ Confirmation needed");
+    lines.push(presentation.locale === "ko" ? "⚠ 진행이 멈췄습니다" : "⚠ Progress is blocked");
   }
 
-  for (const issue of presentation.issues) {
-    lines.push(`- ${issue.message}${issue.nextAction === undefined ? "" : ` Next: ${issue.nextAction}`}`);
-  }
-
-  const passed = report.verification.filter((step) => step.status === "passed").length;
-  const notRun = report.verification.filter((step) => step.status === "not_run").length;
-  const attention = presentation.issues.length;
-  const summaryLine = presentation.locale === "ko"
-    ? `변경 ${report.changedFiles.length} · 검증 ${passed}/${report.verification.length}${attention > 0 ? ` · 확인 필요 ${attention}` : ""}`
-    : `Changed ${report.changedFiles.length} · Verification ${passed}/${report.verification.length}${attention > 0 ? ` · Attention ${attention}` : ""}`;
-  if (report.changedFiles.length > 0 || report.verification.length > 0 || attention > 0) lines.push("", summaryLine);
-  if (notRun > 0 && attention === 0) lines.push("", presentation.locale === "ko" ? `확인 필요 ${notRun}` : `Confirmation needed ${notRun}`);
-
-  if (options.verbose || presentation.evidenceMode === "expanded") {
-    lines.push("", renderReport(report, undefined));
+  if (options.verbose) {
+    if (lines.length > 0) lines.push("");
+    lines.push(renderReport(report, undefined));
   }
   return lines.join("\n").trimEnd();
 }

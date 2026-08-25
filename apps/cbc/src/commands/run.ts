@@ -119,7 +119,7 @@ export async function run(context: CommandContext, args: RunArgs): Promise<Comma
 
   await emitFinal(boot, payload, resultFile, resultJournalFile, context);
   await boot.dispose?.();
-  context.out(finalText);
+  if (finalText.length > 0) context.out(finalText);
 
   return code === EXIT.ok ? ok() : { code };
 }

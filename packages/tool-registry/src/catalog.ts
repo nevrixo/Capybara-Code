@@ -859,7 +859,7 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
   {
     id: "fs.write",
     title: "Write",
-    description: "Create or replace a complete file.",
+    description: "Create or replace a complete file, creating missing parent directories.",
     source: "native",
     defaultRisk: "R2",
     maxRisk: "R2",

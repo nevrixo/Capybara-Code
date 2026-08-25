@@ -31,6 +31,7 @@ fn main() {
                 "platform": std::env::consts::OS,
                 "arch": std::env::consts::ARCH,
                 "sandbox": sandbox,
+                "networkDeny": cbc_sandbox::network_deny_available(),
                 "maxFrameBytes": cbc_protocol::MAX_FRAME_BYTES,
             });
             println!(

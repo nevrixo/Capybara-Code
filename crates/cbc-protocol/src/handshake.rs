@@ -74,6 +74,7 @@ pub struct RuntimeCapabilities {
     /// `none` | `standard` | `strict` (§14.4)
     pub sandbox_level: String,
     pub sandbox_backends: Vec<String>,
+    pub network_deny: bool,
     pub platform: String,
     pub arch: String,
     pub max_frame_bytes: usize,
@@ -137,6 +138,7 @@ mod tests {
                 git: true,
                 sandbox_level: "standard".into(),
                 sandbox_backends: vec![],
+                network_deny: true,
                 platform: "linux".into(),
                 arch: "x86_64".into(),
                 max_frame_bytes: 8 * 1024 * 1024,
@@ -149,5 +151,6 @@ mod tests {
         assert_eq!(json["workspaceId"], "ws_01");
         assert_eq!(json["capabilities"]["enhancedSandbox"], false);
         assert_eq!(json["capabilities"]["sandboxLevel"], "standard");
+        assert_eq!(json["capabilities"]["networkDeny"], true);
     }
 }

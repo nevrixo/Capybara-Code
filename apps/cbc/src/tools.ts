@@ -2114,7 +2114,7 @@ export class RuntimeToolExecutor implements ToolExecutor {
       ...(commandArgs !== undefined ? { args: commandArgs } : {}),
       ...(cwd !== undefined ? { cwd } : {}),
       network: command !== undefined && classifyCommand(command).network ? "allow" : "deny",
-      ...(raw.networkIntent !== undefined ? { ttlMs: 120_000 } : {}),
+      ...(command?.networkIntent !== undefined ? { ttlMs: 120_000 } : {}),
     });
   }
 

@@ -191,11 +191,13 @@ function commandFor(
   toolId: string,
   args: Record<string, unknown>,
   defaultCwd: string,
+  networkDenyAvailable: boolean | undefined,
 ): CommandSpec | undefined {
   if (toolId === "shell.run") {
     // The full script is the command. The first token stays as `program` for
     // display only; the classifier analyses `script`, never the token.
     const script = stringField(args, "script") ?? stringField(args, "command") ?? "";
+    const intent = networkIntentFor(args, networkDenyAvailable === false);
     return {
       program: script.trim().split(/\s+/)[0] ?? "",
       args: [],
@@ -204,13 +206,14 @@ function commandFor(
       semantics: "shell-script",
       script,
       ...(rawEnv(args) !== undefined ? { env: rawEnv(args) as Record<string, string> } : {}),
+      ...(intent !== undefined ? { networkIntent: intent } : {}),
     };
   }
 
   if (toolId === "process.run" || toolId === "process.start") {
     const program = stringField(args, "program") ?? "";
     const argv = stringArrayField(args, "args");
-    const intent = networkIntentFor(args);
+    const intent = networkIntentFor(args, networkDenyAvailable === false);
     const spec: CommandSpec = {
       program,
       args: argv,
@@ -234,21 +237,30 @@ function commandFor(
 }
 
 /**
- * The model's declared network need (P0-03).
+ * Network need presented to the policy engine (P0-03/P0-04).
  *
- * Intent only: the policy engine turns it into a risk class and the approval
- * question, and the runtime receives a mode the policy chose — never one the
- * model chose.
+ * A model may declare intent but cannot grant itself access. When this host
+ * cannot enforce a deny, the host also supplies an intent so the same approval
+ * flow chooses `allow` explicitly instead of attempting an unenforceable deny.
  */
 function networkIntentFor(
   args: Record<string, unknown>,
+  hostRequiresApproval = false,
 ): { required: boolean; reason?: string } | undefined {
   const value = args.networkIntent;
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const record = value as Record<string, unknown>;
-  if (record.required !== true) return undefined;
-  const reason = typeof record.reason === "string" ? record.reason.trim() : "";
-  return reason.length > 0 ? { required: true, reason } : { required: true };
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    if (record.required === true) {
+      const reason = typeof record.reason === "string" ? record.reason.trim() : "";
+      return reason.length > 0 ? { required: true, reason } : { required: true };
+    }
+  }
+  return hostRequiresApproval
+    ? {
+        required: true,
+        reason: "this host cannot enforce network denial, so process execution requires explicit network approval",
+      }
+    : undefined;
 }
 
 export type { ProcessSemantics };
@@ -316,6 +328,8 @@ export type McpHintResolver = (
 export interface NormalizerOptions {
   /** Workspace-relative default cwd for process tools. */
   readonly defaultCwd?: string;
+  /** Whether the runtime can enforce `network = deny` for child processes. */
+  readonly networkDenyAvailable?: boolean;
   /**
    * Side-effect hints from the MCP catalog. §17.8 treats a server's own
    * `readOnlyHint` as a hint only, so the resolved risk is supplied by the host
@@ -335,7 +349,12 @@ export class HostActionNormalizer implements ActionNormalizer {
   normalize(callId: string, toolId: string, args: Record<string, unknown>): ProposedAction {
     const defaultCwd = this.#options.defaultCwd ?? ".";
     const normalizedArgs = normalizeArguments(toolId, args);
-    const command = commandFor(toolId, normalizedArgs, defaultCwd);
+    const command = commandFor(
+      toolId,
+      normalizedArgs,
+      defaultCwd,
+      this.#options.networkDenyAvailable,
+    );
 
     const declaredPaths = collectPaths(normalizedArgs);
     const patchPaths =

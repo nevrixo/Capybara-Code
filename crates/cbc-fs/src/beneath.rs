@@ -497,7 +497,13 @@ fn map_io(path: &Path, error: io::Error) -> FsError {
 }
 
 pub fn path_exists_beneath(root: &Path, relative: &Path) -> Result<bool, FsError> {
-    platform::path_exists(root, relative)
+    // A missing intermediate directory means the target is absent just as much
+    // as a missing leaf does. Keep existence checks side-effect free; mutation
+    // helpers create the validated parent chain only when the write commits.
+    match platform::path_exists(root, relative) {
+        Err(FsError::NotFound { .. }) => Ok(false),
+        result => result,
+    }
 }
 
 pub fn hash_file_beneath(root: &Path, relative: &Path) -> Result<String, FsError> {
@@ -1413,6 +1419,18 @@ compile_error!("race-safe workspace filesystem operations require Unix or Window
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn missing_parent_is_reported_as_absent_without_creating_it() {
+        let root = TempDir::new().expect("root");
+        let target = Path::new("src/components/App.jsx");
+
+        assert!(!path_exists_beneath(root.path(), target).expect("existence check"));
+        assert!(
+            !root.path().join("src").exists(),
+            "an existence check must not create parent directories"
+        );
+    }
 
     #[test]
     fn reads_replaces_moves_and_deletes_beneath_root() {

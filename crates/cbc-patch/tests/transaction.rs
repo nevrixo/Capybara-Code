@@ -274,6 +274,39 @@ fn empty_expected_hash_is_ignored_when_creating_a_file() {
 }
 
 #[test]
+fn create_write_creates_missing_parent_directories_with_workspace_root() {
+    let dir = TempDir::new().expect("tempdir");
+    let ws = Workspace::open(dir.path()).expect("workspace");
+    let resolved = ws
+        .resolve_write("src/components/App.jsx")
+        .expect("resolve missing nested path");
+    let mut tx = FileTransaction::begin("tx_missing_parents", None, None)
+        .with_workspace_root(ws.root().to_path_buf());
+
+    tx.stage_write(
+        &resolved.relative,
+        &resolved.absolute,
+        "export default function App() {}\n",
+        cbc_fs::WriteIntent::Create,
+        None,
+    )
+    .expect("stage create beneath missing parents");
+
+    assert!(
+        !ws.root().join("src").exists(),
+        "staging must not mutate the workspace"
+    );
+
+    let records = tx.commit().expect("commit create");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].kind, FileOperationKind::Create);
+    assert_eq!(
+        fs::read_to_string(ws.root().join("src/components/App.jsx")).unwrap(),
+        "export default function App() {}\n"
+    );
+}
+
+#[test]
 fn replace_without_a_base_hash_is_refused() {
     // P0-07: replacing an existing file must present the file's current hash.
     // A blind replace is exactly the stale-read optimistic concurrency guards

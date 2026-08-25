@@ -126,6 +126,7 @@ function initializeResult(): Record<string, unknown> {
       git: false,
       sandboxLevel: "standard",
       sandboxBackends: [],
+      networkDeny: true,
       platform: "linux",
       arch: "x86_64",
       maxFrameBytes: 8 * 1024 * 1024,

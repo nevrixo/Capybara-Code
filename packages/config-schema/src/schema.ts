@@ -463,8 +463,8 @@ export function defaultConfig(): CbcConfig {
       sidebar: "auto",
       finalAnswer: {
         style: "chat",
-        evidence: "collapsed",
-        attentionDetails: true,
+        evidence: "hidden",
+        attentionDetails: false,
       },
     },
     model: {

@@ -62,7 +62,7 @@ export const TOOL_PROTOCOL = `Tool protocol:
 - Paths are workspace-relative. An absolute path requires an explicit flag and a user approval.
 - Only a subset of tools is active at any moment. Call tool.discover with a short natural-language query to activate more.
 - Mutations run inside a transaction. A multi-file patch either applies completely or not at all.
-- fs.write creates a missing file with intent:"create"; replacing an existing file requires the checksum returned by fs.read in expectedHash. An empty checksum is valid only for create/upsert semantics.
+- fs.write creates a missing file and any missing parent directories with intent:"create"; replacing an existing file requires the checksum returned by fs.read in expectedHash. An empty checksum is valid only for create/upsert semantics.
 - fs.delete and fs.move on an existing file also require that checksum in expectedHash; read the file first. Deleting a directory uses recursive:true and needs no checksum.
 - fs.apply_patch requires --- a/path and +++ b/path headers. Use bare @@ with exact, unique old-side context or a numbered unified-diff hunk; line counts are derived from the hunk body. For a new file, prefer fs.write instead of guessing a patch header.
 - Risk classes: R0 read-only, R1 local reversible execution, R2 bounded workspace mutation, R3 network or broad execution, R4 destructive or privileged, R5 credential or outside-workspace, R6 external side effect.

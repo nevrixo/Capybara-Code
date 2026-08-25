@@ -219,7 +219,7 @@ describe("defaults (§21.4)", () => {
 
   test("default to chat-first adaptive context policies", () => {
     const config = defaultConfig();
-    expect(config.ui.finalAnswer).toEqual({ style: "chat", evidence: "collapsed", attentionDetails: true });
+    expect(config.ui.finalAnswer).toEqual({ style: "chat", evidence: "hidden", attentionDetails: false });
     expect(config.model.context.compactionPolicy).toBe("adaptive");
     expect(config.model.context.providerCompactionMode).toBe("auto");
     expect(config.model.context.emergencyRatio).toBe(0.9);

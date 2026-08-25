@@ -816,6 +816,9 @@ export class SubagentBridge {
       approvals: this.#options.approvals,
       normalizer: new HostActionNormalizer({
         defaultCwd: ".",
+        ...(childRuntime.capabilities?.networkDeny === undefined
+          ? {}
+          : { networkDenyAvailable: childRuntime.capabilities.networkDeny }),
         ...(this.#options.mcpHint !== undefined ? { mcpHint: this.#options.mcpHint } : {}),
       }),
       emitter: childEmitter,

@@ -301,8 +301,8 @@ export class InteractiveUi {
   #toolDetail: ToolDetail = "compact";
   #subagentDetail: SubagentDetail = "drawer";
   #finalAnswerStyle: "chat" | "report" = "chat";
-  #finalAnswerEvidence: "hidden" | "collapsed" | "expanded" = "collapsed";
-  #finalAnswerAttentionDetails = true;
+  #finalAnswerEvidence: "hidden" | "collapsed" | "expanded" = "hidden";
+  #finalAnswerAttentionDetails = false;
   #lastNoticeText: string | undefined;
   #lastNoticeCount = 0;
   #effectiveSandbox: string | undefined;
@@ -382,8 +382,8 @@ export class InteractiveUi {
     this.#toolDetail = options.uiToolDetail ?? "compact";
     this.#subagentDetail = options.uiSubagentDetail ?? "drawer";
     this.#finalAnswerStyle = options.uiFinalAnswerStyle ?? "chat";
-    this.#finalAnswerEvidence = options.uiFinalAnswerEvidence ?? "collapsed";
-    this.#finalAnswerAttentionDetails = options.uiFinalAnswerAttentionDetails ?? true;
+    this.#finalAnswerEvidence = options.uiFinalAnswerEvidence ?? "hidden";
+    this.#finalAnswerAttentionDetails = options.uiFinalAnswerAttentionDetails ?? false;
     this.#credentialSource = options.credentialSource;
     this.#sidebarVisible =
       options.sidebarVisibility === undefined || options.sidebarVisibility === "auto"
