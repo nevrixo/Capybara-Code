@@ -107,6 +107,8 @@ export interface ToolExecutorOptions {
   readonly editEngineV2?: boolean;
   /** Enables evidence-backed durable memory tools. */
   readonly durableMemory?: boolean;
+  /** Enables isolated Git worktree and merge-preview tools. */
+  readonly worktreeMultiAgent?: boolean;
   /** Per-scope gates are enforced again at execution, not only in the catalog. */
   readonly memoryScopes?: Readonly<{
     workspace: boolean;
@@ -1722,6 +1724,109 @@ export class RuntimeToolExecutor implements ToolExecutor {
                 : {}),
         })) as { content: string; revision: string };
         return { result: okResult(`showed ${data.revision}`, data), text: data.content };
+      }
+
+      case "worktree.list": {
+        if (this.#options.worktreeMultiAgent !== true) {
+          return {
+            result: errorResult(
+              "NOT_FOUND",
+              "worktree multi-agent is disabled; enable experimental.worktreeMultiAgent",
+              { retryable: false },
+            ),
+          };
+        }
+        const data = (await runtime.listWorktrees()) as Record<string, unknown>;
+        return { result: okResult("listed worktrees", data) };
+      }
+
+      case "worktree.inspect": {
+        if (this.#options.worktreeMultiAgent !== true) {
+          return {
+            result: errorResult(
+              "NOT_FOUND",
+              "worktree multi-agent is disabled; enable experimental.worktreeMultiAgent",
+              { retryable: false },
+            ),
+          };
+        }
+        const path = str(action, "path");
+        if (path === undefined) {
+          return { result: errorResult("INVALID_ARGUMENT", "worktree.inspect requires path") };
+        }
+        const data = (await runtime.inspectWorktree({ path: workspacePath(path, workspace) })) as Record<string, unknown>;
+        return { result: okResult("inspected worktree", data) };
+      }
+
+      case "worktree.create": {
+        if (this.#options.worktreeMultiAgent !== true) {
+          return {
+            result: errorResult(
+              "NOT_FOUND",
+              "worktree multi-agent is disabled; enable experimental.worktreeMultiAgent",
+              { retryable: false },
+            ),
+          };
+        }
+        const path = str(action, "path");
+        const commit = str(action, "commit");
+        if (path === undefined || commit === undefined) {
+          return { result: errorResult("INVALID_ARGUMENT", "worktree.create requires path and commit") };
+        }
+        const capability = await this.#issueCapability(action);
+        const data = (await runtime.createWorktree({
+          path: workspacePath(path, workspace),
+          commit,
+          requireClean: args(action).requireClean !== false,
+          capabilityReceipt: capability.id,
+          capabilitySessionId: capability.sessionId,
+          capabilityActionHash: capability.actionHash,
+        })) as Record<string, unknown>;
+        return { result: okResult("created worktree", data) };
+      }
+
+      case "worktree.remove": {
+        if (this.#options.worktreeMultiAgent !== true) {
+          return {
+            result: errorResult(
+              "NOT_FOUND",
+              "worktree multi-agent is disabled; enable experimental.worktreeMultiAgent",
+              { retryable: false },
+            ),
+          };
+        }
+        const path = str(action, "path");
+        if (path === undefined) {
+          return { result: errorResult("INVALID_ARGUMENT", "worktree.remove requires path") };
+        }
+        const capability = await this.#issueCapability(action);
+        const data = (await runtime.removeWorktree({
+          path: workspacePath(path, workspace),
+          capabilityReceipt: capability.id,
+          capabilitySessionId: capability.sessionId,
+          capabilityActionHash: capability.actionHash,
+        })) as Record<string, unknown>;
+        return { result: okResult("removed worktree", data) };
+      }
+
+      case "merge.preview": {
+        if (this.#options.worktreeMultiAgent !== true) {
+          return {
+            result: errorResult(
+              "NOT_FOUND",
+              "worktree multi-agent is disabled; enable experimental.worktreeMultiAgent",
+              { retryable: false },
+            ),
+          };
+        }
+        const base = str(action, "base");
+        const ours = str(action, "ours");
+        const theirs = str(action, "theirs");
+        if (base === undefined || ours === undefined || theirs === undefined) {
+          return { result: errorResult("INVALID_ARGUMENT", "merge.preview requires base, ours, and theirs") };
+        }
+        const data = (await runtime.previewMerge({ base, ours, theirs })) as Record<string, unknown>;
+        return { result: okResult("previewed merge", data) };
       }
 
       case "git.checkpoint": {

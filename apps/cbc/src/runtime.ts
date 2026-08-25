@@ -1040,6 +1040,26 @@ export class Runtime {
     );
   }
 
+  async listWorktrees(): Promise<unknown> {
+    return await this.#client.request("worktree.list", {});
+  }
+
+  async inspectWorktree(params: Record<string, unknown>): Promise<unknown> {
+    return await this.#client.request("worktree.inspect", params);
+  }
+
+  async createWorktree(params: Record<string, unknown>): Promise<unknown> {
+    return await this.#client.request("worktree.create", params);
+  }
+
+  async removeWorktree(params: Record<string, unknown>): Promise<unknown> {
+    return await this.#client.request("worktree.remove", params);
+  }
+
+  async previewMerge(params: Record<string, unknown>): Promise<unknown> {
+    return await this.#client.request("merge.preview", params);
+  }
+
   // ---- credentials (§9.1) ----
 
   async storeCredential(

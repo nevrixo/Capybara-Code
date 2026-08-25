@@ -43,6 +43,7 @@ import {
 import {
   SUBAGENT_ROLES,
   SpawnRejected,
+  GraphAuthority,
   SubagentScheduler,
   buildTask,
   renderAgentCandidates,
@@ -156,6 +157,20 @@ export class SubagentBridge {
   constructor(options: SubagentBridgeOptions) {
     this.#options = options;
     this.scheduler = new SubagentScheduler({
+      ...(options.config.experimental.persistentAgentGraph && options.config.agentGraph.enabled
+        ? {
+            graph: new GraphAuthority({
+              sessionId: options.sessionId,
+              workspaceIdentityDigest: options.sessionId,
+              ...(options.now !== undefined ? { now: options.now } : {}),
+            }),
+          }
+        : {}),
+      ...(options.config.experimental.worktreeMultiAgent && options.config.worktrees.enabled
+        ? {
+            writerPartition: (task) => task.allowedPaths[0] ?? "base",
+          }
+        : {}),
       emitter: {
         emit: <T>(
           kind: CbcEventKind,
@@ -523,6 +538,9 @@ export class SubagentBridge {
         (this.#options.config.memory.workspaceEnabled ||
           this.#options.config.memory.sessionEnabled ||
           this.#options.config.memory.taskEnabled),
+      worktreeMultiAgent:
+        this.#options.config.experimental.worktreeMultiAgent &&
+        this.#options.config.worktrees.enabled,
     }).filter((tool) =>
       !tool.id.startsWith("task.") &&
       tool.id !== "todo.write" &&
@@ -575,6 +593,9 @@ export class SubagentBridge {
         (this.#options.config.memory.workspaceEnabled ||
           this.#options.config.memory.sessionEnabled ||
           this.#options.config.memory.taskEnabled),
+      worktreeMultiAgent:
+        this.#options.config.experimental.worktreeMultiAgent &&
+        this.#options.config.worktrees.enabled,
       memoryScopes: {
         workspace: this.#options.config.memory.workspaceEnabled,
         session: this.#options.config.memory.sessionEnabled,

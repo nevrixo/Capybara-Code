@@ -534,6 +534,7 @@ export class AgentSession {
   /** The most recently resolved plan, for `/status` and inspectors. */
   #tokenSavingLastPlan: ResolvedTokenSavingPlan | undefined;
   readonly #pluginHookBus: PluginHookBus;
+  #diagnosticErrorFindings = 0;
 
   constructor(options: AgentSessionOptions) {
     this.#options = options;
@@ -577,6 +578,9 @@ export class AgentSession {
         fullLspTools &&
         options.config.experimental.editEngineV2 &&
         options.config.lsp.mutations.codeActions,
+      worktreeMultiAgent:
+        options.config.experimental.worktreeMultiAgent &&
+        options.config.worktrees.enabled,
     }).filter((tool) =>
       options.config.agent.compoundTools ||
       (tool.id !== "repo.investigate" && tool.id !== "verification.run_many"),
@@ -815,6 +819,9 @@ export class AgentSession {
         (options.config.memory.workspaceEnabled ||
           options.config.memory.sessionEnabled ||
           options.config.memory.taskEnabled),
+      worktreeMultiAgent:
+        options.config.experimental.worktreeMultiAgent &&
+        options.config.worktrees.enabled,
       memoryScopes: {
         workspace: options.config.memory.workspaceEnabled,
         session: options.config.memory.sessionEnabled,
@@ -1019,6 +1026,7 @@ export class AgentSession {
         staleEvidence: [...this.#verificationGenerations.values()].filter(
           (verification) => verification.ok && verification.generation < this.#verificationInvalidatingGeneration,
         ).length,
+        highRiskFindings: this.#diagnosticErrorFindings,
       }),
       permissionContext: () => this.permissionContext(),
       promptInputs: () => this.promptInputs(),
@@ -1275,6 +1283,9 @@ export class AgentSession {
   }
 
   async #ingestToolObservation(event: ToolObservationEnvelope): Promise<ToolObservationAck> {
+    if (event.action.toolId === "lsp.diagnostics" && event.execution.result.ok) {
+      this.#diagnosticErrorFindings = diagnosticErrorCount(event.execution.result.data);
+    }
     const scopeAgentId = event.agentId ?? "root";
     const targetContext = this.#contextForAgent(scopeAgentId);
     const isRootScope = targetContext === this.context;
@@ -3905,4 +3916,19 @@ export function parseReviewOutcome(text: string): ReviewOutcome {
   } catch {
     return { findings: [{ severity: "high", title: "reviewer JSON parse failed", evidence: trimmed.slice(0, 500), recommendation: "re-run independent review" }], summary: `independent review failed: invalid JSON ??${trimmed.slice(0, 500)}` };
   }
+}
+
+function diagnosticErrorCount(data: unknown): number {
+  if (typeof data !== "object" || data === null) return 0;
+  const record = data as Record<string, unknown>;
+  const diagnostics = record.diagnostics;
+  if (Array.isArray(diagnostics)) {
+    return diagnostics.filter((item) => {
+      if (typeof item !== "object" || item === null) return false;
+      const severity = (item as { severity?: unknown }).severity;
+      return severity === 1 || severity === "error";
+    }).length;
+  }
+  const returned = record.returnedDiagnostics;
+  return typeof returned === "number" && returned > 0 ? returned : 0;
 }

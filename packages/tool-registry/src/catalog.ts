@@ -1148,6 +1148,85 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
     keywords: ["git", "checkpoint", "safety", "stash", "snapshot", "backup"],
     parameters: objectSchema({ label: { type: "string", maxLength: 200 } }, []),
   },
+  {
+    id: "worktree.list",
+    title: "WorktreeList",
+    description: "List isolated Git worktrees bound to this repository identity.",
+    source: "native",
+    defaultRisk: "R0",
+    maxRisk: "R1",
+    alwaysActive: false,
+    mutates: false,
+    network: false,
+    keywords: ["worktree", "git", "parallel", "isolation"],
+    parameters: objectSchema({}, []),
+  },
+  {
+    id: "worktree.inspect",
+    title: "WorktreeInspect",
+    description: "Inspect one managed worktree path, HEAD, and lease state.",
+    source: "native",
+    defaultRisk: "R0",
+    maxRisk: "R1",
+    alwaysActive: false,
+    mutates: false,
+    network: false,
+    keywords: ["worktree", "inspect", "git"],
+    parameters: objectSchema({ path: relativePath }, ["path"]),
+  },
+  {
+    id: "worktree.create",
+    title: "WorktreeCreate",
+    description: "Create a detached Git worktree under the runtime data root from a verified commit.",
+    source: "native",
+    defaultRisk: "R2",
+    maxRisk: "R3",
+    alwaysActive: false,
+    mutates: true,
+    network: false,
+    keywords: ["worktree", "create", "isolate", "writer"],
+    parameters: objectSchema(
+      {
+        path: relativePath,
+        commit: { type: "string", minLength: 1, maxLength: 128 },
+        requireClean: { type: "boolean", default: true },
+      },
+      ["path", "commit"],
+    ),
+  },
+  {
+    id: "worktree.remove",
+    title: "WorktreeRemove",
+    description: "Remove a managed worktree after its writer lease is released.",
+    source: "native",
+    defaultRisk: "R3",
+    maxRisk: "R4",
+    alwaysActive: false,
+    mutates: true,
+    network: false,
+    keywords: ["worktree", "remove", "cleanup"],
+    parameters: objectSchema({ path: relativePath }, ["path"]),
+  },
+  {
+    id: "merge.preview",
+    title: "MergePreview",
+    description: "Preview a three-way merge without writing conflict markers into working files.",
+    source: "native",
+    defaultRisk: "R1",
+    maxRisk: "R2",
+    alwaysActive: false,
+    mutates: false,
+    network: false,
+    keywords: ["merge", "preview", "conflict", "worktree"],
+    parameters: objectSchema(
+      {
+        base: { type: "string", minLength: 1, maxLength: 128 },
+        ours: { type: "string", minLength: 1, maxLength: 128 },
+        theirs: { type: "string", minLength: 1, maxLength: 128 },
+      },
+      ["base", "ours", "theirs"],
+    ),
+  },
 
   // ---- Interaction and extension ----
   {
@@ -1542,6 +1621,13 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
 /** Experimental tools are absent from the default model catalog until enabled. */
 const EDIT_ENGINE_TOOL_IDS = new Set(["fs.edit.preview", "fs.edit"]);
 const DURABLE_MEMORY_TOOL_IDS = new Set(["memory.search", "memory.remember"]);
+const WORKTREE_TOOL_IDS = new Set([
+  "worktree.list",
+  "worktree.inspect",
+  "worktree.create",
+  "worktree.remove",
+  "merge.preview",
+]);
 const FULL_LSP_TOOL_IDS = new Set([
   "lsp.diagnostics",
   "lsp.symbols",
@@ -1571,6 +1657,7 @@ const LSP_FORMAT_PREVIEW_TOOL_IDS = new Set([
 export interface NativeToolFeatures {
   readonly editEngineV2?: boolean;
   readonly durableMemory?: boolean;
+  readonly worktreeMultiAgent?: boolean;
   readonly fullLsp?: boolean;
   /** Requires the separate LSP mutation rollout and the structured edit engine. */
   readonly lspRenamePreview?: boolean;
@@ -1584,6 +1671,7 @@ export function nativeToolsForFeatures(features: NativeToolFeatures = {}): ToolD
   return NATIVE_TOOLS.filter((tool) =>
     (!EDIT_ENGINE_TOOL_IDS.has(tool.id) || features.editEngineV2 === true) &&
     (!DURABLE_MEMORY_TOOL_IDS.has(tool.id) || features.durableMemory === true) &&
+    (!WORKTREE_TOOL_IDS.has(tool.id) || features.worktreeMultiAgent === true) &&
     (!FULL_LSP_TOOL_IDS.has(tool.id) || features.fullLsp === true) &&
     (
       !LSP_RENAME_PREVIEW_TOOL_IDS.has(tool.id) ||
