@@ -78,6 +78,11 @@ export interface MemoryQuery {
   readonly now?: string;
 }
 
+/** Production MemoryService and the in-process MemoryBank both satisfy this. */
+export interface MemoryRecallSource {
+  recall(query?: MemoryQuery): readonly MemoryRecord[];
+}
+
 export interface MemoryConfidenceThresholds {
   readonly workspace: number;
   readonly session: number;

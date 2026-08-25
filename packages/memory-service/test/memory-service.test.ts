@@ -173,6 +173,27 @@ describe("memory-service", () => {
     expect(restored.inspect().forgottenIds).toEqual([first.record.id]);
   });
 
+  test("ingestRestored hydrates a store-backed record without write-gate evidence", () => {
+    const { service } = serviceFixture();
+    service.ingestRestored({
+      id: "memory-restored",
+      key: "build.system",
+      value: "ninja",
+      scope: "workspace",
+      status: "active",
+      confidence: 0.9,
+      evidenceIds: ["ev-store"],
+      validFor: { workspaceIdentity: "workspace-a" },
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastValidatedAt: "2026-01-01T00:00:00.000Z",
+      evidenceObservedAt: "2026-01-01T00:00:00.000Z",
+      supersedes: [],
+      contestedWith: [],
+      revision: 1,
+    });
+    expect(service.recall().map((record) => record.key)).toEqual(["build.system"]);
+  });
+
   test("toContextItems projects active recalled records", () => {
     const { service, records } = serviceFixture();
     records.set("ev-1", evidence("ev-1", "2026-01-01T00:00:00.000Z"));

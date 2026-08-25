@@ -68,7 +68,7 @@ export interface MemoryServiceSnapshot {
 }
 
 export class MemoryService {
-  readonly #bank: MemoryBank;
+  #bank: MemoryBank;
   readonly #workspaceIdentity: string;
   readonly #forgotten = new Set<`memory-${string}`>();
   readonly #options: MemoryServiceOptions;
@@ -146,6 +146,31 @@ export class MemoryService {
       });
     }
     return this.#bank.write({ ...input, validFor });
+  }
+
+  /**
+   * Restart hydration: insert a store-backed record without re-running the write
+   * gate. Secret and cross-workspace checks still apply.
+   */
+  ingestRestored(record: MemoryRecord): void {
+    const secretReasons = detectSecretShaped(record.key, record.value);
+    if (secretReasons.length > 0) return;
+    if (
+      record.validFor.workspaceIdentity !== undefined &&
+      record.validFor.workspaceIdentity !== this.#workspaceIdentity
+    ) {
+      return;
+    }
+    const snapshot = this.#bank.snapshot();
+    const records = snapshot.records.filter((existing) => existing.id !== record.id);
+    records.push(record);
+    this.#bank = MemoryBank.fromSnapshot(
+      { schemaVersion: "1", records, transitions: snapshot.transitions },
+      this.#options,
+    );
+    if (record.status === "contested") {
+      // Contested records stay in the bank and are excluded by recall().
+    }
   }
 
   /** Logical forget: excluded from recall; audit history retained in the bank. */

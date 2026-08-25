@@ -4,6 +4,10 @@
  * The reducer stays pure. Persistence is a host-injected sidecar so tests can
  * round-trip through memory while production writes a JSON snapshot the
  * daemon can restore after crash.
+ *
+ * Durable mailbox, checkpoints, and budget reservations live in
+ * `cbc-session-store` (`agent_messages`, `agent_checkpoints`,
+ * `agent_budget_reservations`). This package must not talk to SQLite.
  */
 
 import type { GraphState, NodeId } from "@cbc/agent-graph-domain";
@@ -31,9 +35,18 @@ export interface GraphPersistSnapshot {
 export interface GraphSnapshotStore {
   load(): GraphPersistSnapshot | undefined;
   save(snapshot: GraphPersistSnapshot): void;
+  /**
+   * Optional durable sidecar. Hosts wrapping SessionStore can persist JSON
+   * onto the graph root checkpoint without this package opening SQLite.
+   */
+  persistDurable?(graphId: string, snapshotJson: string, at: string): void;
+  loadDurable?(graphId: string): string | undefined;
 }
 
-/** In-memory store used by tests and as a write-through cache. */
+/**
+ * In-memory store used by tests and as a write-through cache.
+ * Durable mailbox/checkpoint/budget rows are owned by cbc-session-store.
+ */
 export class MemoryGraphStore implements GraphSnapshotStore {
   #snapshot: GraphPersistSnapshot | undefined;
 

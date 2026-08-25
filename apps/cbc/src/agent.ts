@@ -28,6 +28,7 @@ import {
   type TurnResult,
 } from "@cbc/agent-kernel";
 import type { CbcConfig, ReasoningEffort } from "@cbc/config-schema";
+import { MemoryService } from "@cbc/memory-service";
 import { requestModeChange, TaskEpochManager, type InteractionMode, type ModeChangeSource } from "@cbc/session-domain";
 import {
   ContextEngine,
@@ -48,6 +49,7 @@ import {
   type ContextInspection,
   type ContextPack,
   type EvidenceSelection,
+  type MemoryRecord,
   type InstructionReader,
   type RepositoryDelta,
   type ScopedExactExcerpt,
@@ -471,6 +473,9 @@ function pathAllowedForTask(
 export class AgentSession {
   readonly registry: ToolRegistry;
   readonly context: ContextEngine;
+  get memoryService(): MemoryService | undefined {
+    return this.#memoryService;
+  }
   readonly skills: SkillRegistry;
   readonly subagents: SubagentScheduler;
   readonly executor: RuntimeToolExecutor;
@@ -479,6 +484,7 @@ export class AgentSession {
   readonly inferencePolicy: InferencePolicyPort;
 
   readonly recorder: SessionRecorder;
+  #memoryService: MemoryService | undefined;
 
   readonly #options: AgentSessionOptions;
   #executableCapabilities: ExecutableCapabilities | undefined;
@@ -673,8 +679,34 @@ export class AgentSession {
       options.config.memory.enabled
     ) {
       const workspaceIdentity = options.workspaceIdentityDigest;
-      this.context.attachMemory(
-        new MemoryBank({
+      const bank = new MemoryBank({
+        resolveEvidence: (id) => {
+          const record = this.context.evidence.get(id as `evidence-${string}`);
+          if (record === undefined) return undefined;
+          return {
+            id: record.id,
+            freshness: record.freshness,
+            observedAt: record.observedAt,
+            exact: record.kind === "file_excerpt" || record.kind === "repository_map",
+            digest: record.digest,
+            kind: record.kind,
+            ...(record.workspaceIdentityDigest === undefined
+              ? {}
+              : { workspaceIdentityDigest: record.workspaceIdentityDigest }),
+          };
+        },
+        ...(workspaceIdentity === undefined ? {} : { workspaceIdentity }),
+        sessionId: options.sessionId,
+        allowSessionFallback: options.config.memory.allowSessionFallback,
+        confidenceThresholds: options.config.memory.confidence,
+        ...(options.now !== undefined ? { now: () => new Date(options.now!()).toISOString() } : {}),
+      });
+      this.#memoryService = new MemoryService(
+        {
+          ...(workspaceIdentity === undefined ? { workspaceIdentity: options.sessionId } : { workspaceIdentity }),
+          sessionId: options.sessionId,
+          allowSessionFallback: options.config.memory.allowSessionFallback,
+          confidenceThresholds: options.config.memory.confidence,
           resolveEvidence: (id) => {
             const record = this.context.evidence.get(id as `evidence-${string}`);
             if (record === undefined) return undefined;
@@ -690,14 +722,11 @@ export class AgentSession {
                 : { workspaceIdentityDigest: record.workspaceIdentityDigest }),
             };
           },
-          ...(workspaceIdentity === undefined ? {} : { workspaceIdentity }),
-          sessionId: options.sessionId,
-          allowSessionFallback: options.config.memory.allowSessionFallback,
-          confidenceThresholds: options.config.memory.confidence,
           ...(options.now !== undefined ? { now: () => new Date(options.now!()).toISOString() } : {}),
-        }),
-        options.config.memory.recallLimit,
+        },
+        bank,
       );
+      this.context.attachMemory(this.#memoryService, options.config.memory.recallLimit);
     }
     this.#rootContextScope = createContextScope({
       scopeId: "ctx_root",
@@ -832,6 +861,9 @@ export class AgentSession {
         ? { verificationContract: options.verificationContract }
         : {}),
       workspaceState: () => ({ activeJobCount: this.#activeBackgroundJobs.size }),
+      onEditEvent: (kind, payload) => {
+        this.#emit(kind, payload);
+      },
       readCache,
       scope: () => {
         const turnId = this.recorder.model.currentTurnId;
@@ -906,10 +938,12 @@ export class AgentSession {
       provider: options.provider,
       registry: this.registry,
       executor: this.executor,
-      executeWithRecovery: (action, signal, context) => {
+      executeWithRecovery: async (action, signal, context) => {
         const tool = this.registry.get(action.toolId);
-        if (tool === undefined) return this.executor.execute(action, signal);
-        return runToolWithRecovery(this.executor, tool, action, signal, {
+        const started = this.#options.host.now();
+        const execution = tool === undefined
+          ? await this.executor.execute(action, signal)
+          : await runToolWithRecovery(this.executor, tool, action, signal, {
           mode: options.config.agent.toolRecovery?.mode ?? "safe",
           maxAttempts: options.config.agent.toolRecovery?.maxAttempts ?? 3,
           sessionId: options.sessionId,
@@ -921,6 +955,16 @@ export class AgentSession {
             ? {}
             : { stateFence: ({ signal: recoverySignal }) => this.#awaitWorkspaceQuiescence(recoverySignal) }),
         });
+        if (options.config.experimental.pluginRuntime && options.config.plugins.enabled) {
+          await this.#pluginHookBus.afterTool(action, {
+            ok: execution.result.ok,
+            ...(execution.result.ok || execution.result.error === undefined
+              ? {}
+              : { code: execution.result.error.code }),
+            durationMs: Math.max(0, this.#options.host.now() - started),
+          });
+        }
+        return execution;
       },
       beforeToolExecute: async (action) => {
         if (options.config.experimental.pluginRuntime && options.config.plugins.enabled) {
@@ -2063,6 +2107,43 @@ export class AgentSession {
       item.type === "function_call_output" && replacements.has(item.callId)
         ? { ...item, output: replacements.get(item.callId)! }
         : item));
+  }
+
+  async hydrateDurableMemory(runtime: Pick<Runtime, "searchMemory">): Promise<number> {
+    const service = this.#memoryService;
+    if (service === undefined) return 0;
+    const recalled = await runtime.searchMemory({
+      statuses: ["active", "contested", "superseded", "forgotten"],
+      limit: 200,
+    });
+    let restored = 0;
+    for (const memory of recalled.memories) {
+      if (!memory.id.startsWith("memory-")) continue;
+      const id = memory.id as `memory-${string}`;
+      const now = new Date((this.#options.now?.() ?? this.#options.host.now())).toISOString();
+      service.ingestRestored({
+        id,
+        key: memory.key,
+        value: memory.value,
+        scope: memory.scope,
+        status: memory.status === "contested" ? "contested" : memory.status === "superseded" ? "superseded" : "active",
+        confidence: memory.confidence,
+        evidenceIds: [...(memory.evidenceIds ?? [])],
+        validFor: memory.validFor ?? { workspaceIdentity: service.workspaceIdentity },
+        createdAt: memory.createdAt ?? now,
+        lastValidatedAt: memory.lastValidatedAt ?? now,
+        evidenceObservedAt: memory.evidenceObservedAt ?? now,
+        supersedes: [],
+        contestedWith: [],
+        revision: memory.revision ?? 1,
+      });
+      if (memory.status === "forgotten") {
+        try { service.forget(id); } catch { /* already forgotten */ }
+      }
+      restored += 1;
+    }
+    this.#emit("memory.recalled", { count: restored, workspaceIdentity: service.workspaceIdentity });
+    return restored;
   }
 
   compactContext(options: { userRequested?: boolean; toolOutputAccumulation?: boolean } = {}): CompactionResult | undefined {

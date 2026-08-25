@@ -3,10 +3,12 @@ import { describe, expect, test } from "bun:test";
 import {
   GraphDomainError,
   MAX_GRAPH_DEPTH,
+  MAX_GRAPH_NODES,
   applyGraphCommand,
   projectReadyNodes,
   wouldCreateCycle,
   type GraphCommand,
+  type GraphNode,
   type GraphState,
   type NodeId,
 } from "../src/index.ts";
@@ -209,5 +211,44 @@ describe("agent-graph-domain", () => {
       parentId: "agt_d3",
       title: "D4",
     })).toThrow(/depth/i);
+  });
+
+  test("the 10001st node is rejected at MAX_GRAPH_NODES", () => {
+    const created = create();
+    const template = created.nodes.agt_root;
+    expect(template).toBeDefined();
+    const nodes: Record<string, GraphNode> = { agt_root: template! };
+    for (let i = 1; i < MAX_GRAPH_NODES; i += 1) {
+      const id = `agt_n${i}` as NodeId;
+      nodes[id] = {
+        ...template!,
+        id,
+        parentId: "agt_root",
+        depth: 1,
+        title: "n",
+        role: "worker",
+        state: "queued",
+      };
+    }
+    const packed: GraphState = {
+      ...created,
+      nodes: nodes as GraphState["nodes"],
+    };
+    expect(Object.keys(packed.nodes)).toHaveLength(MAX_GRAPH_NODES);
+
+    try {
+      applyGraphCommand(packed, {
+        type: "add_node",
+        expectedRevision: packed.revision,
+        at: AT,
+        nodeId: "agt_overflow",
+        parentId: "agt_root",
+        title: "overflow",
+      });
+      throw new Error("expected GRAPH_NODE_BUDGET");
+    } catch (error) {
+      expect(error).toBeInstanceOf(GraphDomainError);
+      expect((error as GraphDomainError).code).toBe("GRAPH_NODE_BUDGET");
+    }
   });
 });

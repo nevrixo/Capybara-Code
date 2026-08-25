@@ -60,7 +60,7 @@ import {
   type SelectionResult,
   type SelectionSignals,
 } from "./selection.ts";
-import type { MemoryBank, MemoryRecord } from "./memory.ts";
+import type { MemoryRecallSource, MemoryRecord } from "./memory.ts";
 
 /** §18.1 layer identifiers, mirroring `ContextLayer` in the kernel's prompt module. */
 export const CONTEXT_LAYERS = [
@@ -92,8 +92,8 @@ export interface ContextEngineOptions {
   readonly maxEvidenceRecords?: number;
   /** P2 retrieval controller rollout; false restores the deterministic scorer only. */
   readonly retrievalControllerV2?: boolean;
-  /** Optional durable memory bank. Contested records are never compiled. */
-  readonly memory?: MemoryBank;
+  /** Optional durable memory source. Contested records are never compiled. */
+  readonly memory?: MemoryRecallSource;
   readonly memoryRecallLimit?: number;
   readonly now?: () => number;
 }
@@ -327,7 +327,7 @@ export class ContextEngine {
   /** Newest last, capped at `REFLECTION_WINDOW`. */
   #reflections: RecordedReflection[] = [];
 
-  attachMemory(memory: MemoryBank, recallLimit?: number): void {
+  attachMemory(memory: MemoryRecallSource, recallLimit?: number): void {
     this.#options = {
       ...this.#options,
       memory,

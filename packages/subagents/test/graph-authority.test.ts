@@ -4,7 +4,7 @@ import { MAX_GRAPH_NODES } from "@cbc/agent-graph-domain";
 
 import { emptyChildResult } from "../src/instance.ts";
 import { GraphAuthority } from "../src/graph-authority.ts";
-import { MemoryGraphStore } from "../src/graph-store.ts";
+import { MemoryGraphStore, type GraphSnapshotStore } from "../src/graph-store.ts";
 import { SubagentScheduler } from "../src/scheduler.ts";
 import { buildTask } from "../src/task.ts";
 
@@ -103,5 +103,35 @@ describe("durable graph authority", () => {
 
   test("hard-caps the domain node budget at 10k", () => {
     expect(MAX_GRAPH_NODES).toBe(10_000);
+  });
+
+  test("optional durable persist hook is invoked when a snapshot is saved", () => {
+    const durable: string[] = [];
+    const store: GraphSnapshotStore = {
+      load() {
+        return undefined;
+      },
+      save() {
+        return;
+      },
+      persistDurable(graphId, snapshotJson, at) {
+        durable.push(`${graphId}:${at}:${snapshotJson.length}`);
+      },
+    };
+    const graph = new GraphAuthority({
+      sessionId: "ses_hook",
+      workspaceIdentityDigest: "ws",
+      now: () => Date.parse("2026-08-25T00:00:00.000Z"),
+      store,
+    });
+    graph.recordSpawn({
+      id: "reader",
+      title: "scan",
+      role: "explore",
+      dependencies: [],
+      canWrite: false,
+    });
+    expect(durable.length).toBeGreaterThan(0);
+    expect(durable[0]).toContain("grf_ses_hook");
   });
 });

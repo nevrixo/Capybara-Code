@@ -85,6 +85,11 @@ export class GraphAuthority {
       mailbox: [...this.#mailbox],
     };
     this.#store?.save(snapshot);
+    this.#store?.persistDurable?.(
+      this.#graphId,
+      JSON.stringify(snapshot),
+      snapshot.state?.updatedAt ?? iso(this.#now),
+    );
     return snapshot;
   }
 
