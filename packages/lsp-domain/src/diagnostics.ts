@@ -80,6 +80,8 @@ export interface NormalizeLspWorkspaceDiagnosticsOptions {
   readonly workspaceIdentityDigest: string;
   readonly server: string;
   readonly documents: readonly LspWorkspaceDiagnosticDocument[];
+  /** Prefer this exact tracked document when the bounded output is truncated. */
+  readonly preferredUri?: string;
   readonly publishedAt: string;
   readonly maxSnapshots?: number;
   readonly maxDiagnostics?: number;
@@ -204,6 +206,7 @@ export function normalizeLspWorkspaceDiagnostics(
   const maxSnapshots = normalizeMaxWorkspaceSnapshots(options.maxSnapshots);
   const maxDiagnostics = normalizeMaxDiagnostics(options.maxDiagnostics);
   const documents = normalizeWorkspaceDiagnosticDocuments(options.documents, workspaceRoot);
+  const preferredPath = preferredWorkspaceDiagnosticPath(options.preferredUri, documents);
 
   const report = requiredRecord(result, "workspace diagnostic report");
   const rawReports = report.items;
@@ -255,7 +258,13 @@ export function normalizeLspWorkspaceDiagnostics(
     if (snapshot !== undefined) snapshots.push(snapshot);
   }
 
-  snapshots.sort((left, right) => left.path.localeCompare(right.path));
+  snapshots.sort((left, right) => {
+    if (preferredPath !== undefined) {
+      if (left.path === preferredPath && right.path !== preferredPath) return -1;
+      if (right.path === preferredPath && left.path !== preferredPath) return 1;
+    }
+    return left.path.localeCompare(right.path);
+  });
   return Object.freeze({
     snapshots: Object.freeze(snapshots.slice(0, maxSnapshots)),
     totalSnapshots: snapshots.length,
@@ -461,6 +470,7 @@ function normalizeWorkspaceDiagnosticDocuments(
   }
 
   const documents = new Map<string, NormalizedWorkspaceDiagnosticDocument>();
+  const paths = new Set<string>();
   for (const rawDocument of value) {
     const entry = requiredRecord(rawDocument, "workspace diagnostic document");
     const uri = requiredDiagnosticUri(entry, "uri");
@@ -477,9 +487,28 @@ function normalizeWorkspaceDiagnosticDocuments(
     if (documents.has(uri)) {
       throw failure("LSP_DIAGNOSTICS_INVALID", "workspace diagnostic documents must not repeat a URI");
     }
+    if (paths.has(path)) {
+      throw failure("LSP_DIAGNOSTICS_INVALID", "workspace diagnostic documents must not repeat a path", path);
+    }
+    paths.add(path);
     documents.set(uri, Object.freeze({ uri, document, documentVersion }));
   }
   return documents;
+}
+
+function preferredWorkspaceDiagnosticPath(
+  value: unknown,
+  documents: ReadonlyMap<string, NormalizedWorkspaceDiagnosticDocument>,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw failure("LSP_DIAGNOSTICS_INVALID", "preferredUri must be a string");
+  }
+  const document = documents.get(value);
+  if (document === undefined) {
+    throw failure("LSP_DIAGNOSTICS_INVALID", "preferredUri must name an exact tracked document");
+  }
+  return document.document.path;
 }
 
 function normalizePublishedAt(value: string): string {
