@@ -140,6 +140,8 @@ export class RuntimeAppServerBackend implements AppServerBackend {
         maxEvents: input.maxEvents,
         maxBytes: input.maxBytes,
       }),
+      input.maxEvents,
+      input.maxBytes,
     );
     const floor = input.afterSequence ?? replay.subscription.lastAckedSequence;
     if (
@@ -197,10 +199,27 @@ function subscriptionResponse(value: unknown): AppServerSubscription {
   };
 }
 
-function replayResponse(value: unknown): EventReplayResult {
-  if (!isRecord(value) || !Array.isArray(value.events) || typeof value.hasMore !== "boolean") {
+function replayResponse(
+  value: unknown,
+  maxEvents: number,
+  maxBytes: number,
+): EventReplayResult {
+  if (
+    !isRecord(value)
+    || !Array.isArray(value.events)
+    || typeof value.hasMore !== "boolean"
+    || !Number.isSafeInteger(maxEvents)
+    || maxEvents < 1
+    || !Number.isSafeInteger(maxBytes)
+    || maxBytes < 1
+  ) {
     throw invalidRuntimeResponse();
   }
+  if (value.events.length > maxEvents) throw invalidRuntimeResponse();
+
+  const events = value.events.map(replayEvent);
+  if (eventBatchByteLength(events) > maxBytes) throw invalidRuntimeResponse();
+
   const cursor = nestedRecord(value, "cursor");
   return {
     subscription: subscriptionResponse(value),
@@ -208,11 +227,23 @@ function replayResponse(value: unknown): EventReplayResult {
       sessionId: opaqueId(cursor.sessionId),
       journalSequence: nonNegativeSequence(cursor.journalSequence),
     },
-    events: value.events.map(replayEvent),
+    events,
     hasMore: value.hasMore,
   };
 }
 
+// Runtime replay limits are caller-visible; enforce them on the normalized
+// public event representation before this adapter returns it to App Server.
+function eventBatchByteLength(events: readonly EventReplayEvent[]): number {
+  let encoded: string | undefined;
+  try {
+    encoded = JSON.stringify(events);
+  } catch {
+    throw invalidRuntimeResponse();
+  }
+  if (encoded === undefined) throw invalidRuntimeResponse();
+  return UTF8.encode(encoded).byteLength;
+}
 function replayEvent(value: unknown): EventReplayEvent {
   if (!isRecord(value) || !Object.hasOwn(value, "payload") || value.payload === undefined) {
     throw invalidRuntimeResponse();
@@ -372,6 +403,7 @@ function invalidRuntimeResponse(): AppProtocolError {
   ));
 }
 
+const UTF8 = new TextEncoder();
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

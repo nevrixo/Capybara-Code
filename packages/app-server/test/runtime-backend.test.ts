@@ -211,6 +211,53 @@ describe("RuntimeAppServerBackend", () => {
     }]);
   });
 
+  test("rejects runtime replays that exceed caller event or byte budgets", async () => {
+    const event = {
+      schemaVersion: "1.0",
+      sequence: 5,
+      id: "evt:batch-1",
+      timestamp: "2026-08-25T00:00:05Z",
+      sessionId: "ses_timeline",
+      kind: "user.message",
+      level: "info",
+      visibility: "timeline",
+      durability: "journaled",
+      payload: { text: "bounded" },
+    };
+    const countRuntime = new FakeRuntime();
+    countRuntime.replies.push({
+      subscription: subscription(),
+      events: [event, { ...event, sequence: 6, id: "evt:batch-2" }],
+      cursor: { sessionId: "ses_timeline", journalSequence: 6 },
+      hasMore: true,
+    });
+    await expect(new RuntimeAppServerBackend(countRuntime).replaySubscription({
+      subscriptionId: "sub_timeline",
+      clientId: "client_tui",
+      afterSequence: 4,
+      maxEvents: 1,
+      maxBytes: 2048,
+    })).rejects.toMatchObject({
+      structured: { code: "APP_RUNTIME_RESPONSE_INVALID", category: "internal" },
+    });
+
+    const byteRuntime = new FakeRuntime();
+    byteRuntime.replies.push({
+      subscription: subscription(),
+      events: [{ ...event, payload: { text: "x".repeat(2048) } }],
+      cursor: { sessionId: "ses_timeline", journalSequence: 5 },
+      hasMore: false,
+    });
+    await expect(new RuntimeAppServerBackend(byteRuntime).replaySubscription({
+      subscriptionId: "sub_timeline",
+      clientId: "client_tui",
+      afterSequence: 4,
+      maxEvents: 8,
+      maxBytes: 128,
+    })).rejects.toMatchObject({
+      structured: { code: "APP_RUNTIME_RESPONSE_INVALID", category: "internal" },
+    });
+  });
   test("rejects malformed replay envelopes from the runtime", async () => {
     const runtime = new FakeRuntime();
     runtime.replies.push({
