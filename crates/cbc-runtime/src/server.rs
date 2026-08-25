@@ -2992,4 +2992,13 @@ mod tests {
         .expect_err("non-git must refuse");
         assert_eq!(error.code, error_codes::NOT_FOUND);
     }
+
+    #[test]
+    fn worktree_list_is_a_known_method() {
+        let (_dir, state) = initialized();
+        let listed = dispatch(&state, &request("worktree.list", json!({})))
+            .expect("worktree.list dispatched")
+            .expect("worktree.list must not be unknown");
+        assert!(listed.get("worktrees").and_then(Value::as_array).is_some());
+    }
 }

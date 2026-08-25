@@ -360,6 +360,12 @@ export interface MemoryVerifyResponse extends MemoryRecordResponse {
 
 type LegacyReadOptions = ReadRequest & Record<string, unknown>;
 
+function isWorktreeListUnavailable(error: unknown): boolean {
+  if (!(error instanceof RuntimeRpcError)) return false;
+  if (error.code === JSONRPC_ERROR_CODES.methodNotFound) return true;
+  return error.taxonomy === "NOT_FOUND";
+}
+
 function objectRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -1111,8 +1117,15 @@ export class Runtime {
     );
   }
 
-  async listWorktrees(): Promise<unknown> {
-    return await this.#client.request("worktree.list", {});
+  /** List Git worktrees. Unknown-method and non-repo sidecars return an empty list. */
+  async listWorktrees(): Promise<{ worktrees: unknown[] }> {
+    try {
+      const raw = objectRecord(await this.#client.request("worktree.list", {}));
+      return { worktrees: Array.isArray(raw.worktrees) ? raw.worktrees : [] };
+    } catch (error) {
+      if (isWorktreeListUnavailable(error)) return { worktrees: [] };
+      throw error;
+    }
   }
 
   async inspectWorktree(params: Record<string, unknown>): Promise<unknown> {

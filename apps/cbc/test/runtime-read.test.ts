@@ -106,4 +106,52 @@ describe("typed runtime read facade", () => {
     await sidecar.stop();
     await runtime.stop();
   });
+
+  test("listWorktrees treats an unknown sidecar method as an empty list", async () => {
+    const fake = createFakeRuntime({
+      handler: ({ method }) => {
+        if (method === "worktree.list") {
+          const error = new Error("unknown method: worktree.list") as Error & { code: number };
+          error.code = -32601;
+          throw error;
+        }
+        return {};
+      },
+    });
+    const runtime = await Runtime.start({
+      host: testHost(),
+      workspace: "/work",
+      dataDir: "/data",
+      clientVersion: "test",
+      spawner: fake.spawner,
+    });
+    await expect(runtime.listWorktrees()).resolves.toEqual({ worktrees: [] });
+    await runtime.stop();
+  });
+
+  test("listWorktrees treats a missing git repository as an empty list", async () => {
+    const fake = createFakeRuntime({
+      handler: ({ method }) => {
+        if (method === "worktree.list") {
+          const error = new Error("/work is not a Git repository") as Error & {
+            code: number;
+            data: { taxonomy: string };
+          };
+          error.code = -32003;
+          error.data = { taxonomy: "NOT_FOUND" };
+          throw error;
+        }
+        return {};
+      },
+    });
+    const runtime = await Runtime.start({
+      host: testHost(),
+      workspace: "/work",
+      dataDir: "/data",
+      clientVersion: "test",
+      spawner: fake.spawner,
+    });
+    await expect(runtime.listWorktrees()).resolves.toEqual({ worktrees: [] });
+    await runtime.stop();
+  });
 });

@@ -352,6 +352,68 @@ describe("CapybaraDaemon with fake backend", () => {
     }
     await daemon.stop();
   });
+
+  test("worktree.list returns registered worktrees instead of an unknown method", async () => {
+    const dir = runtimeDir();
+    const daemon = new CapybaraDaemon({
+      runtimeDir: dir,
+      listen: false,
+      executableDigest: DIGEST,
+      daemonId: "dmn_worktree",
+    });
+    await daemon.start();
+    daemon.worktrees.create({
+      id: "wt_agent",
+      workspaceIdentityDigest: "ws_1",
+      path: "worktrees/ws_1/wt_agent/repo",
+      baseCommit: "abc123",
+      baseWorkspaceRevision: "1",
+    });
+    const initialized = await daemon.dispatch(undefined, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "server.initialize",
+      params: {
+        protocolVersion: "1.0",
+        client: {
+          id: "client_tui",
+          name: "capy",
+          version: "1.0.0",
+          kind: "tui",
+        },
+        capabilities: {
+          eventStreaming: true,
+          eventAck: true,
+          approvals: true,
+          interactivePrompts: true,
+          artifactStreaming: false,
+          richDiff: false,
+        },
+      },
+    });
+    expect("result" in initialized).toBe(true);
+    const connectionId = "result" in initialized
+      ? (initialized.result as { connectionId: string }).connectionId
+      : undefined;
+    const listed = await daemon.dispatch(connectionId, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "worktree.list",
+      params: { workspaceIdentityDigest: "ws_1" },
+    });
+    expect("error" in listed).toBe(false);
+    expect("result" in listed).toBe(true);
+    if ("result" in listed) {
+      const worktrees = (listed.result as { worktrees: Array<{ id: string; path: string }> }).worktrees;
+      expect(worktrees).toEqual([
+        expect.objectContaining({
+          id: "wt_agent",
+          path: "worktrees/ws_1/wt_agent/repo",
+        }),
+      ]);
+    }
+    await daemon.stop();
+  });
 });
 
 describe("approval manager detach survival", () => {

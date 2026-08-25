@@ -201,10 +201,32 @@ fn require_mutation_capability(
 }
 
 fn worktree_value(info: &cbc_git::WorktreeInfo) -> Value {
+    let path = info.path.to_string_lossy();
+    let id = info
+        .branch
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            info.path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .filter(|name| !name.is_empty())
+        })
+        .unwrap_or_else(|| path.to_string());
+    let state = if info.locked {
+        "locked"
+    } else if info.prunable {
+        "prunable"
+    } else {
+        "ready"
+    };
     json!({
-        "path": info.path.to_string_lossy(),
+        "id": id,
+        "path": path,
         "head": info.head,
         "branch": info.branch,
+        "state": state,
         "locked": info.locked,
         "prunable": info.prunable,
     })
@@ -240,10 +262,15 @@ pub fn create(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
 }
 
 pub fn list(state: &RuntimeState) -> Result<Value, RpcError> {
-    let git = service(state)?;
-    let entries = git
-        .worktree_list()
-        .map_err(|error| git_error(state, error))?;
+    let git = match service(state) {
+        Ok(git) => git,
+        Err(_) => return Ok(json!({ "worktrees": [] })),
+    };
+    let entries = match git.worktree_list() {
+        Ok(entries) => entries,
+        Err(GitError::NotARepository { .. }) => Vec::new(),
+        Err(error) => return Err(git_error(state, error)),
+    };
     Ok(json!({
         "worktrees": entries.iter().map(worktree_value).collect::<Vec<_>>(),
     }))

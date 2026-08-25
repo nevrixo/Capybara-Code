@@ -466,6 +466,13 @@ export class CapybaraDaemon {
             connectionId: "app_" + input.clientId,
           });
         }
+        if (input.method === "worktree.list") {
+          const params = isRecord(input.params) ? input.params : {};
+          const workspaceIdentityDigest = typeof params.workspaceIdentityDigest === "string"
+            ? params.workspaceIdentityDigest
+            : undefined;
+          return { worktrees: daemon.worktrees.list(workspaceIdentityDigest) };
+        }
         if (input.method === "approval.list") {
           const params = isRecord(input.params) ? input.params : {};
           const sessionId = typeof params.sessionId === "string" ? params.sessionId : undefined;

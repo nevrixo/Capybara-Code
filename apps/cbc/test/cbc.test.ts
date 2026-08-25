@@ -48,6 +48,7 @@ import {
 import { NATIVE_TOOLS, okResult } from "@cbc/tool-registry";
 import { MODEL_REGISTRY } from "@cbc/provider-openai";
 import { ComposerSession } from "../src/composer.ts";
+import { worktreeOverlayLines } from "../src/commands/interactive.ts";
 import { decodeKeys, flushPendingSequence, inertKeyStream } from "../src/keys.ts";
 import { slashArgumentValues } from "../src/slash.ts";
 import {
@@ -1209,6 +1210,25 @@ describe("composer session (§6.14, §6.15, AC-05, AC-20)", () => {
     const { composer } = session();
     expect(composer.handle({ key: "pageup" }, idle)).toEqual({ kind: "scroll_page_up" });
     expect(composer.handle({ key: "pagedown" }, idle)).toEqual({ kind: "scroll_page_down" });
+  });
+});
+
+describe("worktree overlay", () => {
+  test("an empty or unavailable list is a quiet empty state", () => {
+    expect(worktreeOverlayLines({})).toEqual(["No isolated worktrees."]);
+    expect(worktreeOverlayLines({ worktrees: [] })).toEqual(["No isolated worktrees."]);
+  });
+
+  test("renders git porcelain fields when the sidecar has no managed id", () => {
+    expect(worktreeOverlayLines({
+      worktrees: [
+        { path: "/repo/.capybara/worktrees/agt_1", branch: "feat/agent", head: "abcdef123", locked: false },
+        { path: "/repo/.capybara/worktrees/agt_2", head: "deadbeef", locked: true },
+      ],
+    })).toEqual([
+      "feat/agent  /repo/.capybara/worktrees/agt_1",
+      "deadbeef  locked  /repo/.capybara/worktrees/agt_2",
+    ]);
   });
 });
 

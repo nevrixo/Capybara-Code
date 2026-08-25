@@ -62,6 +62,29 @@ export interface InteractiveArgs {
   readonly noDaemon?: boolean;
 }
 
+export function worktreeOverlayLines(listed: {
+  readonly worktrees?: ReadonlyArray<{
+    readonly id?: string;
+    readonly path?: string;
+    readonly state?: string;
+    readonly branch?: string;
+    readonly head?: string;
+    readonly locked?: boolean;
+  }>;
+}): string[] {
+  const rows = listed.worktrees ?? [];
+  if (rows.length === 0) return ["No isolated worktrees."];
+  return rows.map((tree) => {
+    const id = tree.id
+      ?? (typeof tree.branch === "string" && tree.branch.length > 0 ? tree.branch : undefined)
+      ?? (typeof tree.head === "string" && tree.head.length > 0 ? tree.head.slice(0, 8) : undefined)
+      ?? "?";
+    const state = tree.state
+      ?? (tree.locked === true ? "locked" : "");
+    return `${id}  ${state}  ${tree.path ?? ""}`.replace(/  +/g, "  ").trim();
+  });
+}
+
 export async function interactive(
   context: CommandContext,
   args: InteractiveArgs,
@@ -1797,15 +1820,16 @@ async function handleOverlay(
     case "worktree": {
       try {
         const listed = await boot.runtime.listWorktrees() as {
-          worktrees?: Array<{ id?: string; path?: string; state?: string }>;
+          worktrees?: Array<{
+            id?: string;
+            path?: string;
+            state?: string;
+            branch?: string;
+            head?: string;
+            locked?: boolean;
+          }>;
         };
-        const rows = listed.worktrees ?? [];
-        ui.openOverlay(
-          "worktree",
-          rows.length === 0
-            ? ["No isolated worktrees."]
-            : rows.map((tree) => `${tree.id ?? "?"}  ${tree.state ?? ""}  ${tree.path ?? ""}`),
-        );
+        ui.openOverlay("worktree", worktreeOverlayLines(listed));
       } catch (error) {
         ui.openOverlay("worktree", [
           "Worktree list failed: " + (error instanceof Error ? error.message : String(error)),
