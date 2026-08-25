@@ -34,6 +34,7 @@ import {
 } from "@cbc/tui-components";
 
 import { bootstrapSession, warmContext } from "../bootstrap.ts";
+import { submitTurnOverApp } from "../session-app-client.ts";
 import type { ToolBridges } from "../tools.ts";
 import { EXIT, type ExitCode } from "../exit.ts";
 import { InputReader } from "../input-reader.ts";
@@ -874,7 +875,12 @@ export async function interactive(
 
         try {
           await reader.duringTurn(controller, boot.session, async () => {
-            const result = await boot.session.submit(text, controller.signal);
+            await submitTurnOverApp({
+              client: boot.appClient,
+              sessionId: boot.sessionId,
+              prompt: text,
+              signal: controller.signal,
+            });
             ui.flush(boot.session.viewModel);
             // Flush emits task anchors and child responses as their events arrive; draining
             // at the end of a turn is an idempotent catch-up for any final snapshot.

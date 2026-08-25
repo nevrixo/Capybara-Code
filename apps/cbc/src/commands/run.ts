@@ -7,6 +7,7 @@ import { renderReport, type CompletionReport } from "@cbc/agent-kernel";
 import type { CbcEvent } from "@cbc/protocol";
 
 import { bootstrapSession, warmContext } from "../bootstrap.ts";
+import { submitTurnOverApp } from "../session-app-client.ts";
 import { CliError, EXIT, exitForStatus, type ExitCode } from "../exit.ts";
 import { ok, type CommandContext, type CommandResult } from "./context.ts";
 import { ensureTrust } from "../workspace-trust.ts";
@@ -70,9 +71,15 @@ export async function run(context: CommandContext, args: RunArgs): Promise<Comma
   let payload: FinalStatusPayload;
 
   try {
-    const result = await boot.session.submit(prompt, signal);
-    const report = result.report;
-    finalText = renderReport(report, result.answer);
+    const submitted = await submitTurnOverApp({
+      client: boot.appClient,
+      sessionId: boot.sessionId,
+      prompt,
+      signal,
+    });
+    const result = boot.appClient ? boot.session.snapshotCompletionReport(submitted.answer) : undefined;
+    const report = (submitted.report as CompletionReport | undefined) ?? result ?? boot.session.snapshotCompletionReport(submitted.answer);
+    finalText = renderReport(report, submitted.answer);
     code = exitForStatus(report.status);
     payload = payloadFromReport(report, code);
   } catch (error) {

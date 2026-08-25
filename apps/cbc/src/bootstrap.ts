@@ -43,6 +43,8 @@ import {
   type TimelineItem,
 } from "@cbc/session-domain";
 import { builtinSkillFiles } from "@cbc/skills";
+import { AppServer } from "@cbc/app-server";
+import type { CapybaraClient } from "@cbc/sdk";
 
 import {
   AgentSession,
@@ -71,6 +73,8 @@ import {
 } from "./repository-map.ts";
 import { appendApprovalRule, readApprovalRules } from "./rules-store.ts";
 import type { Runtime, RuntimeSessionSummary } from "./runtime.ts";
+import { SessionAppBackend } from "./session-app-backend.ts";
+import { connectEmbeddedAppClient } from "./session-app-client.ts";
 import { LspHost, type LspServiceStatus } from "./lsp-host.ts";
 import { createLspToolBridge } from "./lsp-tool-bridge.ts";
 import { DeferredMcpHost } from "./mcp-host.ts";
@@ -100,6 +104,7 @@ export interface BootstrapOptions {
 
 export interface Bootstrapped {
   readonly session: AgentSession;
+  readonly appClient: CapybaraClient;
   readonly runtime: Runtime;
   readonly sessionId: string;
   readonly granted: GrantedRules;
@@ -701,8 +706,24 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
     }
   }
 
+  const app = new AppServer({
+    backend: new SessionAppBackend({ session, sessionId }),
+    daemonId: "embedded_" + sessionId.replace(/[^a-zA-Z0-9_]/g, ""),
+    serverVersion: context.version,
+    authorizer: {
+      authorize: async () => ["observer", "controller", "approval_resolver", "administrator-local"] as const,
+    },
+  });
+  const appClient = await connectEmbeddedAppClient({
+    app,
+    clientId: (options.headlessPolicy !== undefined ? "cli_" : "tui_") + sessionId.replace(/[^a-zA-Z0-9_]/g, "").slice(0, 24),
+    kind: options.headlessPolicy !== undefined ? "cli" : "tui",
+    version: context.version,
+  });
+
   return {
     session,
+    appClient,
     lspHost,
     runtime,
     sessionId,
@@ -716,7 +737,7 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
       try {
         await session.close();
       } finally {
-        await Promise.all([lspHost.close(), mcpHost?.close()]);
+        await Promise.all([appClient.close(), lspHost.close(), mcpHost?.close()]);
       }
     },
   };
