@@ -127,6 +127,7 @@ export interface OpenAiProviderOptions {
   readonly transport?: ProviderTransport;
   readonly serviceTier?: "standard" | "fast";
   readonly nativeCompaction?: boolean;
+  readonly nativeCompactionDynamic?: boolean;
   readonly compactionThresholdTokens?: number;
   /** Injectable Bun-compatible socket factory for contract tests and alternate hosts. */
   readonly webSocketFactory?: WebSocketFactory;
@@ -498,7 +499,7 @@ export class OpenAiResponsesProvider implements ModelProvider {
       body.safety_identifier = request.safetyIdentifier;
     }
     if (this.#options.chatGpt === undefined) {
-      const dynamicThreshold = model === undefined || model.contextWindow === undefined
+      const dynamicThreshold = this.#options.nativeCompactionDynamic === false || model === undefined || model.contextWindow === undefined
         ? undefined
         : calculateNativeCompactionThreshold({
             modelWindowTokens: model.contextWindow,

@@ -344,6 +344,7 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
       : effective.model.context.providerCompactionMode === "on"
         ? true
         : effective.model.context.providerCompaction,
+    nativeCompactionDynamic: effective.model.context.compactionPolicy === "adaptive",
     compactionThresholdTokens: effective.model.context.compactionThresholdTokens,
     enableToolSearch: effective.provider.openai.toolSearch,
   });

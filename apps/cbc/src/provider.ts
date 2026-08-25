@@ -56,6 +56,7 @@ export interface BuildProviderOptions {
   readonly transport?: ProviderTransport;
   readonly serviceTier?: "standard" | "fast";
   readonly nativeCompaction?: boolean;
+  readonly nativeCompactionDynamic?: boolean;
   readonly compactionThresholdTokens?: number;
   readonly enableToolSearch?: boolean;
   /** Non-secret account selector extracted from the ChatGPT token. */
@@ -141,6 +142,7 @@ export async function buildProvider(
       ...(options.transport !== undefined ? { transport: options.transport } : {}),
       ...(options.serviceTier !== undefined ? { serviceTier: options.serviceTier } : {}),
       ...(options.nativeCompaction !== undefined ? { nativeCompaction: options.nativeCompaction } : {}),
+      ...(options.nativeCompactionDynamic !== undefined ? { nativeCompactionDynamic: options.nativeCompactionDynamic } : {}),
       ...(options.compactionThresholdTokens !== undefined ? { compactionThresholdTokens: options.compactionThresholdTokens } : {}),
       ...(options.enableToolSearch !== undefined ? { enableToolSearch: options.enableToolSearch } : {}),
       ...(isChatGpt ? { allowChatGptHostedTools } : {}),

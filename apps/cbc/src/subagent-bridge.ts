@@ -834,7 +834,7 @@ export class SubagentBridge {
         : this.#options.config.model.context.providerCompactionMode === "on"
           ? true
           : this.#options.config.model.context.providerCompaction,
-      nativeCompactionDynamic: true,
+      nativeCompactionDynamic: this.#options.config.model.context.compactionPolicy === "adaptive",
       compactionThresholdTokens: this.#options.config.model.context.compactionThresholdTokens,
       serviceTier: this.#options.config.provider.openai.serviceTier,
       phasePolicy: this.#options.config.model.router.phasePolicy && this.#options.config.perf.phaseRouting !== false,

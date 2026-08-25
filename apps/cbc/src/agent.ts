@@ -1097,7 +1097,7 @@ export class AgentSession {
         : options.config.model.context.providerCompactionMode === "on"
           ? true
           : options.config.model.context.providerCompaction,
-      nativeCompactionDynamic: true,
+      nativeCompactionDynamic: options.config.model.context.compactionPolicy === "adaptive",
       compactionThresholdTokens: options.config.model.context.compactionThresholdTokens,
       serviceTier: options.config.provider.openai.serviceTier,
       phasePolicy: options.config.model.router.phasePolicy,
