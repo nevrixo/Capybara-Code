@@ -5236,6 +5236,10 @@ describe("tool execution helpers", () => {
           result: okResult("found 1 subagent role(s)"),
           text: "explore",
         }),
+        lsp: async () => ({
+          result: okResult("found 1 current LSP snapshot"),
+          text: "src/widget.ts: error",
+        }),
       },
     });
     const result = await executor.execute(
@@ -5249,6 +5253,17 @@ describe("tool execution helpers", () => {
     );
     expect(result.result.ok).toBe(true);
     expect(result.result.summary).toContain("subagent");
+    const lsp = await executor.execute(
+      {
+        callId: "lsp-1",
+        toolId: "lsp.diagnostics",
+        arguments: { path: "src/widget.ts" },
+        display: "lsp.diagnostics src/widget.ts",
+      },
+      new AbortController().signal,
+    );
+    expect(lsp.result.ok).toBe(true);
+    expect(lsp.result.summary).toContain("LSP snapshot");
   });
 
   test("generated images are stored as raw artifacts and user-facing binary files", async () => {

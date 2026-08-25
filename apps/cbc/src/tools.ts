@@ -92,6 +92,8 @@ export interface ToolBridges {
   /** `mcp.*` â€” supplied by the MCP manager. */
   readonly mcp?: (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
   /** `user.ask` â€” supplied by the TUI or headless policy. */
+  /** `lsp.diagnostics`+§uçâçT supplied by the supervised local LSP host. */
+  readonly lsp?: (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
   readonly ask?: (question: string, choices: readonly string[], signal: AbortSignal) => Promise<string>;
   /** `todo.write` â€” root session state, never a workspace side effect. */
   readonly todo?: (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
@@ -1778,6 +1780,9 @@ export class RuntimeToolExecutor implements ToolExecutor {
         return await this.#viaBridge("mcp", action, signal, "no MCP server is configured");
 
       default:
+      case "lsp.diagnostics":
+        return await this.#viaBridge("lsp", action, signal, "full LSP diagnostics are not available");
+
         return {
           result: errorResult("INVALID_ARGUMENT", `no executor for tool '${action.toolId}'`),
         };
@@ -1785,7 +1790,7 @@ export class RuntimeToolExecutor implements ToolExecutor {
   }
 
   async #viaBridge(
-    name: "task" | "skill" | "mcp",
+    name: "task" | "skill" | "mcp" | "lsp",
     action: ProposedAction,
     signal: AbortSignal,
     unavailable: string,
@@ -1794,7 +1799,7 @@ export class RuntimeToolExecutor implements ToolExecutor {
     if (bridge === undefined) {
       return {
         result: errorResult(
-          name === "mcp" ? "MCP_UNAVAILABLE" : "NOT_FOUND",
+          name === "mcp" ? "MCP_UNAVAILABLE" : name === "lsp" ? "NOT_INITIALIZED" : "NOT_FOUND",
           `${action.toolId} is unavailable: ${unavailable}`,
         ),
       };
