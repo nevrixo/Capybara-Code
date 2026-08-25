@@ -6,6 +6,7 @@ import {
   LspDiagnosticDomainError,
   normalizeLspDiagnostics,
   normalizeLspPullDiagnostics,
+  normalizeLspWorkspaceDiagnostics,
 } from "../src/index.ts";
 
 const workspaceRoot = process.platform === "win32" ? "C:\\lsp-diagnostics-workspace" : "/lsp-diagnostics-workspace";
@@ -37,6 +38,38 @@ function pullOptions(
   return {
     ...options(),
     uri: workspaceUri("src/example.ts"),
+    ...overrides,
+  };
+}
+
+function workspaceOptions(
+  overrides: Partial<Parameters<typeof normalizeLspWorkspaceDiagnostics>[1]> = {},
+) {
+  return {
+    workspaceRoot,
+    workspaceIdentityDigest: "sha256:workspace",
+    server: "typescript",
+    documents: [
+      {
+        uri: workspaceUri("src/example.ts"),
+        document: {
+          path: "src/example.ts",
+          text: "const value = 1;\n",
+          revision: "sha256:document-revision",
+        },
+        documentVersion: 7,
+      },
+      {
+        uri: workspaceUri("src/other.ts"),
+        document: {
+          path: "src/other.ts",
+          text: "const other = 1;\n",
+          revision: "sha256:other-revision",
+        },
+        documentVersion: 8,
+      },
+    ],
+    publishedAt,
     ...overrides,
   };
 }
@@ -202,6 +235,111 @@ describe("normalizeLspDiagnostics", () => {
           }],
         }),
         options(),
+      ),
+      "LSP_DIAGNOSTICS_LIMIT",
+    );
+  });
+});
+
+describe("normalizeLspWorkspaceDiagnostics", () => {
+  test("retains exact full reports, strips server-private fields, and bounds snapshots", () => {
+    const normalized = normalizeLspWorkspaceDiagnostics(
+      {
+        items: [
+          {
+            uri: workspaceUri("src/other.ts"),
+            version: 8,
+            kind: "full",
+            resultId: "other-private",
+            items: [{
+              range: {
+                start: { line: 0, character: 0 },
+                end: { line: 0, character: 5 },
+              },
+              message: "other diagnostic",
+            }],
+          },
+          {
+            uri: workspaceUri("src/example.ts"),
+            version: 7,
+            kind: "full",
+            resultId: "example-private",
+            items: params().diagnostics,
+          },
+          {
+            uri: workspaceUri("src/untracked.ts"),
+            kind: "unchanged",
+            resultId: "untracked-private",
+          },
+        ],
+      },
+      workspaceOptions({ maxSnapshots: 1, maxDiagnostics: 1 }),
+    );
+
+    expect(normalized).toEqual({
+      snapshots: [expect.objectContaining({
+        path: "src/example.ts",
+        documentRevision: "sha256:document-revision",
+        documentVersion: 7,
+        diagnostics: [expect.objectContaining({
+          message: "unexpected [31m token",
+        })],
+      })],
+      totalSnapshots: 2,
+      truncated: true,
+    });
+    expect(Object.isFrozen(normalized)).toBe(true);
+    expect(Object.isFrozen(normalized.snapshots)).toBe(true);
+    expect(JSON.stringify(normalized)).not.toContain("private");
+  });
+
+  test("fails closed for unchanged, stale, malformed, or oversized workspace reports", () => {
+    expect(normalizeLspWorkspaceDiagnostics(
+      {
+        items: [{
+          uri: workspaceUri("src/example.ts"),
+          kind: "unchanged",
+          resultId: "prior",
+        }],
+      },
+      workspaceOptions(),
+    )).toEqual({ snapshots: [], totalSnapshots: 0, truncated: false });
+
+    expect(normalizeLspWorkspaceDiagnostics(
+      {
+        items: [{
+          uri: workspaceUri("src/example.ts"),
+          version: 9,
+          kind: "full",
+          items: params().diagnostics,
+        }],
+      },
+      workspaceOptions(),
+    )).toEqual({ snapshots: [], totalSnapshots: 0, truncated: false });
+
+    expectDiagnosticError(
+      () => normalizeLspWorkspaceDiagnostics(
+        {
+          items: [{
+            uri: workspaceUri("src/example.ts"),
+            version: 7,
+            kind: "full",
+            items: {},
+          }],
+        },
+        workspaceOptions(),
+      ),
+      "LSP_DIAGNOSTICS_INVALID",
+    );
+    expectDiagnosticError(
+      () => normalizeLspWorkspaceDiagnostics(
+        {
+          items: Array.from({ length: 513 }, () => ({
+            uri: workspaceUri("src/untracked.ts"),
+            kind: "unchanged",
+          })),
+        },
+        workspaceOptions(),
       ),
       "LSP_DIAGNOSTICS_LIMIT",
     );
