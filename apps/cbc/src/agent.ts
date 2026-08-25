@@ -561,6 +561,10 @@ export class AgentSession {
           options.config.memory.sessionEnabled ||
           options.config.memory.taskEnabled),
       fullLsp: fullLspTools,
+      lspRenamePreview:
+        fullLspTools &&
+        options.config.experimental.editEngineV2 &&
+        options.config.lsp.mutations.rename,
     }).filter((tool) =>
       options.config.agent.compoundTools ||
       (tool.id !== "repo.investigate" && tool.id !== "verification.run_many"),

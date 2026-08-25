@@ -539,6 +539,34 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
     parameters: objectSchema(lspTextDocumentPosition, ["path", "line", "character"]),
   },
   {
+    id: "lsp.rename_preview",
+    title: "LspRenamePreview",
+    description: "Create a bounded revision-bound rename proposal through configured local language servers without writing files.",
+    source: "native",
+    defaultRisk: "R0",
+    maxRisk: "R0",
+    alwaysActive: false,
+    mutates: false,
+    network: false,
+    authority: "read",
+    idempotency: "idempotent",
+    maxParallelism: 1,
+    resultSchemaId: "lsp.rename_preview.v1",
+    keywords: ["lsp", "rename", "refactor", "preview", "language server"],
+    parameters: objectSchema(
+      {
+        ...lspTextDocumentPosition,
+        newName: {
+          type: "string",
+          minLength: 1,
+          maxLength: 1_024,
+          description: "New symbol name. The returned proposal does not write files.",
+        },
+      },
+      ["path", "line", "character", "newName"],
+    ),
+  },
+  {
     id: "memory.search",
     title: "RecallMemory",
     description: "Recall bounded, fresh, evidence-backed memory from this workspace only.",
@@ -1373,19 +1401,27 @@ const FULL_LSP_TOOL_IDS = new Set([
   "lsp.hover",
   "lsp.signature_help",
   "lsp.document_highlights",
+  "lsp.rename_preview",
 ]);
+const LSP_RENAME_PREVIEW_TOOL_IDS = new Set(["lsp.rename_preview"]);
 
 export interface NativeToolFeatures {
   readonly editEngineV2?: boolean;
   readonly durableMemory?: boolean;
   readonly fullLsp?: boolean;
+  /** Requires the separate LSP mutation rollout and the structured edit engine. */
+  readonly lspRenamePreview?: boolean;
 }
 
 export function nativeToolsForFeatures(features: NativeToolFeatures = {}): ToolDefinition[] {
   return NATIVE_TOOLS.filter((tool) =>
     (!EDIT_ENGINE_TOOL_IDS.has(tool.id) || features.editEngineV2 === true) &&
     (!DURABLE_MEMORY_TOOL_IDS.has(tool.id) || features.durableMemory === true) &&
-    (!FULL_LSP_TOOL_IDS.has(tool.id) || features.fullLsp === true),
+    (!FULL_LSP_TOOL_IDS.has(tool.id) || features.fullLsp === true) &&
+    (
+      !LSP_RENAME_PREVIEW_TOOL_IDS.has(tool.id) ||
+      (features.editEngineV2 === true && features.lspRenamePreview === true)
+    ),
   );
 }
 
