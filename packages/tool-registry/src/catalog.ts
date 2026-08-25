@@ -307,6 +307,28 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
     ),
   },
   {
+    id: "lsp.diagnostics",
+    title: "LspDiagnostics",
+    description: "Read bounded, revision-bound diagnostics cached from configured local language servers.",
+    source: "native",
+    defaultRisk: "R0",
+    maxRisk: "R0",
+    alwaysActive: false,
+    mutates: false,
+    network: false,
+    authority: "read",
+    idempotency: "pure",
+    maxParallelism: 2,
+    resultSchemaId: "lsp.diagnostics.v1",
+    keywords: ["lsp", "diagnostics", "type errors", "language server", "problems"],
+    parameters: objectSchema(
+      {
+        path: relativePath,
+      },
+      ["path"],
+    ),
+  },
+  {
     id: "memory.search",
     title: "RecallMemory",
     description: "Recall bounded, fresh, evidence-backed memory from this workspace only.",
@@ -1129,16 +1151,19 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
 /** Experimental tools are absent from the default model catalog until enabled. */
 const EDIT_ENGINE_TOOL_IDS = new Set(["fs.edit.preview", "fs.edit"]);
 const DURABLE_MEMORY_TOOL_IDS = new Set(["memory.search", "memory.remember"]);
+const FULL_LSP_TOOL_IDS = new Set(["lsp.diagnostics"]);
 
 export interface NativeToolFeatures {
   readonly editEngineV2?: boolean;
   readonly durableMemory?: boolean;
+  readonly fullLsp?: boolean;
 }
 
 export function nativeToolsForFeatures(features: NativeToolFeatures = {}): ToolDefinition[] {
   return NATIVE_TOOLS.filter((tool) =>
     (!EDIT_ENGINE_TOOL_IDS.has(tool.id) || features.editEngineV2 === true) &&
-    (!DURABLE_MEMORY_TOOL_IDS.has(tool.id) || features.durableMemory === true),
+    (!DURABLE_MEMORY_TOOL_IDS.has(tool.id) || features.durableMemory === true) &&
+    (!FULL_LSP_TOOL_IDS.has(tool.id) || features.fullLsp === true),
   );
 }
 

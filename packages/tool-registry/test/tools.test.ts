@@ -190,6 +190,22 @@ describe("catalog completeness (§12.2)", () => {
     expect(registry.has("memory.remember")).toBe(true);
     expect(registry.activeIds()).not.toEqual(expect.arrayContaining(["memory.search", "memory.remember"]));
   });
+
+  test("LSP diagnostics are opt-in through fullLsp", () => {
+    const disabled = nativeToolsForFeatures().map((tool) => tool.id);
+    const enabled = nativeToolsForFeatures({ fullLsp: true }).map((tool) => tool.id);
+    expect(NATIVE_TOOLS.map((tool) => tool.id)).toEqual(expect.arrayContaining(["lsp.diagnostics"]));
+    expect(disabled).not.toContain("lsp.diagnostics");
+    expect(enabled).toContain("lsp.diagnostics");
+    expect(new ToolRegistry().has("lsp.diagnostics")).toBe(false);
+    expect(new ToolRegistry(nativeToolsForFeatures({ fullLsp: true })).has("lsp.diagnostics")).toBe(true);
+    expect(findTool("lsp.diagnostics")).toMatchObject({
+      authority: "read",
+      idempotency: "pure",
+      maxParallelism: 2,
+      resultSchemaId: "lsp.diagnostics.v1",
+    });
+  });
 });
 
 describe("argument validation (§12.4, AC-10)", () => {
