@@ -556,6 +556,34 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
     parameters: objectSchema(lspTextDocumentPosition, ["path", "line", "character"]),
   },
   {
+    id: "lsp.code_action_preview",
+    title: "LspCodeActionPreview",
+    description: "Create a bounded revision-bound proposal from a command-free code action without writing files.",
+    source: "native",
+    defaultRisk: "R0",
+    maxRisk: "R0",
+    alwaysActive: false,
+    mutates: false,
+    network: false,
+    authority: "read",
+    idempotency: "idempotent",
+    maxParallelism: 1,
+    resultSchemaId: "lsp.code_action_preview.v1",
+    keywords: ["lsp", "code action", "quick fix", "refactor", "preview", "language server"],
+    parameters: objectSchema(
+      {
+        ...lspTextDocumentPosition,
+        actionIndex: {
+          type: "integer",
+          minimum: 0,
+          maximum: 255,
+          description: "Zero-based index from lsp.code_actions. The returned proposal does not write files.",
+        },
+      },
+      ["path", "line", "character", "actionIndex"],
+    ),
+  },
+  {
     id: "lsp.rename_preview",
     title: "LspRenamePreview",
     description: "Create a bounded revision-bound rename proposal through configured local language servers without writing files.",
@@ -1419,9 +1447,11 @@ const FULL_LSP_TOOL_IDS = new Set([
   "lsp.signature_help",
   "lsp.document_highlights",
   "lsp.code_actions",
+  "lsp.code_action_preview",
   "lsp.rename_preview",
 ]);
 const LSP_RENAME_PREVIEW_TOOL_IDS = new Set(["lsp.rename_preview"]);
+const LSP_CODE_ACTION_PREVIEW_TOOL_IDS = new Set(["lsp.code_action_preview"]);
 
 export interface NativeToolFeatures {
   readonly editEngineV2?: boolean;
@@ -1429,6 +1459,8 @@ export interface NativeToolFeatures {
   readonly fullLsp?: boolean;
   /** Requires the separate LSP mutation rollout and the structured edit engine. */
   readonly lspRenamePreview?: boolean;
+  /** Requires the command-free code-action mutation rollout and structured edit engine. */
+  readonly lspCodeActionPreview?: boolean;
 }
 
 export function nativeToolsForFeatures(features: NativeToolFeatures = {}): ToolDefinition[] {
@@ -1439,6 +1471,10 @@ export function nativeToolsForFeatures(features: NativeToolFeatures = {}): ToolD
     (
       !LSP_RENAME_PREVIEW_TOOL_IDS.has(tool.id) ||
       (features.editEngineV2 === true && features.lspRenamePreview === true)
+    ) &&
+    (
+      !LSP_CODE_ACTION_PREVIEW_TOOL_IDS.has(tool.id) ||
+      (features.editEngineV2 === true && features.lspCodeActionPreview === true)
     ),
   );
 }
