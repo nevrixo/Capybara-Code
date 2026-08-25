@@ -191,20 +191,54 @@ describe("catalog completeness (§12.2)", () => {
     expect(registry.activeIds()).not.toEqual(expect.arrayContaining(["memory.search", "memory.remember"]));
   });
 
-  test("LSP diagnostics are opt-in through fullLsp", () => {
+  test("LSP read tools are opt-in through fullLsp", () => {
+    const lspTools = ["lsp.diagnostics", "lsp.definition", "lsp.references", "lsp.hover"];
     const disabled = nativeToolsForFeatures().map((tool) => tool.id);
     const enabled = nativeToolsForFeatures({ fullLsp: true }).map((tool) => tool.id);
-    expect(NATIVE_TOOLS.map((tool) => tool.id)).toEqual(expect.arrayContaining(["lsp.diagnostics"]));
-    expect(disabled).not.toContain("lsp.diagnostics");
-    expect(enabled).toContain("lsp.diagnostics");
-    expect(new ToolRegistry().has("lsp.diagnostics")).toBe(false);
-    expect(new ToolRegistry(nativeToolsForFeatures({ fullLsp: true })).has("lsp.diagnostics")).toBe(true);
+
+    expect(NATIVE_TOOLS.map((tool) => tool.id)).toEqual(expect.arrayContaining(lspTools));
+    expect(disabled).not.toEqual(expect.arrayContaining(lspTools));
+    expect(enabled).toEqual(expect.arrayContaining(lspTools));
+
+    const registry = new ToolRegistry(nativeToolsForFeatures({ fullLsp: true }));
+    for (const id of lspTools) {
+      expect(new ToolRegistry().has(id)).toBe(false);
+      expect(registry.has(id)).toBe(true);
+    }
+
     expect(findTool("lsp.diagnostics")).toMatchObject({
       authority: "read",
       idempotency: "pure",
       maxParallelism: 2,
       resultSchemaId: "lsp.diagnostics.v1",
     });
+    for (const id of ["lsp.definition", "lsp.references", "lsp.hover"]) {
+      expect(findTool(id)).toMatchObject({
+        authority: "read",
+        idempotency: "idempotent",
+        maxParallelism: 2,
+        resultSchemaId: id + ".v1",
+      });
+    }
+
+    const referencesSchema = findTool("lsp.references")!.parameters;
+    expect(parseAndValidate(JSON.stringify({
+      path: "src/widget.ts",
+      line: 0,
+      character: 4,
+      includeDeclaration: false,
+    }), referencesSchema).ok).toBe(true);
+    expect(parseAndValidate(JSON.stringify({
+      path: "src/widget.ts",
+      line: -1,
+      character: 4,
+    }), referencesSchema).ok).toBe(false);
+    expect(parseAndValidate(JSON.stringify({
+      path: "src/widget.ts",
+      line: 0,
+      character: 4,
+      unexpected: true,
+    }), referencesSchema).ok).toBe(false);
   });
 });
 

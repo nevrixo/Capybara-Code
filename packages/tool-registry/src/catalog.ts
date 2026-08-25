@@ -97,6 +97,17 @@ const relativePath = {
   maxLength: 4096,
 };
 
+/** Bounded zero-based UTF-16 coordinates accepted by semantic LSP lookups. */
+const lspTextDocumentPosition = {
+  path: {
+    ...relativePath,
+    maxLength: 512,
+    description: "Workspace-relative source path for a bounded LSP semantic lookup.",
+  },
+  line: { type: "integer", minimum: 0, maximum: 1_000_000 },
+  character: { type: "integer", minimum: 0, maximum: 1_000_000 },
+};
+
 const timeoutMs = {
   type: "integer",
   description: "Hard timeout in milliseconds. Clamped to the runtime ceiling.",
@@ -327,6 +338,67 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
       },
       ["path"],
     ),
+  },
+  {
+    id: "lsp.definition",
+    title: "LspDefinition",
+    description: "Find bounded workspace-local definition locations through configured local language servers.",
+    source: "native",
+    defaultRisk: "R0",
+    maxRisk: "R0",
+    alwaysActive: false,
+    mutates: false,
+    network: false,
+    authority: "read",
+    idempotency: "idempotent",
+    maxParallelism: 2,
+    resultSchemaId: "lsp.definition.v1",
+    keywords: ["lsp", "definition", "go to definition", "symbol", "language server"],
+    parameters: objectSchema(lspTextDocumentPosition, ["path", "line", "character"]),
+  },
+  {
+    id: "lsp.references",
+    title: "LspReferences",
+    description: "Find bounded workspace-local references through configured local language servers.",
+    source: "native",
+    defaultRisk: "R0",
+    maxRisk: "R0",
+    alwaysActive: false,
+    mutates: false,
+    network: false,
+    authority: "read",
+    idempotency: "idempotent",
+    maxParallelism: 2,
+    resultSchemaId: "lsp.references.v1",
+    keywords: ["lsp", "references", "usages", "find references", "language server"],
+    parameters: objectSchema(
+      {
+        ...lspTextDocumentPosition,
+        includeDeclaration: {
+          type: "boolean",
+          default: true,
+          description: "Whether the declaration itself should be included in reference results.",
+        },
+      },
+      ["path", "line", "character"],
+    ),
+  },
+  {
+    id: "lsp.hover",
+    title: "LspHover",
+    description: "Read bounded hover text through configured local language servers.",
+    source: "native",
+    defaultRisk: "R0",
+    maxRisk: "R0",
+    alwaysActive: false,
+    mutates: false,
+    network: false,
+    authority: "read",
+    idempotency: "idempotent",
+    maxParallelism: 2,
+    resultSchemaId: "lsp.hover.v1",
+    keywords: ["lsp", "hover", "symbol information", "type information", "language server"],
+    parameters: objectSchema(lspTextDocumentPosition, ["path", "line", "character"]),
   },
   {
     id: "memory.search",
@@ -1151,7 +1223,7 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
 /** Experimental tools are absent from the default model catalog until enabled. */
 const EDIT_ENGINE_TOOL_IDS = new Set(["fs.edit.preview", "fs.edit"]);
 const DURABLE_MEMORY_TOOL_IDS = new Set(["memory.search", "memory.remember"]);
-const FULL_LSP_TOOL_IDS = new Set(["lsp.diagnostics"]);
+const FULL_LSP_TOOL_IDS = new Set(["lsp.diagnostics", "lsp.definition", "lsp.references", "lsp.hover"]);
 
 export interface NativeToolFeatures {
   readonly editEngineV2?: boolean;
