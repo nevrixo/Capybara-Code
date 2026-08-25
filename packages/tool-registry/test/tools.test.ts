@@ -195,6 +195,7 @@ describe("catalog completeness (§12.2)", () => {
     const lspTools = [
       "lsp.diagnostics",
       "lsp.symbols",
+      "lsp.workspace_symbols",
       "lsp.definition",
       "lsp.declaration",
       "lsp.type_definition",
@@ -224,6 +225,7 @@ describe("catalog completeness (§12.2)", () => {
     });
     for (const id of [
       "lsp.symbols",
+      "lsp.workspace_symbols",
       "lsp.definition",
       "lsp.declaration",
       "lsp.type_definition",
@@ -263,6 +265,15 @@ describe("catalog completeness (§12.2)", () => {
     expect(parseAndValidate(JSON.stringify({ path: "src/widget.ts" }), symbolsSchema).ok).toBe(true);
     expect(parseAndValidate(JSON.stringify({ path: "src/widget.ts", line: 0 }), symbolsSchema).ok).toBe(false);
     expect(parseAndValidate(JSON.stringify({ path: "a".repeat(513) }), symbolsSchema).ok).toBe(false);
+
+    const workspaceSymbolsSchema = findTool("lsp.workspace_symbols")!.parameters;
+    expect(parseAndValidate(JSON.stringify({ query: "Widget" }), workspaceSymbolsSchema).ok).toBe(true);
+    expect(parseAndValidate(JSON.stringify({ query: "" }), workspaceSymbolsSchema).ok).toBe(false);
+    expect(parseAndValidate(JSON.stringify({ query: "a".repeat(513) }), workspaceSymbolsSchema).ok).toBe(false);
+    expect(parseAndValidate(JSON.stringify({
+      query: "Widget",
+      path: "src/widget.ts",
+    }), workspaceSymbolsSchema).ok).toBe(false);
   });
 });
 

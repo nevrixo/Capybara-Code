@@ -366,6 +366,33 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
     ),
   },
   {
+    id: "lsp.workspace_symbols",
+    title: "LspWorkspaceSymbols",
+    description: "Search bounded workspace-local symbols through configured local language servers.",
+    source: "native",
+    defaultRisk: "R0",
+    maxRisk: "R0",
+    alwaysActive: false,
+    mutates: false,
+    network: false,
+    authority: "read",
+    idempotency: "idempotent",
+    maxParallelism: 2,
+    resultSchemaId: "lsp.workspace_symbols.v1",
+    keywords: ["lsp", "workspace symbols", "find symbol", "symbol search", "language server"],
+    parameters: objectSchema(
+      {
+        query: {
+          type: "string",
+          minLength: 1,
+          maxLength: 512,
+          description: "Bounded symbol-search text sent only to configured local language servers.",
+        },
+      },
+      ["query"],
+    ),
+  },
+  {
     id: "lsp.definition",
     title: "LspDefinition",
     description: "Find bounded workspace-local definition locations through configured local language servers.",
@@ -1320,6 +1347,7 @@ const DURABLE_MEMORY_TOOL_IDS = new Set(["memory.search", "memory.remember"]);
 const FULL_LSP_TOOL_IDS = new Set([
   "lsp.diagnostics",
   "lsp.symbols",
+  "lsp.workspace_symbols",
   "lsp.definition",
   "lsp.declaration",
   "lsp.type_definition",
