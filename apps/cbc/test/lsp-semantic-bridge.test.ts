@@ -26,7 +26,8 @@ function action(
     | "lsp.implementation"
     | "lsp.references"
     | "lsp.hover"
-    | "lsp.signature_help",
+    | "lsp.signature_help"
+    | "lsp.document_highlights",
   argumentsValue: Record<string, unknown>,
 ) {
   return {
@@ -50,6 +51,7 @@ function reader(overrides: Partial<LspSemanticReader> = {}): LspSemanticReader {
     references: async (_input: LspReferencesRequest) => queryResult([]),
     hover: async (_input: LspTextDocumentPosition) => queryResult(null),
     signatureHelp: async (_input: LspTextDocumentPosition) => queryResult(null),
+    documentHighlights: async (_input: LspTextDocumentPosition) => queryResult([]),
     ...overrides,
   };
 }
@@ -332,4 +334,51 @@ describe("LSP semantic bridge", () => {
     expect(execution.result.error?.code).toBe("NOT_INITIALIZED");
     expect(execution.result.error?.message).not.toContain("private.ts");
   });
+
+  test("projects bounded document highlights without raw server data", async () => {
+    let received: LspTextDocumentPosition | undefined;
+    const bridge = createLspSemanticBridge(
+      reader({
+        documentHighlights: async (input) => {
+          received = input;
+          return queryResult(
+            Array.from({ length: 40 }, (_, index) => ({
+              range: {
+                start: { line: index, character: 0 },
+                end: { line: index, character: 6 },
+              },
+              kind: index % 2 === 0 ? 2 : 3,
+              data: { mustNotEscape: true },
+            })),
+          );
+        },
+      }),
+      { workspaceRoot },
+    );
+
+    const execution = await bridge(
+      action("lsp.document_highlights", { path: "src/query.ts", line: 2, character: 3 }),
+      new AbortController().signal,
+    );
+
+    expect(execution.result.ok).toBe(true);
+    expect(received).toEqual({ path: "src/query.ts", line: 2, character: 3 });
+    const data = execution.result.data as {
+      readonly kind: string;
+      readonly totalHighlights: number;
+      readonly returnedHighlights: number;
+      readonly highlights: readonly { readonly kind: string }[];
+      readonly truncated: boolean;
+    };
+    expect(data.kind).toBe("document_highlights");
+    expect(data.totalHighlights).toBe(40);
+    expect(data.returnedHighlights).toBe(32);
+    expect(data.highlights).toHaveLength(32);
+    expect(data.highlights[0]?.kind).toBe("read");
+    expect(data.truncated).toBe(true);
+    expect(JSON.stringify(data)).not.toContain("mustNotEscape");
+    expect(execution.text).toContain("untrusted server output");
+    expect(execution.text).toContain("possibly stale language-server claims");
+  });
+
 });

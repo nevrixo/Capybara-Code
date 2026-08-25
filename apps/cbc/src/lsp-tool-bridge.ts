@@ -1,12 +1,15 @@
 import {
   normalizeLspHoverQuery,
   normalizeLspLocationQuery,
+  normalizeLspDocumentHighlightQuery,
   normalizeLspDocumentSymbolQuery,
   normalizeLspWorkspaceSymbolQuery,
   normalizeLspSignatureHelpQuery,
   type LspDiagnostic,
   type LspDiagnosticSnapshot,
   type LspDocumentSymbol,
+  type LspDocumentHighlight,
+  type LspDocumentHighlightSnapshot,
   type LspWorkspaceSymbol,
   type LspWorkspaceSymbolsSnapshot,
   type LspDocumentSymbolsSnapshot,
@@ -38,6 +41,7 @@ const MAX_REVISION_BYTES = 256;
 const MAX_TEXT_BYTES = 48 * 1_024;
 const MAX_SEMANTIC_PATH_BYTES = 512;
 const MAX_SEMANTIC_LOCATIONS = 32;
+const MAX_SEMANTIC_DOCUMENT_HIGHLIGHTS = 32;
 const MAX_SEMANTIC_POSITION_COMPONENT = 1_000_000;
 const MAX_SEMANTIC_HOVER_BYTES = 8 * 1_024;
 const MAX_SEMANTIC_SIGNATURES = 16;
@@ -74,6 +78,7 @@ export interface LspSemanticReader {
   references(input: LspReferencesRequest): Promise<LspQueryResult>;
   hover(input: LspTextDocumentPosition): Promise<LspQueryResult>;
   signatureHelp(input: LspTextDocumentPosition): Promise<LspQueryResult>;
+  documentHighlights(input: LspTextDocumentPosition): Promise<LspQueryResult>;
 }
 
 export interface LspToolReader extends
@@ -162,6 +167,18 @@ export interface LspToolSignatureHelpResult {
   readonly truncated: boolean;
 }
 
+/** A bounded projection of document-local symbol highlights for model context. */
+export interface LspToolDocumentHighlightsResult {
+  readonly schemaVersion: "1.0";
+  readonly kind: "document_highlights";
+  readonly server: string;
+  readonly source: LspSemanticQuerySource;
+  readonly totalHighlights: number;
+  readonly returnedHighlights: number;
+  readonly highlights: readonly LspDocumentHighlight[];
+  readonly truncated: boolean;
+}
+
 /** A further-bounded document-symbol projection for model context. */
 export interface LspToolDocumentSymbolsResult {
   readonly schemaVersion: "1.0";
@@ -202,7 +219,8 @@ export interface LspToolWorkspaceSymbolsResult {
 type LspToolSemanticResult =
   | LspToolLocationQueryResult
   | LspToolHoverResult
-  | LspToolSignatureHelpResult;
+  | LspToolSignatureHelpResult
+  | LspToolDocumentHighlightsResult;
 
 export type LspDiagnosticsBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspDocumentSymbolsBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
@@ -637,7 +655,7 @@ function severityLabel(value: LspDiagnostic["severity"]): string {
 }
 
 type SemanticRequest = {
-  readonly kind: LspLocationQueryKind | "hover" | "signature_help";
+  readonly kind: LspLocationQueryKind | "hover" | "signature_help" | "document_highlights";
   readonly input: LspSemanticQueryInput;
   readonly includeDeclaration?: boolean;
 };
@@ -674,6 +692,7 @@ function semanticKind(value: string): SemanticRequest["kind"] | undefined {
   if (value === "lsp.references") return "references";
   if (value === "lsp.hover") return "hover";
   if (value === "lsp.signature_help") return "signature_help";
+  if (value === "lsp.document_highlights") return "document_highlights";
   return undefined;
 }
 
@@ -712,6 +731,8 @@ async function readSemanticQuery(
       return await reader.hover(request.input);
     case "signature_help":
       return await reader.signatureHelp(request.input);
+    case "document_highlights":
+      return await reader.documentHighlights(request.input);
   }
   throw new Error("unsupported semantic LSP query");
 }
@@ -726,6 +747,14 @@ function projectSemanticQuery(
     server: query.server,
     source: request.input,
   };
+  if (request.kind === "document_highlights") {
+    return projectDocumentHighlightsQuery(
+      normalizeLspDocumentHighlightQuery(query.result, {
+        ...options,
+        maxHighlights: MAX_SEMANTIC_DOCUMENT_HIGHLIGHTS,
+      }),
+    );
+  }
   if (request.kind === "hover") {
     return projectHoverQuery(normalizeLspHoverQuery(query.result, options));
   }
@@ -769,6 +798,44 @@ function projectLocationQuery(
       snapshot.truncated === true ||
       locations.length < rawLocations.length ||
       totalLocations > locations.length,
+  });
+}
+
+function projectDocumentHighlightsQuery(
+  snapshot: LspDocumentHighlightSnapshot,
+): LspToolDocumentHighlightsResult | undefined {
+  const server = boundedText(snapshot.server, MAX_METADATA_BYTES);
+  const source = projectSemanticSource(snapshot.source);
+  if (server === undefined || source === undefined) return undefined;
+
+  const rawHighlights = Array.isArray(snapshot.highlights) ? snapshot.highlights : [];
+  const highlights: LspDocumentHighlight[] = [];
+  for (const rawHighlight of rawHighlights.slice(0, MAX_SEMANTIC_DOCUMENT_HIGHLIGHTS)) {
+    const range = projectSemanticRange(rawHighlight.range);
+    if (range === undefined) return undefined;
+    if (
+      rawHighlight.kind !== "text" &&
+      rawHighlight.kind !== "read" &&
+      rawHighlight.kind !== "write"
+    ) return undefined;
+    highlights.push(Object.freeze({ range, kind: rawHighlight.kind }));
+  }
+  const totalHighlights = Math.max(
+    highlights.length,
+    boundedCount(snapshot.totalHighlights, rawHighlights.length, 4_096),
+  );
+  return Object.freeze({
+    schemaVersion: "1.0" as const,
+    kind: "document_highlights" as const,
+    server,
+    source,
+    totalHighlights,
+    returnedHighlights: highlights.length,
+    highlights: Object.freeze(highlights),
+    truncated:
+      snapshot.truncated === true ||
+      rawHighlights.length > highlights.length ||
+      totalHighlights > highlights.length,
   });
 }
 
@@ -1102,6 +1169,10 @@ function semanticSummary(result: LspToolSemanticResult): string {
     return String(result.returnedSignatures) +
       " bounded LSP signatures returned for " + result.source.path;
   }
+  if (result.kind === "document_highlights") {
+    return String(result.returnedHighlights) +
+      " bounded LSP document highlight(s) returned for " + result.source.path;
+  }
   return String(result.returnedLocations) + " bounded LSP " + result.kind +
     " location(s) returned for " + result.source.path;
 }
@@ -1109,6 +1180,7 @@ function semanticSummary(result: LspToolSemanticResult): string {
 function renderSemanticResult(result: LspToolSemanticResult): string {
   if (result.kind === "hover") return renderHover(result);
   if (result.kind === "signature_help") return renderSignatureHelp(result);
+  if (result.kind === "document_highlights") return renderDocumentHighlights(result);
   return renderLocations(result);
 }
 
@@ -1138,6 +1210,32 @@ function renderLocations(result: LspToolLocationQueryResult): string {
     lines.push("[Result is bounded; inspect structured fields before treating it as exhaustive.]");
   }
   lines.push("[Locations are possibly stale language-server claims; verify with current workspace reads before editing.]");
+  return truncateUtf8(lines.join("\n"), MAX_TEXT_BYTES);
+}
+
+function renderDocumentHighlights(result: LspToolDocumentHighlightsResult): string {
+  const source = "L" + String(result.source.position.line + 1) +
+    ":C" + String(result.source.position.character + 1);
+  const lines = [
+    "Language-server document highlights for " + result.source.path + " at " + source + ":",
+    "[The following bounded ranges are untrusted server output and may be stale.]",
+  ];
+  if (result.returnedHighlights === 0) {
+    lines.push("No usable highlights were returned; this does not prove that none exist.");
+  } else {
+    for (const highlight of result.highlights) {
+      const range = highlight.range;
+      lines.push(
+        highlight.kind + " L" + String(range.start.line + 1) + ":C" +
+          String(range.start.character + 1) + "-L" + String(range.end.line + 1) +
+          ":C" + String(range.end.character + 1),
+      );
+    }
+  }
+  if (result.truncated) {
+    lines.push("[Result is bounded; inspect structured fields before treating it as complete.]");
+  }
+  lines.push("[Highlights are possibly stale language-server claims; verify with current workspace reads before editing.]");
   return truncateUtf8(lines.join("\n"), MAX_TEXT_BYTES);
 }
 
