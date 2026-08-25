@@ -450,6 +450,11 @@ describe("LspHost", () => {
       "textDocument/documentSymbol",
     ]));
     expect(initializeCapabilities).toMatchObject({
+      workspace: {
+        diagnostic: {
+          refreshSupport: false,
+        },
+      },
       textDocument: {
         signatureHelp: {
           signatureInformation: {
@@ -465,6 +470,7 @@ describe("LspHost", () => {
     });
     const current = await host.diagnostics("src/widget.ts");
     expect(methods).not.toContain("textDocument/diagnostic");
+    expect(methods).not.toContain("workspace/diagnostic");
 
     expect(current).toEqual(expect.objectContaining({
       totalServers: 1,
@@ -667,6 +673,153 @@ describe("LspHost", () => {
       truncatedServers: false,
     });
     expect(methods.filter((method) => method === "textDocument/diagnostic")).toHaveLength(2);
+
+    await host.close();
+  });
+
+  test("pulls bounded workspace diagnostics only when the server advertises support", async () => {
+    let notification:
+      | ((method: string, params: unknown) => void)
+      | undefined;
+    let protocolChannel = "";
+    let openedUri = "";
+    let openedVersion = 0;
+    let initializeCapabilities: unknown;
+    let workspaceParams: unknown;
+    const methods: string[] = [];
+    const runtime = {
+      issueCapability: async () => ({ id: "cap", sessionId: "session-1", actionHash: "hash" }),
+      startJob: async (params: Record<string, unknown>) => {
+        protocolChannel = String(params.protocolChannel);
+        return { jobId: "job-1", display: "fake LSP" };
+      },
+      sendInput: async (params: Record<string, unknown>) => {
+        const data = params.data;
+        if (typeof data !== "string") throw new Error("expected framed LSP input");
+        const message = messageFromFrame(data);
+        if (typeof message.method === "string") methods.push(message.method);
+        if (message.method === "initialize") {
+          const params = message.params;
+          if (typeof params === "object" && params !== null && !Array.isArray(params)) {
+            initializeCapabilities = (params as Record<string, unknown>).capabilities;
+          }
+        }
+        if (message.method === "textDocument/didOpen") {
+          const opened = message.params as {
+            readonly textDocument?: { readonly uri?: unknown; readonly version?: unknown };
+          };
+          const uri = opened.textDocument?.uri;
+          const version = opened.textDocument?.version;
+          if (typeof uri === "string") openedUri = uri;
+          if (typeof version === "number") openedVersion = version;
+          return undefined;
+        }
+        if (typeof message.id !== "number") return undefined;
+        let result: unknown = [];
+        if (message.method === "initialize") {
+          result = { capabilities: { diagnosticProvider: { workspaceDiagnostics: true } } };
+        } else if (message.method === "textDocument/diagnostic") {
+          result = { kind: "full", items: [] };
+        } else if (message.method === "workspace/diagnostic") {
+          workspaceParams = message.params;
+          result = {
+            items: [{
+              uri: openedUri,
+              version: openedVersion,
+              kind: "full",
+              resultId: "server-private-result-id",
+              relatedDocuments: { mustNotEscape: true },
+              items: [{
+                range: {
+                  start: { line: 0, character: 6 },
+                  end: { line: 0, character: 11 },
+                },
+                severity: 1,
+                source: "workspace",
+                message: "workspace diagnostic",
+                data: { mustNotEscape: true },
+              }],
+            }],
+          };
+        }
+        notification?.("lsp.stdio.output", {
+          protocolChannel,
+          text: lspFrame({ jsonrpc: "2.0", id: message.id, result }),
+        });
+        return undefined;
+      },
+      stopJob: async () => undefined,
+      subscribeNotifications: (handler: (method: string, params: unknown) => void) => {
+        notification = handler;
+        return () => {
+          if (notification === handler) notification = undefined;
+        };
+      },
+    };
+    const host = new LspHost({
+      runtime: runtime as never,
+      servers: {
+        typescript: {
+          command: "typescript-language-server",
+          args: ["--stdio"],
+          extensions: [".ts"],
+          languageId: "typescript",
+          timeoutMs: 1_000,
+        },
+      },
+      sessionId: "session-1",
+      workspaceRoot: "/work",
+      workspaceTrusted: true,
+      enabled: true,
+      workspaceIdentityDigest: () => "ws_workspace",
+      readEditDocument: async (path) =>
+        path === "src/widget.ts"
+          ? { path, text: "const value = 1;\n", revision: "sha256:workspace-1" }
+          : undefined,
+      isBuildMode: () => true,
+      resolveExecutable: () => "fake-lsp",
+    });
+
+    const lookup = await host.diagnostics("src/widget.ts");
+
+    expect(methods).toEqual(expect.arrayContaining([
+      "initialize",
+      "textDocument/diagnostic",
+      "workspace/diagnostic",
+    ]));
+    expect(methods.filter((method) => method === "textDocument/didOpen")).toHaveLength(1);
+    expect(methods.filter((method) => method === "workspace/diagnostic")).toHaveLength(1);
+    expect(workspaceParams).toEqual({ previousResultIds: [] });
+    expect(initializeCapabilities).toMatchObject({
+      workspace: {
+        diagnostic: {
+          refreshSupport: false,
+        },
+      },
+      textDocument: {
+        diagnostic: {
+          dynamicRegistration: false,
+          relatedDocumentSupport: false,
+        },
+      },
+    });
+    expect(lookup).toEqual(expect.objectContaining({
+      totalServers: 1,
+      truncatedServers: false,
+      snapshots: [expect.objectContaining({
+        server: "typescript",
+        workspaceIdentityDigest: "ws_workspace",
+        path: "src/widget.ts",
+        documentRevision: "sha256:workspace-1",
+        documentVersion: openedVersion,
+        diagnostics: [expect.objectContaining({
+          severity: 1,
+          source: "workspace",
+          message: "workspace diagnostic",
+        })],
+      })],
+    }));
+    expect(JSON.stringify(lookup)).not.toContain("server-private-result-id");
 
     await host.close();
   });
