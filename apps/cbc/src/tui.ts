@@ -602,8 +602,10 @@ export class InteractiveUi {
   }
 
   #accordionCollapsed = false;
+  #completionEvidenceExpanded = false;
   toggleAccordion(): string {
     this.#accordionCollapsed = !this.#accordionCollapsed;
+    this.#completionEvidenceExpanded = !this.#accordionCollapsed;
     this.#timelineScrollOffset = 0;
     this.#invalidateTimelineScrollRange();
     this.#markFrameDirty("timeline");
@@ -706,6 +708,7 @@ export class InteractiveUi {
             accordionExpandedIds: liveExpandedIds(model),
           }
         : {}),
+      ...(this.#completionEvidenceExpanded ? { completionEvidenceExpanded: true } : {}),
     };
   }
 
@@ -2955,6 +2958,7 @@ export class InteractiveUi {
             ? { statusDensity: this.#options.uiStatusDensity }
             : {}),
           accordionCollapsed: this.#accordionCollapsed,
+          completionEvidenceExpanded: this.#completionEvidenceExpanded,
           thinkingVisibility: this.#thinkingVisibility,
           thinkingMode: this.#thinkingMode,
           toolDetail: this.#toolDetail,

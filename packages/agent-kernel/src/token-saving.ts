@@ -263,10 +263,10 @@ export function tokenSavingDirectiveText(
   }
   lines.push(SAFETY_INVARIANT_LINE);
   if (plan.responseStyle === "concise") {
-    lines.push("Keep progress and final reporting concise without omitting evidence.");
+    lines.push("Answer naturally and briefly. Preserve material limitations; the host renders audit evidence separately.");
   } else if (plan.responseStyle === "minimal") {
     lines.push(
-      "Keep progress and final reporting minimal: changed files, verification results, and remaining risks; provide details only on request.",
+      "Give the direct result and one necessary caveat. Do not create Status, Changed, Verification, Risks, or Next step sections; the host renders audit evidence.",
     );
   }
   return lines.join("\n");

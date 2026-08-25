@@ -11,6 +11,8 @@
 
 import { planDigest } from "@cbc/session-domain";
 import type {
+  CompletionIssueView,
+  CompletionPresentationView,
   CompletionReportView,
   PlanDocument,
   PlanItem,
@@ -1934,13 +1936,112 @@ function finalPresentation(report: CompletionReportView | undefined): {
   }
 }
 
-export function renderFinal(
-  item: Pick<TimelineFinal, "answer" | "text" | "report"> & { agentId?: string },
+function completionStatusLabel(
+  presentation: CompletionPresentationView,
+): { readonly title: string; readonly iconName: IconName; readonly token: ThemeToken } | undefined {
+  switch (presentation.disposition) {
+    case "failure":
+      return { title: presentation.locale === "ko" ? "작업을 완료하지 못했습니다" : "The task could not be completed", iconName: "error", token: "accent.red" };
+    case "blocked":
+      return { title: presentation.locale === "ko" ? "진행이 멈췄습니다" : "Progress is blocked", iconName: "warning", token: "accent.amber" };
+    case "cancelled":
+      return { title: presentation.locale === "ko" ? "작업이 취소되었습니다" : "Task cancelled", iconName: "warning", token: "fg.muted" };
+    default:
+      return undefined;
+  }
+}
+
+function issueToken(issue: CompletionIssueView): ThemeToken {
+  return issue.severity === "error" ? "accent.red" : issue.severity === "blocking" ? "accent.amber" : "accent.amber";
+}
+
+/** One-line evidence retained when the full audit report is folded. */
+export function renderCompletionEvidenceSummary(
+  report: CompletionReportView,
+  presentation: CompletionPresentationView,
   context: BlockContext,
+): StyledLine {
+  const passed = report.verification.filter((step) => step.status === "passed").length;
+  const total = report.verification.length;
+  const attention = presentation.issues.length;
+  const text = presentation.locale === "ko"
+    ? `변경 ${report.changedFiles.length} · 검증 ${passed}/${total}${attention > 0 ? ` · 확인 필요 ${attention}` : ""}  [Enter: 자세히]`
+    : `Changed ${report.changedFiles.length} · Verification ${passed}/${total}${attention > 0 ? ` · Attention ${attention}` : ""}  [Enter: details]`;
+  return fitLine("notice", [segment(text, { fg: "fg.muted" })], context);
+}
+
+function renderChatFinal(
+  item: Pick<TimelineFinal, "answer" | "text" | "report" | "presentation">,
+  context: BlockContext,
+  options: { readonly evidenceExpanded?: boolean },
+): StyledLine[] {
+  const presentation = item.presentation;
+  if (presentation === undefined) return [];
+  const report = item.report;
+  const innerContext: BlockContext = { ...context, columns: Math.max(12, context.columns - 2) };
+  const lines: StyledLine[] = [];
+  const status = completionStatusLabel(presentation);
+  if (status !== undefined) {
+    lines.push(fitLine("header", [
+      segment(`${icon(status.iconName, context.capabilities)} `, { fg: status.token }),
+      segment(status.title, { fg: status.token, bold: true }),
+    ], context));
+  }
+
+  const answer = finalAnswerText(item);
+  if (answer.trim().length > 0) {
+    lines.push(...renderMarkdown(answer, innerContext, { kind: "final", style: { fg: "fg.primary" } }));
+  }
+
+  if (presentation.issues.length > 0 && presentation.disposition !== "success") {
+    const title = presentation.disposition === "blocked"
+      ? (presentation.locale === "ko" ? "⚠ 진행이 멈췄습니다" : "⚠ Progress is blocked")
+      : (presentation.locale === "ko" ? "⚠ 확인이 남았습니다" : "⚠ Confirmation needed");
+    lines.push(blank());
+    lines.push(fitLine("notice", [segment(title, { fg: "accent.amber", bold: true })], innerContext));
+    for (const issue of presentation.issues.slice(0, 3)) {
+      lines.push(fitLine("notice", [
+        segment("  ", { fg: "fg.muted" }),
+        segment(`${issue.message}`, { fg: issueToken(issue), bold: issue.severity !== "attention" }),
+      ], innerContext));
+      if (issue.nextAction !== undefined) {
+        lines.push(fitLine("notice", [
+          segment("  ", { fg: "fg.muted" }),
+          segment(`${presentation.locale === "ko" ? "다음 확인: " : "Next: "}${issue.nextAction}`, { fg: "fg.muted" }),
+        ], innerContext));
+      }
+    }
+  }
+
+  if (report !== undefined) {
+    const expanded = options.evidenceExpanded === true || presentation.evidenceMode === "expanded";
+    if (expanded) {
+      lines.push(...renderReportEvidence(report, innerContext, {
+        ...(presentation.locale === undefined ? {} : { locale: presentation.locale }),
+        answer,
+        suppressDuplicates: true,
+      }));
+    } else {
+      lines.push(blank(), renderCompletionEvidenceSummary(report, presentation, innerContext));
+    }
+  }
+  return lines;
+}
+
+export function renderFinal(
+  item: Pick<TimelineFinal, "answer" | "text" | "report" | "presentation"> & { agentId?: string },
+  context: BlockContext,
+  options: { readonly evidenceExpanded?: boolean } = {},
 ): StyledLine[] {
   // ── Subagent final: do not output any text block (notice line suffices) ─
   if (item.agentId !== undefined && item.agentId !== "root") {
     return [];
+  }
+
+  // New kernel events carry an explicit host presentation. Legacy journal events
+  // deliberately keep the report renderer below so old snapshots remain readable.
+  if (item.presentation !== undefined) {
+    return renderChatFinal(item, context, options);
   }
 
   // ── Root agent final: full rendering ───────────────────────────────────
@@ -2010,15 +2111,31 @@ export function renderFinal(
   return [divider, headerLine, ...bodyWithGutter];
 }
 
+export interface ReportEvidenceRenderOptions {
+  readonly locale?: "en" | "ko";
+  readonly answer?: string;
+  readonly suppressDuplicates?: boolean;
+}
+
 export function renderReportEvidence(
   report: CompletionReportView,
   context: BlockContext,
+  options: ReportEvidenceRenderOptions = {},
 ): StyledLine[] {
   const lines: StyledLine[] = [];
+  const locale = options.locale ?? "en";
+  const answer = options.answer?.toLocaleLowerCase() ?? "";
   const section = (title: string, token: ThemeToken = "fg.primary"): void => {
     lines.push(blank());
     lines.push(line("header", [segment(title, { fg: token, bold: true })]));
   };
+  const label = (english: string, korean: string): string => locale === "ko" ? korean : english;
+  const duplicate = (value: string): boolean =>
+    options.suppressDuplicates === true && value.trim().length > 0 && answer.includes(value.trim().toLocaleLowerCase());
+  const securityRisk = (value: string): boolean => /security|credential|secret|permission|data loss|보안|자격 증명|비밀|권한|데이터 손실/iu.test(value);
+
+  const sectionOriginal = section;
+  const sectionTranslated = (english: string, korean: string, token: ThemeToken = "fg.primary"): void => sectionOriginal(label(english, korean), token);
 
   if (report.status !== "completed") {
     // §6.5 and AC-50: a partial or failed turn says so in words.
@@ -2028,7 +2145,7 @@ export function renderReportEvidence(
         "notice",
         [
           segment(`${icon("warning", context.capabilities)} `, { fg: "accent.amber" }),
-          segment(`status: ${report.status}`, { fg: "accent.amber", bold: true }),
+          segment(`${label("status", "상태")}: ${report.status}`, { fg: "accent.amber", bold: true }),
         ],
         context,
       ),
@@ -2036,8 +2153,9 @@ export function renderReportEvidence(
   }
 
   if (report.changedFiles.length > 0) {
-    section("Changed");
+    sectionTranslated("Changed", "변경 파일");
     for (const file of report.changedFiles) {
+      if (options.suppressDuplicates === true && duplicate(file.path)) continue;
       const counts =
         file.additions !== undefined || file.deletions !== undefined
           ? ` (+${file.additions ?? 0} -${file.deletions ?? 0})`
@@ -2058,8 +2176,9 @@ export function renderReportEvidence(
   }
 
   if (report.verification.length > 0) {
-    section("Verification");
+    sectionTranslated("Verification", "검증");
     for (const step of report.verification) {
+      if (options.suppressDuplicates === true && duplicate(step.command ?? step.evidence)) continue;
       const token: ThemeToken =
         step.status === "passed"
           ? "accent.green"
@@ -2083,7 +2202,7 @@ export function renderReportEvidence(
   }
 
   if (report.delegatedTasks.length > 0) {
-    section("Delegated");
+    sectionTranslated("Delegated", "위임 작업");
     for (const task of report.delegatedTasks) {
       lines.push(
         fitLine(
@@ -2101,8 +2220,9 @@ export function renderReportEvidence(
   }
 
   if (report.risks.length > 0) {
-    section("Risks", "accent.amber");
+    sectionTranslated("Risks", "남은 확인", "accent.amber");
     for (const risk of report.risks) {
+      if (options.suppressDuplicates === true && duplicate(risk) && !securityRisk(risk)) continue;
       lines.push(
         fitLine(
           "body",
@@ -2119,7 +2239,7 @@ export function renderReportEvidence(
       fitLine(
         "body",
         [
-          segment("Next step: ", { fg: "fg.muted", bold: true }),
+          segment(`${label("Next step: ", "다음 확인: ")}`, { fg: "fg.muted", bold: true }),
           segment(sanitizeInline(report.nextStep, 200), { fg: "fg.primary" }),
         ],
         context,
@@ -2240,6 +2360,8 @@ export interface TimelineRenderOptions {
   readonly accordionCollapsed?: boolean;
   /** Accordion collapsed summary per item id. */
   readonly accordionSummaries?: Readonly<Record<string, string>>;
+  /** Final audit evidence remains collapsed until explicitly requested. */
+  readonly completionEvidenceExpanded?: boolean;
   /** Offered scopes for pending approval card in timeline. */
   readonly offeredScopes?: readonly string[];
   /** Currently selected choice index for pending approval card in timeline. */
@@ -2348,7 +2470,9 @@ export function renderTimelineItem(
       });
     }
     case "final":
-      return renderFinal(item, context);
+      return renderFinal(item, context, {
+        ...(options.completionEvidenceExpanded === true ? { evidenceExpanded: true } : {}),
+      });
     case "tool_discovery":
       return renderToolDiscovery(item, context, {
         expanded: options.expandDiscovery === true,
@@ -2492,6 +2616,17 @@ export function renderTimelineItemTail(
 
   if (item.type !== "final" || (item.agentId !== undefined && item.agentId !== "root")) {
     return undefined;
+  }
+  if (item.presentation !== undefined) {
+    const rendered = renderFinal(item, context, {
+      ...(options.completionEvidenceExpanded === true ? { evidenceExpanded: true } : {}),
+    });
+    return {
+      lines: rendered.slice(Math.max(0, rendered.length - rows)),
+      totalLines: rendered.length,
+      sourceLinesRendered: rendered.length,
+      bounded: true,
+    };
   }
 
   const presentation = finalPresentation(item.report);

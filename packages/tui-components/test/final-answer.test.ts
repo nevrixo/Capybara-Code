@@ -31,6 +31,33 @@ describe("final answer rendering", () => {
     expect(output).toContain("Verification");
   });
 
+  test("uses chat-first presentation and folds audit evidence", () => {
+    const lines = renderFinal({
+      answer: "랜딩 페이지를 통합했습니다.",
+      text: "랜딩 페이지를 통합했습니다.",
+      presentation: {
+        disposition: "success",
+        issues: [],
+        evidenceMode: "summary",
+        locale: "ko",
+      },
+      report: {
+        status: "completed",
+        summary: "internal audit summary",
+        changedFiles: [{ path: "index.html", purpose: "통합" }],
+        verification: [{ command: "bun test", status: "passed", evidence: "통과" }],
+        delegatedTasks: [],
+        risks: [],
+      },
+    }, context);
+    const output = lines.map(lineText).join("\n");
+    expect(output).toContain("랜딩 페이지를 통합했습니다.");
+    expect(output).toContain("변경 1 · 검증 1/1");
+    expect(output).not.toContain("Final answer");
+    expect(output).not.toContain("internal audit summary");
+    expect(output).not.toContain("Verification");
+  });
+
   test("handles multiline verification commands without breaking box layout or line widths", () => {
     const lines = renderFinal(
       {

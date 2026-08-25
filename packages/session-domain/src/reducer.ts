@@ -101,6 +101,37 @@ export interface TimelineThinking {
   readonly legacy?: boolean;
 }
 
+export type CompletionDispositionView =
+  | "success"
+  | "attention"
+  | "blocked"
+  | "failure"
+  | "cancelled";
+export type CompletionIssueCodeView =
+  | "verification_not_run"
+  | "verification_stale"
+  | "todo_unfinished"
+  | "todo_transition_rejected"
+  | "permission_blocked"
+  | "budget_exhausted"
+  | "provider_incomplete"
+  | "tool_failure"
+  | "review_not_run"
+  | "environment_limitation";
+export interface CompletionIssueView {
+  readonly code: CompletionIssueCodeView;
+  readonly severity: "attention" | "blocking" | "error";
+  readonly message: string;
+  readonly nextAction?: string;
+  readonly evidenceIds?: readonly string[];
+}
+export interface CompletionPresentationView {
+  readonly disposition: CompletionDispositionView;
+  readonly issues: readonly CompletionIssueView[];
+  readonly evidenceMode: "summary" | "expanded";
+  readonly locale?: "en" | "ko";
+}
+
 export interface TimelineFinal {
   readonly type: "final";
   readonly id: string;
@@ -111,6 +142,7 @@ export interface TimelineFinal {
   /** Stable provider output identity, when supplied by the stream bridge. */
   readonly itemId?: string;
   readonly report?: CompletionReportView;
+  readonly presentation?: CompletionPresentationView;
   readonly agentId?: string;
   readonly turnId?: string;
   readonly correlationId?: string;
@@ -1079,6 +1111,7 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
       };
       if (answer.length > 0) item.answer = answer;
       if (p.report) item.report = p.report as CompletionReportView;
+      if (p.presentation) item.presentation = p.presentation as CompletionPresentationView;
       next.timeline.push(item as TimelineFinal);
       next.turnStatus = "verifying";
       break;

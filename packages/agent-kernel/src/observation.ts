@@ -477,6 +477,42 @@ export function buildVerificationCoverage(input: {
 }
 
 
+/** How the host should present a terminal report without changing its machine status. */
+export type CompletionDisposition =
+  | "success"
+  | "attention"
+  | "blocked"
+  | "failure"
+  | "cancelled";
+
+export type CompletionIssueCode =
+  | "verification_not_run"
+  | "verification_stale"
+  | "todo_unfinished"
+  | "todo_transition_rejected"
+  | "permission_blocked"
+  | "budget_exhausted"
+  | "provider_incomplete"
+  | "tool_failure"
+  | "review_not_run"
+  | "environment_limitation";
+
+export interface CompletionIssue {
+  readonly code: CompletionIssueCode;
+  readonly severity: "attention" | "blocking" | "error";
+  readonly message: string;
+  readonly nextAction?: string;
+  readonly evidenceIds?: readonly string[];
+}
+
+export interface CompletionPresentation {
+  readonly disposition: CompletionDisposition;
+  readonly issues: readonly CompletionIssue[];
+  readonly evidenceMode: "summary" | "expanded";
+  /** A small locale hint for host-owned labels; content remains untouched. */
+  readonly locale?: "en" | "ko";
+}
+
 /** §11.7 completion contract. */
 export interface CompletionReport {
   status: "completed" | "partial" | "failed" | "cancelled";
@@ -511,8 +547,91 @@ export function emptyReport(status: CompletionReport["status"] = "completed"): C
   };
 }
 
+/** Derive a display disposition from durable evidence; `report.status` is untouched. */
+export function deriveCompletionPresentation(
+  report: CompletionReport,
+  answer = "",
+): CompletionPresentation {
+  const text = [report.summary, answer, ...report.risks, report.nextStep ?? "", ...report.verification.map((step) => `${step.command ?? ""} ${step.evidence}`)].join("\n");
+  const locale: CompletionPresentation["locale"] = /[가-힣]/u.test(text) ? "ko" : "en";
+  const issues: CompletionIssue[] = [];
+  const add = (
+    code: CompletionIssueCode,
+    severity: CompletionIssue["severity"],
+    message: string,
+    nextAction?: string,
+  ): void => {
+    if (issues.some((issue) => issue.code === code)) return;
+    issues.push({
+      code,
+      severity,
+      message,
+      ...(nextAction === undefined ? {} : { nextAction }),
+    });
+  };
+  const has = (pattern: RegExp): boolean => pattern.test(text);
+  const required = report.verification.filter((step) => step.required !== false);
+  const failedVerification = required.filter((step) => step.status === "failed");
+  const notRunVerification = required.filter((step) => step.status === "not_run");
+  const reviewNotRun = required.some((step) => step.status === "not_run" && /review|audit|검토|리뷰/iu.test(`${step.command ?? ""} ${step.evidence}`));
+  const permissionBlocked = /PERMISSION_DENIED|permission denied|untrusted|denied by policy|workspace write permission|권한(?:이|을)? 거부|신뢰 상태/iu.test(text);
+  const todoRejected = /TODO_INVALID_TRANSITION|todo(?:\.write)?[^\\n]*(?:rejected|rejected|transition)|체크리스트 상태/iu.test(text);
+  const todoUnfinished = /(?:unfinished TODO|TODO has|pending TODO|미완료 TODO|남은 TODO)/iu.test(text);
+  const providerIncomplete = /provider response was incomplete|context(?:_length| budget)|CONTEXT_BUDGET_EXCEEDED|프로바이더 응답이 불완전/iu.test(text);
+  const budgetExhausted = /budget|budget exhausted|stopped early|limit(?:ed)?|예산|한도/iu.test(text);
+  const environmentLimited = /environment|could not run|not available|not installed|browser smoke|실행 환경|환경 제약|미실행/iu.test(text);
+
+  if (permissionBlocked) {
+    add("permission_blocked", "blocking", locale === "ko" ? "workspace 권한 또는 신뢰 상태 때문에 변경을 반영하지 못했습니다." : "Workspace permissions or trust blocked the change.", locale === "ko" ? "workspace 신뢰 상태를 확인한 뒤 다시 실행하세요." : "Check workspace trust and try again.");
+  }
+  if (todoRejected) {
+    add("todo_transition_rejected", "attention", locale === "ko" ? "체크리스트 상태를 자동으로 정리하지 못했습니다." : "The checklist state needs a small recovery update.", locale === "ko" ? "해당 TODO를 pending 또는 active로 다시 연 뒤 범위를 갱신하세요." : "Reopen the TODO as pending or active, then update its scope.");
+  }
+  if (todoUnfinished) {
+    add("todo_unfinished", "blocking", locale === "ko" ? "아직 완료되지 않은 TODO가 있습니다." : "Some TODO items are still unfinished.", locale === "ko" ? "남은 TODO를 처리한 뒤 완료를 확인하세요." : "Finish the remaining TODO items before claiming completion.");
+  }
+  if (failedVerification.length > 0) {
+    add("tool_failure", "error", locale === "ko" ? `필수 검증 ${failedVerification.length}개가 실패했습니다.` : `${failedVerification.length} required verification step(s) failed.`, locale === "ko" ? "실패 원인을 수정한 뒤 검증을 다시 실행하세요." : "Fix the reported failure and rerun verification.");
+  }
+  if (notRunVerification.length > 0) {
+    add("verification_not_run", "attention", locale === "ko" ? `필수 검증 ${notRunVerification.length}개를 실행하지 못했습니다.` : `${notRunVerification.length} required verification step(s) did not run.`, report.nextStep);
+  }
+  if (has(/stale evidence|stale verification|오래된 증거|최신이 아닌 검증/iu)) {
+    add("verification_stale", "attention", locale === "ko" ? "일부 검증 증거가 최신 변경과 일치하지 않습니다." : "Some verification evidence is stale.", locale === "ko" ? "변경 후 검증을 다시 실행하세요." : "Rerun verification after the latest change.");
+  }
+  if (reviewNotRun) add("review_not_run", "attention", locale === "ko" ? "독립 검토가 실행되지 않았습니다." : "Independent review did not run.", report.nextStep);
+  if (providerIncomplete) add("provider_incomplete", "blocking", locale === "ko" ? "프로바이더 응답이 끝까지 도착하지 않았습니다." : "The provider response was incomplete.", locale === "ko" ? "다시 실행하거나 남은 응답을 이어서 확인하세요." : "Retry the turn or continue from the partial response.");
+  if (budgetExhausted) add("budget_exhausted", "blocking", locale === "ko" ? "실행 한도에 도달해 작업이 중단됐습니다." : "The turn stopped because it reached an execution budget.", report.nextStep);
+  if (environmentLimited && notRunVerification.length === 0) add("environment_limitation", "attention", locale === "ko" ? "현재 실행 환경에서 일부 확인을 수행하지 못했습니다." : "The current environment limited one or more checks.", report.nextStep);
+
+  if (report.status === "failed" && issues.every((issue) => issue.severity !== "error")) {
+    add("tool_failure", "error", locale === "ko" ? "안전하게 확정할 수 없어 작업을 완료하지 못했습니다." : "The result could not be safely confirmed.", report.nextStep);
+  }
+  if (report.status === "partial" && issues.length === 0) {
+    add("environment_limitation", "attention", locale === "ko" ? "결과는 일부 반영됐지만 확인이 남았습니다." : "The result is useful, but confirmation remains.", report.nextStep);
+  }
+
+  const hasError = report.status === "failed" || issues.some((issue) => issue.severity === "error");
+  const hasBlocking = issues.some((issue) => issue.severity === "blocking");
+  const disposition: CompletionDisposition = report.status === "cancelled"
+    ? "cancelled"
+    : hasError
+      ? "failure"
+      : hasBlocking
+        ? "blocked"
+        : issues.length > 0 || report.status === "partial"
+          ? "attention"
+          : "success";
+  const sensitive = /security|credential|secret|permission|data loss|보안|자격 증명|비밀|데이터 손실|권한/iu.test(text);
+  return {
+    disposition,
+    issues,
+    evidenceMode: disposition === "failure" || disposition === "blocked" || sensitive ? "expanded" : "summary",
+    locale,
+  };
+}
+
 /**
- * AC-50: the final answer must not present unrun or failed tests as success.
  * This validator runs before the report is emitted and downgrades the status
  * rather than trusting the model's own claim.
  */
@@ -703,6 +822,49 @@ export function renderReport(report: CompletionReport, answer?: string): string 
     lines.push(`Next step: ${report.nextStep}`);
   }
 
+  return lines.join("\n").trimEnd();
+}
+
+export interface ChatResponseOptions {
+  readonly verbose?: boolean;
+  readonly presentation?: CompletionPresentation;
+}
+
+/** Render the user-facing chat response without discarding the report contract. */
+export function renderChatResponse(
+  report: CompletionReport,
+  answer?: string,
+  options: ChatResponseOptions = {},
+): string {
+  const summary = answer?.trim().length ? answer.trim() : report.summary;
+  const presentation = options.presentation ?? deriveCompletionPresentation(report, summary);
+  const lines: string[] = [];
+  if (summary.length > 0) lines.push(summary);
+
+  if (presentation.disposition === "failure") {
+    lines.push("", presentation.locale === "ko" ? "✕ 작업을 완료하지 못했습니다" : "✕ The task could not be completed");
+  } else if (presentation.disposition === "blocked") {
+    lines.push("", presentation.locale === "ko" ? "⚠ 진행이 멈췄습니다" : "⚠ Progress is blocked");
+  } else if (presentation.disposition === "attention") {
+    lines.push("", presentation.locale === "ko" ? "⚠ 확인이 남았습니다" : "⚠ Confirmation needed");
+  }
+
+  for (const issue of presentation.issues) {
+    lines.push(`- ${issue.message}${issue.nextAction === undefined ? "" : ` Next: ${issue.nextAction}`}`);
+  }
+
+  const passed = report.verification.filter((step) => step.status === "passed").length;
+  const notRun = report.verification.filter((step) => step.status === "not_run").length;
+  const attention = presentation.issues.length;
+  const summaryLine = presentation.locale === "ko"
+    ? `변경 ${report.changedFiles.length} · 검증 ${passed}/${report.verification.length}${attention > 0 ? ` · 확인 필요 ${attention}` : ""}`
+    : `Changed ${report.changedFiles.length} · Verification ${passed}/${report.verification.length}${attention > 0 ? ` · Attention ${attention}` : ""}`;
+  if (report.changedFiles.length > 0 || report.verification.length > 0 || attention > 0) lines.push("", summaryLine);
+  if (notRun > 0 && attention === 0) lines.push("", presentation.locale === "ko" ? `확인 필요 ${notRun}` : `Confirmation needed ${notRun}`);
+
+  if (options.verbose || presentation.evidenceMode === "expanded") {
+    lines.push("", renderReport(report, undefined));
+  }
   return lines.join("\n").trimEnd();
 }
 

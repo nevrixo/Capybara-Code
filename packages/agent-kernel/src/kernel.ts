@@ -69,11 +69,13 @@ import {
 import {
   buildVerificationCoverage,
   classifyFailure,
+  deriveCompletionPresentation,
   enforceTruthfulness,
   normalizeObservation,
   partialReport,
   planVerification,
   renderReport,
+  type CompletionPresentation,
   type CompletionReport,
   type FailureCategory,
   type Observation,
@@ -653,6 +655,8 @@ export interface TurnResult {
   readonly turnId: string;
   readonly state: TurnState;
   readonly report: CompletionReport;
+  /** Host-owned display classification; report.status remains the SDK contract. */
+  readonly presentation: CompletionPresentation;
   /** The provider's user-facing answer, kept separate from the evidence report. */
   readonly answer: string;
   readonly usage: ModelUsage;
@@ -1622,12 +1626,14 @@ export class AgentKernel {
     // verification evidence, then exactly one terminal event. Emitting the
     // terminal event before `assistant.final` let the reducer finish the turn
     // and then be pushed back into `verifying` by the late final answer.
+    const presentation = deriveCompletionPresentation(finalReport, finalText);
     emit("assistant.final", {
       // The text is the user-facing answer; the structured report remains separate.
       text: finalText.length > 0 ? finalText : finalReport.summary,
       answer: finalText,
       ...(finalItemId !== undefined ? { itemId: finalItemId } : {}),
       report: finalReport,
+      presentation,
     });
     emit("verification.coverage_updated", coverage);
     if (issues.length > 0) {
@@ -1671,6 +1677,7 @@ export class AgentKernel {
       turnId,
       state: machine.state,
       report,
+      presentation: deriveCompletionPresentation(report, answer),
       answer,
       usage: this.#usage,
       estimatedCostUsd: estimateCostUsd(this.#routedModel(), this.#usage),
