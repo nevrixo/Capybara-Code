@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-25T19:53:41.701Z",
+  "generatedAt": "2026-08-25T19:55:16.090Z",
   "git": {
-    "commit": "fba7f38b6afbc00f2ca78f92f0a4152fd2d9575b",
+    "commit": "f5d4d77db242de9dab633be23058b4e17ab2d80b",
     "dirty": true,
-    "dirtyHash": "535a17a0ae3355011904252d936d296c13531291eb7c7c4da89c719735fdf343"
+    "dirtyHash": "23e8ff24a77014c54f45a4fff7cdfd4fd01dfef3bc2db4fad714261a286554a7"
   },
   "roots": [
     "apps",
@@ -163,8 +163,8 @@
     },
     {
       "path": "apps/cbc/src/agent.ts",
-      "bytes": 189070,
-      "sha256": "0ef9438a62c4787efcdaa6c56519742f02517e474263038b1a1886efd1f4045a"
+      "bytes": 189126,
+      "sha256": "739b100387fa839ccf618e9b60833d72c6ab22e0654c839f298324dee8e97304"
     },
     {
       "path": "apps/cbc/src/approvals.ts",
@@ -183,8 +183,8 @@
     },
     {
       "path": "apps/cbc/src/bootstrap.ts",
-      "bytes": 57716,
-      "sha256": "2c488325c4a196d3e4186334979999cb3b9ed810b6e73aef11bf969ee7de8389"
+      "bytes": 57802,
+      "sha256": "440ad193d395496e081c36c891c4622bbd0a262aaf6c8bbdeb4619369500a71a"
     },
     {
       "path": "apps/cbc/src/bun-host.ts",
@@ -353,8 +353,8 @@
     },
     {
       "path": "apps/cbc/src/provider.ts",
-      "bytes": 10525,
-      "sha256": "308bc92df424f457c88d4f2643e1fd372942d9808fa75e9ff697564dafbe64c1"
+      "bytes": 10697,
+      "sha256": "2db718336aaa7e64b49dffc56682af42c38f14c176df14101763d32655d02b1d"
     },
     {
       "path": "apps/cbc/src/repository-map.ts",
@@ -403,8 +403,8 @@
     },
     {
       "path": "apps/cbc/src/subagent-bridge.ts",
-      "bytes": 50626,
-      "sha256": "36b6094213eba916f1ee0078c90dc880202800ed00f3991a3bc6416573b0640f"
+      "bytes": 50688,
+      "sha256": "87c2e0cc001777b19c5a4121512c88f50b5979ddabdc4de679f46180565cb44d"
     },
     {
       "path": "apps/cbc/src/terminal-writer.ts",
@@ -2388,8 +2388,8 @@
     },
     {
       "path": "packages/provider-openai/src/openai.ts",
-      "bytes": 61615,
-      "sha256": "33faaa1aa8b3057c8e1a9ae1db8a898ac938c7bca6a06d86e4bf39773ecb5b4e"
+      "bytes": 61712,
+      "sha256": "4c333c6b7ebe8be70dcdc7a27b2851c65ffb57d3d26a47d5f92ee4438c3931b2"
     },
     {
       "path": "packages/provider-openai/src/policy.ts",
@@ -3177,5 +3177,5 @@
       "sha256": "3af6b7d3ec7041c90b18206fe898b904d8781a97c25369189f2733173c6d23a5"
     }
   ],
-  "digest": "ca3fb110e587268b805f90e254303a5f3dae23c0bd3424441269f1a3f96252ed"
+  "digest": "d3145bbacbbb31c11d50d728e983aceefd9c8af7641148056ec6e509a34d35b2"
 }
