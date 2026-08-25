@@ -292,6 +292,10 @@ export class LspHost {
     return await this.#positionQuery("textDocument/hover", input);
   }
 
+  async signatureHelp(input: LspTextDocumentPosition): Promise<LspQueryResult> {
+    return await this.#positionQuery("textDocument/signatureHelp", input);
+  }
+
   /**
    * Return only diagnostics whose captured revision still matches a fresh,
    * runtime-authoritative document read. This never starts a language server.
@@ -416,6 +420,7 @@ export class LspHost {
       | "textDocument/implementation"
       | "textDocument/references"
       | "textDocument/hover"
+      | "textDocument/signatureHelp"
       | "textDocument/rename",
     input: LspTextDocumentPosition,
     extra: Readonly<Record<string, unknown>> = {},
@@ -741,6 +746,11 @@ export class LspHost {
             typeDefinition: { linkSupport: true },
             implementation: { linkSupport: true },
             hover: { contentFormat: ["plaintext", "markdown"] },
+            signatureHelp: {
+              signatureInformation: {
+                parameterInformation: { labelOffsetSupport: true },
+              },
+            },
             documentSymbol: {
               hierarchicalDocumentSymbolSupport: true,
             },

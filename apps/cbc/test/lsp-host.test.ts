@@ -326,6 +326,7 @@ describe("LspHost", () => {
     let revision = "sha256:widget-1";
     const documentText = "const value = 1;\n";
     const methods: string[] = [];
+    let initializeCapabilities: unknown;
     const runtime = {
       issueCapability: async () => ({ id: "cap", sessionId: "session-1", actionHash: "hash" }),
       startJob: async (params: Record<string, unknown>) => {
@@ -337,6 +338,12 @@ describe("LspHost", () => {
         if (typeof data !== "string") throw new Error("expected framed LSP input");
         const message = messageFromFrame(data);
         if (typeof message.method === "string") methods.push(message.method);
+        if (message.method === "initialize") {
+          const params = message.params;
+          if (typeof params === "object" && params !== null && !Array.isArray(params)) {
+            initializeCapabilities = (params as Record<string, unknown>).capabilities;
+          }
+        }
         if (message.method === "textDocument/didOpen") {
           const opened = message.params as {
             readonly textDocument?: { readonly uri?: unknown; readonly version?: unknown };
@@ -418,12 +425,23 @@ describe("LspHost", () => {
     await host.declaration({ path: "src/widget.ts", line: 0, character: 0 });
     await host.typeDefinition({ path: "src/widget.ts", line: 0, character: 0 });
     await host.implementation({ path: "src/widget.ts", line: 0, character: 0 });
+    await host.signatureHelp({ path: "src/widget.ts", line: 0, character: 0 });
     expect(methods).toEqual(expect.arrayContaining([
       "textDocument/definition",
       "textDocument/declaration",
       "textDocument/typeDefinition",
       "textDocument/implementation",
+      "textDocument/signatureHelp",
     ]));
+    expect(initializeCapabilities).toMatchObject({
+      textDocument: {
+        signatureHelp: {
+          signatureInformation: {
+            parameterInformation: { labelOffsetSupport: true },
+          },
+        },
+      },
+    });
     const current = await host.diagnostics("src/widget.ts");
 
     expect(current).toEqual(expect.objectContaining({
