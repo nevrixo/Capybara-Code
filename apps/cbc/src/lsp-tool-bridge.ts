@@ -42,6 +42,9 @@ export interface LspDiagnosticsReader {
 
 export interface LspSemanticReader {
   definition(input: LspTextDocumentPosition): Promise<LspQueryResult>;
+  declaration(input: LspTextDocumentPosition): Promise<LspQueryResult>;
+  typeDefinition(input: LspTextDocumentPosition): Promise<LspQueryResult>;
+  implementation(input: LspTextDocumentPosition): Promise<LspQueryResult>;
   references(input: LspReferencesRequest): Promise<LspQueryResult>;
   hover(input: LspTextDocumentPosition): Promise<LspQueryResult>;
 }
@@ -84,7 +87,7 @@ export interface LspToolDiagnosticsResult {
   readonly servers: readonly ProjectedServer[];
 }
 
-/** A bounded definition or references projection suitable for model context. */
+/** A bounded semantic location projection suitable for model context. */
 export interface LspToolLocationQueryResult {
   readonly schemaVersion: "1.0";
   readonly kind: LspLocationQueryKind;
@@ -402,7 +405,7 @@ function severityLabel(value: LspDiagnostic["severity"]): string {
 }
 
 type SemanticRequest = {
-  readonly kind: "definition" | "references" | "hover";
+  readonly kind: LspLocationQueryKind | "hover";
   readonly input: LspSemanticQueryInput;
   readonly includeDeclaration?: boolean;
 };
@@ -433,6 +436,9 @@ function semanticRequest(action: ProposedAction): SemanticRequest | undefined {
 
 function semanticKind(value: string): SemanticRequest["kind"] | undefined {
   if (value === "lsp.definition") return "definition";
+  if (value === "lsp.declaration") return "declaration";
+  if (value === "lsp.type_definition") return "type_definition";
+  if (value === "lsp.implementation") return "implementation";
   if (value === "lsp.references") return "references";
   if (value === "lsp.hover") return "hover";
   return undefined;
@@ -454,6 +460,12 @@ async function readSemanticQuery(
   switch (request.kind) {
     case "definition":
       return await reader.definition(request.input);
+    case "declaration":
+      return await reader.declaration(request.input);
+    case "type_definition":
+      return await reader.typeDefinition(request.input);
+    case "implementation":
+      return await reader.implementation(request.input);
     case "references": {
       const input: LspReferencesRequest = {
         ...request.input,

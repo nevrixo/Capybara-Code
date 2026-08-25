@@ -19,7 +19,13 @@ function workspaceUri(path: string): string {
 }
 
 function action(
-  toolId: "lsp.definition" | "lsp.references" | "lsp.hover",
+  toolId:
+    | "lsp.definition"
+    | "lsp.declaration"
+    | "lsp.type_definition"
+    | "lsp.implementation"
+    | "lsp.references"
+    | "lsp.hover",
   argumentsValue: Record<string, unknown>,
 ) {
   return {
@@ -37,6 +43,9 @@ function queryResult(result: unknown): LspQueryResult {
 function reader(overrides: Partial<LspSemanticReader> = {}): LspSemanticReader {
   return {
     definition: async (_input: LspTextDocumentPosition) => queryResult(null),
+    declaration: async (_input: LspTextDocumentPosition) => queryResult(null),
+    typeDefinition: async (_input: LspTextDocumentPosition) => queryResult(null),
+    implementation: async (_input: LspTextDocumentPosition) => queryResult(null),
     references: async (_input: LspReferencesRequest) => queryResult([]),
     hover: async (_input: LspTextDocumentPosition) => queryResult(null),
     ...overrides,
@@ -92,6 +101,47 @@ describe("LSP semantic bridge", () => {
     expect(JSON.stringify(data)).not.toContain("mustNotEscape");
     expect(JSON.stringify(data)).not.toContain(workspaceRoot);
     expect(execution.text).toContain("possibly stale language-server claims");
+  });
+
+  test("routes advanced workspace location queries through the normalized bridge", async () => {
+    const calls: Array<{ readonly kind: string; readonly input: LspTextDocumentPosition }> = [];
+    const bridge = createLspSemanticBridge(
+      reader({
+        declaration: async (input) => {
+          calls.push({ kind: "declaration", input });
+          return queryResult(location("src/declaration.ts", 1));
+        },
+        typeDefinition: async (input) => {
+          calls.push({ kind: "type_definition", input });
+          return queryResult(location("src/type.ts", 2));
+        },
+        implementation: async (input) => {
+          calls.push({ kind: "implementation", input });
+          return queryResult(location("src/implementation.ts", 3));
+        },
+      }),
+      { workspaceRoot },
+    );
+
+    const cases = [
+      ["lsp.declaration", "declaration"],
+      ["lsp.type_definition", "type_definition"],
+      ["lsp.implementation", "implementation"],
+    ] as const;
+    for (const [toolId, kind] of cases) {
+      const execution = await bridge(
+        action(toolId, { path: "src/query.ts", line: 2, character: 5 }),
+        new AbortController().signal,
+      );
+      expect(execution.result.ok).toBe(true);
+      expect((execution.result.data as { readonly kind: string }).kind).toBe(kind);
+    }
+
+    expect(calls).toEqual([
+      { kind: "declaration", input: { path: "src/query.ts", line: 2, character: 5 } },
+      { kind: "type_definition", input: { path: "src/query.ts", line: 2, character: 5 } },
+      { kind: "implementation", input: { path: "src/query.ts", line: 2, character: 5 } },
+    ]);
   });
 
   test("passes the references declaration policy but rejects invalid query input before a read", async () => {
