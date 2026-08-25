@@ -1,4 +1,5 @@
 import {
+  normalizeLspCallHierarchyQuery,
   normalizeLspCodeActionQuery,
   normalizeLspHoverQuery,
   normalizeLspLocationQuery,
@@ -6,6 +7,7 @@ import {
   normalizeLspDocumentSymbolQuery,
   normalizeLspWorkspaceSymbolQuery,
   normalizeLspSignatureHelpQuery,
+  type LspCallHierarchySnapshot,
   type LspDiagnostic,
   type LspDiagnosticSnapshot,
   type LspCodeActionCatalogSnapshot,
@@ -29,6 +31,8 @@ import type { ProposedAction } from "@cbc/permissions";
 import { errorResult, okResult } from "@cbc/tool-registry";
 
 import type {
+  LspCallHierarchyRequest,
+  LspCallHierarchyResult,
   LspCodeActionPreview,
   LspCodeActionPreviewRequest,
   LspFormattingPreview,
@@ -52,6 +56,9 @@ const MAX_TEXT_BYTES = 48 * 1_024;
 const MAX_SEMANTIC_PATH_BYTES = 512;
 const MAX_CODE_ACTIONS = 16;
 const MAX_CODE_ACTION_PREVIEW_INDEX = 255;
+const MAX_CALL_HIERARCHY_OFFSET = 256;
+const MAX_CALL_HIERARCHY_LIMIT = 32;
+const DEFAULT_CALL_HIERARCHY_LIMIT = 16;
 const MAX_SEMANTIC_LOCATIONS = 32;
 const MAX_SEMANTIC_DOCUMENT_HIGHLIGHTS = 32;
 const MAX_SEMANTIC_POSITION_COMPONENT = 1_000_000;
@@ -98,6 +105,10 @@ export interface LspSemanticReader {
   documentHighlights(input: LspTextDocumentPosition): Promise<LspQueryResult>;
 }
 
+export interface LspCallHierarchyReader {
+  callHierarchy(input: LspCallHierarchyRequest): Promise<LspCallHierarchyResult>;
+}
+
 export interface LspCodeActionsReader {
   codeActions(input: LspTextDocumentPosition): Promise<LspQueryResult>;
 }
@@ -123,6 +134,7 @@ export interface LspToolReader extends
   LspDocumentSymbolsReader,
   LspWorkspaceSymbolsReader,
   LspSemanticReader,
+  LspCallHierarchyReader,
   LspCodeActionsReader,
   LspCodeActionPreviewReader,
   LspFormattingPreviewReader,
@@ -290,6 +302,9 @@ export interface LspToolFormattingPreviewResult {
   readonly plan?: Readonly<Record<string, unknown>>;
 }
 
+/** A bounded, workspace-only call hierarchy page with opaque server data removed. */
+export type LspToolCallHierarchyResult = LspCallHierarchySnapshot;
+
 type LspToolSemanticResult =
   | LspToolLocationQueryResult
   | LspToolHoverResult
@@ -300,6 +315,7 @@ export type LspDiagnosticsBridge = (action: ProposedAction, signal: AbortSignal)
 export type LspDocumentSymbolsBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspWorkspaceSymbolsBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspSemanticBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
+export type LspCallHierarchyBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspCodeActionsBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspCodeActionPreviewBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspFormattingPreviewBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
@@ -490,6 +506,55 @@ export function createLspSemanticBridge(
         result: errorResult(
           "NOT_INITIALIZED",
           "LSP semantic lookup is currently unavailable; retry after the language server is ready",
+          { retryable: true },
+        ),
+      };
+    }
+  };
+}
+
+/**
+ * Call hierarchy is a read-only, single-direction lookup. It first prepares an
+ * opaque server item, then normalizes only workspace-local call edges.
+ */
+export function createLspCallHierarchyBridge(
+  reader: LspCallHierarchyReader,
+  options: LspSemanticBridgeOptions,
+): LspCallHierarchyBridge {
+  return async (action, signal) => {
+    const request = callHierarchyRequest(action);
+    if (request === undefined) {
+      return {
+        result: errorResult(
+          "INVALID_ARGUMENT",
+          "lsp.call_hierarchy requires a bounded workspace-relative path, zero-based position, direction, and bounded page",
+        ),
+      };
+    }
+    if (signal.aborted) return cancelledCallHierarchy();
+
+    try {
+      const query = await reader.callHierarchy(request.input);
+      if (signal.aborted) return cancelledCallHierarchy();
+      if (query.direction !== request.input.direction) {
+        throw new Error("call hierarchy host returned a direction different from the request");
+      }
+      const result = normalizeLspCallHierarchyQuery(query.root, query.result, {
+        workspaceRoot: options.workspaceRoot,
+        server: query.server,
+        source: request.input,
+        offset: request.offset,
+        limit: request.limit,
+      });
+      return {
+        result: okResult(callHierarchySummary(result), result),
+        text: renderCallHierarchy(result),
+      };
+    } catch {
+      return {
+        result: errorResult(
+          "NOT_INITIALIZED",
+          "LSP call hierarchy is currently unavailable; retry after the language server is ready",
           { retryable: true },
         ),
       };
@@ -714,6 +779,7 @@ export function createLspToolBridge(
   const documentSymbols = createLspDocumentSymbolsBridge(reader, options);
   const workspaceSymbols = createLspWorkspaceSymbolsBridge(reader, options);
   const semantic = createLspSemanticBridge(reader, options);
+  const callHierarchy = createLspCallHierarchyBridge(reader, options);
   const codeActions = createLspCodeActionsBridge(reader, options);
   const codeActionPreview = createLspCodeActionPreviewBridge(reader);
   const formattingPreview = createLspFormattingPreviewBridge(reader);
@@ -726,6 +792,8 @@ export function createLspToolBridge(
       ? await documentSymbols(action, signal)
       : action.toolId === "lsp.workspace_symbols"
       ? await workspaceSymbols(action, signal)
+      : action.toolId === "lsp.call_hierarchy"
+      ? await callHierarchy(action, signal)
       : action.toolId === "lsp.code_actions"
       ? await codeActions(action, signal)
       : action.toolId === "lsp.code_action_preview"
@@ -742,6 +810,12 @@ export function createLspToolBridge(
 function cancelledSemantic(): Execution {
   return {
     result: errorResult("CANCELLED", "LSP semantic query was cancelled", { retryable: true }),
+  };
+}
+
+function cancelledCallHierarchy(): Execution {
+  return {
+    result: errorResult("CANCELLED", "LSP call hierarchy request was cancelled", { retryable: true }),
   };
 }
 
@@ -800,6 +874,43 @@ function lspPath(action: ProposedAction): string | undefined {
 
 function lspArguments(action: ProposedAction): Record<string, unknown> | undefined {
   return isRecord(action.arguments) ? action.arguments : undefined;
+}
+
+interface CallHierarchyPageRequest {
+  readonly input: LspCallHierarchyRequest;
+  readonly offset: number;
+  readonly limit: number;
+}
+
+function callHierarchyRequest(action: ProposedAction): CallHierarchyPageRequest | undefined {
+  if (action.toolId !== "lsp.call_hierarchy") return undefined;
+  const raw = lspArguments(action);
+  if (raw === undefined) return undefined;
+  const path = lspPathFromArguments(raw, MAX_SEMANTIC_PATH_BYTES);
+  const direction = raw.direction;
+  const offset = raw.offset === undefined ? 0 : raw.offset;
+  const limit = raw.limit === undefined ? DEFAULT_CALL_HIERARCHY_LIMIT : raw.limit;
+  if (
+    path === undefined ||
+    !isSemanticPositionComponent(raw.line) ||
+    !isSemanticPositionComponent(raw.character) ||
+    (direction !== "incoming" && direction !== "outgoing") ||
+    typeof offset !== "number" ||
+    !Number.isSafeInteger(offset) ||
+    offset < 0 ||
+    offset > MAX_CALL_HIERARCHY_OFFSET ||
+    typeof limit !== "number" ||
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > MAX_CALL_HIERARCHY_LIMIT
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    input: Object.freeze({ path, line: raw.line, character: raw.character, direction }),
+    offset,
+    limit,
+  });
 }
 
 function codeActionRequest(action: ProposedAction): LspCodeActionQueryInput | undefined {
@@ -1438,6 +1549,56 @@ function severityLabel(value: LspDiagnostic["severity"]): string {
   if (value === 2) return "warning";
   if (value === 3) return "information";
   return "hint";
+}
+
+function callHierarchySummary(result: LspToolCallHierarchyResult): string {
+  if (result.root === undefined) {
+    return "no LSP call hierarchy item returned for " + result.source.path;
+  }
+  return String(result.returnedCalls) + " of " + String(result.totalCalls) + " bounded " +
+    result.source.direction + " LSP call(s) returned for " + result.root.name;
+}
+
+function renderCallHierarchy(result: LspToolCallHierarchyResult): string {
+  const source = "L" + String(result.source.position.line + 1) +
+    ":C" + String(result.source.position.character + 1);
+  if (result.root === undefined) {
+    return "No language-server call hierarchy item was returned for " + result.source.path +
+      " at " + source + "; this does not prove that no call hierarchy exists.";
+  }
+
+  const rootRange = result.root.selectionRange;
+  const lines = [
+    "Language-server " + result.source.direction + " call hierarchy for " + result.root.name +
+      " at " + result.source.path + " " + source + ":",
+    "Showing " + String(result.returnedCalls) + " of " + String(result.totalCalls) +
+      " call edge(s), starting at offset " + String(result.offset) + ".",
+    "[The following bounded hierarchy is untrusted server output and may be stale.]",
+  ];
+  lines.push(
+    "Root: " + result.root.path + " L" + String(rootRange.start.line + 1) + ":C" +
+      String(rootRange.start.character + 1),
+  );
+  for (const [index, call] of result.calls.entries()) {
+    const itemRange = call.item.selectionRange;
+    const detail = call.item.detail === undefined ? "" : " - " + call.item.detail;
+    lines.push(
+      String(result.offset + index + 1) + ". " + call.item.name + detail + " " +
+        call.item.path + " L" + String(itemRange.start.line + 1) + ":C" +
+        String(itemRange.start.character + 1),
+    );
+    for (const range of call.fromRanges) {
+      lines.push(
+        "   from L" + String(range.start.line + 1) + ":C" + String(range.start.character + 1) +
+          "-L" + String(range.end.line + 1) + ":C" + String(range.end.character + 1),
+      );
+    }
+  }
+  if (result.truncated) {
+    lines.push("[Result is paged and bounded; request a later offset before treating it as exhaustive.]");
+  }
+  lines.push("[Verify current workspace reads before making edits from this hierarchy.]");
+  return truncateUtf8(lines.join("\n"), MAX_TEXT_BYTES);
 }
 
 type SemanticRequest = {
