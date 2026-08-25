@@ -457,9 +457,14 @@ describe("LspHost", () => {
           },
         },
         documentHighlight: {},
+        diagnostic: {
+          dynamicRegistration: false,
+          relatedDocumentSupport: false,
+        },
       },
     });
     const current = await host.diagnostics("src/widget.ts");
+    expect(methods).not.toContain("textDocument/diagnostic");
 
     expect(current).toEqual(expect.objectContaining({
       totalServers: 1,
@@ -505,6 +510,163 @@ describe("LspHost", () => {
       totalServers: 0,
       truncatedServers: false,
     });
+
+    await host.close();
+  });
+
+  test("pulls capability-advertised diagnostics bound to the opened revision", async () => {
+    let notification:
+      | ((method: string, params: unknown) => void)
+      | undefined;
+    let protocolChannel = "";
+    let openedUri = "";
+    let requestedUri = "";
+    let openedVersion = 0;
+    let reportKind: "full" | "unchanged" = "full";
+    let initializeCapabilities: unknown;
+    const methods: string[] = [];
+    const runtime = {
+      issueCapability: async () => ({ id: "cap", sessionId: "session-1", actionHash: "hash" }),
+      startJob: async (params: Record<string, unknown>) => {
+        protocolChannel = String(params.protocolChannel);
+        return { jobId: "job-1", display: "fake LSP" };
+      },
+      sendInput: async (params: Record<string, unknown>) => {
+        const data = params.data;
+        if (typeof data !== "string") throw new Error("expected framed LSP input");
+        const message = messageFromFrame(data);
+        if (typeof message.method === "string") methods.push(message.method);
+        if (message.method === "initialize") {
+          const params = message.params;
+          if (typeof params === "object" && params !== null && !Array.isArray(params)) {
+            initializeCapabilities = (params as Record<string, unknown>).capabilities;
+          }
+        }
+        if (message.method === "textDocument/didOpen") {
+          const opened = message.params as {
+            readonly textDocument?: { readonly uri?: unknown; readonly version?: unknown };
+          };
+          const uri = opened.textDocument?.uri;
+          const version = opened.textDocument?.version;
+          if (typeof uri === "string") openedUri = uri;
+          if (typeof version === "number") openedVersion = version;
+          return undefined;
+        }
+        if (typeof message.id !== "number") return undefined;
+        let result: unknown = [];
+        if (message.method === "initialize") {
+          result = { capabilities: { diagnosticProvider: {} } };
+        } else if (message.method === "textDocument/diagnostic") {
+          const params = message.params as {
+            readonly textDocument?: { readonly uri?: unknown };
+          };
+          const uri = params.textDocument?.uri;
+          if (typeof uri === "string") requestedUri = uri;
+          result = reportKind === "full"
+            ? {
+                kind: "full",
+                resultId: "must-not-escape",
+                items: [{
+                  range: {
+                    start: { line: 0, character: 6 },
+                    end: { line: 0, character: 11 },
+                  },
+                  severity: 2,
+                  source: "pull",
+                  message: "pull\u001b[31m value",
+                  data: { mustNotEscape: true },
+                }],
+              }
+            : { kind: "unchanged", resultId: "must-not-escape" };
+        }
+        notification?.("lsp.stdio.output", {
+          protocolChannel,
+          text: lspFrame({ jsonrpc: "2.0", id: message.id, result }),
+        });
+        return undefined;
+      },
+      stopJob: async () => undefined,
+      subscribeNotifications: (handler: (method: string, params: unknown) => void) => {
+        notification = handler;
+        return () => {
+          if (notification === handler) notification = undefined;
+        };
+      },
+    };
+    const host = new LspHost({
+      runtime: runtime as never,
+      servers: {
+        typescript: {
+          command: "typescript-language-server",
+          args: ["--stdio"],
+          extensions: [".ts"],
+          languageId: "typescript",
+          timeoutMs: 1_000,
+        },
+      },
+      sessionId: "session-1",
+      workspaceRoot: "/work",
+      workspaceTrusted: true,
+      enabled: true,
+      workspaceIdentityDigest: () => "ws_pull",
+      readEditDocument: async (path) =>
+        path === "src/widget.ts"
+          ? { path, text: "const value = 1;\n", revision: "sha256:pull-1" }
+          : undefined,
+      isBuildMode: () => true,
+      resolveExecutable: () => "fake-lsp",
+    });
+
+    const full = await host.diagnostics("src/widget.ts");
+
+    expect(methods).toEqual(expect.arrayContaining([
+      "initialize",
+      "initialized",
+      "textDocument/didOpen",
+      "textDocument/diagnostic",
+      "textDocument/didClose",
+    ]));
+    expect(openedUri).not.toBe("");
+    expect(requestedUri).toBe(openedUri);
+    expect(openedVersion).toBeGreaterThan(0);
+    expect(initializeCapabilities).toMatchObject({
+      textDocument: {
+        diagnostic: {
+          dynamicRegistration: false,
+          relatedDocumentSupport: false,
+        },
+      },
+    });
+    expect(full).toEqual(expect.objectContaining({
+      totalServers: 1,
+      truncatedServers: false,
+      snapshots: [expect.objectContaining({
+        server: "typescript",
+        workspaceIdentityDigest: "ws_pull",
+        path: "src/widget.ts",
+        documentRevision: "sha256:pull-1",
+        documentVersion: openedVersion,
+        diagnostics: [{
+          range: {
+            start: { line: 0, character: 6 },
+            end: { line: 0, character: 11 },
+          },
+          severity: 2,
+          source: "pull",
+          message: "pull [31m value",
+        }],
+        totalDiagnostics: 1,
+        truncated: false,
+      })],
+    }));
+
+    reportKind = "unchanged";
+    expect(await host.diagnostics("src/widget.ts")).toEqual({
+      snapshots: [],
+      totalServers: 0,
+      truncatedServers: false,
+    });
+    expect(methods.filter((method) => method === "textDocument/diagnostic")).toHaveLength(2);
 
     await host.close();
   });
