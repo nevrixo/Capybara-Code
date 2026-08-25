@@ -263,9 +263,21 @@ export class LspHost {
       .sort((left, right) => left.name.localeCompare(right.name));
   }
 
-  /** Request semantic definitions without granting filesystem authority. */
+  /** Request workspace-scoped semantic locations without filesystem authority. */
   async definition(input: LspTextDocumentPosition): Promise<LspQueryResult> {
     return await this.#positionQuery("textDocument/definition", input);
+  }
+
+  async declaration(input: LspTextDocumentPosition): Promise<LspQueryResult> {
+    return await this.#positionQuery("textDocument/declaration", input);
+  }
+
+  async typeDefinition(input: LspTextDocumentPosition): Promise<LspQueryResult> {
+    return await this.#positionQuery("textDocument/typeDefinition", input);
+  }
+
+  async implementation(input: LspTextDocumentPosition): Promise<LspQueryResult> {
+    return await this.#positionQuery("textDocument/implementation", input);
   }
 
   async references(input: LspReferencesRequest): Promise<LspQueryResult> {
@@ -399,6 +411,9 @@ export class LspHost {
   async #positionQuery(
     method:
       | "textDocument/definition"
+      | "textDocument/declaration"
+      | "textDocument/typeDefinition"
+      | "textDocument/implementation"
       | "textDocument/references"
       | "textDocument/hover"
       | "textDocument/rename",
@@ -721,6 +736,11 @@ export class LspHost {
         workspaceFolders: [{ uri: rootUri, name: "workspace" }],
         capabilities: {
           textDocument: {
+            declaration: { linkSupport: true },
+            definition: { linkSupport: true },
+            typeDefinition: { linkSupport: true },
+            implementation: { linkSupport: true },
+            hover: { contentFormat: ["plaintext", "markdown"] },
             documentSymbol: {
               hierarchicalDocumentSymbolSupport: true,
             },

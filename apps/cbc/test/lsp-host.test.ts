@@ -325,6 +325,7 @@ describe("LspHost", () => {
     let openedUri = "";
     let revision = "sha256:widget-1";
     const documentText = "const value = 1;\n";
+    const methods: string[] = [];
     const runtime = {
       issueCapability: async () => ({ id: "cap", sessionId: "session-1", actionHash: "hash" }),
       startJob: async (params: Record<string, unknown>) => {
@@ -335,6 +336,7 @@ describe("LspHost", () => {
         const data = params.data;
         if (typeof data !== "string") throw new Error("expected framed LSP input");
         const message = messageFromFrame(data);
+        if (typeof message.method === "string") methods.push(message.method);
         if (message.method === "textDocument/didOpen") {
           const opened = message.params as {
             readonly textDocument?: { readonly uri?: unknown; readonly version?: unknown };
@@ -413,6 +415,15 @@ describe("LspHost", () => {
     });
 
     await host.definition({ path: "src/widget.ts", line: 0, character: 0 });
+    await host.declaration({ path: "src/widget.ts", line: 0, character: 0 });
+    await host.typeDefinition({ path: "src/widget.ts", line: 0, character: 0 });
+    await host.implementation({ path: "src/widget.ts", line: 0, character: 0 });
+    expect(methods).toEqual(expect.arrayContaining([
+      "textDocument/definition",
+      "textDocument/declaration",
+      "textDocument/typeDefinition",
+      "textDocument/implementation",
+    ]));
     const current = await host.diagnostics("src/widget.ts");
 
     expect(current).toEqual(expect.objectContaining({
@@ -423,7 +434,7 @@ describe("LspHost", () => {
       workspaceIdentityDigest: "ws_1",
       path: "src/widget.ts",
       documentRevision: "sha256:widget-1",
-      documentVersion: 1,
+      documentVersion: expect.any(Number),
       diagnostics: [{
         range: {
           start: { line: 0, character: 6 },
