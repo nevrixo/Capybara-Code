@@ -194,6 +194,7 @@ describe("catalog completeness (§12.2)", () => {
   test("LSP read tools are opt-in through fullLsp", () => {
     const lspTools = [
       "lsp.diagnostics",
+      "lsp.symbols",
       "lsp.definition",
       "lsp.declaration",
       "lsp.type_definition",
@@ -222,6 +223,7 @@ describe("catalog completeness (§12.2)", () => {
       resultSchemaId: "lsp.diagnostics.v1",
     });
     for (const id of [
+      "lsp.symbols",
       "lsp.definition",
       "lsp.declaration",
       "lsp.type_definition",
@@ -256,6 +258,11 @@ describe("catalog completeness (§12.2)", () => {
       character: 4,
       unexpected: true,
     }), referencesSchema).ok).toBe(false);
+
+    const symbolsSchema = findTool("lsp.symbols")!.parameters;
+    expect(parseAndValidate(JSON.stringify({ path: "src/widget.ts" }), symbolsSchema).ok).toBe(true);
+    expect(parseAndValidate(JSON.stringify({ path: "src/widget.ts", line: 0 }), symbolsSchema).ok).toBe(false);
+    expect(parseAndValidate(JSON.stringify({ path: "a".repeat(513) }), symbolsSchema).ok).toBe(false);
   });
 });
 

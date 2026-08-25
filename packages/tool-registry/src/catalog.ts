@@ -340,6 +340,32 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
     ),
   },
   {
+    id: "lsp.symbols",
+    title: "LspDocumentSymbols",
+    description: "Read bounded document symbols through configured local language servers.",
+    source: "native",
+    defaultRisk: "R0",
+    maxRisk: "R0",
+    alwaysActive: false,
+    mutates: false,
+    network: false,
+    authority: "read",
+    idempotency: "idempotent",
+    maxParallelism: 2,
+    resultSchemaId: "lsp.symbols.v1",
+    keywords: ["lsp", "symbols", "document outline", "structure", "language server"],
+    parameters: objectSchema(
+      {
+        path: {
+          ...relativePath,
+          maxLength: 512,
+          description: "Workspace-relative source path for a bounded LSP document-symbol lookup.",
+        },
+      },
+      ["path"],
+    ),
+  },
+  {
     id: "lsp.definition",
     title: "LspDefinition",
     description: "Find bounded workspace-local definition locations through configured local language servers.",
@@ -1293,6 +1319,7 @@ const EDIT_ENGINE_TOOL_IDS = new Set(["fs.edit.preview", "fs.edit"]);
 const DURABLE_MEMORY_TOOL_IDS = new Set(["memory.search", "memory.remember"]);
 const FULL_LSP_TOOL_IDS = new Set([
   "lsp.diagnostics",
+  "lsp.symbols",
   "lsp.definition",
   "lsp.declaration",
   "lsp.type_definition",
