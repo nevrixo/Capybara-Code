@@ -1779,10 +1779,13 @@ export class RuntimeToolExecutor implements ToolExecutor {
       case "mcp.read_resource":
         return await this.#viaBridge("mcp", action, signal, "no MCP server is configured");
 
-      default:
       case "lsp.diagnostics":
-        return await this.#viaBridge("lsp", action, signal, "full LSP diagnostics are not available");
+      case "lsp.definition":
+      case "lsp.references":
+      case "lsp.hover":
+        return await this.#viaBridge("lsp", action, signal, "full LSP tools are not available");
 
+      default:
         return {
           result: errorResult("INVALID_ARGUMENT", `no executor for tool '${action.toolId}'`),
         };

@@ -5228,6 +5228,7 @@ describe("tool execution helpers", () => {
         throw new Error("capability service unavailable");
       },
     };
+    const lspCalls: string[] = [];
     const executor = new RuntimeToolExecutor({
       runtime: runtime as never,
       host,
@@ -5236,10 +5237,13 @@ describe("tool execution helpers", () => {
           result: okResult("found 1 subagent role(s)"),
           text: "explore",
         }),
-        lsp: async () => ({
-          result: okResult("found 1 current LSP snapshot"),
-          text: "src/widget.ts: error",
-        }),
+        lsp: async (action) => {
+          lspCalls.push(action.toolId);
+          return {
+            result: okResult("LSP bridge " + action.toolId),
+            text: "src/widget.ts: LSP result",
+          };
+        },
       },
     });
     const result = await executor.execute(
@@ -5253,7 +5257,8 @@ describe("tool execution helpers", () => {
     );
     expect(result.result.ok).toBe(true);
     expect(result.result.summary).toContain("subagent");
-    const lsp = await executor.execute(
+
+    const diagnostics = await executor.execute(
       {
         callId: "lsp-1",
         toolId: "lsp.diagnostics",
@@ -5262,8 +5267,33 @@ describe("tool execution helpers", () => {
       },
       new AbortController().signal,
     );
-    expect(lsp.result.ok).toBe(true);
-    expect(lsp.result.summary).toContain("LSP snapshot");
+    expect(diagnostics.result.ok).toBe(true);
+    expect(diagnostics.result.summary).toContain("lsp.diagnostics");
+
+    const definition = await executor.execute(
+      {
+        callId: "lsp-2",
+        toolId: "lsp.definition",
+        arguments: { path: "src/widget.ts", line: 0, character: 0 },
+        display: "lsp.definition src/widget.ts",
+      },
+      new AbortController().signal,
+    );
+    expect(definition.result.ok).toBe(true);
+    expect(definition.result.summary).toContain("lsp.definition");
+
+    const unknown = await executor.execute(
+      {
+        callId: "unknown-1",
+        toolId: "unknown.tool",
+        arguments: {},
+        display: "unknown.tool",
+      },
+      new AbortController().signal,
+    );
+    expect(unknown.result.ok).toBe(false);
+    expect(unknown.result.error?.code).toBe("INVALID_ARGUMENT");
+    expect(lspCalls).toEqual(["lsp.diagnostics", "lsp.definition"]);
   });
 
   test("generated images are stored as raw artifacts and user-facing binary files", async () => {
