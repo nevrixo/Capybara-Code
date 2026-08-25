@@ -20,6 +20,7 @@ import type { GeneratedImageOutput } from "@cbc/provider-openai";
 import { RuntimeRpcError, type CapabilityReceipt, type StructuredEditResponse, type ToolErrorCode } from "@cbc/protocol";
 import { errorResult, okResult, type ArtifactRef, type ToolResult } from "@cbc/tool-registry";
 
+import { MergeCoordinator, containsConflictMarkers } from "../../capy-daemon/src/merge-coordinator.ts";
 import { resolvePaths, type Host } from "./host.ts";
 import type { ProcessOutcome, Runtime } from "./runtime.ts";
 import { normalizePath } from "./normalizer.ts";
@@ -1829,6 +1830,97 @@ export class RuntimeToolExecutor implements ToolExecutor {
         return { result: okResult("previewed merge", data) };
       }
 
+      case "merge.apply": {
+        if (this.#options.worktreeMultiAgent !== true) {
+          return {
+            result: errorResult(
+              "NOT_FOUND",
+              "worktree multi-agent is disabled; enable experimental.worktreeMultiAgent",
+              { retryable: false },
+            ),
+          };
+        }
+        const base = str(action, "base");
+        const ours = str(action, "ours");
+        const theirs = str(action, "theirs");
+        if (base === undefined || ours === undefined || theirs === undefined) {
+          return { result: errorResult("INVALID_ARGUMENT", "merge.apply requires base, ours, and theirs") };
+        }
+        const preview = (await runtime.previewMerge({ base, ours, theirs })) as {
+          autoFiles?: Array<{ path?: string; content?: string }>;
+          conflicts?: unknown[];
+          renameConflicts?: unknown[];
+          deleteModify?: unknown[];
+        };
+        if (
+          (preview.conflicts?.length ?? 0) > 0 ||
+          (preview.renameConflicts?.length ?? 0) > 0 ||
+          (preview.deleteModify?.length ?? 0) > 0
+        ) {
+          return {
+            result: errorResult(
+              "TRANSACTION_CONFLICT",
+              "merge.apply refused a conflicted merge; resolve paths first",
+              { retryable: false, details: preview },
+            ),
+          };
+        }
+        const files = (preview.autoFiles ?? []).filter(
+          (file): file is { path: string; content: string } =>
+            typeof file.path === "string" && typeof file.content === "string",
+        );
+        if (files.some((file) => containsConflictMarkers(file.content))) {
+          return {
+            result: errorResult(
+              "INVALID_ARGUMENT",
+              "merged content must not contain conflict markers",
+              { retryable: false },
+            ),
+          };
+        }
+        return await this.#applyMergeFiles(action, files);
+      }
+
+      case "merge.resolve": {
+        if (this.#options.worktreeMultiAgent !== true) {
+          return {
+            result: errorResult(
+              "NOT_FOUND",
+              "worktree multi-agent is disabled; enable experimental.worktreeMultiAgent",
+              { retryable: false },
+            ),
+          };
+        }
+        const path = str(action, "path");
+        const choice = str(action, "choice");
+        if (path === undefined || (choice !== "ours" && choice !== "theirs" && choice !== "manual")) {
+          return { result: errorResult("INVALID_ARGUMENT", "merge.resolve requires path and choice") };
+        }
+        const coordinator = new MergeCoordinator();
+        const baseText = str(action, "base");
+        const oursText = str(action, "ours");
+        const theirsText = str(action, "theirs");
+        const plan = coordinator.resolutionPlan(
+          {
+            id: "conflict_1",
+            path: workspacePath(path, workspace),
+            kind: "content",
+            ...(baseText !== undefined ? { baseText } : {}),
+            ...(oursText !== undefined ? { oursText } : {}),
+            ...(theirsText !== undefined ? { theirsText } : {}),
+            proposals: [],
+            resolutionOptions: ["ours", "theirs", "manual", "replan"],
+          },
+          choice,
+          str(action, "manualText"),
+        );
+        const operation = plan.operations[0];
+        if (operation === undefined) {
+          return { result: errorResult("INVALID_ARGUMENT", "merge.resolve produced no operations") };
+        }
+        return await this.#applyMergeFiles(action, [{ path: operation.path, content: operation.content }]);
+      }
+
       case "git.checkpoint": {
         const data = (await runtime.gitCheckpoint(str(action, "label"))) as Record<string, unknown>;
         // P1-06: the runtime flags sensitive-looking paths the checkpoint is about
@@ -2103,6 +2195,57 @@ export class RuntimeToolExecutor implements ToolExecutor {
       this.#options.onTransaction?.({ kind: "rolled_back", transactionId, paths: [] });
       return { result: toolErrorFrom(error) };
     }
+  }
+
+  async #applyMergeFiles(
+    action: ProposedAction,
+    files: readonly { readonly path: string; readonly content: string }[],
+  ): Promise<Execution> {
+    const runtime = this.#options.runtime;
+    const workspace = runtime.workspace;
+    const coordinator = new MergeCoordinator();
+    const applied = coordinator.apply(
+      files.map((file) => ({ path: workspacePath(file.path, workspace), oursText: file.content })),
+    );
+    if (!applied.applied) {
+      return {
+        result: errorResult("TRANSACTION_CONFLICT", "merge.apply refused a conflicted merge", { retryable: false }),
+      };
+    }
+    const revisions: Record<string, string> = {};
+    for (const file of files) {
+      const path = workspacePath(file.path, workspace);
+      try {
+        const fingerprint = await runtime.fingerprint(path);
+        if (fingerprint.revisionToken.length > 0) revisions[path] = fingerprint.revisionToken;
+      } catch {
+        // Missing files become creates.
+      }
+    }
+    const plan = coordinator.toEditEnginePlan(applied, {
+      sessionId: this.#options.sessionId ?? "session-unknown",
+      workspaceIdentityDigest: runtime.workspaceId ?? this.#options.sessionId ?? "session-unknown",
+      revisions,
+    });
+    if (plan === undefined) {
+      return { result: okResult("merge produced no file changes", { files: [] }) };
+    }
+    const capability = await this.#issueCapability({
+      ...action,
+      writes: files.map((file) => workspacePath(file.path, workspace)),
+    });
+    const preview = await runtime.previewEdit({ plan });
+    return await this.#mutate(action, capability.id, async (transactionId) => {
+      const staged = await runtime.applyEdit({
+        transactionId,
+        plan,
+        expectedPlanDigest: preview.planDigest,
+        capabilityReceipt: capability.id,
+        capabilitySessionId: capability.sessionId,
+        capabilityActionHash: capability.actionHash,
+      });
+      return { ...staged } as Record<string, unknown>;
+    });
   }
 }
 

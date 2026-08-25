@@ -1241,7 +1241,10 @@ describe("tool action labels (§6.4, §12.2)", () => {
         // `git.checkpoint` mutates but is legitimately a Git operation, so the
         // check is one-directional: a query verb on a mutating tool is only wrong
         // when the tool touches the workspace tree.
-        expect(tool.id.startsWith("git."), `${tool.id} mutates but reads as '${label}'`).toBe(true);
+        expect(
+          tool.id.startsWith("git.") || tool.id.startsWith("worktree."),
+          `${tool.id} mutates but reads as '${label}'`,
+        ).toBe(true);
       }
     }
   });

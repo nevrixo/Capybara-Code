@@ -53,6 +53,11 @@ Additive request methods (still protocol 1.0 major):
 
 Request method count is now 75.
 
+## tools 1.0 — merge.apply / merge.resolve
+
+Model-facing merge tools apply conflict-free results through the structured
+Edit Engine. They are not additional runtime RPC methods.
+
 ## protocol 1.0 · events 1.0 — runtime feature catalog
 
 Added the modification-plan §17 event kinds as a minor, additive change:

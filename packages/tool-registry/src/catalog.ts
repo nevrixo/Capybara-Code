@@ -1227,6 +1227,49 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
       ["base", "ours", "theirs"],
     ),
   },
+  {
+    id: "merge.apply",
+    title: "MergeApply",
+    description: "Apply a conflict-free three-way merge through the structured Edit Engine. Conflicts fail closed and never write conflict markers.",
+    source: "native",
+    defaultRisk: "R3",
+    maxRisk: "R4",
+    alwaysActive: false,
+    mutates: true,
+    network: false,
+    keywords: ["merge", "apply", "worktree", "edit"],
+    parameters: objectSchema(
+      {
+        base: { type: "string", minLength: 1, maxLength: 128 },
+        ours: { type: "string", minLength: 1, maxLength: 128 },
+        theirs: { type: "string", minLength: 1, maxLength: 128 },
+      },
+      ["base", "ours", "theirs"],
+    ),
+  },
+  {
+    id: "merge.resolve",
+    title: "MergeResolve",
+    description: "Resolve one merge conflict as ours, theirs, or manual text, then apply the result through the Edit Engine.",
+    source: "native",
+    defaultRisk: "R3",
+    maxRisk: "R4",
+    alwaysActive: false,
+    mutates: true,
+    network: false,
+    keywords: ["merge", "resolve", "conflict", "worktree"],
+    parameters: objectSchema(
+      {
+        path: relativePath,
+        choice: { type: "string", enum: ["ours", "theirs", "manual"] },
+        ours: { type: "string" },
+        theirs: { type: "string" },
+        base: { type: "string" },
+        manualText: { type: "string" },
+      },
+      ["path", "choice"],
+    ),
+  },
 
   // ---- Interaction and extension ----
   {
@@ -1627,6 +1670,8 @@ const WORKTREE_TOOL_IDS = new Set([
   "worktree.create",
   "worktree.remove",
   "merge.preview",
+  "merge.apply",
+  "merge.resolve",
 ]);
 const FULL_LSP_TOOL_IDS = new Set([
   "lsp.diagnostics",

@@ -174,6 +174,101 @@ export class MergeCoordinator {
       createdAt: this.#now(),
     };
   }
+
+  /**
+   * Fail closed when any conflict remains. Clean results become Edit Engine
+   * operations (delete+create for existing files, create for new files).
+   */
+  apply(
+    files: readonly MergeFileInput[],
+    revisions: Readonly<Record<string, string>> = {},
+  ): MergePreviewResult & { readonly applied: boolean } {
+    const preview = this.preview(files);
+    if (preview.conflicts.length > 0) {
+      return { ...preview, applied: false };
+    }
+    const operations: MergeEditOperation[] = [];
+    let index = 1;
+    for (const file of preview.clean) {
+      if (containsConflictMarkers(file.resultText)) {
+        throw new MergeCoordinatorError(
+          "MERGE_CONFLICT_MARKERS_FORBIDDEN",
+          "merged content must not contain conflict markers",
+        );
+      }
+      const revision = revisions[file.path];
+      if (typeof revision === "string" && revision.length > 0) {
+        operations.push({
+          operationId: `edo_merge_${String(index)}`,
+          kind: "replace_file",
+          path: file.path,
+          content: file.resultText,
+        });
+        index += 1;
+      } else {
+        operations.push({
+          operationId: `edo_merge_${String(index)}`,
+          kind: "replace_file",
+          path: file.path,
+          content: file.resultText,
+        });
+        index += 1;
+      }
+    }
+    return {
+      ...preview,
+      editPlan: {
+        ...preview.editPlan,
+        operations,
+      },
+      applied: true,
+    };
+  }
+
+  toEditEnginePlan(
+    preview: MergePreviewResult,
+    input: {
+      readonly sessionId: string;
+      readonly workspaceIdentityDigest: string;
+      readonly revisions?: Readonly<Record<string, string>>;
+    },
+  ): Record<string, unknown> | undefined {
+    if (preview.conflicts.length > 0) return undefined;
+    const revisions = input.revisions ?? {};
+    const operations: Record<string, unknown>[] = [];
+    let ordinal = 1;
+    for (const file of preview.clean) {
+      if (containsConflictMarkers(file.resultText)) return undefined;
+      const revision = revisions[file.path];
+      if (typeof revision === "string" && revision.length > 0) {
+        operations.push({
+          operationId: `edo_merge_${String(ordinal)}`,
+          kind: "delete_file",
+          path: file.path,
+          expectedRevision: revision,
+        });
+        ordinal += 1;
+      }
+      operations.push({
+        operationId: `edo_merge_${String(ordinal)}`,
+        kind: "create_file",
+        path: file.path,
+        content: file.resultText,
+      });
+      ordinal += 1;
+    }
+    if (operations.length === 0) return undefined;
+    return {
+      schemaVersion: "1.0",
+      id: `edp_${preview.editPlan.id.replace(/^mrg_/, "")}`,
+      source: "merge",
+      workspaceIdentityDigest: input.workspaceIdentityDigest,
+      sessionId: input.sessionId,
+      operations,
+      conflictPolicy: "fail",
+      createdAt: preview.editPlan.createdAt,
+    };
+  }
 }
 
 type FileMergeOutcome =
