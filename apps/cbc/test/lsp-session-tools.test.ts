@@ -12,12 +12,14 @@ function makeSession(
   trust: "trusted-always" | "untrusted" = "trusted-always",
   editEngineV2 = false,
   renameMutation = false,
+  codeActionMutation = false,
 ): AgentSession {
   const config = structuredClone(loadConfig({ projectTrusted: true, env: {} }).config);
   config.experimental.fullLsp = fullLsp;
   config.experimental.editEngineV2 = editEngineV2;
   config.lsp.enabled = true;
   config.lsp.mutations.rename = renameMutation;
+  config.lsp.mutations.codeActions = codeActionMutation;
   const runtime = {
     workspace: "/work",
     appendEvents: async (params: { events?: unknown[] }) => ({
@@ -99,5 +101,26 @@ describe("AgentSession LSP tool gate", () => {
     }
     expect(enabled.registry.has("lsp.rename_preview")).toBe(true);
     expect(enabled.registry.activeIds()).not.toContain("lsp.rename_preview");
+  });
+
+  test("requires the edit engine and code action mutation gates for proposal-only code actions", () => {
+    const disabled = makeSession(false, true, "trusted-always", true, false, true);
+    const missingBridge = makeSession(true, false, "trusted-always", true, false, true);
+    const untrusted = makeSession(true, true, "untrusted", true, false, true);
+    const missingEditEngine = makeSession(true, true, "trusted-always", false, false, true);
+    const missingCodeActionMutation = makeSession(true, true, "trusted-always", true, false, false);
+    const enabled = makeSession(true, true, "trusted-always", true, false, true);
+
+    for (const session of [
+      disabled,
+      missingBridge,
+      untrusted,
+      missingEditEngine,
+      missingCodeActionMutation,
+    ]) {
+      expect(session.registry.has("lsp.code_action_preview")).toBe(false);
+    }
+    expect(enabled.registry.has("lsp.code_action_preview")).toBe(true);
+    expect(enabled.registry.activeIds()).not.toContain("lsp.code_action_preview");
   });
 });
