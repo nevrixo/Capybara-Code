@@ -1,0 +1,25 @@
+{
+  "x-dialect": "json-schema-draft-2020-12",
+  "$id": "cbc:lsp/workspace-edit",
+  "title": "LspWorkspaceEditAdapterResult",
+  "description": "Language-server WorkspaceEdit converted to a canonical EditPlan. Apply only through fs.edit.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "plan"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "plan": { "$ref": "cbc:edit/plan" },
+    "rejected": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reason"],
+        "properties": {
+          "reason": { "type": "string", "minLength": 1 },
+          "path": { "type": "string" }
+        }
+      }
+    }
+  }
+}

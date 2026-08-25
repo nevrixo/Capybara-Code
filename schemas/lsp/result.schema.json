@@ -1,0 +1,34 @@
+{
+  "x-dialect": "json-schema-draft-2020-12",
+  "$id": "cbc:lsp/result",
+  "title": "LspQueryResult",
+  "description": "Bounded language-server query result. Servers never write files; this is evidence and locations only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "server", "kind"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "server": { "type": "string", "minLength": 1 },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "symbols",
+        "workspace_symbols",
+        "definition",
+        "declaration",
+        "type_definition",
+        "implementation",
+        "references",
+        "hover",
+        "signature_help",
+        "diagnostics",
+        "call_hierarchy"
+      ]
+    },
+    "path": { "type": "string", "minLength": 1 },
+    "documentRevision": { "type": "string", "minLength": 1 },
+    "documentVersion": { "type": "integer", "minimum": 0 },
+    "truncated": { "type": "boolean" },
+    "items": { "type": "array", "maxItems": 256 }
+  }
+}

@@ -266,6 +266,8 @@ export interface LspHostOptions {
   readonly maxPendingRequests?: number;
   /** Called whenever a sidebar-visible service state changes. */
   readonly onStatus?: (servers: readonly SidebarService[]) => void;
+  /** Revision-bound diagnostic snapshots for evidence / completion gates. */
+  readonly onDiagnostics?: (snapshot: LspDiagnosticSnapshot) => void;
 }
 
 /** Resolve without spawning or downloading an executable. */
@@ -1309,6 +1311,7 @@ export class LspHost {
           this.#diagnosticCacheKey(descriptor.name, snapshot.path),
           snapshot,
         );
+        this.#options.onDiagnostics?.(snapshot);
         return true;
       },
     );
@@ -1389,6 +1392,7 @@ export class LspHost {
         this.#diagnosticCacheKey(descriptor.name, snapshot.path),
         snapshot,
       );
+      this.#options.onDiagnostics?.(snapshot);
       captured += 1;
     }
     return captured;
@@ -1528,6 +1532,7 @@ export class LspHost {
         this.#diagnosticCacheKey(process.descriptor.name, snapshot.path),
         snapshot,
       );
+      this.#options.onDiagnostics?.(snapshot);
     } catch {
       // Invalid, oversized, or stale server output remains unavailable evidence.
     }
