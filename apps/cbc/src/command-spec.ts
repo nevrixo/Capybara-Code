@@ -128,5 +128,9 @@ export function commandTree(): Record<string, readonly string[]> {
 }
 
 export function commandNames(): string[] {
-  return COMMAND_REGISTRY.map((spec) => spec.name);
+  // The daemon's session-worker entry point is an internal spawn target, not a
+  // public command. Keep it in the parser registry without advertising it.
+  return COMMAND_REGISTRY
+    .filter((spec) => spec.name !== "session-worker")
+    .map((spec) => spec.name);
 }
