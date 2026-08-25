@@ -828,6 +828,7 @@ describe("timeline blocks (§6.4, §6.7–§6.12, AC-06)", () => {
     expect(toolActionLabel("lsp.symbols")).toBe("Find");
     expect(toolActionLabel("lsp.workspace_symbols")).toBe("Search");
     expect(toolActionLabel("lsp.references")).toBe("Find");
+    expect(toolActionLabel("lsp.call_hierarchy")).toBe("Find");
     expect(toolActionLabel("lsp.code_actions")).toBe("Read");
     expect(toolActionLabel("lsp.code_action_preview")).toBe("Preview");
     expect(toolActionLabel("lsp.format_preview")).toBe("Preview");
