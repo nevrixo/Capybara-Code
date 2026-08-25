@@ -11,9 +11,17 @@
 //! `git.commit`, `git.push`, and `git reset --hard` are deliberately absent from
 //! the tool catalog (§12.2).
 
+mod merge;
+mod worktree;
+
+pub use merge::{
+    ContentConflict, DeleteModifyConflict, MergeAnalysis, MergedFile, RenameConflict,
+};
+pub use worktree::{validate_worktree_path, WorktreeCreateOptions, WorktreeInfo};
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 
 use serde::Serialize;
 
@@ -22,6 +30,15 @@ pub enum GitError {
     NotARepository { path: String },
     GitUnavailable { message: String },
     CommandFailed { argv: Vec<String>, stderr: String },
+    DirtyBase,
+    PathEscapesDataRoot { path: String },
+    PathTooLong { path: String, bytes: usize },
+    SymlinkParent { path: String },
+    IdentityMismatch { expected: String, actual: String },
+    ActiveWriter { path: String },
+    HeadMismatch { expected: String, actual: String },
+    InvalidArgument { message: String },
+    Io { path: String, message: String },
 }
 
 impl std::fmt::Display for GitError {
@@ -32,6 +49,30 @@ impl std::fmt::Display for GitError {
             GitError::CommandFailed { argv, stderr } => {
                 write!(f, "git {} failed: {stderr}", argv.join(" "))
             }
+            GitError::DirtyBase => write!(f, "refusing to create a worktree on a dirty base"),
+            GitError::PathEscapesDataRoot { path } => {
+                write!(f, "worktree path escapes data root: {path}")
+            }
+            GitError::PathTooLong { path, bytes } => {
+                write!(f, "worktree path is too long ({bytes} bytes): {path}")
+            }
+            GitError::SymlinkParent { path } => {
+                write!(f, "worktree path has a symlink parent: {path}")
+            }
+            GitError::IdentityMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "worktree git identity mismatch: expected {expected}, got {actual}"
+                )
+            }
+            GitError::ActiveWriter { path } => {
+                write!(f, "refusing to remove worktree with an active writer: {path}")
+            }
+            GitError::HeadMismatch { expected, actual } => {
+                write!(f, "worktree HEAD mismatch: expected {expected}, got {actual}")
+            }
+            GitError::InvalidArgument { message } => write!(f, "{message}"),
+            GitError::Io { path, message } => write!(f, "io error at {path}: {message}"),
         }
     }
 }
@@ -144,7 +185,7 @@ pub struct LogEntry {
 /// Git service bound to one workspace.
 #[derive(Debug, Clone)]
 pub struct GitService {
-    root: PathBuf,
+    pub(crate) root: PathBuf,
     git_dir: Option<PathBuf>,
 }
 
@@ -159,6 +200,10 @@ impl GitService {
 
     pub fn is_repository(&self) -> bool {
         self.git_dir.is_some()
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     pub fn git_root(&self) -> Option<&Path> {
@@ -191,7 +236,20 @@ impl GitService {
     }
 
     /// Run git with direct argv, a disabled pager, and no hooks (§14.9).
-    fn run(&self, args: &[&str]) -> Result<String, GitError> {
+    pub(crate) fn run(&self, args: &[&str]) -> Result<String, GitError> {
+        let (status, stdout, stderr) = self.run_raw(args)?;
+        if !status.success() {
+            return Err(GitError::CommandFailed {
+                argv: args.iter().map(|s| s.to_string()).collect(),
+                stderr,
+            });
+        }
+        Ok(stdout)
+    }
+
+    /// Like [`Self::run`], but preserves non-zero exits for callers that parse
+    /// conflict output (notably `git merge-tree`).
+    pub(crate) fn run_raw(&self, args: &[&str]) -> Result<(ExitStatus, String, String), GitError> {
         let mut command = Command::new("git");
         command
             .arg("--no-pager")
@@ -225,13 +283,11 @@ impl GitService {
             message: e.to_string(),
         })?;
 
-        if !output.status.success() {
-            return Err(GitError::CommandFailed {
-                argv: args.iter().map(|s| s.to_string()).collect(),
-                stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-            });
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        Ok((
+            output.status,
+            String::from_utf8_lossy(&output.stdout).to_string(),
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ))
     }
 
     /// `git.status` — normalized porcelain v1 output.
