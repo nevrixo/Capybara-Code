@@ -628,6 +628,7 @@ const TOOL_ACTIONS: Readonly<Record<string, string>> = {
   "lsp.document_highlights": "Find",
   "lsp.code_actions": "Read",
   "lsp.code_action_preview": "Preview",
+  "lsp.format_preview": "Preview",
   "lsp.rename_preview": "Preview",
   "memory.search": "Search",
   "memory.remember": "Remember",
