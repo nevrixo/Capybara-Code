@@ -979,7 +979,7 @@ export class LspHost {
       tracked.path === path &&
       tracked.document.revision === document.revision
     ) {
-      return await this.#requestWorkspaceDiagnostics(process, descriptor);
+      return await this.#requestWorkspaceDiagnostics(process, descriptor, uri);
     }
     if (document === undefined) return 0;
     return await this.#withOpenedDocument(
@@ -990,13 +990,14 @@ export class LspHost {
       async (_openedUri, openedTracked) =>
         openedTracked === undefined
           ? 0
-          : await this.#requestWorkspaceDiagnostics(process, descriptor),
+          : await this.#requestWorkspaceDiagnostics(process, descriptor, uri),
     );
   }
 
   async #requestWorkspaceDiagnostics(
     process: LspProcess,
     descriptor: LspServerDescriptor,
+    preferredUri: string,
   ): Promise<number> {
     const trackedDocuments = [...process.diagnosticDocuments.values()];
     if (trackedDocuments.length === 0) return 0;
@@ -1021,6 +1022,7 @@ export class LspHost {
         documentVersion: tracked.version,
       })),
       publishedAt: new Date().toISOString(),
+      preferredUri,
       maxSnapshots: MAX_LSP_WORKSPACE_DIAGNOSTIC_SNAPSHOTS,
       maxDiagnostics: MAX_LSP_WORKSPACE_DIAGNOSTICS_PER_SNAPSHOT,
     });
