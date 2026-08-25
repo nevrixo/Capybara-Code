@@ -2544,6 +2544,23 @@ export class AgentSession {
     this.#options.config.model.reasoningEffort = effort;
   }
 
+  /** Apply an interactive model choice to this session immediately. */
+  setModel(modelId: string): void {
+    this.kernel.setModel(modelId);
+    this.#options.config.model.default = modelId;
+    this.#currentRoute = undefined;
+  }
+
+  /** Model the composer chrome and the next turn should advertise. */
+  get liveModelId(): string {
+    return this.kernel.model;
+  }
+
+  /** Effort the composer chrome and the next turn should advertise. */
+  get liveReasoningEffort(): ReasoningEffort {
+    return this.kernel.reasoningEffort;
+  }
+
   /** The requested token-saving level and the most recently applied plan. */
   get tokenSaving(): {
     readonly requestedLevel: TokenSavingLevel;

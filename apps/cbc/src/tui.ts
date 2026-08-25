@@ -283,6 +283,9 @@ export class InteractiveUi {
   #loadingEarlierHistory = false;
   #historyLoaderGeneration = 0;
   #selectedReasoningEffort: string | undefined;
+  #selectedModel: string | undefined;
+  #pinnedReasoningEffort = false;
+  #pinnedModel = false;
   #composerState: {
     text: string;
     cursor: number;
@@ -1405,7 +1408,20 @@ export class InteractiveUi {
     const normalized = effort?.trim();
     this.#selectedReasoningEffort =
       normalized === undefined || normalized.length === 0 ? undefined : normalized;
+    this.#pinnedReasoningEffort = this.#selectedReasoningEffort !== undefined;
     this.#invalidateTimelineScrollRange();
+    this.#markFrameDirty("composer", "status");
+    if (this.#fullScreen) this.#scheduleFrame();
+  }
+
+  /** Show the model selected for the next turn in the composer chrome. */
+  setModel(model: string | undefined): void {
+    const normalized = model?.trim();
+    this.#selectedModel =
+      normalized === undefined || normalized.length === 0 ? undefined : normalized;
+    this.#pinnedModel = this.#selectedModel !== undefined;
+    this.#invalidateTimelineScrollRange();
+    this.#markFrameDirty("composer", "status");
     if (this.#fullScreen) this.#scheduleFrame();
   }
 
@@ -1786,6 +1802,9 @@ export class InteractiveUi {
     this.#lastLiveLabel = "";
     this.#turnTitle = undefined;
     this.#selectedReasoningEffort = model.reasoningEffort;
+    this.#selectedModel = model.modelId;
+    this.#pinnedReasoningEffort = false;
+    this.#pinnedModel = false;
     this.#notices = [];
     this.#lastNoticeText = undefined;
     this.#lastNoticeCount = 0;
@@ -1897,10 +1916,15 @@ export class InteractiveUi {
     }
     this.#residentModel = model;
     this.#latestModel = this.#withHistoricalTimeline(model);
-    this.#selectedReasoningEffort = model.reasoningEffort;
+    if (!this.#pinnedReasoningEffort) {
+      this.#selectedReasoningEffort = model.reasoningEffort;
+    }
+    if (!this.#pinnedModel) {
+      this.#selectedModel = model.modelId;
+    }
     this.#syncLiveAnimation(model);
     this.#replan();
-    this.#markFrameDirty("layout", "timeline", "live", "sidebar", "status");
+    this.#markFrameDirty("layout", "timeline", "live", "sidebar", "status", "composer");
 
     // Full-screen rendering replaces the whole viewport. The projection, deep
     // comparison, cloning, and source maps below exist solely to reconcile mutable
@@ -2806,9 +2830,15 @@ export class InteractiveUi {
         this.#userAsk === undefined &&
         this.#promptRequest === undefined);
     const sessionModel =
-      displayModel !== undefined && this.#selectedReasoningEffort !== undefined
-        ? { ...displayModel, reasoningEffort: this.#selectedReasoningEffort }
-        : displayModel;
+      displayModel === undefined
+        ? displayModel
+        : {
+            ...displayModel,
+            ...(this.#selectedReasoningEffort !== undefined
+              ? { reasoningEffort: this.#selectedReasoningEffort }
+              : {}),
+            ...(this.#selectedModel !== undefined ? { modelId: this.#selectedModel } : {}),
+          };
     // Approval is rendered as an inline decision card within the timeline,
     // so the conversation history and live progress remain visible above it.
     const approval = this.#approval;
@@ -2862,7 +2892,7 @@ export class InteractiveUi {
           rows,
           version: this.#options.version,
           workspacePath: this.#options.workspacePath,
-          model: model?.modelId ?? this.#options.provider ?? "gpt-5.6-sol",
+          model: this.#selectedModel ?? model?.modelId ?? this.#options.provider ?? "gpt-5.6-sol",
            reasoningEffort: this.#selectedReasoningEffort ?? model?.reasoningEffort ?? "medium",
            interactionMode: model?.modeState.selected ?? "build",
            ...(model?.modeState.pending === undefined ? {} : { pendingInteractionMode: model.modeState.pending }),

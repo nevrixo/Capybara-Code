@@ -2511,6 +2511,30 @@ describe("interactive UI (§6.2, §6.21)", () => {
     instance.restore();
   });
 
+  test("model and effort chrome updates immediately and survives a stale flush", () => {
+    const host = createFakeHost({ isTty: true, columns: 140, env: { NO_COLOR: "1" } });
+    const decision = decideRenderMode({ host, rendererAvailable: true });
+    const instance = new InteractiveUi({
+      host,
+      decision,
+      writer: new LineWriter(host, decision),
+      workspacePath: "/work/project",
+      version: "0.1.0-test",
+      provider: "gpt-5.6-sol",
+    });
+    const model = emptyViewModel("ses_chrome");
+    instance.flush(model);
+    host.out.length = 0;
+    instance.setModel("gpt-5.6-luna");
+    instance.setReasoningEffort("max");
+    instance.flush(model);
+    const frame = host.out.at(-1) ?? host.out.join("");
+    expect(frame).toContain("gpt-5.6-luna");
+    expect(frame).toContain("max effort");
+    expect(frame).not.toContain("gpt-5.6-sol");
+    instance.restore();
+  });
+
   test("slash completions stay attached to the centered home composer", () => {
     const host = createFakeHost({ isTty: true, columns: 140, env: { NO_COLOR: "1" } });
     const decision = decideRenderMode({ host, rendererAvailable: true });

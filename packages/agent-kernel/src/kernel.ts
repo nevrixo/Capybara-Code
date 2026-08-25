@@ -712,6 +712,8 @@ export class AgentKernel {
   #risks: string[] = [];
   #lastFailureSummary: string | undefined;
   #currentEffort: ReasoningEffort;
+  #currentModel: string;
+  #autoRoute: boolean;
   #reasoningEffortLocked: boolean;
   /** Any applied effect makes an automatic provider replay unsafe. */
   #sideEffectsApplied = false;
@@ -785,6 +787,8 @@ export class AgentKernel {
     this.#limits = options.limits ?? ROOT_LIMITS;
     this.#now = options.now ?? (() => Date.now());
     this.#currentEffort = options.reasoningEffort ?? "medium";
+    this.#currentModel = options.model;
+    this.#autoRoute = options.autoRoute === true;
     this.#reasoningEffortLocked = options.reasoningEffortLocked === true;
     this.#providerSession = options.provider.createTurnSession?.() ?? {
       capabilities: options.provider.capabilities ?? {
@@ -828,7 +832,7 @@ export class AgentKernel {
     }, { version: this.#options.promptCompiler ?? "v2" });
     await this.#providerSession.prewarm({
       requestId: "prewarm_" + this.#options.agentId + "_" + this.#now().toString(36),
-      model: this.#options.model,
+      model: this.#currentModel,
       requestDigest: compiled.requestDigest,
       input: compiled.input,
       tools: compiled.tools,
@@ -857,9 +861,14 @@ export class AgentKernel {
     return this.#currentEffort;
   }
 
+  /** The model selected for the next sampling step. */
+  get model(): string {
+    return this.#currentModel;
+  }
+
   /** The model the current turn is actually routed to (§10.5). */
   #routedModel(): string {
-    return this.#turnRoute?.model ?? this.#options.model;
+    return this.#turnRoute?.model ?? this.#currentModel;
   }
 
   /**
@@ -913,6 +922,12 @@ export class AgentKernel {
   setReasoningEffort(effort: ReasoningEffort): void {
     this.#currentEffort = effort;
     this.#reasoningEffortLocked = true;
+  }
+
+  /** Pin the next turn to an explicit model instead of auto-routing. */
+  setModel(model: string): void {
+    this.#currentModel = model;
+    this.#autoRoute = false;
   }
 
   /** Seed history from a resumed session (§18.11). */
@@ -1057,7 +1072,7 @@ export class AgentKernel {
     }
 
     emit("turn.started", {
-      model: this.#turnRoute?.model ?? this.#options.model,
+      model: this.#turnRoute?.model ?? this.#currentModel,
       reasoning: {
         mode: this.#turnRoute?.mode ?? this.#options.reasoningMode ?? "standard",
         effort: this.#turnRoute?.effort ?? this.#currentEffort,
@@ -1673,7 +1688,7 @@ export class AgentKernel {
   }
 
   #selectEffort(emit: <T>(kind: CbcEventKind, payload: T) => void): void {
-    const model = findModel(this.#options.model);
+    const model = findModel(this.#currentModel);
     if (!model) return;
 
     const requested = this.#currentEffort;
@@ -1868,7 +1883,7 @@ export class AgentKernel {
   ): InferencePolicyDecision | undefined {
     return this.#options.inferencePolicy?.decide({
       intent: this.#sampleIntent(userInput, phase),
-      ...(this.#options.autoRoute === true ? {} : { explicitModel: this.#options.model }),
+      ...(this.#autoRoute === true ? {} : { explicitModel: this.#currentModel }),
       explicitEffort: this.#currentEffort,
       ...(this.#options.reasoningMode !== undefined ? { explicitMode: this.#options.reasoningMode } : {}),
       ...(this.#options.complexity !== undefined ? { complexity: this.#options.complexity() } : {}),
@@ -1997,7 +2012,7 @@ export class AgentKernel {
     // The turn's single routing decision (§10.5). Sampling steps never re-decide:
     // a second decision could disagree with the one the route events announced.
     const policyDecision = this.#turnRoute;
-    const requestModelId = policyDecision?.model ?? this.#options.model;
+    const requestModelId = policyDecision?.model ?? this.#currentModel;
     const requestMode = policyDecision?.mode ?? this.#options.reasoningMode ?? "standard";
     const requestEffort = policyDecision?.effort ?? this.#currentEffort;
     const model = findModel(requestModelId);

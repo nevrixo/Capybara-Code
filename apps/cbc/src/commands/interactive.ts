@@ -15,7 +15,7 @@ import { isTokenSavingLevel } from "@cbc/agent-kernel";
 import type { ReasoningEffort } from "@cbc/config-schema";
 import type { CbcEvent } from "@cbc/protocol";
 import type { SessionViewModel } from "@cbc/session-domain";
-import { findModel, MODEL_REGISTRY } from "@cbc/provider-openai";
+import { clampEffortToModel, findModel, MODEL_REGISTRY } from "@cbc/provider-openai";
 import { describeEffectivePermissionPolicy, isPermissionPreset, resolvePermissionPolicy } from "@cbc/permissions";
 import { renderSkillList } from "@cbc/skills";
 import { SUBAGENT_ROLES, roleDefinition } from "@cbc/subagents";
@@ -702,14 +702,14 @@ export async function interactive(
         argumentValues: (input) => {
           const values = slashArgumentValues(input, {
             sessions: resumeCandidates,
-            model: boot.session.viewModel.modelId,
+            model: boot.session.liveModelId,
           });
           if (values === undefined) return undefined;
           const currentValues =
             input.command === "/model"
-              ? new Set([boot.session.viewModel.modelId])
+              ? new Set([boot.session.liveModelId])
               : input.command === "/effort"
-                ? new Set([boot.session.viewModel.reasoningEffort])
+                ? new Set([boot.session.liveReasoningEffort])
                 : undefined;
           if (currentValues === undefined) return values;
           return [...values]
@@ -1434,7 +1434,7 @@ async function handleSlash(
           ];
       const lines = [
         `Session    ${model.sessionId}`,
-        `Model      ${model.modelId} · ${model.reasoningEffort}`,
+        `Model      ${session.liveModelId} · ${session.liveReasoningEffort}`,
         `Mode       ${model.modeState.selected.toUpperCase()}`,
         ...savingLines,
         ...describeEffectivePermissionPolicy(policy),
@@ -1457,8 +1457,6 @@ async function handleSlash(
 
     case "set_model": {
       const target = intent.model?.trim();
-      // Inline model selections are durable defaults for the next session.
-      // The running kernel keeps its current model until the next session.
       if (target === undefined || target.length === 0) return "continue";
       const descriptor = findModel(target);
       if (descriptor === undefined) {
@@ -1466,26 +1464,36 @@ async function handleSlash(
         return "continue";
       }
 
+      session.setModel(descriptor.id);
+      ui.setModel(descriptor.id);
+      const clamped = clampEffortToModel(descriptor, session.liveReasoningEffort);
+      if (clamped.effort !== session.liveReasoningEffort) {
+        session.setReasoningEffort(clamped.effort);
+        ui.setReasoningEffort(clamped.effort);
+      }
+
       const settings = [
         ["model.profile", "auto"],
         ["model.default", descriptor.id],
+        ...(clamped.clamped !== undefined
+          ? [["model.reasoningEffort", clamped.effort] as const]
+          : []),
       ] as const;
       const { setUserConfigValue } = await import("../state.ts");
       for (const [path, value] of settings) {
         const written = await setUserConfigValue(context.host, path, value);
         const error = written.issues.find((issue) => issue.severity === "error");
         if (error !== undefined) {
-          ui.text(`Could not save model selection: ${error.message}`);
+          ui.text(`Model set to ${descriptor.id} for this session, but was not saved: ${error.message}`);
           return "continue";
         }
       }
 
-      const current = session.viewModel.modelId;
-      const status =
-        descriptor.id === current
-          ? "already active"
-          : "starts next session; current session stays on " + current;
-      ui.text("Model saved: " + descriptor.id + " · " + status);
+      ui.text(
+        clamped.clamped === undefined
+          ? `Model set: ${descriptor.id}`
+          : `Model set: ${descriptor.id} · effort ${clamped.effort} (${clamped.clamped.reason})`,
+      );
       return "continue";
     }
 
@@ -1495,22 +1503,31 @@ async function handleSlash(
         context.warn(`'${intent.value}' is not a valid reasoning effort`);
         return "continue";
       }
+      const requested = intent.value as ReasoningEffort;
+      const descriptor = findModel(session.liveModelId);
+      const clamped = descriptor === undefined
+        ? { effort: requested }
+        : clampEffortToModel(descriptor, requested);
+      session.setReasoningEffort(clamped.effort);
+      ui.setReasoningEffort(clamped.effort);
       const settings = [
         ["model.profile", "auto"],
-        ["model.reasoningEffort", intent.value],
+        ["model.reasoningEffort", clamped.effort],
       ] as const;
       const { setUserConfigValue } = await import("../state.ts");
       for (const [path, value] of settings) {
         const written = await setUserConfigValue(context.host, path, value);
         const error = written.issues.find((issue) => issue.severity === "error");
         if (error !== undefined) {
-          ui.text(`Could not save effort selection: ${error.message}`);
+          ui.text(`Effort set to ${clamped.effort} for this session, but was not saved: ${error.message}`);
           return "continue";
         }
       }
-      session.setReasoningEffort(intent.value as ReasoningEffort);
-      ui.setReasoningEffort(intent.value);
-      ui.text(`Effort saved: ${intent.value}; active for the next message.`);
+      ui.text(
+        clamped.effort === requested
+          ? `Effort set: ${clamped.effort}`
+          : `Effort set: ${clamped.effort} (${clamped.clamped?.reason ?? "clamped to this model"})`,
+      );
       return "continue";
     }
 
@@ -1942,7 +1959,7 @@ async function handleOverlay(
     }
 
     case "model_picker": {
-      const current = session.viewModel.modelId;
+      const current = session.liveModelId;
       const lines = [`Model choices (current: ${current}):`];
       for (const model of MODEL_REGISTRY) {
         const aliases = model.aliases.length > 0 ? " (" + model.aliases.join(", ") + ")" : "";

@@ -2519,6 +2519,13 @@ describe("adaptive effort (§10.4, AC-48)", () => {
     expect(provider.requests[0]?.reasoning.effort).toBe("low");
   });
 
+  test("an explicit model update is used by the next model request", async () => {
+    const { kernel, provider } = harness({ steps: [{ text: "done" }], model: "gpt-5.6-sol" });
+    kernel.setModel("gpt-5.6-luna");
+    await kernel.runTurn("use the selected model", new AbortController().signal);
+    expect(provider.requests[0]?.model).toBe("gpt-5.6-luna");
+  });
+
   test("an explicit max remains fixed when adaptive complexity is available", async () => {
     const { kernel, provider } = harness({
       steps: [{ text: "done" }],
