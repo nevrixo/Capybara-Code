@@ -5282,6 +5282,20 @@ describe("tool execution helpers", () => {
     expect(definition.result.ok).toBe(true);
     expect(definition.result.summary).toContain("lsp.definition");
 
+    for (const toolId of ["lsp.declaration", "lsp.type_definition", "lsp.implementation"]) {
+      const locationQuery = await executor.execute(
+        {
+          callId: "lsp-" + toolId,
+          toolId,
+          arguments: { path: "src/widget.ts", line: 0, character: 0 },
+          display: toolId + " src/widget.ts",
+        },
+        new AbortController().signal,
+      );
+      expect(locationQuery.result.ok).toBe(true);
+      expect(locationQuery.result.summary).toContain(toolId);
+    }
+
     const unknown = await executor.execute(
       {
         callId: "unknown-1",
@@ -5293,7 +5307,13 @@ describe("tool execution helpers", () => {
     );
     expect(unknown.result.ok).toBe(false);
     expect(unknown.result.error?.code).toBe("INVALID_ARGUMENT");
-    expect(lspCalls).toEqual(["lsp.diagnostics", "lsp.definition"]);
+    expect(lspCalls).toEqual([
+      "lsp.diagnostics",
+      "lsp.definition",
+      "lsp.declaration",
+      "lsp.type_definition",
+      "lsp.implementation",
+    ]);
   });
 
   test("generated images are stored as raw artifacts and user-facing binary files", async () => {

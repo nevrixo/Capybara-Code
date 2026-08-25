@@ -1781,6 +1781,9 @@ export class RuntimeToolExecutor implements ToolExecutor {
 
       case "lsp.diagnostics":
       case "lsp.definition":
+      case "lsp.declaration":
+      case "lsp.type_definition":
+      case "lsp.implementation":
       case "lsp.references":
       case "lsp.hover":
         return await this.#viaBridge("lsp", action, signal, "full LSP tools are not available");
