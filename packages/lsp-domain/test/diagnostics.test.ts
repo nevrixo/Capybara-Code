@@ -288,6 +288,38 @@ describe("normalizeLspWorkspaceDiagnostics", () => {
       totalSnapshots: 2,
       truncated: true,
     });
+    const prioritized = normalizeLspWorkspaceDiagnostics(
+      {
+        items: [
+          {
+            uri: workspaceUri("src/other.ts"),
+            version: 8,
+            kind: "full",
+            items: [{
+              range: {
+                start: { line: 0, character: 0 },
+                end: { line: 0, character: 5 },
+              },
+              message: "other diagnostic",
+            }],
+          },
+          {
+            uri: workspaceUri("src/example.ts"),
+            version: 7,
+            kind: "full",
+            items: params().diagnostics,
+          },
+        ],
+      },
+      workspaceOptions({
+        maxSnapshots: 1,
+        preferredUri: workspaceUri("src/other.ts"),
+      }),
+    );
+    expect(prioritized.snapshots).toEqual([
+      expect.objectContaining({ path: "src/other.ts" }),
+    ]);
+
     expect(Object.isFrozen(normalized)).toBe(true);
     expect(Object.isFrozen(normalized.snapshots)).toBe(true);
     expect(JSON.stringify(normalized)).not.toContain("private");
@@ -317,6 +349,13 @@ describe("normalizeLspWorkspaceDiagnostics", () => {
       workspaceOptions(),
     )).toEqual({ snapshots: [], totalSnapshots: 0, truncated: false });
 
+    expectDiagnosticError(
+      () => normalizeLspWorkspaceDiagnostics(
+        { items: [] },
+        workspaceOptions({ preferredUri: workspaceUri("src/untracked.ts") }),
+      ),
+      "LSP_DIAGNOSTICS_INVALID",
+    );
     expectDiagnosticError(
       () => normalizeLspWorkspaceDiagnostics(
         {
