@@ -39,6 +39,7 @@ import {
   fitLine,
   line,
   segment,
+  wrapPrefixedLines,
   type BlockContext,
   type Segment,
   type StyledLine,
@@ -1841,7 +1842,8 @@ export function renderPlan(
     line("header", [segment("TODO", { fg: "fg.primary", bold: true })]),
   ];
   for (const [index, entry] of item.items.entries()) {
-    lines.push(fitLine("body", planItemSegments(entry, index, context), context));
+    const { prefix, text, textToken } = planItemHeading(entry, index, context);
+    lines.push(...wrapPrefixedLines(prefix, text, context, { fg: textToken }));
     const detail = entry as typeof entry & {
       readonly details?: string;
       readonly files?: readonly string[];
@@ -1852,13 +1854,15 @@ export function renderPlan(
     };
     const addDetail = (label: string, values: readonly string[] | undefined, token: ThemeToken = "fg.muted"): void => {
       if (values === undefined || values.length === 0) return;
-      lines.push(fitLine("body", [
-        segment("    " + label + ": ", { fg: "fg.muted" }),
-        segment(sanitizeInline(values.join(", "), 300), { fg: token }),
-      ], context));
+      lines.push(...wrapPrefixedLines(
+        [segment("    " + label + ": ", { fg: "fg.muted" })],
+        sanitizeInline(values.join(", "), 800),
+        context,
+        { fg: token },
+      ));
     };
     if (detail.details !== undefined) {
-      lines.push(fitLine("body", [segment("    details: ", { fg: "fg.muted" }), segment(sanitizeInline(detail.details, 300), { fg: "fg.muted" })], context));
+      addDetail("details", [detail.details]);
     }
     addDetail("files", detail.files);
     addDetail("symbols", detail.symbols);
@@ -1869,7 +1873,11 @@ export function renderPlan(
   return lines;
 }
 
-function planItemSegments(entry: PlanItem, index: number, context: BlockContext): Segment[] {
+function planItemHeading(
+  entry: PlanItem,
+  index: number,
+  context: BlockContext,
+): { prefix: Segment[]; text: string; textToken: ThemeToken } {
   const marker: Record<PlanItem["status"], { glyph: string; token: ThemeToken }> = {
     pending: { glyph: context.capabilities.unicode ? "○" : "-", token: "fg.muted" },
     active: { glyph: icon("working", context.capabilities), token: "accent.coral" },
@@ -1878,15 +1886,16 @@ function planItemSegments(entry: PlanItem, index: number, context: BlockContext)
     skipped: { glyph: context.capabilities.unicode ? "⊘" : "~", token: "fg.muted" },
   };
   const { glyph, token } = marker[entry.status];
-  return [
-    segment(`${glyph} `, { fg: token }),
-    segment(`${index + 1}. `, { fg: "fg.muted" }),
-    // §6.5: the status word is present so no-colour output still distinguishes it.
-    segment(`[${entry.status}] `, { fg: token }),
-    segment(sanitizeInline(entry.text, 200), {
-      fg: entry.status === "done" ? "fg.muted" : "fg.primary",
-    }),
-  ];
+  return {
+    prefix: [
+      segment(`${glyph} `, { fg: token }),
+      segment(`${index + 1}. `, { fg: "fg.muted" }),
+      // §6.5: the status word is present so no-colour output still distinguishes it.
+      segment(`[${entry.status}] `, { fg: token }),
+    ],
+    text: sanitizeInline(entry.text, 400),
+    textToken: entry.status === "done" ? "fg.muted" : "fg.primary",
+  };
 }
 
 /**

@@ -1290,6 +1290,33 @@ describe("timeline blocks (§6.4, §6.7–§6.12, AC-06)", () => {
     expect(text).toContain("[pending]");
   });
 
+  test("plan item details wrap inside the main column instead of stretching to the sidebar", () => {
+    const columns = 42;
+    const lines = renderPlan(
+      {
+        items: [
+          {
+            id: "landing",
+            text: "렌딩 페이지 UI를 제작한다",
+            status: "active",
+            details: "브랜드 히어로, 게임 소개, CTA, 반응형 스타일을 구현합니다.",
+            files: ["index.html", "landing.css"],
+            acceptanceCriteria: [
+              "첫 화면에서 게임 가치 제안과 CTA가 명확함, 모바일/데스크톱 레이아웃이 자연스러움",
+            ],
+            dependsOn: ["inspect"],
+          },
+        ],
+      },
+      context(columns),
+    );
+    expect(lines.every((styled) => lineWidth(styled) <= columns)).toBe(true);
+    const text = lines.map(lineText).join("\n");
+    expect(text).toContain("details:");
+    expect(text).toContain("acceptance:");
+    expect(text.split("\n").length).toBeGreaterThan(4);
+  });
+
   test("the final answer renders the §11.7 report structure (§7.4)", () => {
     const lines = renderTimeline(
       [

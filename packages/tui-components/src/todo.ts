@@ -9,11 +9,10 @@
 
 import { planDigest, type PlanDocument, type PlanItem, type TodoListState } from "@cbc/session-domain";
 
-import { fitLine, line, segment, type BlockContext, type StyledLine } from "./segments.ts";
+import { fitLine, line, segment, wrapPrefixedLines, type BlockContext, type StyledLine } from "./segments.ts";
 import { sanitizeInline } from "./sanitize.ts";
 import { todoBox } from "./chrome.ts";
 import type { ThemeToken } from "./theme.ts";
-import { wrapToWidth } from "./width.ts";
 
 /** A display-compatible file anchor (kept structural for old/new session models). */
 export interface PlanFileAnchorView {
@@ -360,10 +359,12 @@ function appendValue(lines: StyledLine[], value: string, context: BlockContext, 
   const token = options.token ?? "fg.primary";
   const clean = sanitizeInline(value, 800);
   if (clean.length === 0) return;
-  // Fit a wrapped value one row at a time. The prefix survives narrow terminals.
-  const available = Math.max(1, context.columns - indent.length);
-  const chunks = wrapToWidth(clean, available);
-  for (const chunk of chunks) lines.push(fitLine("body", [segment(indent, { fg: "fg.muted" }), segment(chunk, { fg: token })], context));
+  lines.push(...wrapPrefixedLines(
+    [segment(indent, { fg: "fg.muted" })],
+    clean,
+    context,
+    { fg: token },
+  ));
 }
 
 function renderApprovalSummary(

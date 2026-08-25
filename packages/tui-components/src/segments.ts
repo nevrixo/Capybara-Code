@@ -261,6 +261,31 @@ export function bodyLines(
   );
 }
 
+/**
+ * Wrap a value under a styled prefix, hanging continuation lines to the value
+ * column so a two-column session frame does not leave a long Korean sentence
+ * stretching into the sidebar padding.
+ */
+export function wrapPrefixedLines(
+  prefix: readonly Segment[],
+  value: string,
+  context: BlockContext,
+  valueStyle: SegmentStyle = { fg: "fg.primary" },
+  kind: LineKind = "body",
+): StyledLine[] {
+  const prefixWidth = prefix.reduce((sum, part) => sum + stringWidth(part.text), 0);
+  const available = Math.max(1, context.columns - prefixWidth);
+  const chunks = wrapToWidth(value, available);
+  if (chunks.length === 0) return [];
+  const hang = prefixWidth > 0 ? " ".repeat(prefixWidth) : "";
+  return chunks.map((chunk, index) =>
+    line(kind, [
+      ...(index === 0 ? prefix : hang.length > 0 ? [segment(hang)] : []),
+      segment(chunk, valueStyle),
+    ]),
+  );
+}
+
 /** A single line truncated to the available width. */
 export function fitLine(
   kind: LineKind,
