@@ -1,4 +1,5 @@
 import {
+  normalizeLspCodeActionQuery,
   normalizeLspHoverQuery,
   normalizeLspLocationQuery,
   normalizeLspDocumentHighlightQuery,
@@ -7,6 +8,8 @@ import {
   normalizeLspSignatureHelpQuery,
   type LspDiagnostic,
   type LspDiagnosticSnapshot,
+  type LspCodeActionCatalogSnapshot,
+  type LspCodeActionQueryInput,
   type LspDocumentSymbol,
   type LspDocumentHighlight,
   type LspDocumentHighlightSnapshot,
@@ -42,6 +45,7 @@ const MAX_METADATA_BYTES = 128;
 const MAX_REVISION_BYTES = 256;
 const MAX_TEXT_BYTES = 48 * 1_024;
 const MAX_SEMANTIC_PATH_BYTES = 512;
+const MAX_CODE_ACTIONS = 16;
 const MAX_SEMANTIC_LOCATIONS = 32;
 const MAX_SEMANTIC_DOCUMENT_HIGHLIGHTS = 32;
 const MAX_SEMANTIC_POSITION_COMPONENT = 1_000_000;
@@ -88,6 +92,10 @@ export interface LspSemanticReader {
   documentHighlights(input: LspTextDocumentPosition): Promise<LspQueryResult>;
 }
 
+export interface LspCodeActionsReader {
+  codeActions(input: LspTextDocumentPosition): Promise<LspQueryResult>;
+}
+
 export interface LspRenamePreviewReader {
   renamePreview(input: LspRenameRequest): Promise<LspRenamePreview>;
 }
@@ -97,6 +105,7 @@ export interface LspToolReader extends
   LspDocumentSymbolsReader,
   LspWorkspaceSymbolsReader,
   LspSemanticReader,
+  LspCodeActionsReader,
   LspRenamePreviewReader {}
 
 export interface LspSemanticBridgeOptions {
@@ -250,6 +259,7 @@ export type LspDiagnosticsBridge = (action: ProposedAction, signal: AbortSignal)
 export type LspDocumentSymbolsBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspWorkspaceSymbolsBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspSemanticBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
+export type LspCodeActionsBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspRenamePreviewBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspToolBridge = LspSemanticBridge;
 
@@ -444,6 +454,51 @@ export function createLspSemanticBridge(
 }
 
 /**
+ * Code actions are a catalog only at this boundary. The raw edit, command,
+ * diagnostics, and data fields never reach model context or execute anything.
+ */
+export function createLspCodeActionsBridge(
+  reader: LspCodeActionsReader,
+  options: LspSemanticBridgeOptions,
+): LspCodeActionsBridge {
+  return async (action, signal) => {
+    const request = codeActionRequest(action);
+    if (request === undefined) {
+      return {
+        result: errorResult(
+          "INVALID_ARGUMENT",
+          "lsp.code_actions requires a bounded workspace-relative path and zero-based position",
+        ),
+      };
+    }
+    if (signal.aborted) return cancelledCodeActions();
+
+    try {
+      const query = await reader.codeActions(request);
+      if (signal.aborted) return cancelledCodeActions();
+      const catalog = normalizeLspCodeActionQuery(query.result, {
+        workspaceRoot: options.workspaceRoot,
+        server: query.server,
+        source: request,
+        maxActions: MAX_CODE_ACTIONS,
+      });
+      return {
+        result: okResult(codeActionSummary(catalog), catalog),
+        text: renderCodeActions(catalog),
+      };
+    } catch {
+      return {
+        result: errorResult(
+          "NOT_INITIALIZED",
+          "LSP code actions are currently unavailable; retry after the language server is ready",
+          { retryable: true },
+        ),
+      };
+    }
+  };
+}
+
+/**
  * Rename stays proposal-only: this bridge returns a reconstructed, bounded
  * edit plan but never exposes the raw server WorkspaceEdit or writes files.
  */
@@ -486,7 +541,7 @@ export function createLspRenamePreviewBridge(
   };
 }
 
-/** Combine diagnostics, symbols, semantic queries, and proposal-only rename behind one LSP bridge. */
+/** Combine diagnostics, symbols, semantic queries, code-action catalog, and proposal-only rename. */
 export function createLspToolBridge(
   reader: LspToolReader,
   options: LspSemanticBridgeOptions,
@@ -495,6 +550,7 @@ export function createLspToolBridge(
   const documentSymbols = createLspDocumentSymbolsBridge(reader, options);
   const workspaceSymbols = createLspWorkspaceSymbolsBridge(reader, options);
   const semantic = createLspSemanticBridge(reader, options);
+  const codeActions = createLspCodeActionsBridge(reader, options);
   const renamePreview = createLspRenamePreviewBridge(reader);
   return async (action, signal) =>
     action.toolId === "lsp.diagnostics"
@@ -503,6 +559,8 @@ export function createLspToolBridge(
       ? await documentSymbols(action, signal)
       : action.toolId === "lsp.workspace_symbols"
       ? await workspaceSymbols(action, signal)
+      : action.toolId === "lsp.code_actions"
+      ? await codeActions(action, signal)
       : action.toolId === "lsp.rename_preview"
       ? await renamePreview(action, signal)
       : await semantic(action, signal);
@@ -532,6 +590,12 @@ function cancelledWorkspaceSymbols(): Execution {
   };
 }
 
+function cancelledCodeActions(): Execution {
+  return {
+    result: errorResult("CANCELLED", "LSP code actions request was cancelled", { retryable: true }),
+  };
+}
+
 function cancelledRenamePreview(): Execution {
   return {
     result: errorResult("CANCELLED", "LSP rename preview was cancelled", { retryable: true }),
@@ -545,6 +609,21 @@ function lspPath(action: ProposedAction): string | undefined {
 
 function lspArguments(action: ProposedAction): Record<string, unknown> | undefined {
   return isRecord(action.arguments) ? action.arguments : undefined;
+}
+
+function codeActionRequest(action: ProposedAction): LspCodeActionQueryInput | undefined {
+  if (action.toolId !== "lsp.code_actions") return undefined;
+  const raw = lspArguments(action);
+  if (raw === undefined) return undefined;
+  const path = lspPathFromArguments(raw, MAX_SEMANTIC_PATH_BYTES);
+  if (
+    path === undefined ||
+    !isSemanticPositionComponent(raw.line) ||
+    !isSemanticPositionComponent(raw.character)
+  ) {
+    return undefined;
+  }
+  return Object.freeze({ path, line: raw.line, character: raw.character });
 }
 
 function renamePreviewRequest(action: ProposedAction): LspRenameRequest | undefined {
@@ -831,6 +910,39 @@ function renderRenamePreview(result: LspToolRenamePreviewResult): string {
       String(result.paths.length) + " file(s): " + result.paths.join(", "),
     "[This proposal has not written files. Run fs.edit.preview to re-preflight it; fs.edit requires its own approval and re-preflights immediately before staging.]",
   ].join("\n"), MAX_TEXT_BYTES);
+}
+
+function codeActionSummary(result: LspCodeActionCatalogSnapshot): string {
+  return String(result.actions.length) + " bounded LSP code action(s) cataloged for " + result.source.path;
+}
+
+function renderCodeActions(result: LspCodeActionCatalogSnapshot): string {
+  const location = result.source.path + ":" + String(result.source.position.line + 1) +
+    ":" + String(result.source.position.character + 1);
+  if (result.actions.length === 0) {
+    return "No LSP code actions are available at " + location +
+      ". No command was run and no edit payload was returned.";
+  }
+  const lines = [
+    "LSP code-action catalog at " + location + ": showing " + String(result.actions.length) +
+      " of " + String(result.totalActions) + " action(s).",
+    "[Actions are untrusted metadata only; no command was run and no edit payload was returned.]",
+  ];
+  if (result.truncated) {
+    lines.push("[Result is bounded; the catalog is not exhaustive.]");
+  }
+  for (const action of result.actions) {
+    const details = [
+      ...(action.kind === undefined ? [] : [action.kind]),
+      ...(action.preferred ? ["preferred"] : []),
+      ...(action.disabled ? ["disabled"] : []),
+      ...(action.hasEdit ? ["contains edit"] : []),
+      ...(action.hasCommand ? ["contains command"] : []),
+    ];
+    lines.push("#" + String(action.index) + " " + action.title +
+      (details.length === 0 ? "" : " [" + details.join("; ") + "]"));
+  }
+  return truncateUtf8(lines.join("\n"), MAX_TEXT_BYTES);
 }
 
 function projectDiagnostics(path: string, lookup: LspDiagnosticLookup): LspToolDiagnosticsResult {
