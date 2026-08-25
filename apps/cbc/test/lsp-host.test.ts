@@ -409,6 +409,7 @@ describe("LspHost", () => {
       workspaceTrusted: true,
       enabled: true,
       allowRenamePreview: true,
+      maxEditChangedBytes: 7,
       workspaceIdentityDigest: () => "ws_1",
       readFile: async () => documentText,
       readEditDocument: async (path) =>
@@ -439,6 +440,20 @@ describe("LspHost", () => {
       newName: "Blocked",
     })).rejects.toThrow("LSP server does not allow rename at this position");
     expect(methods.filter((method) => method === "textDocument/rename")).toHaveLength(renameRequests);
+
+    preparation = {
+      range: {
+        start: { line: 0, character: 13 },
+        end: { line: 0, character: 19 },
+      },
+      placeholder: "Widget",
+    };
+    await expect(host.renamePreview({
+      path: "src/widget.ts",
+      line: 0,
+      character: 13,
+      newName: "TooLarge",
+    })).rejects.toThrow("LSP edit preview exceeds the configured changed-byte limit");
 
     await host.close();
   });
