@@ -38,6 +38,12 @@ function receipt(): OperationReceipt<string> {
 }
 
 describe("App Protocol command contracts", () => {
+  test("transport notifications stay outside the session journal catalog", async () => {
+    const { APP_NOTIFICATION_KINDS } = await import("../src/index.ts");
+    expect(APP_NOTIFICATION_KINDS).toContain("events.push");
+    expect(APP_NOTIFICATION_KINDS).toContain("artifact.chunk");
+  });
+
   test("canonicalizes object keys deterministically", () => {
     expect(canonicalJson({ b: [2, { z: true, a: 1 }], a: "x" }))
       .toBe(canonicalJson({ a: "x", b: [2, { a: 1, z: true }] }));

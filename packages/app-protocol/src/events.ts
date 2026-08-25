@@ -82,3 +82,18 @@ export interface EventGap {
   readonly earliestAvailable: EventCursor;
   readonly snapshotRequired: true;
 }
+
+/** Transport-level App Server notifications. Separate from the session journal catalog. */
+export const APP_NOTIFICATION_KINDS = [
+  "server.notice",
+  "server.restarting",
+  "server.capability_changed",
+  "events.push",
+  "events.gap",
+  "subscription.slow",
+  "command.progress",
+  "approval.pending",
+  "artifact.chunk",
+] as const;
+
+export type AppNotificationKind = (typeof APP_NOTIFICATION_KINDS)[number];

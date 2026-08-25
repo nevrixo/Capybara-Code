@@ -29,6 +29,7 @@
       "@cbc/lsp-domain": ["packages/lsp-domain/src/index.ts"],
       "@cbc/protocol": ["packages/protocol-ts/src/index.ts"],
       "@cbc/app-protocol": ["packages/app-protocol/src/index.ts"],
+      "@cbc/app-server": ["packages/app-server/src/index.ts"],
       "@cbc/edit-domain": ["packages/edit-domain/src/index.ts"],
       "@cbc/plugin-sdk": ["packages/plugin-sdk/src/index.ts"],
       "@cbc/plugin-sdk/testing": ["packages/plugin-sdk/src/testing.ts"],
@@ -44,7 +45,10 @@
       "@cbc/skills": ["packages/skills/src/index.ts"],
       "@cbc/mcp-client": ["packages/mcp-client/src/index.ts"],
       "@cbc/tui-components": ["packages/tui-components/src/index.ts"],
-      "@cbc/evals": ["packages/evals/src/index.ts"]
+      "@cbc/evals": ["packages/evals/src/index.ts"],
+      "@cbc/memory-service": ["packages/memory-service/src/index.ts"],
+      "@cbc/agent-graph-domain": ["packages/agent-graph-domain/src/index.ts"],
+      "@cbc/sdk": ["packages/sdk-typescript/src/index.ts"]
     }
   },
   "include": ["apps", "packages", "benchmarks", "scripts"],

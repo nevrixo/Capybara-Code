@@ -8,6 +8,7 @@
  * capybara-code-<version>-<target>/
  * ├─ bin/capy
  * ├─ libexec/cbc-runtime
+ * ├─ libexec/capy-daemon
  * ├─ share/capybara/{skills,schemas,model-registry.json,notices}
  * └─ manifest.json
  * ```
@@ -189,6 +190,28 @@ async function main(argv: readonly string[]): Promise<number> {
     warnings.push("cbc-runtime is omitted: --no-runtime was passed, so normal workspace sessions cannot start");
   }
 
+  // ---- libexec/capy-daemon ----
+  const daemonName = `capy-daemon${options.target.startsWith("windows") ? ".exe" : ""}`;
+  const daemonPath = `${stage}/libexec/${daemonName}`;
+  if (options.compile) {
+    const daemon = await compileExecutable(spec.bunTarget, daemonPath, `${ROOT}/apps/capy-daemon/src/main.ts`);
+    if (!daemon.ok) {
+      console.error(daemon.detail);
+      return 1;
+    }
+  } else {
+    await write(
+      daemonPath.replace(/\.exe$/, ""),
+      [
+        "#!/usr/bin/env bash",
+        'here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+        `exec bun run "${ROOT}/apps/capy-daemon/src/main.ts" "$@"`,
+        "",
+      ].join("\n"),
+    );
+    warnings.push("libexec/capy-daemon is a development launcher and must not be distributed");
+  }
+
   // POSIX executability is part of the artifact contract, not a property we can
   // leave to whichever archiver or package transport happens to run later.
   // Bun.write() does not promise to preserve the source mode when it copies the
@@ -196,6 +219,7 @@ async function main(argv: readonly string[]): Promise<number> {
   if (spec.exe === "") {
     await makeExecutable(binPath);
     if (options.includeRuntime) await makeExecutable(`${stage}/libexec/cbc-runtime`);
+    await makeExecutable(`${stage}/libexec/capy-daemon`);
   }
 
   // ---- share/capybara ----
@@ -313,6 +337,7 @@ async function main(argv: readonly string[]): Promise<number> {
 async function compileExecutable(
   bunTarget: string,
   outfile: string,
+  entry = `${ROOT}/apps/cbc/src/main.ts`,
 ): Promise<{ ok: true } | { ok: false; detail: string }> {
   const args = [
     "build",
@@ -321,7 +346,7 @@ async function compileExecutable(
     "--sourcemap=none",
     `--target=${bunTarget}`,
     `--outfile=${outfile}`,
-    `${ROOT}/apps/cbc/src/main.ts`,
+    entry,
   ];
   console.log(`  bun ${args.join(" ")}`);
 

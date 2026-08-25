@@ -39,6 +39,20 @@ export const CATEGORY_TARGETS: Readonly<Record<TaskCategory, number>> = {
 
 export const TARGET_TASK_COUNT = 150;
 
+/** Additional modification-plan categories. They do not change the 150-task §26.2 mix. */
+export const FEATURE_TASK_CATEGORIES = [
+  "edit_precision",
+  "full_lsp",
+  "durable_memory",
+  "session_daemon",
+  "persistent_graph",
+  "worktree_multi_agent",
+  "plugin_hooks",
+  "app_server_sdk",
+] as const;
+
+export type FeatureTaskCategory = (typeof FEATURE_TASK_CATEGORIES)[number];
+
 /** §26.2's language coverage. */
 export const TASK_LANGUAGES = [
   "typescript",
