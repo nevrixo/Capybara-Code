@@ -71,6 +71,7 @@ export function configuredLspServers(
 
 const MAX_LSP_DOCUMENTS_PER_LANGUAGE = 64;
 const MAX_LSP_DIAGNOSTIC_DOCUMENTS = MAX_LSP_DOCUMENTS_PER_LANGUAGE * 2;
+const MAX_LSP_DIAGNOSTIC_SERVERS = 8;
 const MAX_LSP_DOCUMENT_BYTES = 1_000_000;
 const MAX_LSP_SYMBOLS_PER_DOCUMENT = 512;
 const MAX_LSP_PARALLEL_REQUESTS = 4;
@@ -139,6 +140,20 @@ export interface LspQueryResult {
   readonly server: string;
   readonly result: unknown;
 }
+
+/** Bounded, current diagnostic evidence for one workspace-relative document. */
+export interface LspDiagnosticLookup {
+  readonly snapshots: readonly LspDiagnosticSnapshot[];
+  /** Number of current server snapshots before the return cap is applied. */
+  readonly totalServers: number;
+  readonly truncatedServers: boolean;
+}
+
+const EMPTY_LSP_DIAGNOSTIC_LOOKUP: LspDiagnosticLookup = Object.freeze({
+  snapshots: Object.freeze([]) as readonly LspDiagnosticSnapshot[],
+  totalServers: 0,
+  truncatedServers: false,
+});
 
 /** A semantic rename proposal. Applying it still requires the fs.edit authority path. */
 export interface LspRenamePreview {
@@ -269,15 +284,16 @@ export class LspHost {
    * Return only diagnostics whose captured revision still matches a fresh,
    * runtime-authoritative document read. This never starts a language server.
    */
-  async diagnostics(path: string): Promise<readonly LspDiagnosticSnapshot[]> {
+  async diagnostics(path: string): Promise<LspDiagnosticLookup> {
     workspaceFileUri(this.#options.workspaceRoot, path);
-    if (!this.#mayStart()) return [];
+    if (!this.#mayStart()) return EMPTY_LSP_DIAGNOSTIC_LOOKUP;
     const document = await this.#readDiagnosticDocument(path);
-    if (document === undefined) return [];
+    if (document === undefined) return EMPTY_LSP_DIAGNOSTIC_LOOKUP;
     const workspaceIdentityDigest = this.#workspaceIdentityDigest();
-    if (workspaceIdentityDigest === undefined) return [];
+    if (workspaceIdentityDigest === undefined) return EMPTY_LSP_DIAGNOSTIC_LOOKUP;
 
     const snapshots: LspDiagnosticSnapshot[] = [];
+    let totalServers = 0;
     for (const descriptor of this.#servers) {
       const snapshot = this.#diagnosticSnapshots.get(this.#diagnosticCacheKey(descriptor.name, path));
       if (
@@ -285,10 +301,15 @@ export class LspHost {
         snapshot.workspaceIdentityDigest === workspaceIdentityDigest &&
         snapshot.documentRevision === document.revision
       ) {
-        snapshots.push(snapshot);
+        totalServers += 1;
+        if (snapshots.length < MAX_LSP_DIAGNOSTIC_SERVERS) snapshots.push(snapshot);
       }
     }
-    return Object.freeze(snapshots);
+    return Object.freeze({
+      snapshots: Object.freeze(snapshots),
+      totalServers,
+      truncatedServers: totalServers > snapshots.length,
+    });
   }
 
   /**

@@ -415,7 +415,10 @@ describe("LspHost", () => {
     await host.definition({ path: "src/widget.ts", line: 0, character: 0 });
     const current = await host.diagnostics("src/widget.ts");
 
-    expect(current).toEqual([expect.objectContaining({
+    expect(current).toEqual(expect.objectContaining({
+      totalServers: 1,
+      truncatedServers: false,
+      snapshots: [expect.objectContaining({
       server: "typescript",
       workspaceIdentityDigest: "ws_1",
       path: "src/widget.ts",
@@ -433,7 +436,8 @@ describe("LspHost", () => {
       }],
       totalDiagnostics: 1,
       truncated: false,
-    })]);
+      })],
+    }));
 
     notification?.("lsp.stdio.output", {
       protocolChannel,
@@ -450,7 +454,11 @@ describe("LspHost", () => {
     expect(await host.diagnostics("src/widget.ts")).toEqual(current);
 
     revision = "sha256:widget-2";
-    expect(await host.diagnostics("src/widget.ts")).toEqual([]);
+    expect(await host.diagnostics("src/widget.ts")).toEqual({
+      snapshots: [],
+      totalServers: 0,
+      truncatedServers: false,
+    });
 
     await host.close();
   });
