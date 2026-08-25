@@ -642,6 +642,7 @@ const TOOL_ACTIONS: Readonly<Record<string, string>> = {
   "memory.search": "Search",
   "memory.remember": "Remember",
   "todo.write": "TODO",
+  "plugin.invoke": "Plugin",
   "tool.discover": "Discover",
   "repo.investigate": "Search",
   "verification.run_many": "Run",
@@ -715,6 +716,8 @@ export function toolActionIcon(toolId: string): IconName {
       return "git";
     case "Task":
       return "subagent";
+    case "Plugin":
+      return "tool";
     case "TODO":
       return "task";
     case "Skill":
