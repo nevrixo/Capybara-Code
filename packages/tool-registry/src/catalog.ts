@@ -452,6 +452,23 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
     parameters: objectSchema(lspTextDocumentPosition, ["path", "line", "character"]),
   },
   {
+    id: "lsp.signature_help",
+    title: "LspSignatureHelp",
+    description: "Read bounded signature labels through configured local language servers.",
+    source: "native",
+    defaultRisk: "R0",
+    maxRisk: "R0",
+    alwaysActive: false,
+    mutates: false,
+    network: false,
+    authority: "read",
+    idempotency: "idempotent",
+    maxParallelism: 2,
+    resultSchemaId: "lsp.signature_help.v1",
+    keywords: ["lsp", "signature", "parameters", "call help", "language server"],
+    parameters: objectSchema(lspTextDocumentPosition, ["path", "line", "character"]),
+  },
+  {
     id: "memory.search",
     title: "RecallMemory",
     description: "Recall bounded, fresh, evidence-backed memory from this workspace only.",
@@ -1282,6 +1299,7 @@ const FULL_LSP_TOOL_IDS = new Set([
   "lsp.implementation",
   "lsp.references",
   "lsp.hover",
+  "lsp.signature_help",
 ]);
 
 export interface NativeToolFeatures {
