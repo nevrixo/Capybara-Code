@@ -35,4 +35,38 @@ describe("daemon crash recovery", () => {
       "safe_idle",
     );
   });
+
+  test("classifies kill points for approval, integrity, and idle sessions", async () => {
+    const recovered = await recoverDaemonState({
+      workspaces: new WorkspaceSupervisorRegistry(),
+      approvals: new ApprovalManager(),
+      eventHub: new EventHub(),
+      now: () => "2026-08-25T00:00:00.000Z",
+      sessions: [
+        {
+          sessionId: "ses_approval",
+          workspaceIdentityDigest: "ws_1",
+          pendingApprovalIds: ["appr_1"],
+        },
+        {
+          sessionId: "ses_corrupt",
+          workspaceIdentityDigest: "ws_1",
+          integrityOk: false,
+        },
+        {
+          sessionId: "ses_idle",
+          workspaceIdentityDigest: "ws_1",
+        },
+      ],
+    });
+    expect(recovered.recovered.find((session) => session.sessionId === "ses_approval")?.classification).toBe(
+      "waiting_approval",
+    );
+    expect(recovered.recovered.find((session) => session.sessionId === "ses_corrupt")?.classification).toBe(
+      "failed_integrity",
+    );
+    expect(recovered.recovered.find((session) => session.sessionId === "ses_idle")?.classification).toBe(
+      "safe_idle",
+    );
+  });
 });

@@ -9,8 +9,11 @@
 
 import {
   CATEGORY_TARGETS,
+  FEATURE_TASK_CATEGORIES,
+  FEATURE_TASK_PROMPTS,
   TARGET_TASK_COUNT,
   type BenchTask,
+  type FeatureTaskCategory,
   type GeneratedSnapshotSpec,
   type RiskLabel,
   type TaskCategory,
@@ -345,6 +348,33 @@ export const SUITE: readonly BenchTask[] = [
 
 if (SUITE.length !== TARGET_TASK_COUNT) {
   throw new Error(`benchmark suite drift: expected ${TARGET_TASK_COUNT}, found ${SUITE.length}`);
+}
+
+/** Extra modification-plan tasks. They are not part of the 150-task §26.2 mix. */
+export const FEATURE_SUITE: readonly BenchTask[] = FEATURE_TASK_CATEGORIES.map((category, offset) => {
+  const index = offset + 1;
+  return generatedTask({
+    id: `feat-${String(index).padStart(3, "0")}`,
+    category: featureCategory(category),
+    language: "typescript",
+    title: FEATURE_TASK_PROMPTS[category],
+    template: "repository-understanding",
+    index,
+    prompt: FEATURE_TASK_PROMPTS[category],
+    expectedScope: ["ANSWER.md"],
+    reportMentions: [category.replaceAll("_", " ")],
+    permissionMode: "auto-review",
+    wallMinutes: 8,
+    maxToolCalls: 40,
+  });
+});
+
+function featureCategory(_category: FeatureTaskCategory): TaskCategory {
+  return "feature_implementation";
+}
+
+if (FEATURE_SUITE.length !== FEATURE_TASK_CATEGORIES.length) {
+  throw new Error(`feature suite drift: expected ${FEATURE_TASK_CATEGORIES.length}, found ${FEATURE_SUITE.length}`);
 }
 
 /** Tasks matching a filter expression: an id, category, language, or `all`. */
