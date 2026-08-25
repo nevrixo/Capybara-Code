@@ -539,6 +539,23 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
     parameters: objectSchema(lspTextDocumentPosition, ["path", "line", "character"]),
   },
   {
+    id: "lsp.code_actions",
+    title: "LspCodeActions",
+    description: "Read a bounded non-executable code-action catalog through configured local language servers.",
+    source: "native",
+    defaultRisk: "R0",
+    maxRisk: "R0",
+    alwaysActive: false,
+    mutates: false,
+    network: false,
+    authority: "read",
+    idempotency: "idempotent",
+    maxParallelism: 2,
+    resultSchemaId: "lsp.code_actions.v1",
+    keywords: ["lsp", "code actions", "quick fix", "refactor", "language server"],
+    parameters: objectSchema(lspTextDocumentPosition, ["path", "line", "character"]),
+  },
+  {
     id: "lsp.rename_preview",
     title: "LspRenamePreview",
     description: "Create a bounded revision-bound rename proposal through configured local language servers without writing files.",
@@ -1401,6 +1418,7 @@ const FULL_LSP_TOOL_IDS = new Set([
   "lsp.hover",
   "lsp.signature_help",
   "lsp.document_highlights",
+  "lsp.code_actions",
   "lsp.rename_preview",
 ]);
 const LSP_RENAME_PREVIEW_TOOL_IDS = new Set(["lsp.rename_preview"]);
