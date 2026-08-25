@@ -92,7 +92,7 @@ export interface ToolBridges {
   /** `mcp.*` â€” supplied by the MCP manager. */
   readonly mcp?: (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
   /** `user.ask` â€” supplied by the TUI or headless policy. */
-  /** `lsp.diagnostics`+§uçâçT supplied by the supervised local LSP host. */
+  /** `lsp.diagnostics`+ï¿½uï¿½ï¿½ï¿½T supplied by the supervised local LSP host. */
   readonly lsp?: (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
   readonly ask?: (question: string, choices: readonly string[], signal: AbortSignal) => Promise<string>;
   /** `todo.write` â€” root session state, never a workspace side effect. */
@@ -1475,10 +1475,12 @@ export class RuntimeToolExecutor implements ToolExecutor {
           };
         }
         const capability = await this.#issueCapability(action);
+        const preview = await runtime.previewEdit({ plan });
         return await this.#mutate(action, capability.id, async (transactionId) => {
           const staged = await runtime.applyEdit({
             transactionId,
             plan,
+            expectedPlanDigest: preview.planDigest,
             capabilityReceipt: capability.id,
             capabilitySessionId: capability.sessionId,
             capabilityActionHash: capability.actionHash,

@@ -84,6 +84,16 @@ describe("runtime sidecar environment", () => {
         };
       },
       beginTransaction: async () => ({ transactionId: "tx-edit" }),
+      async previewEdit() {
+        return {
+          status: "previewed" as const,
+          planId: "edp_1",
+          planDigest: "sha256:plan",
+          resolvedOperations: [],
+          files: [],
+          diffPreview: [],
+        };
+      },
       async applyEdit(params: Record<string, unknown>) {
         applied.push(params);
         return {

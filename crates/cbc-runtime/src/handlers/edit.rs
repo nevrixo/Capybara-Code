@@ -18,7 +18,8 @@ use serde_json::{json, Value};
 
 use crate::handlers::transaction;
 use crate::server::{
-    fs_error, guard_error, optional_bool, required_str, transaction_error, RuntimeState,
+    fs_error, guard_error, optional_bool, optional_str, required_str, transaction_error,
+    RuntimeState,
 };
 
 /// Preflight a plan against a fresh workspace snapshot without opening a
@@ -49,6 +50,20 @@ pub fn apply(state: &RuntimeState, params: Value) -> Result<Value, RpcError> {
         transaction::resolve_write(&ws, path, lease.clone(), &params)
     })?;
     let prepared = preflight_for_workspace(state, &plan, &documents)?;
+    if let Some(expected) = optional_str(&params, "expectedPlanDigest") {
+        if expected != prepared.plan_digest {
+            return Err(RpcError::with_data(
+                error_codes::INVALID_ARGUMENT,
+                "edit plan digest does not match expectedPlanDigest",
+                json!({
+                    "taxonomy": "HASH_MISMATCH",
+                    "editCode": "EDIT_PREVIEW_STALE",
+                    "expectedPlanDigest": expected,
+                    "planDigest": prepared.plan_digest,
+                }),
+            ));
+        }
+    }
 
     // The preflight result is the only content that reaches FileTransaction.
     // Check every text payload before the lock so a capability failure cannot
