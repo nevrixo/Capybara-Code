@@ -5270,6 +5270,18 @@ describe("tool execution helpers", () => {
     expect(diagnostics.result.ok).toBe(true);
     expect(diagnostics.result.summary).toContain("lsp.diagnostics");
 
+    const symbols = await executor.execute(
+      {
+        callId: "lsp-symbols",
+        toolId: "lsp.symbols",
+        arguments: { path: "src/widget.ts" },
+        display: "lsp.symbols src/widget.ts",
+      },
+      new AbortController().signal,
+    );
+    expect(symbols.result.ok).toBe(true);
+    expect(symbols.result.summary).toContain("lsp.symbols");
+
     const definition = await executor.execute(
       {
         callId: "lsp-2",
@@ -5314,6 +5326,7 @@ describe("tool execution helpers", () => {
     expect(unknown.result.error?.code).toBe("INVALID_ARGUMENT");
     expect(lspCalls).toEqual([
       "lsp.diagnostics",
+      "lsp.symbols",
       "lsp.definition",
       "lsp.declaration",
       "lsp.type_definition",

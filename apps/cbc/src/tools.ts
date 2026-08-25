@@ -1780,6 +1780,7 @@ export class RuntimeToolExecutor implements ToolExecutor {
         return await this.#viaBridge("mcp", action, signal, "no MCP server is configured");
 
       case "lsp.diagnostics":
+      case "lsp.symbols":
       case "lsp.definition":
       case "lsp.declaration":
       case "lsp.type_definition":
