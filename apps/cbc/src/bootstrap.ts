@@ -72,7 +72,7 @@ import {
 import { appendApprovalRule, readApprovalRules } from "./rules-store.ts";
 import type { Runtime, RuntimeSessionSummary } from "./runtime.ts";
 import { LspHost, type LspServiceStatus } from "./lsp-host.ts";
-import { createLspDiagnosticsBridge } from "./lsp-tool-bridge.ts";
+import { createLspToolBridge } from "./lsp-tool-bridge.ts";
 import { DeferredMcpHost } from "./mcp-host.ts";
 import {
   newSessionId,
@@ -511,18 +511,18 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
       }
     });
   }
-  const lspDiagnosticsEnabled =
+  const lspToolsEnabled =
     effective.experimental.fullLsp &&
     effective.lsp.enabled &&
     (trust === "trusted-always" || trust === "trusted-once");
   const sessionBridges: ToolBridges | undefined =
-    options.bridges !== undefined || lspDiagnosticsEnabled
+    options.bridges !== undefined || lspToolsEnabled
       ? {
           ...(options.bridges ?? {}),
           ...(options.bridges?.lsp !== undefined
             ? {}
-            : lspDiagnosticsEnabled
-              ? { lsp: createLspDiagnosticsBridge(lspHost) }
+            : lspToolsEnabled
+              ? { lsp: createLspToolBridge(lspHost, { workspaceRoot: context.workspacePath }) }
               : {}),
         }
       : undefined;
