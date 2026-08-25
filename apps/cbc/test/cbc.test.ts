@@ -5282,7 +5282,12 @@ describe("tool execution helpers", () => {
     expect(definition.result.ok).toBe(true);
     expect(definition.result.summary).toContain("lsp.definition");
 
-    for (const toolId of ["lsp.declaration", "lsp.type_definition", "lsp.implementation"]) {
+    for (const toolId of [
+      "lsp.declaration",
+      "lsp.type_definition",
+      "lsp.implementation",
+      "lsp.signature_help",
+    ]) {
       const locationQuery = await executor.execute(
         {
           callId: "lsp-" + toolId,
@@ -5313,6 +5318,7 @@ describe("tool execution helpers", () => {
       "lsp.declaration",
       "lsp.type_definition",
       "lsp.implementation",
+      "lsp.signature_help",
     ]);
   });
 
