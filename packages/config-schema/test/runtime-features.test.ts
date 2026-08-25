@@ -28,19 +28,23 @@ describe("durable runtime configuration gates", () => {
       values: {
         "experimental.editEngineV2": true,
         "experimental.fullLsp": true,
+        "lsp.mutations.formatting": true,
         "lsp.mutations.codeActions": true,
       },
     }]);
     expect(merged.config.experimental.editEngineV2).toBe(true);
     expect(merged.config.experimental.fullLsp).toBe(true);
+    expect(merged.config.lsp.mutations.formatting).toBe(true);
     expect(merged.config.lsp.mutations.codeActions).toBe(true);
     expect(merged.issues.some((issue) =>
       issue.path === "experimental.editEngineV2" ||
       issue.path === "experimental.fullLsp" ||
+      issue.path === "lsp.mutations.formatting" ||
       issue.path === "lsp.mutations.codeActions",
     )).toBe(false);
     expect(configKeyInfo("experimental.editEngineV2")?.status).toBe("wired");
     expect(configKeyInfo("experimental.fullLsp")?.status).toBe("wired");
+    expect(configKeyInfo("lsp.mutations.formatting")?.status).toBe("wired");
     expect(configKeyInfo("lsp.mutations.codeActions")?.status).toBe("wired");
   });
 
