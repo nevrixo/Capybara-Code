@@ -1345,6 +1345,190 @@ describe("LspHost", () => {
     await host.close();
   });
 
+  test("prepares capability-advertised call hierarchy requests before returning one bounded direction", async () => {
+    let notification:
+      | ((method: string, params: unknown) => void)
+      | undefined;
+    let protocolChannel = "";
+    let initializeCapabilities: unknown;
+    let prepareParams: Record<string, unknown> | undefined;
+    let incomingParams: Record<string, unknown> | undefined;
+    let outgoingParams: Record<string, unknown> | undefined;
+    let returnEmptyPreparation = false;
+    let overflowIncoming = false;
+    const methods: string[] = [];
+    const preparedItem = {
+      name: "target",
+      kind: 12,
+      detail: "void target()",
+      uri: "file:///work/src/target.ts",
+      range: {
+        start: { line: 0, character: 0 },
+        end: { line: 2, character: 1 },
+      },
+      selectionRange: {
+        start: { line: 0, character: 5 },
+        end: { line: 0, character: 11 },
+      },
+      data: { opaque: "server-owned" },
+    };
+    const incomingCall = {
+      from: {
+        ...preparedItem,
+        name: "caller",
+        uri: "file:///work/src/caller.ts",
+      },
+      fromRanges: [{
+        start: { line: 4, character: 2 },
+        end: { line: 4, character: 8 },
+      }],
+    };
+    const outgoingCall = {
+      to: {
+        ...preparedItem,
+        name: "callee",
+        uri: "file:///work/src/callee.ts",
+      },
+      fromRanges: [{
+        start: { line: 1, character: 2 },
+        end: { line: 1, character: 8 },
+      }],
+    };
+    const runtime = {
+      issueCapability: async () => ({ id: "cap", sessionId: "session-1", actionHash: "hash" }),
+      startJob: async (params: Record<string, unknown>) => {
+        protocolChannel = String(params.protocolChannel);
+        return { jobId: "job-1", display: "fake LSP" };
+      },
+      sendInput: async (params: Record<string, unknown>) => {
+        const data = params.data;
+        if (typeof data !== "string") throw new Error("expected framed LSP input");
+        const message = messageFromFrame(data);
+        if (typeof message.method === "string") methods.push(message.method);
+        if (message.method === "initialize") {
+          const rawParams = message.params;
+          if (typeof rawParams === "object" && rawParams !== null && !Array.isArray(rawParams)) {
+            initializeCapabilities = (rawParams as Record<string, unknown>).capabilities;
+          }
+        }
+        if (typeof message.id !== "number") return undefined;
+
+        let result: unknown = null;
+        if (message.method === "initialize") {
+          result = { capabilities: { callHierarchyProvider: true } };
+        } else if (message.method === "textDocument/prepareCallHierarchy") {
+          prepareParams = message.params as Record<string, unknown>;
+          result = returnEmptyPreparation ? [] : [preparedItem];
+        } else if (message.method === "callHierarchy/incomingCalls") {
+          incomingParams = message.params as Record<string, unknown>;
+          result = overflowIncoming
+            ? Array.from({ length: 257 }, () => incomingCall)
+            : [incomingCall];
+        } else if (message.method === "callHierarchy/outgoingCalls") {
+          outgoingParams = message.params as Record<string, unknown>;
+          result = [outgoingCall];
+        }
+        notification?.("lsp.stdio.output", {
+          protocolChannel,
+          text: lspFrame({ jsonrpc: "2.0", id: message.id, result }),
+        });
+        return undefined;
+      },
+      stopJob: async () => undefined,
+      subscribeNotifications: (handler: (method: string, params: unknown) => void) => {
+        notification = handler;
+        return () => {
+          if (notification === handler) notification = undefined;
+        };
+      },
+    };
+    const host = new LspHost({
+      runtime: runtime as never,
+      servers: {
+        typescript: {
+          command: "typescript-language-server",
+          args: ["--stdio"],
+          extensions: [".ts"],
+          languageId: "typescript",
+          timeoutMs: 1_000,
+        },
+      },
+      sessionId: "session-1",
+      workspaceRoot: "/work",
+      workspaceTrusted: true,
+      enabled: true,
+      isBuildMode: () => true,
+      resolveExecutable: () => "fake-lsp",
+      readFile: async () => "export function target() {}\n",
+    });
+
+    const incoming = await host.callHierarchy({
+      path: "src/target.ts",
+      line: 0,
+      character: 7,
+      direction: "incoming",
+    });
+    expect(incoming).toMatchObject({
+      server: "typescript",
+      direction: "incoming",
+      root: preparedItem,
+      result: [incomingCall],
+    });
+    expect(prepareParams).toMatchObject({
+      position: { line: 0, character: 7 },
+    });
+    const preparedTextDocument = prepareParams?.textDocument as Record<string, unknown> | undefined;
+    expect(String(preparedTextDocument?.uri)).toMatch(/src\/target\.ts$/);
+    expect(incomingParams).toEqual({ item: preparedItem });
+    expect(methods).toEqual(expect.arrayContaining([
+      "textDocument/didOpen",
+      "textDocument/prepareCallHierarchy",
+      "callHierarchy/incomingCalls",
+      "textDocument/didClose",
+    ]));
+    expect(initializeCapabilities).toMatchObject({
+      textDocument: { callHierarchy: { dynamicRegistration: false } },
+    });
+
+    const outgoing = await host.callHierarchy({
+      path: "src/target.ts",
+      line: 0,
+      character: 7,
+      direction: "outgoing",
+    });
+    expect(outgoing).toMatchObject({
+      direction: "outgoing",
+      root: preparedItem,
+      result: [outgoingCall],
+    });
+    expect(outgoingParams).toEqual({ item: preparedItem });
+
+    const incomingRequests = methods.filter((method) => method === "callHierarchy/incomingCalls").length;
+    returnEmptyPreparation = true;
+    const empty = await host.callHierarchy({
+      path: "src/target.ts",
+      line: 0,
+      character: 7,
+      direction: "incoming",
+    });
+    expect(empty.root).toBeUndefined();
+    expect(empty.result).toEqual([]);
+    expect(methods.filter((method) => method === "callHierarchy/incomingCalls")).toHaveLength(
+      incomingRequests,
+    );
+
+    returnEmptyPreparation = false;
+    overflowIncoming = true;
+    await expect(host.callHierarchy({
+      path: "src/target.ts",
+      line: 0,
+      character: 7,
+      direction: "incoming",
+    })).rejects.toThrow("too many call hierarchy calls");
+
+    await host.close();
+  });
+
   test("does not start a server while the full LSP rollout gate is disabled", async () => {
     let starts = 0;
     const host = new LspHost({
