@@ -29,6 +29,8 @@ import type {
   LspDiagnosticLookup,
   LspQueryResult,
   LspReferencesRequest,
+  LspRenamePreview,
+  LspRenameRequest,
   LspTextDocumentPosition,
 } from "./lsp-host.ts";
 import type { Execution } from "./tools.ts";
@@ -55,6 +57,11 @@ const MAX_WORKSPACE_SYMBOLS_PER_SERVER = 16;
 const MAX_WORKSPACE_SYMBOLS = 32;
 const MAX_WORKSPACE_SYMBOL_NAME_BYTES = 256;
 const MAX_REPORTED_WORKSPACE_SYMBOLS = 32 * 1_024;
+const MAX_RENAME_NAME_BYTES = 1_024;
+const MAX_RENAME_PREVIEW_PATHS = 100;
+const MAX_RENAME_PREVIEW_OPERATIONS = 100;
+const MAX_RENAME_PREVIEW_CHANGED_BYTES = 16 * 1_024 * 1_024;
+const MAX_RENAME_PLAN_BINDING_BYTES = 256;
 const UNSAFE_WORKSPACE_SYMBOL_QUERY_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/;
 const UNSAFE_PATH_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/;
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/g;
@@ -81,11 +88,16 @@ export interface LspSemanticReader {
   documentHighlights(input: LspTextDocumentPosition): Promise<LspQueryResult>;
 }
 
+export interface LspRenamePreviewReader {
+  renamePreview(input: LspRenameRequest): Promise<LspRenamePreview>;
+}
+
 export interface LspToolReader extends
   LspDiagnosticsReader,
   LspDocumentSymbolsReader,
   LspWorkspaceSymbolsReader,
-  LspSemanticReader {}
+  LspSemanticReader,
+  LspRenamePreviewReader {}
 
 export interface LspSemanticBridgeOptions {
   readonly workspaceRoot: string;
@@ -216,6 +228,18 @@ export interface LspToolWorkspaceSymbolsResult {
   readonly truncated: boolean;
 }
 
+/**
+ * A revision-bound proposal only. It omits the raw WorkspaceEdit and must still
+ * be passed through fs.edit.preview or approval-gated fs.edit before writing.
+ */
+export interface LspToolRenamePreviewResult {
+  readonly schemaVersion: "1.0";
+  readonly kind: "rename_preview";
+  readonly server: string;
+  readonly paths: readonly string[];
+  readonly plan: Readonly<Record<string, unknown>>;
+}
+
 type LspToolSemanticResult =
   | LspToolLocationQueryResult
   | LspToolHoverResult
@@ -226,6 +250,7 @@ export type LspDiagnosticsBridge = (action: ProposedAction, signal: AbortSignal)
 export type LspDocumentSymbolsBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspWorkspaceSymbolsBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspSemanticBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
+export type LspRenamePreviewBridge = (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 export type LspToolBridge = LspSemanticBridge;
 
 /**
@@ -418,7 +443,50 @@ export function createLspSemanticBridge(
   };
 }
 
-/** Combine diagnostics, document and workspace symbols, and semantic queries behind one LSP bridge. */
+/**
+ * Rename stays proposal-only: this bridge returns a reconstructed, bounded
+ * edit plan but never exposes the raw server WorkspaceEdit or writes files.
+ */
+export function createLspRenamePreviewBridge(
+  reader: LspRenamePreviewReader,
+): LspRenamePreviewBridge {
+  return async (action, signal) => {
+    const request = renamePreviewRequest(action);
+    if (request === undefined) {
+      return {
+        result: errorResult(
+          "INVALID_ARGUMENT",
+          "lsp.rename_preview requires a bounded workspace-relative path, zero-based position, and control-free new name",
+        ),
+      };
+    }
+    if (signal.aborted) return cancelledRenamePreview();
+
+    try {
+      const preview = await reader.renamePreview(request);
+      if (signal.aborted) return cancelledRenamePreview();
+      const result = projectRenamePreview(preview);
+      if (result === undefined) throw new Error("rename preview could not be projected safely");
+      return {
+        result: okResult(
+          "revision-bound LSP rename proposal returned for " + String(result.paths.length) + " file(s)",
+          result,
+        ),
+        text: renderRenamePreview(result),
+      };
+    } catch {
+      return {
+        result: errorResult(
+          "NOT_INITIALIZED",
+          "LSP rename preview is currently unavailable; confirm that the symbol is renameable and retry after the language server is ready",
+          { retryable: true },
+        ),
+      };
+    }
+  };
+}
+
+/** Combine diagnostics, symbols, semantic queries, and proposal-only rename behind one LSP bridge. */
 export function createLspToolBridge(
   reader: LspToolReader,
   options: LspSemanticBridgeOptions,
@@ -427,6 +495,7 @@ export function createLspToolBridge(
   const documentSymbols = createLspDocumentSymbolsBridge(reader, options);
   const workspaceSymbols = createLspWorkspaceSymbolsBridge(reader, options);
   const semantic = createLspSemanticBridge(reader, options);
+  const renamePreview = createLspRenamePreviewBridge(reader);
   return async (action, signal) =>
     action.toolId === "lsp.diagnostics"
       ? await diagnostics(action, signal)
@@ -434,6 +503,8 @@ export function createLspToolBridge(
       ? await documentSymbols(action, signal)
       : action.toolId === "lsp.workspace_symbols"
       ? await workspaceSymbols(action, signal)
+      : action.toolId === "lsp.rename_preview"
+      ? await renamePreview(action, signal)
       : await semantic(action, signal);
 }
 
@@ -461,6 +532,12 @@ function cancelledWorkspaceSymbols(): Execution {
   };
 }
 
+function cancelledRenamePreview(): Execution {
+  return {
+    result: errorResult("CANCELLED", "LSP rename preview was cancelled", { retryable: true }),
+  };
+}
+
 function lspPath(action: ProposedAction): string | undefined {
   const raw = lspArguments(action);
   return raw === undefined ? undefined : lspPathFromArguments(raw, 4_096);
@@ -468,6 +545,27 @@ function lspPath(action: ProposedAction): string | undefined {
 
 function lspArguments(action: ProposedAction): Record<string, unknown> | undefined {
   return isRecord(action.arguments) ? action.arguments : undefined;
+}
+
+function renamePreviewRequest(action: ProposedAction): LspRenameRequest | undefined {
+  if (action.toolId !== "lsp.rename_preview") return undefined;
+  const raw = lspArguments(action);
+  if (raw === undefined) return undefined;
+  const path = lspPathFromArguments(raw, MAX_SEMANTIC_PATH_BYTES);
+  const newName = raw.newName;
+  if (
+    path === undefined ||
+    !isSemanticPositionComponent(raw.line) ||
+    !isSemanticPositionComponent(raw.character) ||
+    typeof newName !== "string" ||
+    newName.trim().length === 0 ||
+    newName.trim() !== newName ||
+    Buffer.byteLength(newName, "utf8") > MAX_RENAME_NAME_BYTES ||
+    UNSAFE_WORKSPACE_SYMBOL_QUERY_CHARACTERS.test(newName)
+  ) {
+    return undefined;
+  }
+  return Object.freeze({ path, line: raw.line, character: raw.character, newName });
 }
 
 function workspaceSymbolQuery(action: ProposedAction): string | undefined {
@@ -505,6 +603,234 @@ function workspaceRelativePath(value: unknown, maxBytes: number): string | undef
     parts.some((part) => part.length === 0 || part === "." || part === "..")
   ) return undefined;
   return value;
+}
+
+function projectRenamePreview(value: unknown): LspToolRenamePreviewResult | undefined {
+  const preview = isRecord(value) ? value : undefined;
+  const edit = isRecord(preview?.edit) ? preview.edit : undefined;
+  const server = opaquePlanText(preview?.server, MAX_METADATA_BYTES);
+  const rawPaths = edit?.paths;
+  if (server === undefined || !Array.isArray(rawPaths) || rawPaths.length === 0 || rawPaths.length > MAX_RENAME_PREVIEW_PATHS) {
+    return undefined;
+  }
+  const paths: string[] = [];
+  for (const rawPath of rawPaths) {
+    const path = workspaceRelativePath(rawPath, MAX_SEMANTIC_PATH_BYTES);
+    if (path === undefined || paths.includes(path)) return undefined;
+    paths.push(path);
+  }
+  paths.sort();
+  const plan = projectRenamePlan(edit?.plan, new Set(paths));
+  if (plan === undefined) return undefined;
+  return Object.freeze({
+    schemaVersion: "1.0" as const,
+    kind: "rename_preview" as const,
+    server,
+    paths: Object.freeze(paths),
+    plan,
+  });
+}
+
+function projectRenamePlan(
+  value: unknown,
+  paths: ReadonlySet<string>,
+): Readonly<Record<string, unknown>> | undefined {
+  const raw = isRecord(value) ? value : undefined;
+  if (raw === undefined) return undefined;
+  const id = opaquePlanText(raw.id, MAX_METADATA_BYTES);
+  const workspaceIdentityDigest = opaquePlanText(raw.workspaceIdentityDigest, MAX_RENAME_PLAN_BINDING_BYTES);
+  const sessionId = opaquePlanText(raw.sessionId, MAX_RENAME_PLAN_BINDING_BYTES);
+  const createdAt = opaquePlanText(raw.createdAt, MAX_METADATA_BYTES);
+  if (
+    raw.schemaVersion !== "1.0" ||
+    raw.source !== "lsp" ||
+    id === undefined ||
+    workspaceIdentityDigest === undefined ||
+    sessionId === undefined ||
+    createdAt === undefined ||
+    (raw.conflictPolicy !== "fail" && raw.conflictPolicy !== "safe_rebase") ||
+    !Array.isArray(raw.operations) ||
+    raw.operations.length === 0 ||
+    raw.operations.length > MAX_RENAME_PREVIEW_OPERATIONS
+  ) {
+    return undefined;
+  }
+
+  const operations: Readonly<Record<string, unknown>>[] = [];
+  let changedBytes = 0;
+  for (const value of raw.operations) {
+    const projected = projectRenameOperation(value, paths);
+    if (projected === undefined || projected.changedBytes > MAX_RENAME_PREVIEW_CHANGED_BYTES - changedBytes) {
+      return undefined;
+    }
+    changedBytes += projected.changedBytes;
+    operations.push(projected.operation);
+  }
+  return Object.freeze({
+    schemaVersion: "1.0",
+    id,
+    source: "lsp",
+    workspaceIdentityDigest,
+    sessionId,
+    operations: Object.freeze(operations),
+    conflictPolicy: raw.conflictPolicy,
+    createdAt,
+  });
+}
+
+function projectRenameOperation(
+  value: unknown,
+  paths: ReadonlySet<string>,
+): { readonly operation: Readonly<Record<string, unknown>>; readonly changedBytes: number } | undefined {
+  const raw = isRecord(value) ? value : undefined;
+  if (raw === undefined) return undefined;
+  const operationId = opaquePlanText(raw.operationId, MAX_METADATA_BYTES);
+  const path = workspaceRelativePath(raw.path, MAX_SEMANTIC_PATH_BYTES);
+  if (operationId === undefined || path === undefined || !paths.has(path)) return undefined;
+
+  if (raw.kind === "replace_range") {
+    const baseRevision = opaquePlanText(raw.baseRevision, MAX_RENAME_PLAN_BINDING_BYTES);
+    const range = projectRenameRange(raw.range);
+    const expectedTextDigest = raw.expectedTextDigest === undefined
+      ? undefined
+      : opaquePlanText(raw.expectedTextDigest, MAX_RENAME_PLAN_BINDING_BYTES);
+    if (
+      baseRevision === undefined ||
+      range === undefined ||
+      (raw.expectedTextDigest !== undefined && expectedTextDigest === undefined) ||
+      typeof raw.replacement !== "string"
+    ) {
+      return undefined;
+    }
+    return {
+      operation: Object.freeze({
+        kind: "replace_range",
+        operationId,
+        path,
+        baseRevision,
+        range,
+        ...(expectedTextDigest === undefined ? {} : { expectedTextDigest }),
+        replacement: raw.replacement,
+      }),
+      changedBytes: Buffer.byteLength(raw.replacement, "utf8"),
+    };
+  }
+
+  if (raw.kind === "create_file") {
+    if (typeof raw.content !== "string") return undefined;
+    return {
+      operation: Object.freeze({ kind: "create_file", operationId, path, content: raw.content }),
+      changedBytes: Buffer.byteLength(raw.content, "utf8"),
+    };
+  }
+
+  if (raw.kind === "move_file") {
+    const toPath = workspaceRelativePath(raw.toPath, MAX_SEMANTIC_PATH_BYTES);
+    const expectedRevision = raw.expectedRevision === undefined
+      ? undefined
+      : opaquePlanText(raw.expectedRevision, MAX_RENAME_PLAN_BINDING_BYTES);
+    if (
+      toPath === undefined ||
+      !paths.has(toPath) ||
+      (raw.expectedRevision !== undefined && expectedRevision === undefined)
+    ) {
+      return undefined;
+    }
+    return {
+      operation: Object.freeze({
+        kind: "move_file",
+        operationId,
+        path,
+        toPath,
+        ...(expectedRevision === undefined ? {} : { expectedRevision }),
+      }),
+      changedBytes: 0,
+    };
+  }
+
+  if (raw.kind === "delete_file") {
+    const expectedRevision = raw.expectedRevision === undefined
+      ? undefined
+      : opaquePlanText(raw.expectedRevision, MAX_RENAME_PLAN_BINDING_BYTES);
+    if (raw.expectedRevision !== undefined && expectedRevision === undefined) return undefined;
+    return {
+      operation: Object.freeze({
+        kind: "delete_file",
+        operationId,
+        path,
+        ...(expectedRevision === undefined ? {} : { expectedRevision }),
+      }),
+      changedBytes: 0,
+    };
+  }
+  return undefined;
+}
+
+interface ProjectedRenamePosition {
+  readonly line: number;
+  readonly column: number;
+}
+
+function projectRenameRange(value: unknown): Readonly<{
+  readonly start: ProjectedRenamePosition;
+  readonly end: ProjectedRenamePosition;
+  readonly encoding: "utf16";
+}> | undefined {
+  const raw = isRecord(value) ? value : undefined;
+  const start = projectRenamePosition(raw?.start);
+  const end = projectRenamePosition(raw?.end);
+  if (
+    raw?.encoding !== "utf16" ||
+    start === undefined ||
+    end === undefined ||
+    compareRenamePositions(start, end) > 0
+  ) {
+    return undefined;
+  }
+  return Object.freeze({ start, end, encoding: "utf16" as const });
+}
+
+function projectRenamePosition(value: unknown): Readonly<ProjectedRenamePosition> | undefined {
+  const raw = isRecord(value) ? value : undefined;
+  const line = raw?.line;
+  const column = raw?.column;
+  if (
+    typeof line !== "number" ||
+    typeof column !== "number" ||
+    !Number.isSafeInteger(line) ||
+    !Number.isSafeInteger(column) ||
+    line < 1 ||
+    column < 0 ||
+    line > MAX_SEMANTIC_POSITION_COMPONENT + 1 ||
+    column > MAX_SEMANTIC_POSITION_COMPONENT
+  ) {
+    return undefined;
+  }
+  return Object.freeze({ line, column });
+}
+
+function compareRenamePositions(
+  left: ProjectedRenamePosition,
+  right: ProjectedRenamePosition,
+): number {
+  return left.line === right.line ? left.column - right.column : left.line - right.line;
+}
+
+function opaquePlanText(value: unknown, maxBytes: number): string | undefined {
+  return typeof value === "string" &&
+      value.trim().length > 0 &&
+      Buffer.byteLength(value, "utf8") <= maxBytes &&
+      !UNSAFE_WORKSPACE_SYMBOL_QUERY_CHARACTERS.test(value)
+    ? value
+    : undefined;
+}
+
+function renderRenamePreview(result: LspToolRenamePreviewResult): string {
+  return truncateUtf8([
+    "Language-server rename preview created a revision-bound plan for " +
+      String(result.paths.length) + " file(s): " + result.paths.join(", "),
+    "[This proposal has not written files. Run fs.edit.preview to re-preflight it; fs.edit requires its own approval and re-preflights immediately before staging.]",
+  ].join("\n"), MAX_TEXT_BYTES);
 }
 
 function projectDiagnostics(path: string, lookup: LspDiagnosticLookup): LspToolDiagnosticsResult {
