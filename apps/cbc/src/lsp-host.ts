@@ -1803,11 +1803,16 @@ function assertLspWorkspaceSymbolQuery(query: string): void {
 }
 
 function lspFormattingWorkspaceEdit(result: unknown, uri: string): LspWorkspaceEdit | undefined {
+  const edits = lspFormattingEdits(result);
+  if (edits.length === 0) return undefined;
+  return { changes: { [uri]: edits } } as LspWorkspaceEdit;
+}
+
+function lspFormattingEdits(result: unknown): unknown[] {
   if (!Array.isArray(result) || result.length > MAX_LSP_FORMATTING_EDITS) {
     throw new Error("language server did not return a bounded formatting edit array");
   }
-  if (result.length === 0) return undefined;
-  return { changes: { [uri]: result } } as LspWorkspaceEdit;
+  return result;
 }
 
 function lspRangeFormattingWorkspaceEdit(
@@ -1815,14 +1820,14 @@ function lspRangeFormattingWorkspaceEdit(
   uri: string,
   input: LspRangeFormattingPreviewRequest,
 ): LspWorkspaceEdit | undefined {
-  const workspaceEdit = lspFormattingWorkspaceEdit(result, uri);
-  if (workspaceEdit === undefined) return undefined;
-  for (const rawEdit of result) {
+  const edits = lspFormattingEdits(result);
+  if (edits.length === 0) return undefined;
+  for (const rawEdit of edits) {
     if (!lspFormattingEditStaysWithinRange(rawEdit, input)) {
       throw new Error("language server returned a range formatting edit outside the requested range");
     }
   }
-  return workspaceEdit;
+  return { changes: { [uri]: edits } } as LspWorkspaceEdit;
 }
 
 function lspFormattingEditStaysWithinRange(
