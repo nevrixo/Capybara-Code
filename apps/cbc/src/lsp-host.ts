@@ -296,6 +296,15 @@ export class LspHost {
     return await this.#positionQuery("textDocument/signatureHelp", input);
   }
 
+  async documentSymbols(path: string): Promise<LspQueryResult> {
+    workspaceFileUri(this.#options.workspaceRoot, path);
+    const descriptor = this.#descriptorForPath(path);
+    const process = await this.#startForQuery(descriptor);
+    const result = await this.#documentSymbols(process, descriptor, path);
+    this.#setStatus(descriptor.name, "ready", "document symbols ready");
+    return { server: descriptor.name, result };
+  }
+
   /**
    * Return only diagnostics whose captured revision still matches a fresh,
    * runtime-authoritative document read. This never starts a language server.
@@ -587,7 +596,7 @@ export class LspHost {
         MAX_LSP_PARALLEL_REQUESTS,
         async (file): Promise<IndexedDocument> => {
           try {
-            const result = await this.#documentSymbols(process, descriptor, file);
+            const result = await this.#documentSymbols(process, descriptor, file.path);
             return {
               file,
               symbols: normalizeLspDocumentSymbols(
@@ -774,13 +783,13 @@ export class LspHost {
   async #documentSymbols(
     process: LspProcess,
     descriptor: LspServerDescriptor,
-    file: RepoFile,
+    path: string,
   ): Promise<unknown> {
-    const uri = workspaceFileUri(this.#options.workspaceRoot, file.path);
+    const uri = workspaceFileUri(this.#options.workspaceRoot, path);
     return await this.#withOpenedDocument(
       process,
       descriptor,
-      file.path,
+      path,
       uri,
       async (openedUri) =>
         await this.#request(

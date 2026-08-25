@@ -426,12 +426,14 @@ describe("LspHost", () => {
     await host.typeDefinition({ path: "src/widget.ts", line: 0, character: 0 });
     await host.implementation({ path: "src/widget.ts", line: 0, character: 0 });
     await host.signatureHelp({ path: "src/widget.ts", line: 0, character: 0 });
+    await host.documentSymbols("src/widget.ts");
     expect(methods).toEqual(expect.arrayContaining([
       "textDocument/definition",
       "textDocument/declaration",
       "textDocument/typeDefinition",
       "textDocument/implementation",
       "textDocument/signatureHelp",
+      "textDocument/documentSymbol",
     ]));
     expect(initializeCapabilities).toMatchObject({
       textDocument: {
