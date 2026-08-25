@@ -611,6 +611,37 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
     ),
   },
   {
+    id: "lsp.range_format_preview",
+    title: "LspRangeFormatPreview",
+    description:
+      "Create a bounded current-revision formatting proposal for one explicit source range without writing files.",
+    source: "native",
+    defaultRisk: "R0",
+    maxRisk: "R0",
+    alwaysActive: false,
+    mutates: false,
+    network: false,
+    authority: "read",
+    idempotency: "idempotent",
+    maxParallelism: 1,
+    resultSchemaId: "lsp.range_format_preview.v1",
+    keywords: ["lsp", "range", "format", "formatting", "preview", "language server"],
+    parameters: objectSchema(
+      {
+        path: {
+          ...relativePath,
+          maxLength: 512,
+          description: "Workspace-relative source path for a bounded range formatting proposal.",
+        },
+        startLine: { type: "integer", minimum: 0, maximum: 1_000_000 },
+        startCharacter: { type: "integer", minimum: 0, maximum: 1_000_000 },
+        endLine: { type: "integer", minimum: 0, maximum: 1_000_000 },
+        endCharacter: { type: "integer", minimum: 0, maximum: 1_000_000 },
+      },
+      ["path", "startLine", "startCharacter", "endLine", "endCharacter"],
+    ),
+  },
+  {
     id: "lsp.rename_preview",
     title: "LspRenamePreview",
     description: "Create a bounded revision-bound rename proposal through configured local language servers without writing files.",
@@ -1476,11 +1507,15 @@ const FULL_LSP_TOOL_IDS = new Set([
   "lsp.code_actions",
   "lsp.code_action_preview",
   "lsp.format_preview",
+  "lsp.range_format_preview",
   "lsp.rename_preview",
 ]);
 const LSP_RENAME_PREVIEW_TOOL_IDS = new Set(["lsp.rename_preview"]);
 const LSP_CODE_ACTION_PREVIEW_TOOL_IDS = new Set(["lsp.code_action_preview"]);
-const LSP_FORMAT_PREVIEW_TOOL_IDS = new Set(["lsp.format_preview"]);
+const LSP_FORMAT_PREVIEW_TOOL_IDS = new Set([
+  "lsp.format_preview",
+  "lsp.range_format_preview",
+]);
 
 export interface NativeToolFeatures {
   readonly editEngineV2?: boolean;
