@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-26T01:12:22.709Z",
+  "generatedAt": "2026-08-26T21:44:32.049Z",
   "git": {
-    "commit": "85e9f0cb94610c17de7de3115c70ec87ccab5a31",
+    "commit": "dcb67e42d98d760937a656595e6ae5ce656ea6f6",
     "dirty": true,
-    "dirtyHash": "5d3f7bfdca257df2e08a97e5b22a018b42c6ae912ff3a33d379abc9ecd42db75"
+    "dirtyHash": "9954d0159a3b7ac705e9c1cdf8294659ba6ef5190da1cad52f757230de243ddf"
   },
   "roots": [
     "apps",
@@ -53,7 +53,7 @@
     "node": "v24.3.0",
     "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
-    "typescript": "5.9.3"
+    "typescript": "unavailable"
   },
   "fileCount": 620,
   "historicalArtifacts": [],
@@ -1550,8 +1550,8 @@
     },
     {
       "path": "packages/agent-kernel/src/kernel.ts",
-      "bytes": 198955,
-      "sha256": "02e4d65957b58b3cbfebc3ba33d6f0828f438713df3642567500c4ba6bd06ee3"
+      "bytes": 200362,
+      "sha256": "0f70eb42b641ad028fda16278051e851480e70c10a61de418381444593e9ede6"
     },
     {
       "path": "packages/agent-kernel/src/observation.ts",
@@ -1595,8 +1595,8 @@
     },
     {
       "path": "packages/agent-kernel/test/kernel.test.ts",
-      "bytes": 144467,
-      "sha256": "3dca790bc49f9b30fd5ba24a2f7df87f6cc4db34ed6b8d53819ba17ce0f24b67"
+      "bytes": 147319,
+      "sha256": "892e01b02fb04130b1bb2ea434c8f3950eb0d87798faad3a120c3762982b0dad"
     },
     {
       "path": "packages/agent-kernel/test/patch-recovery.test.ts",
@@ -2765,8 +2765,8 @@
     },
     {
       "path": "packages/tool-registry/src/graph.ts",
-      "bytes": 11149,
-      "sha256": "72fea7d3e937566ec986a4a3704b5683f6be97ad1383ec41e7853b9de4a1466f"
+      "bytes": 11365,
+      "sha256": "f7893f294f8617b3858d036029eb08033b7ae41ce36fa9002092cb918849c009"
     },
     {
       "path": "packages/tool-registry/src/index.ts",
@@ -2790,8 +2790,8 @@
     },
     {
       "path": "packages/tool-registry/test/graph.test.ts",
-      "bytes": 2999,
-      "sha256": "5ff25a32adc6dc63b2daba5e0660f60375a9e08bd4b2bc0b332674e82033b3ac"
+      "bytes": 4209,
+      "sha256": "a3321011b4fdea838305696d559fe577944e4c85bb63c18db69e328466cc38f5"
     },
     {
       "path": "packages/tool-registry/test/recovery.test.ts",
@@ -3159,5 +3159,5 @@
       "sha256": "3af6b7d3ec7041c90b18206fe898b904d8781a97c25369189f2733173c6d23a5"
     }
   ],
-  "digest": "dd1e1e95bb7d1946482410b9d19b9615f9de30149c10daf6e921108c3fb376f3"
+  "digest": "2dd96c61e87921e6808aa5983fd22c00b9a0ba550156ea9fafc34dc696430e53"
 }

@@ -146,9 +146,20 @@ export class ToolExecutionGraph {
       }
 
       const kind = batchKind(ready[0]!);
-      const eligible = ready.filter((call) => batchKind(call) === kind && isBatchCompatible(call, ready[0]!, kind));
       const chunkSize = kind === "read" ? this.#limits.maxParallelReads : kind === "test" ? this.#limits.maxParallelTests : 1;
-      const selected = eligible.slice(0, chunkSize);
+      const selected: ToolGraphCall[] = [];
+      for (const candidate of ready) {
+        if (batchKind(candidate) !== kind) {
+          continue;
+        }
+        if (!selected.every((entry) => isBatchCompatible(candidate, entry, kind))) {
+          continue;
+        }
+        selected.push(candidate);
+        if (selected.length >= chunkSize) {
+          break;
+        }
+      }
       const batchId = `tool-batch-${batches.length + 1}`;
       const dependsOn = [...new Set(selected.flatMap((call) => [...(dependencies.get(call.callId) ?? [])].filter((dep) => !selected.some((entry) => entry.callId === dep))))].sort();
       batches.push({

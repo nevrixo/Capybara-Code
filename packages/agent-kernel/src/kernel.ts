@@ -2971,6 +2971,7 @@ export class AgentKernel {
       return "done";
     }
 
+    const outputHistoryStart = this.#history.length;
     const pendingById = new Map(calls.map((call) => [call.callId, call]));
     const graph = new ToolExecutionGraph(this.#options.toolGraph ?? {});
     const graphCalls: ToolGraphCall[] = calls.map((call) => {
@@ -3491,6 +3492,37 @@ export class AgentKernel {
         batchId: batch.batchId,
         kind: batch.kind,
         callIds: batch.calls.map((call) => call.callId),
+      });
+    }
+
+    // Provider replay requires exactly one observation for every function call.
+    // A planner rejection or scheduler defect must remain a local tool failure;
+    // otherwise the next provider request is rejected before the model can recover.
+    const answeredCallIds = new Set<string>();
+    for (const item of this.#history.slice(outputHistoryStart)) {
+      if (item.type === "function_call_output") answeredCallIds.add(item.callId);
+    }
+    for (const call of calls) {
+      if (answeredCallIds.has(call.callId)) continue;
+      const rejection = graphPlan.rejected.find((entry) => entry.callId === call.callId);
+      const message = rejection === undefined
+        ? "the tool execution graph did not schedule the call"
+        : `the tool execution graph rejected the call (${rejection.code}): ${rejection.message}`;
+      const text = `TOOL_GRAPH_UNSCHEDULED: ${call.name} was not executed; ${message}.`;
+      if (rejection === undefined) this.#risks.push(`tool graph did not schedule ${call.callId}`);
+      emit("tool.failed", {
+        callId: call.callId,
+        toolId: call.name,
+        code: "INTERNAL",
+        message,
+      });
+      this.#appendToolOutput(call, text);
+      this.#noteFailure({
+        toolId: call.name,
+        callId: call.callId,
+        code: "INTERNAL",
+        message,
+        text,
       });
     }
 

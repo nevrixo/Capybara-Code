@@ -128,6 +128,8 @@ interface HarnessOptions {
   readonly onGeneratedImage?: KernelOptions["onGeneratedImage"];
   readonly inferenceContextTokens?: KernelOptions["inferenceContextTokens"];
   readonly continuationMode?: KernelOptions["continuationMode"];
+  readonly commandClassification?: KernelOptions["commandClassification"];
+  readonly toolGraph?: KernelOptions["toolGraph"];
   readonly promptInputs?: KernelOptions["promptInputs"];
   readonly interactionMode?: KernelOptions["interactionMode"];
   readonly todoState?: KernelOptions["todoState"];
@@ -277,6 +279,10 @@ function harness(options: HarnessOptions) {
     ...(options.continuationMode !== undefined
       ? { continuationMode: options.continuationMode }
       : {}),
+    ...(options.commandClassification !== undefined
+      ? { commandClassification: options.commandClassification }
+      : {}),
+    ...(options.toolGraph !== undefined ? { toolGraph: options.toolGraph } : {}),
     ...(options.interactionMode !== undefined
       ? { interactionMode: options.interactionMode }
       : {}),
@@ -1392,6 +1398,77 @@ describe("multi-step loop (AC-08, AC-47)", () => {
     expect(types).toContain("function_call");
     expect(types).toContain("function_call_output");
     expect(types.indexOf("function_call_output")).toBeGreaterThan(types.indexOf("function_call"));
+  });
+
+  test("an exclusive build command executes and returns its tool output", async () => {
+    const { kernel, events, executed } = harness({
+      commandClassification: true,
+      steps: [
+        {
+          toolCalls: [{
+            callId: "build-call",
+            name: "process.run",
+            arguments: { program: "npm", args: ["run", "build"], cwd: "." },
+          }],
+        },
+        { text: "Build passed." },
+      ],
+      toolResults: {
+        "process.run": {
+          result: okResult("build succeeded"),
+          text: "BUILD_OUTPUT_SENTINEL",
+          exitCode: 0,
+        },
+      },
+    });
+
+    const result = await kernel.runTurn("build the project", new AbortController().signal);
+
+    expect(executed.map((action) => action.callId)).toEqual(["build-call"]);
+    expect(
+      (payloadsOf(events, "tool.batch_started") as Array<{ callIds: string[] }>)
+        .map((batch) => batch.callIds),
+    ).toEqual([["build-call"]]);
+    expect(
+      result.history.some(
+        (item) =>
+          item.type === "function_call_output" &&
+          item.callId === "build-call" &&
+          item.output.includes("BUILD_OUTPUT_SENTINEL"),
+      ),
+    ).toBe(true);
+  });
+
+  test("graph-rejected calls still return a protocol-safe tool output", async () => {
+    const { kernel, events, executed } = harness({
+      toolGraph: { maxNodes: 1 },
+      selfCorrection: false,
+      steps: [
+        {
+          toolCalls: [
+            { callId: "accepted-call", name: "fs.read", arguments: { path: "a.ts" } },
+            { callId: "rejected-call", name: "fs.read", arguments: { path: "b.ts" } },
+          ],
+        },
+        { text: "Handled the graph limit." },
+      ],
+      toolResults: { "fs.read": { result: okResult("ok"), text: "content" } },
+    });
+
+    const result = await kernel.runTurn("read both files", new AbortController().signal);
+    const outputs = result.history.filter(
+      (item): item is Extract<ModelInputItem, { type: "function_call_output" }> =>
+        item.type === "function_call_output",
+    );
+
+    expect(executed.map((action) => action.callId)).toEqual(["accepted-call"]);
+    expect(outputs.map((item) => item.callId)).toEqual(["accepted-call", "rejected-call"]);
+    expect(outputs.at(-1)?.output).toContain("TOOL_GRAPH_UNSCHEDULED");
+    expect(payloadsOf(events, "tool.failed")).toContainEqual(expect.objectContaining({
+      callId: "rejected-call",
+      code: "INTERNAL",
+      message: expect.stringContaining("node_budget"),
+    }));
   });
 
   test("commentary is preserved with its phase (§10.7)", async () => {

@@ -15,6 +15,44 @@ function deferred<T>(): { readonly promise: Promise<T>; resolve(value: T): void 
   return { promise, resolve };
 }
 
+describe("ToolExecutionGraph planning", () => {
+  test("keeps an exclusive test call in a non-empty batch", () => {
+    const call: ToolGraphCall = {
+      callId: "build",
+      toolId: "process.run",
+      kind: "test",
+      conflictKeys: ["command:.:shared-build"],
+      writes: ["command:.:shared-build"],
+    };
+
+    const plan = new ToolExecutionGraph().plan([call]);
+
+    expect(plan.batches.map((batch) => batch.calls.map((entry) => entry.callId))).toEqual([
+      ["build"],
+    ]);
+    expect(plan.callOrder).toEqual(["build"]);
+    expect(plan.rejected).toEqual([]);
+  });
+
+  test("serializes conflicting exclusive tests without emitting empty batches", () => {
+    const calls: readonly ToolGraphCall[] = ["build", "verify"].map((callId) => ({
+      callId,
+      toolId: "process.run",
+      kind: "test" as const,
+      conflictKeys: ["command:.:shared-build"],
+      writes: ["command:.:shared-build"],
+    }));
+
+    const plan = new ToolExecutionGraph().plan(calls);
+
+    expect(plan.batches.map((batch) => batch.calls.map((entry) => entry.callId))).toEqual([
+      ["build"],
+      ["verify"],
+    ]);
+    expect(plan.batches.every((batch) => batch.calls.length > 0)).toBe(true);
+  });
+});
+
 describe("ToolExecutionGraph result ordering", () => {
   test("defaults to deterministic planned-call order", async () => {
     const slow = deferred<string>();
