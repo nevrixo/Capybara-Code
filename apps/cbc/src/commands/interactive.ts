@@ -28,6 +28,7 @@ import {
   SLASH_COMMANDS,
   applyRemapping,
   renderKeymapHelp,
+  updateBannerText,
   type CompletionCandidate,
   type KeyBinding,
   type SidebarService,
@@ -191,6 +192,15 @@ export async function interactive(
   try {
     // §7.1 step 6: paint first.
     await ui.open({ trustLabel: trustLabel(trust) });
+
+    // §10: when the check missed the 1500ms cap, its late confirmation lands
+    // as the fallback banner instead of a blocking prompt. The banner never
+    // installs; the user is asked again on the next restart.
+    settledUpdate.late
+      ?.then((candidate) => {
+        if (candidate !== undefined) ui.notice(updateBannerText(candidate.version));
+      })
+      .catch(() => undefined);
 
     // The trust prompt runs before the runtime exists so it can paint first. Once
     // the runtime is started, mirror the session decision into its filesystem guard

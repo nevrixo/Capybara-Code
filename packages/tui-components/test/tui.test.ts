@@ -130,6 +130,7 @@ import {
   toolActionLabel,
   truncateToWidth,
   turnCompleteLabel,
+  updateBannerText,
   visibleSlice,
   wrapComposer,
   wrapToWidth,
@@ -1374,11 +1375,16 @@ describe("timeline blocks (§6.4, §6.7–§6.12, AC-06)", () => {
     expect(text).not.toContain("Final answer");
   });
 
-  test("the update banner names the version and upgrade path (§6.19)", () => {
+  test("the update banner names the version and upgrade path (§6.19, §10)", () => {
     const text = renderUpdateBanner({ version: "0.12.5" }, context()).map(lineText).join("\n");
     expect(text).toContain("Update Available");
     expect(text).toContain("0.12.5");
-    expect(text).toContain("package manager");
+    // §10: the banner is the late-check fallback and must not contradict the
+    // blocking prompt — it points at a restart rather than installing.
+    const wide = renderUpdateBanner({ version: "0.12.5" }, context(160)).map(lineText).join("\n");
+    expect(wide).toContain(updateBannerText("0.12.5"));
+    expect(wide).toContain("Restart capy");
+    expect(wide).toContain("package manager");
   });
 
   test("chronological timeline keeps delegated responses beside their action", () => {
