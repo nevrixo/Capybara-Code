@@ -108,6 +108,13 @@ export const COMMAND_REGISTRY: readonly CommandSpec[] = [
       },
     ],
   },
+  {
+    name: "update",
+    summary: "check for a newer release",
+    flags: [
+      { name: "--check", kind: "boolean", summary: "report through the exit code only; install nothing" },
+    ],
+  },
   { name: "version", summary: "print the version" },
   {
     name: "help",

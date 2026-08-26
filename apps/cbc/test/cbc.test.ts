@@ -393,7 +393,7 @@ describe("parseArgs", () => {
   });
 
   test("the registry and help expose only the minimal public surface", () => {
-    expect(commandNames()).toEqual(["run", "auth", "model", "config", "daemon", "version", "help"]);
+    expect(commandNames()).toEqual(["run", "auth", "model", "config", "daemon", "update", "version", "help"]);
     for (const text of [
       "auth login",
       "auth api",
@@ -406,6 +406,7 @@ describe("parseArgs", () => {
       "daemon status",
       "daemon logs",
       "daemon attach",
+      "update",
       "version",
       "help",
     ]) {
@@ -419,7 +420,6 @@ describe("parseArgs", () => {
       "init",
       "trust",
       "doctor",
-      "update",
       "completion",
       "permission",
       "--jsonl",
