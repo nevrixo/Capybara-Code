@@ -90,6 +90,9 @@ capy "Explain the structure of this project"
 
 Use `/setting` in the TUI to update interactive settings, or use `capy config set <path> <value>` in scripts.
 
+- `Fast mode` toggles OpenAI Fast mode (`provider.openai.serviceTier`): priority processing at up to ~2.5x speed for a per-token premium. It is only honored by the API backend and stays off by default.
+- `1M context` toggles the premium context-band policy (`model.context.premiumBandPolicy`): off keeps bands utility-gated at the 272k pricing boundary; on admits bands up to the model's 1M window. Input above 272K is billed at premium rates for the whole request.
+
 - Capybara Code creates a single global `config.toml` on first use; it does not read project-local Capybara configuration files.
 - MCP and LSP service definitions stay visible in that file. Missing external executables are reported but never installed automatically.
 - Root agent turns run until completion or cancellation. Sub-agent budgets and process/protocol resource limits remain in place as safety boundaries.

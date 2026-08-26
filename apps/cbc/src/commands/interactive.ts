@@ -1267,6 +1267,58 @@ function settingDescriptors(ui: InteractiveUi, session: ActiveSession): SettingD
       },
     },
     {
+      key: "fast-mode",
+      label: "Fast mode",
+      value: session.liveServiceTier,
+      configPath: "provider.openai.serviceTier",
+      values: [
+        { value: "standard", label: "Off" },
+        { value: "fast", label: "On (up to 2.5x faster, token premium)" },
+      ],
+      apply: (active, value) => {
+        if (value !== "standard" && value !== "fast") {
+          return { message: "Use Off or On for Fast mode." };
+        }
+        // The ChatGPT account backend never sends a service tier; a toggle
+        // that pretends to switch would lie about the next request.
+        if (!active.fastModeSupported) {
+          return { message: "Fast mode needs the API backend; this session is on the ChatGPT account backend." };
+        }
+        active.setServiceTier(value);
+        return {
+          value,
+          message: value === "fast"
+            ? "Fast mode on; tokens cost ~2x standard ($8/$40 per M on gpt-5.6-sol, $16/$60 over 272K)."
+            : "Fast mode off; standard processing from the next request.",
+        };
+      },
+    },
+    {
+      key: "long-context",
+      label: "1M context",
+      value: session.livePremiumContextPolicy,
+      configPath: "model.context.premiumBandPolicy",
+      values: [
+        { value: "utility-gated", label: "Off (default, 272k pricing boundary)" },
+        { value: "allow", label: "On (allow up to 1M)" },
+      ],
+      apply: (active, value) => {
+        if (value !== "utility-gated" && value !== "allow") {
+          return { message: "Use Off or On for 1M context." };
+        }
+        const accountBackend = !active.fastModeSupported;
+        active.setPremiumContextPolicy(value);
+        return {
+          value,
+          message: value === "allow"
+            ? accountBackend
+              ? "Premium context allowed, but the account backend caps the window at 400k; 272k stays the effective maximum band."
+              : "Premium context allowed; input over 272K is billed at 2x input / 1.5x output for the whole request."
+            : "Premium context back to utility gating.",
+        };
+      },
+    },
+    {
       key: "todo",
       label: "TODO",
       value: "show",

@@ -123,6 +123,8 @@ interface HarnessOptions {
   readonly onReflection?: KernelOptions["onReflection"];
   readonly inferencePolicy?: KernelOptions["inferencePolicy"];
   readonly autoRoute?: boolean;
+  readonly serviceTier?: KernelOptions["serviceTier"];
+  readonly premiumContextPolicy?: KernelOptions["premiumContextPolicy"];
   readonly onRouteDecided?: KernelOptions["onRouteDecided"];
   readonly onPromptCompiled?: KernelOptions["onPromptCompiled"];
   readonly onGeneratedImage?: KernelOptions["onGeneratedImage"];
@@ -270,6 +272,8 @@ function harness(options: HarnessOptions) {
     ...(options.onReflection !== undefined ? { onReflection: options.onReflection } : {}),
     ...(options.inferencePolicy !== undefined ? { inferencePolicy: options.inferencePolicy } : {}),
     ...(options.autoRoute !== undefined ? { autoRoute: options.autoRoute } : {}),
+    ...(options.serviceTier !== undefined ? { serviceTier: options.serviceTier } : {}),
+    ...(options.premiumContextPolicy !== undefined ? { premiumContextPolicy: options.premiumContextPolicy } : {}),
     ...(options.onRouteDecided !== undefined ? { onRouteDecided: options.onRouteDecided } : {}),
     ...(options.onPromptCompiled !== undefined ? { onPromptCompiled: options.onPromptCompiled } : {}),
     ...(options.onGeneratedImage !== undefined ? { onGeneratedImage: options.onGeneratedImage } : {}),
@@ -3693,5 +3697,103 @@ describe("routing is decided once and shared (P0-11)", () => {
     expect(routedContextTokens).toBe(measurePrompt(compiled!).totalInputTokens);
     expect(provider.requests[0]?.input).toBe(compiled!.input);
     expect(provider.requests[0]?.tools).toBe(compiled!.tools);
+  });
+});
+
+describe("OpenAI Fast mode service tier", () => {
+  test("setServiceTier switches the tier from the next sample on", async () => {
+    const provider = new MockProvider({
+      steps: [{ text: "Done." }],
+      repeatLast: true,
+      capabilities: { fastTier: true },
+    });
+    const { kernel } = harness({ steps: [], provider });
+
+    await kernel.runTurn("first turn", new AbortController().signal);
+    expect(provider.requests[0]?.serviceTier).toBeUndefined();
+    expect(kernel.serviceTier).toBeUndefined();
+
+    kernel.setServiceTier("fast");
+    expect(kernel.serviceTier).toBe("fast");
+    await kernel.runTurn("second turn", new AbortController().signal);
+    expect(provider.requests[1]?.serviceTier).toBe("fast");
+
+    kernel.setServiceTier("standard");
+    await kernel.runTurn("third turn", new AbortController().signal);
+    expect(provider.requests[2]?.serviceTier).toBe("standard");
+  });
+
+  test("a configured tier is applied to the very first request", async () => {
+    const provider = new MockProvider({
+      steps: [{ text: "Done." }],
+      capabilities: { fastTier: true },
+    });
+    const { kernel } = harness({ steps: [], provider, serviceTier: "fast" });
+    await kernel.runTurn("fast from the start", new AbortController().signal);
+    expect(provider.requests[0]?.serviceTier).toBe("fast");
+  });
+
+  test("a backend without the fast tier never receives a service tier", async () => {
+    const provider = new MockProvider({
+      steps: [{ text: "Done." }],
+      capabilities: { fastTier: false },
+    });
+    const { kernel } = harness({ steps: [], provider, serviceTier: "fast" });
+    kernel.setServiceTier("fast");
+    await kernel.runTurn("account-style backend", new AbortController().signal);
+    expect(provider.requests[0]?.serviceTier).toBeUndefined();
+  });
+});
+
+describe("premium context policy routing", () => {
+  function capturingPolicy() {
+    const delegate = new InferenceUtilityController({ defaultModel: "gpt-5.6-terra" });
+    const seen: Array<"utility-gated" | "allow" | "deny" | undefined> = [];
+    const policy: NonNullable<KernelOptions["inferencePolicy"]> = {
+      decide(input) {
+        seen.push(input.premiumPolicy);
+        return delegate.decide(input);
+      },
+    };
+    return { policy, seen };
+  }
+
+  test("the configured policy reaches the route decision", async () => {
+    const { policy, seen } = capturingPolicy();
+    const { kernel } = harness({
+      steps: [{ text: "Done." }],
+      inferencePolicy: policy,
+      autoRoute: true,
+      premiumContextPolicy: "allow",
+    });
+    await kernel.runTurn("route me", new AbortController().signal);
+    expect(seen).toEqual(["allow"]);
+  });
+
+  test("setPremiumContextPolicy changes the policy for the next turn", async () => {
+    const { policy, seen } = capturingPolicy();
+    const { kernel } = harness({
+      steps: [{ text: "Done." }],
+      repeatLast: true,
+      inferencePolicy: policy,
+      autoRoute: true,
+      premiumContextPolicy: "utility-gated",
+    });
+    await kernel.runTurn("first turn", new AbortController().signal);
+    kernel.setPremiumContextPolicy("allow");
+    expect(kernel.premiumContextPolicy).toBe("allow");
+    await kernel.runTurn("second turn", new AbortController().signal);
+    expect(seen).toEqual(["utility-gated", "allow"]);
+  });
+
+  test("an unset policy leaves the route decision to the controller default", async () => {
+    const { policy, seen } = capturingPolicy();
+    const { kernel } = harness({
+      steps: [{ text: "Done." }],
+      inferencePolicy: policy,
+      autoRoute: true,
+    });
+    await kernel.runTurn("route me", new AbortController().signal);
+    expect(seen).toEqual([undefined]);
   });
 });

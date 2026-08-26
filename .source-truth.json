@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-26T21:44:32.049Z",
+  "generatedAt": "2026-08-26T21:53:35.028Z",
   "git": {
-    "commit": "dcb67e42d98d760937a656595e6ae5ce656ea6f6",
+    "commit": "8b5586f0ada2950cacc8a29af9e076078f033970",
     "dirty": true,
-    "dirtyHash": "9954d0159a3b7ac705e9c1cdf8294659ba6ef5190da1cad52f757230de243ddf"
+    "dirtyHash": "ed85600ac7449dd12ec40ad814685aa07dac46bcfc113ca20be9e86e2e6d20a3"
   },
   "roots": [
     "apps",
@@ -49,13 +49,13 @@
     "benchmarks/**/results/"
   ],
   "toolVersions": {
-    "bun": "1.3.10",
+    "bun": "1.3.14",
     "node": "v24.3.0",
     "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
-    "typescript": "unavailable"
+    "typescript": "5.9.3"
   },
-  "fileCount": 620,
+  "fileCount": 621,
   "historicalArtifacts": [],
   "files": [
     {
@@ -70,8 +70,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 5113,
-      "sha256": "f56253d03684c75dcf5502f589ee8fb884c9dbe5cb206adf2fceb992d3cffe50"
+      "bytes": 5580,
+      "sha256": "ed9ec7f71f86bed8ecc26f4d39f9994c3313394439a366b48ec1acea64ffe785"
     },
     {
       "path": "apps/capy-daemon/package.json",
@@ -180,8 +180,8 @@
     },
     {
       "path": "apps/cbc/src/agent.ts",
-      "bytes": 190891,
-      "sha256": "ff3aebca93449baeb0f719d71e4dfcf9fd6d3e1f0e0e8d6acdc58afdd672cdb1"
+      "bytes": 192659,
+      "sha256": "52be56858346f6da87290dfdf5d6cae3866fba5e8161546b704ccd56287d0201"
     },
     {
       "path": "apps/cbc/src/approvals.ts",
@@ -235,8 +235,8 @@
     },
     {
       "path": "apps/cbc/src/commands/interactive.ts",
-      "bytes": 79848,
-      "sha256": "d0a15737eeac8ee4dde12d71b5ff1ae5f273d74486655bb336fb1343162a92f5"
+      "bytes": 81956,
+      "sha256": "938686ef8afa369f15fb81972c369183fa2420283e186d24c2f0eac6e0b86ca0"
     },
     {
       "path": "apps/cbc/src/commands/model.ts",
@@ -420,8 +420,8 @@
     },
     {
       "path": "apps/cbc/src/subagent-bridge.ts",
-      "bytes": 50893,
-      "sha256": "ff3fd46e42d1326d754876999be2f2d065ab0ddc2f9003403c2f5331e748d603"
+      "bytes": 50975,
+      "sha256": "5270dcca73831978265c55d512627979857a726ea0f44c11861dd813e0bdc6f2"
     },
     {
       "path": "apps/cbc/src/terminal-writer.ts",
@@ -607,6 +607,11 @@
       "path": "apps/cbc/test/oauth-security.test.ts",
       "bytes": 6758,
       "sha256": "b9f55b91bc7749b3bc3c9c542dbae3e6d8f0ed6ab056cb3aeaf7529d9aeab349"
+    },
+    {
+      "path": "apps/cbc/test/openai-modes.test.ts",
+      "bytes": 5439,
+      "sha256": "aea4cfa8c5807a74098e76acccc1be9c74e74d398cf53e080c013fa7174abaa9"
     },
     {
       "path": "apps/cbc/test/opentui-view.test.ts",
@@ -1550,8 +1555,8 @@
     },
     {
       "path": "packages/agent-kernel/src/kernel.ts",
-      "bytes": 200362,
-      "sha256": "0f70eb42b641ad028fda16278051e851480e70c10a61de418381444593e9ede6"
+      "bytes": 201534,
+      "sha256": "47232a989c27fedd497e6e9090289d62b182b404e88ee78adc27e968d4932d59"
     },
     {
       "path": "packages/agent-kernel/src/observation.ts",
@@ -1595,8 +1600,8 @@
     },
     {
       "path": "packages/agent-kernel/test/kernel.test.ts",
-      "bytes": 147319,
-      "sha256": "892e01b02fb04130b1bb2ea434c8f3950eb0d87798faad3a120c3762982b0dad"
+      "bytes": 151345,
+      "sha256": "71db689fda82f34c363437ce91f993e7aeb08a43144e5ce31ad66493116f81b7"
     },
     {
       "path": "packages/agent-kernel/test/patch-recovery.test.ts",
@@ -2435,8 +2440,8 @@
     },
     {
       "path": "packages/provider-openai/test/provider.test.ts",
-      "bytes": 72346,
-      "sha256": "5a9bfdc885b0485be25c2b7368bf162bbf95534f0e8a2915f7c314db03a3c939"
+      "bytes": 73932,
+      "sha256": "c4d183f97c3ce315c549fa69792802271771f34705d4c8622390110365b8da24"
     },
     {
       "path": "packages/provider-openai/test/service-tier.test.ts",
@@ -3159,5 +3164,5 @@
       "sha256": "3af6b7d3ec7041c90b18206fe898b904d8781a97c25369189f2733173c6d23a5"
     }
   ],
-  "digest": "2dd96c61e87921e6808aa5983fd22c00b9a0ba550156ea9fafc34dc696430e53"
+  "digest": "6f42b3aa4626c2b76612879dcd7efa08e920ed1f7a2de95cb2200f16c091641a"
 }

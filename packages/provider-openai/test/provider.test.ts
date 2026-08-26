@@ -181,6 +181,56 @@ describe("ChatGPT/Codex routing profile", () => {
   });
 });
 
+describe("premium context band policy", () => {
+  const reserve = { reserveOutputTokens: 32_000 };
+
+  test("utility gating refuses a premium band without measured utility", () => {
+    const decision = new InferenceUtilityController().decide({
+      intent: "inspect",
+      explicitModel: "gpt-5.6-sol",
+      contextTokens: 300_000,
+      ...reserve,
+    });
+    expect(decision.context.band).toBe(512_000);
+    expect(decision.context.premium).toBe(true);
+    expect(decision.context.allowed).toBe(false);
+  });
+
+  test("allow admits bands up to the 1M window", () => {
+    const decision = new InferenceUtilityController().decide({
+      intent: "inspect",
+      explicitModel: "gpt-5.6-sol",
+      contextTokens: 300_000,
+      premiumPolicy: "allow",
+      ...reserve,
+    });
+    expect(decision.context.band).toBe(512_000);
+    expect(decision.context.allowed).toBe(true);
+
+    const largest = new InferenceUtilityController().decide({
+      intent: "inspect",
+      explicitModel: "gpt-5.6-sol",
+      contextTokens: 800_000,
+      premiumPolicy: "allow",
+      ...reserve,
+    });
+    expect(largest.context.band).toBe(1_000_000);
+    expect(largest.context.allowed).toBe(true);
+  });
+
+  test("deny refuses premium bands even with measured utility", () => {
+    const decision = new InferenceUtilityController().decide({
+      intent: "review",
+      explicitModel: "gpt-5.6-sol",
+      contextTokens: 300_000,
+      premiumPolicy: "deny",
+      ...reserve,
+    });
+    expect(decision.context.premium).toBe(true);
+    expect(decision.context.allowed).toBe(false);
+  });
+});
+
 describe("adaptive reasoning (§10.4, AC-48)", () => {
   test("score maps to effort per the PRD table", () => {
     expect(effortForScore(0)).toBe("low");

@@ -1104,6 +1104,7 @@ export class AgentSession {
       nativeCompactionDynamic: options.config.model.context.compactionPolicy === "adaptive",
       compactionThresholdTokens: options.config.model.context.compactionThresholdTokens,
       serviceTier: options.config.provider.openai.serviceTier,
+      premiumContextPolicy: options.config.model.context.premiumBandPolicy,
       phasePolicy: options.config.model.router.phasePolicy,
       commandClassification: options.config.agent.toolGraph.commandClassification,
       toolGraph: options.config.agent.toolGraph,
@@ -2778,6 +2779,49 @@ export class AgentSession {
       source,
     }, this.#currentScope());
     return transition;
+  }
+
+  /** The OpenAI Fast mode tier this session requests. */
+  get liveServiceTier(): "standard" | "fast" {
+    return this.#options.config.provider.openai.serviceTier;
+  }
+
+  /** True when the connected provider backend honors the Fast mode tier. */
+  get fastModeSupported(): boolean {
+    return this.#options.provider.capabilities?.fastTier === true;
+  }
+
+  /**
+   * Apply an interactive Fast mode choice to this session immediately.
+   *
+   * The tier is read per provider sample, so the change takes effect from the
+   * next sample on, and children spawned afterwards read the synced config.
+   * ChatGPT account backends do not honor the tier, so the switch is refused
+   * instead of silently pretending it happened. The persisted user config is
+   * written by the caller.
+   */
+  setServiceTier(tier: "standard" | "fast"): boolean {
+    if (!this.fastModeSupported) return false;
+    this.kernel.setServiceTier(tier);
+    this.#options.config.provider.openai.serviceTier = tier;
+    return true;
+  }
+
+  /** The premium context-band policy active for this session. */
+  get livePremiumContextPolicy(): "utility-gated" | "allow" | "deny" {
+    return this.#options.config.model.context.premiumBandPolicy;
+  }
+
+  /**
+   * Apply an interactive premium-context choice to this session immediately.
+   *
+   * The policy is read per route decision and per compiled sample, so the
+   * change takes effect from the next sample on. The persisted user config is
+   * written by the caller.
+   */
+  setPremiumContextPolicy(policy: "utility-gated" | "allow" | "deny"): void {
+    this.kernel.setPremiumContextPolicy(policy);
+    this.#options.config.model.context.premiumBandPolicy = policy;
   }
 
   /**

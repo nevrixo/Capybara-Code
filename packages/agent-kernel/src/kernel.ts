@@ -540,6 +540,8 @@ export interface KernelOptions {
   readonly compactionThresholdTokens?: number;
   /** OpenAI Fast mode (priority processing alias). */
   readonly serviceTier?: "standard" | "fast";
+  /** Premium context-band policy (>272k bands) applied to route decisions. */
+  readonly premiumContextPolicy?: "utility-gated" | "allow" | "deny";
   /** Route the turn using its concrete work phase instead of treating every sample as final. */
   readonly phasePolicy?: boolean;
   /** v1 bypasses stable materialization caches; v2 reuses versioned stable sections. */
@@ -733,6 +735,8 @@ export class AgentKernel {
   #currentModel: string;
   #autoRoute: boolean;
   #reasoningEffortLocked: boolean;
+  #serviceTier: "standard" | "fast" | undefined;
+  #premiumContextPolicy: "utility-gated" | "allow" | "deny" | undefined;
   /** Any applied effect makes an automatic provider replay unsafe. */
   #sideEffectsApplied = false;
   /** Only explicitly external mutations contribute to change-review risk. */
@@ -808,6 +812,8 @@ export class AgentKernel {
     this.#currentModel = options.model;
     this.#autoRoute = options.autoRoute === true;
     this.#reasoningEffortLocked = options.reasoningEffortLocked === true;
+    this.#serviceTier = options.serviceTier;
+    this.#premiumContextPolicy = options.premiumContextPolicy;
     this.#providerSession = options.provider.createTurnSession?.() ?? {
       capabilities: options.provider.capabilities ?? {
         websocket: false,
@@ -866,7 +872,7 @@ export class AgentKernel {
       this.#providerSession.capabilities.parallelToolCalls
         ? { parallelToolCalls: this.#options.parallelToolCalls }
         : {}),
-      ...(this.#options.serviceTier !== undefined ? { serviceTier: this.#options.serviceTier } : {}),
+      ...(this.#serviceTier !== undefined ? { serviceTier: this.#serviceTier } : {}),
     }, signal);
   }
 
@@ -946,6 +952,26 @@ export class AgentKernel {
   setModel(model: string): void {
     this.#currentModel = model;
     this.#autoRoute = false;
+  }
+
+  /** The OpenAI Fast mode tier requested from the next sample on. */
+  get serviceTier(): "standard" | "fast" | undefined {
+    return this.#serviceTier;
+  }
+
+  /** Apply an interactive Fast mode choice to the running session. */
+  setServiceTier(tier: "standard" | "fast"): void {
+    this.#serviceTier = tier;
+  }
+
+  /** The premium context-band policy applied to the next route decision. */
+  get premiumContextPolicy(): "utility-gated" | "allow" | "deny" | undefined {
+    return this.#premiumContextPolicy;
+  }
+
+  /** Apply an interactive premium-context choice to the running session. */
+  setPremiumContextPolicy(policy: "utility-gated" | "allow" | "deny"): void {
+    this.#premiumContextPolicy = policy;
   }
 
   /** Seed history from a resumed session (§18.11). */
@@ -1943,6 +1969,7 @@ export class AgentKernel {
       configuredMaxOutputTokens: this.#options.maxOutputTokens ?? 32_000,
       needsReasoningSummary: (this.#options.reasoningSummary ?? "auto") === "auto",
       qualityFirst: this.#reasoningEffortLocked && this.#currentEffort === "max",
+      ...(this.#premiumContextPolicy !== undefined ? { premiumPolicy: this.#premiumContextPolicy } : {}),
       ...(this.#options.reserveOutputTokens !== undefined ? { reserveOutputTokens: this.#options.reserveOutputTokens } : {}),
     });
   }
@@ -2268,7 +2295,7 @@ export class AgentKernel {
             }],
           }
         : {}),
-      ...(this.#options.serviceTier !== undefined && this.#providerSession.capabilities.fastTier ? { serviceTier: this.#options.serviceTier } : {}),
+      ...(this.#serviceTier !== undefined && this.#providerSession.capabilities.fastTier ? { serviceTier: this.#serviceTier } : {}),
       ...(this.#options.callerId !== undefined ? { callerId: this.#options.callerId } : {}),
       ...(taskEpochId !== undefined ? { taskEpochId } : {}),
       ...(this.#options.continuationMode === "previous_response" &&
