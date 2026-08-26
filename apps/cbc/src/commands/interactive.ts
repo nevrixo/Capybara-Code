@@ -57,6 +57,8 @@ import {
 } from "../tui.ts";
 import { ok, type CommandContext, type CommandResult } from "./context.ts";
 import { ensureTrust, trustLabel } from "../workspace-trust.ts";
+import { beginUpdateCheck, settleUpdateCheck } from "../update-check.ts";
+import { ensureUpdatePrompt, printUpdateGuidance, recordSkippedUpdate } from "../update-prompt.ts";
 
 export interface InteractiveArgs {
   readonly prompt?: string;
@@ -90,9 +92,32 @@ export async function interactive(
   context: CommandContext,
   args: InteractiveArgs,
 ): Promise<CommandResult> {
+  // §5.2: the update check starts in parallel with everything else, so the
+  // GitHub response can land while the user is still reading the trust box.
+  // `settleUpdateCheck` enforces the hard cap; a late result feeds the banner.
+  const updateCheck = beginUpdateCheck(context);
+
   // §7.1 step 3, before anything reads the workspace.
   const trust = await ensureTrust(context);
   if (trust === "exit") return ok();
+
+  // §5.2: the update prompt sits between trust and paint. It only exists when
+  // the check finished inside the cap with a newer, unskipped release; every
+  // other outcome continues exactly like before.
+  const settledUpdate = await settleUpdateCheck(context, updateCheck);
+  if (settledUpdate.candidate !== undefined) {
+    const updateDecision = await ensureUpdatePrompt(context, settledUpdate.candidate);
+    if (updateDecision === "update") {
+      // The first increment prints the verified manual path and exits; the
+      // replaced binary must not keep running the loaded code (§5.4).
+      printUpdateGuidance(context, settledUpdate.candidate);
+      return ok();
+    }
+    if (updateDecision === "skip") {
+      await recordSkippedUpdate(context, settledUpdate.candidate.version);
+    }
+    // "later" (Esc) persists nothing: the next run may ask again.
+  }
 
   // P1-02: the `[ui]` config drives real render decisions — theme palette,
   // mouse tracking, animation, cost visibility, status density. Read leniently:
