@@ -111,6 +111,7 @@ import {
 // `@cbc/inference-domain` and is re-exported here for existing call sites.
 import type { AgentRole, WorkPhase, TurnBudgetController, BudgetEnforcementMode } from "@cbc/inference-domain";
 import type { ContextPressureDecision } from "@cbc/session-domain";
+import { reprojectPromptContextDialogue } from "@cbc/context-engine";
 export type { AgentRole, WorkPhase };
 
 /**
@@ -1783,10 +1784,6 @@ export class AgentKernel {
     let history: readonly ModelInputItem[] = this.#history;
     const cacheBefore = promptMaterializationCacheStats();
     const compileStartedAt = this.#now();
-    emit("prompt.compile_started", {
-      historyItems: history.length,
-      fullReplay: history === this.#history,
-    });
     let promptInputs = this.#options.promptInputs();
     this.#resetContinuationForHistoryRewrite(
       promptInputs.historyRewriteCallIds ?? [],
@@ -1798,6 +1795,21 @@ export class AgentKernel {
         ? this.#history.slice(this.#continuationHistoryCursor)
         : this.#history;
     history = historyForPrompt();
+    emit("prompt.compile_started", {
+      historyItems: history.length,
+      fullReplay: history === this.#history,
+    });
+    const bindContinuationDialogue = (inputs: PromptInputs): PromptInputs =>
+      history === this.#history || inputs.contextProjection === undefined
+        ? inputs
+        : {
+            ...inputs,
+            contextProjection: reprojectPromptContextDialogue(
+              inputs.contextProjection,
+              history,
+            ),
+          };
+    promptInputs = bindContinuationDialogue(promptInputs);
     const assemble = (inputs: PromptInputs): CompiledModelRequest => assemblePrompt({
       ...inputs,
       activeTools: this.#options.registry.activeToolsFor(this.#activeInteractionMode),
@@ -1823,6 +1835,7 @@ export class AgentKernel {
         promptInputs.historyRewriteCallIds ?? [],
       );
       history = historyForPrompt();
+      promptInputs = bindContinuationDialogue(promptInputs);
       compiled = assemble(promptInputs);
       projectionMismatches = contextProjectionMismatches(promptInputs, compiled);
       if (projectionMismatches.length > 0) {

@@ -195,15 +195,48 @@ function failResult(code: string, message: string, text: string): Execution {
   };
 }
 
-function searchExecution(matches: McpSearchMatch[], query: string): Execution {
+const MAX_RENDERED_MCP_SCHEMA_CHARS = 16 * 1024;
+
+function renderedMcpSchema(schema: Record<string, unknown>): string {
+  const serialized = JSON.stringify(schema);
+  return serialized.length <= MAX_RENDERED_MCP_SCHEMA_CHARS
+    ? serialized
+    : serialized.slice(0, MAX_RENDERED_MCP_SCHEMA_CHARS - 1) + "…";
+}
+
+function requiredMcpArguments(schema: Record<string, unknown>): string[] {
+  return Array.isArray(schema.required)
+    ? schema.required.filter((value): value is string => typeof value === "string")
+    : [];
+}
+
+function searchExecution(
+  manager: McpClientManager,
+  matches: McpSearchMatch[],
+  query: string,
+): Execution {
   const entries = matches.map((match) => ({
     server: match.descriptor.server,
     tool: match.descriptor.name,
     description: match.descriptor.description,
+    ...(match.descriptor.kind === "tool"
+      ? {
+          inputSchema: manager
+            .get(match.descriptor.server)
+            ?.client.schemaFor(match.descriptor.name),
+        }
+      : {}),
   }));
-  const lines = entries.map(
-    (entry) => `- ${entry.server}/${entry.tool}: ${entry.description ?? ""}`,
-  );
+  const lines = entries.flatMap((entry) => {
+    const heading = `- ${entry.server}/${entry.tool}: ${entry.description ?? ""}`;
+    if (entry.inputSchema === undefined) return [heading];
+    const required = requiredMcpArguments(entry.inputSchema);
+    return [
+      heading,
+      `  required arguments: ${required.length > 0 ? required.join(", ") : "none"}`,
+      `  input schema for mcp.call.arguments: ${renderedMcpSchema(entry.inputSchema)}`,
+    ];
+  });
   const label =
     query.length === 0
       ? `${entries.length} MCP capabilit${entries.length === 1 ? "y" : "ies"}`
@@ -240,7 +273,7 @@ export function buildMcpBridgeForManager(
       if (options.waitForConnections !== false) {
         await manager.waitForConnections(5_000, { signal });
       }
-      return searchExecution(manager.search(query, 5), query);
+      return searchExecution(manager, manager.search(query, 5), query);
     }
 
     if (action.toolId === "mcp.read_resource") {

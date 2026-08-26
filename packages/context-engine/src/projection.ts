@@ -144,6 +144,33 @@ export function projectContextPack(
   );
 }
 
+/**
+ * Rebind an immutable compiler projection to the exact dialogue sent on one
+ * provider request.
+ *
+ * `previous_response_id` continuation is intentionally incremental: the
+ * provider already owns the earlier function calls, so the next request must
+ * contain only the new call outputs. Reusing a projection prepared from full
+ * local history would silently reintroduce those calls and can produce an
+ * orphan/duplicate tool sequence at the provider boundary. Keep every compiler
+ * selection and identity field, but recompute the provider-facing digest around
+ * the request's actual dialogue suffix.
+ */
+export function reprojectPromptContextDialogue(
+  projection: PromptContextProjection,
+  recentDialogue: readonly ModelInputItem[],
+): PromptContextProjection {
+  return finalizeProjection(
+    projection.packId,
+    projection.manifestDigest,
+    projection.segments,
+    recentDialogue,
+    projection.virtualizedExcerpts,
+    projection.tokens,
+    projection.cacheBreakpoints,
+  );
+}
+
 function finalizeProjection(
   packId: string,
   manifestDigest: string,
@@ -153,6 +180,7 @@ function finalizeProjection(
   estimatedTokens = 0,
   cacheBreakpoints: readonly number[] = [],
 ): PromptContextProjection {
+  const immutableDialogue = Object.freeze([...recentDialogue]);
   const ordered = [
     ...segments.stable_prefix,
     ...segments.task_state,
@@ -176,7 +204,7 @@ function finalizeProjection(
     segments,
     text,
     tokens: estimatedTokens,
-    recentDialogue,
+    recentDialogue: immutableDialogue,
     virtualizedExcerpts,
     cacheBreakpoints,
     provenanceDigest,

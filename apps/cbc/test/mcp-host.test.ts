@@ -88,6 +88,58 @@ describe("buildMcpBridgeForManager (P0-15)", () => {
     expect(execution.text).toContain("No MCP capabilities matched.");
   });
 
+  test("mcp.search exposes the selected tool's exact required input schema", async () => {
+    const inputSchema = {
+      type: "object",
+      additionalProperties: false,
+      required: ["query", "libraryName"],
+      properties: {
+        query: { type: "string" },
+        libraryName: { type: "string" },
+      },
+    };
+    const catalog = new McpCatalog();
+    catalog.set(
+      "context7",
+      buildDescriptors({
+        server: "context7",
+        tools: [{
+          name: "resolve-library-id",
+          description: "Resolve a library name",
+          inputSchema,
+        }],
+      }),
+    );
+    const manager = new McpClientManager({ catalog });
+    manager.add({
+      name: "context7",
+      enabled: true,
+      fromProjectConfig: false,
+      client: {
+        schemaFor: (name: string) => name === "resolve-library-id" ? inputSchema : undefined,
+      } as never,
+    });
+    const bridge = buildMcpBridgeForManager(manager, { waitForConnections: false });
+
+    const execution = await bridge(
+      {
+        callId: "schema-search",
+        toolId: "mcp.search",
+        arguments: { query: "resolve library" },
+        display: "search resolve library",
+      },
+      new AbortController().signal,
+    );
+
+    expect(execution.result.ok).toBe(true);
+    expect(execution.text).toContain("required arguments: query, libraryName");
+    expect(execution.text).toContain("input schema for mcp.call.arguments");
+    expect(execution.text).toContain('"additionalProperties":false');
+    expect(execution.result.data).toMatchObject({
+      matches: [{ server: "context7", tool: "resolve-library-id", inputSchema }],
+    });
+  });
+
   test("mcp.call on an unreachable server fails honestly with MCP_UNAVAILABLE", async () => {
     const manager = new McpClientManager({ catalog: new McpCatalog() });
     const bridge = buildMcpBridgeForManager(manager);

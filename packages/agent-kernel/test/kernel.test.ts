@@ -14,12 +14,14 @@ import {
   InferenceUtilityController,
   estimateCostUsd,
   type ModelEvent,
+  type ModelInputItem,
   type ModelRequest,
   type ScriptedStep,
 } from "@cbc/provider-openai";
 import { NATIVE_TOOLS, ToolRegistry, okResult, errorResult, type ToolResult } from "@cbc/tool-registry";
 import type { ApprovalDecision, ApprovalRequest, PermissionContext, ProposedAction } from "@cbc/permissions";
 import { estimateTokens } from "@cbc/session-domain";
+import type { PromptContextProjection } from "@cbc/context-engine";
 
 import {
   changeDetailFromResult,
@@ -62,6 +64,32 @@ import {
 interface Recorded {
   kind: CbcEventKind;
   payload: unknown;
+}
+
+function projectionForDialogue(
+  recentDialogue: readonly ModelInputItem[],
+): PromptContextProjection {
+  return {
+    version: "1",
+    packId: "context-pack-continuation-test",
+    manifestDigest: "manifest-continuation-test",
+    segments: {
+      stable_prefix: [],
+      task_state: [],
+      working_code: [],
+      exact_evidence: [],
+      memory_handles: [],
+    },
+    text: "",
+    tokens: 0,
+    stable: false,
+    exact: false,
+    provenanceDigest: "provenance-continuation-test",
+    recentDialogue,
+    virtualizedExcerpts: [],
+    cacheBreakpoints: [],
+    renderedDigest: "rendered-continuation-test",
+  };
 }
 
 interface HarnessOptions {
@@ -2637,6 +2665,75 @@ describe("explicit provider continuation modes (§10.6)", () => {
     expect(secondInput).not.toContain("PRIOR_USER_SENTINEL");
     expect(second?.input.some((item) => item.type === "function_call")).toBe(false);
     expect(second?.input.some((item) => item.type === "function_call_output")).toBe(true);
+  });
+
+  test("previous_response overrides a full-history context projection with the incremental suffix", async () => {
+    let promptBuild = 0;
+    const fullProjectedHistory: ModelInputItem[] = [
+      {
+        type: "function_call",
+        callId: "projected-call",
+        name: "fs.read",
+        argumentsText: JSON.stringify({ path: "a.ts" }),
+      },
+      {
+        type: "function_call_output",
+        callId: "projected-call",
+        output: "FULL_PROJECTION_OUTPUT_SENTINEL",
+      },
+    ];
+    const { kernel, provider } = harness({
+      continuationMode: "previous_response",
+      steps: [
+        {
+          toolCalls: [{
+            callId: "projected-call",
+            name: "fs.read",
+            arguments: { path: "a.ts" },
+          }],
+        },
+        { text: "Done." },
+      ],
+      toolResults: {
+        "fs.read": { result: okResult("ok"), text: "INCREMENTAL_OUTPUT_SENTINEL" },
+      },
+      promptInputs: () => ({
+        activeTools: [],
+        projectInstructions: [],
+        skillCatalog: [],
+        loadedSkills: [],
+        contextProjection: projectionForDialogue(
+          promptBuild++ === 0 ? [] : fullProjectedHistory,
+        ),
+        contextManifest: {
+          evidenceIds: [],
+          excerptIds: [],
+          rejected: [],
+          estimatedTokens: 0,
+          omitted: 0,
+          compilerPackId: "context-pack-continuation-test",
+          compilerManifestDigest: "manifest-continuation-test",
+        },
+        history: [],
+      }),
+    });
+
+    await kernel.runTurn("PROJECTED_USER_SENTINEL", new AbortController().signal);
+
+    const second = provider.requests[1];
+    expect(second?.previousResponseId).toBe("mock_resp_1");
+    expect(second?.input.some((item) => item.type === "function_call")).toBe(false);
+    expect(
+      second?.input.some(
+        (item) =>
+          item.type === "function_call_output" &&
+          item.callId === "projected-call" &&
+          item.output.includes("INCREMENTAL_OUTPUT_SENTINEL"),
+      ),
+    ).toBe(true);
+    const serialized = JSON.stringify(second?.input);
+    expect(serialized).not.toContain("FULL_PROJECTION_OUTPUT_SENTINEL");
+    expect(serialized).not.toContain("PROJECTED_USER_SENTINEL");
   });
 
   test("a phase change that resets previous_response recompiles complete tool history", async () => {

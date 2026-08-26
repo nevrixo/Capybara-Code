@@ -2891,6 +2891,41 @@ describe("action normalization", () => {
     expect(action.display).toBe("npm install sharp");
   });
 
+  test("npm installs on a WSL Windows mount avoid DrvFs bin-link failures up front", () => {
+    const mounted = new HostActionNormalizer({
+      defaultCwd: ".",
+      workspaceRoot: "/mnt/c/work/project",
+    });
+    const action = mounted.normalize("c1", "process.run", {
+      program: "npm",
+      args: ["install"],
+    });
+
+    expect(action.arguments.args).toEqual(["install", "--no-bin-links"]);
+    expect(action.command?.args).toEqual(["install", "--no-bin-links"]);
+    expect(action.display).toBe("npm install --no-bin-links");
+
+    const explicit = mounted.normalize("c2", "process.run", {
+      program: "npm",
+      args: ["install", "--bin-links=true"],
+    });
+    expect(explicit.command?.args).toEqual(["install", "--bin-links=true"]);
+
+    const native = new HostActionNormalizer({
+      defaultCwd: ".",
+      workspaceRoot: "/work/project",
+    }).normalize("c3", "process.run", {
+      program: "npm",
+      args: ["install"],
+    });
+    expect(native.command?.args).toEqual(["install"]);
+  });
+
+  test("skill.load displays the selected skill instead of only the tool id", () => {
+    const action = normalizer.normalize("c1", "skill.load", { name: "frontend-expert" });
+    expect(action.display).toBe("load frontend-expert");
+  });
+
   test("a host without network-deny support requires explicit process approval", async () => {
     const hostBound = new HostActionNormalizer({
       defaultCwd: ".",

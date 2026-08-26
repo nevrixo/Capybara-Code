@@ -288,6 +288,7 @@ export class LspHost {
   readonly #servers: readonly LspServerDescriptor[];
   readonly #services = new Map<string, ServiceState>();
   readonly #processes = new Map<string, LspProcess>();
+  readonly #processStarts = new Map<string, Promise<LspProcess>>();
   readonly #diagnosticSnapshots = new Map<string, LspDiagnosticSnapshot>();
   #lastFiles: readonly RepoFile[] = [];
   #lastIntelligence: RepositoryIntelligence | undefined;
@@ -1062,6 +1063,21 @@ export class LspHost {
   }
 
   async #ensureProcess(descriptor: LspServerDescriptor): Promise<LspProcess> {
+    const pending = this.#processStarts.get(descriptor.name);
+    if (pending !== undefined) return await pending;
+
+    const started = this.#startProcess(descriptor);
+    this.#processStarts.set(descriptor.name, started);
+    try {
+      return await started;
+    } finally {
+      if (this.#processStarts.get(descriptor.name) === started) {
+        this.#processStarts.delete(descriptor.name);
+      }
+    }
+  }
+
+  async #startProcess(descriptor: LspServerDescriptor): Promise<LspProcess> {
     const existing = this.#processes.get(descriptor.name);
     if (existing !== undefined && !existing.stopped && existing.jobId !== undefined) {
       return existing;

@@ -216,6 +216,96 @@ describe("LspHost", () => {
     expect(stops).toBe(1);
   });
 
+  test("concurrent symbol queries share initialization and wait until the server is ready", async () => {
+    let notification:
+      | ((method: string, params: unknown) => void)
+      | undefined;
+    let protocolChannel = "";
+    let starts = 0;
+    let initializeId: number | undefined;
+    let initializeObserved!: () => void;
+    const initializeSent = new Promise<void>((resolve) => {
+      initializeObserved = resolve;
+    });
+    const methods: string[] = [];
+    const runtime = {
+      issueCapability: async () => ({ id: "cap", sessionId: "session-1", actionHash: "hash" }),
+      startJob: async (params: Record<string, unknown>) => {
+        starts += 1;
+        protocolChannel = String(params.protocolChannel);
+        return { jobId: "job-1", display: "fake LSP" };
+      },
+      sendInput: async (params: Record<string, unknown>) => {
+        const data = params.data;
+        if (typeof data !== "string") throw new Error("expected framed LSP input");
+        const message = messageFromFrame(data);
+        if (typeof message.method === "string") methods.push(message.method);
+        if (message.method === "initialize" && typeof message.id === "number") {
+          initializeId = message.id;
+          initializeObserved();
+          return undefined;
+        }
+        if (typeof message.id !== "number") return undefined;
+        const result = message.method === "textDocument/documentSymbol" ? [] : null;
+        notification?.("lsp.stdio.output", {
+          protocolChannel,
+          text: lspFrame({ jsonrpc: "2.0", id: message.id, result }),
+        });
+        return undefined;
+      },
+      stopJob: async () => undefined,
+      subscribeNotifications: (handler: (method: string, params: unknown) => void) => {
+        notification = handler;
+        return () => {
+          if (notification === handler) notification = undefined;
+        };
+      },
+    };
+    const host = new LspHost({
+      runtime: runtime as never,
+      servers: {
+        typescript: {
+          command: "typescript-language-server",
+          args: ["--stdio"],
+          extensions: [".ts"],
+          languageId: "typescript",
+          timeoutMs: 1_000,
+        },
+      },
+      sessionId: "session-1",
+      workspaceRoot: "/work",
+      workspaceTrusted: true,
+      isBuildMode: () => true,
+      resolveExecutable: () => "fake-lsp",
+      readFile: async () => "export const value = 1;\n",
+    });
+
+    const first = host.documentSymbols("src/widget.ts");
+    const second = host.documentSymbols("src/widget.ts");
+    await initializeSent;
+
+    expect(starts).toBe(1);
+    expect(methods.filter((method) => method === "initialize")).toHaveLength(1);
+    expect(methods).not.toContain("textDocument/documentSymbol");
+    expect(initializeId).toBeDefined();
+
+    notification?.("lsp.stdio.output", {
+      protocolChannel,
+      text: lspFrame({
+        jsonrpc: "2.0",
+        id: initializeId,
+        result: { capabilities: {} },
+      }),
+    });
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { server: "typescript", result: [] },
+      { server: "typescript", result: [] },
+    ]);
+    expect(methods.filter((method) => method === "textDocument/documentSymbol")).toHaveLength(2);
+    await host.close();
+  });
+
   test("turns a supervised rename response into a runtime-bound edit plan", async () => {
     let notification:
       | ((method: string, params: unknown) => void)
