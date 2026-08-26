@@ -1,6 +1,6 @@
 {
   "name": "capybara-code",
-  "version": "0.1.1-alpha.6",
+  "version": "0.1.1-alpha.7",
   "private": true,
   "description": "Capybara Code (capy) - independent terminal coding agent powered by OpenAI models",
   "license": "Apache-2.0",
