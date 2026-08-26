@@ -13,6 +13,7 @@
 
 import type { CbcConfig } from "@cbc/config-schema";
 import type { TrustState } from "@cbc/permissions";
+import type { RuntimeSpawner } from "@cbc/protocol";
 
 import { CliError, EXIT, type ExitCode } from "../exit.ts";
 import { expandHome, join, resolvePaths, type CbcPaths, type Host } from "../host.ts";
@@ -31,6 +32,8 @@ export interface CommandContextOptions {
   readonly version: string;
   /** Set by capy run: never prompt. */
   readonly nonInteractive?: boolean;
+  /** Injected in tests so commands can run without a compiled sidecar. */
+  readonly runtimeSpawner?: RuntimeSpawner;
 }
 
 export class CommandContext {
@@ -41,6 +44,7 @@ export class CommandContext {
   readonly decision: RenderDecision;
   readonly writer: LineWriter;
   readonly nonInteractive: boolean;
+  readonly #runtimeSpawner: RuntimeSpawner | undefined;
   #runtime: Runtime | undefined;
   #config: LoadedConfig | undefined;
   #trust: TrustState | undefined;
@@ -51,6 +55,7 @@ export class CommandContext {
   constructor(options: CommandContextOptions) {
     this.host = options.host;
     this.version = options.version;
+    this.#runtimeSpawner = options.runtimeSpawner;
     this.paths = resolvePaths(options.host);
     // Normalize host.cwd because a trailing separator must not change the trust key.
     this.workspacePath = resolveWorkspace(options.host, options.host.cwd);
@@ -165,6 +170,7 @@ export class CommandContext {
       dataDir: this.paths.data,
       clientVersion: this.version,
       pty: true,
+      ...(this.#runtimeSpawner !== undefined ? { spawner: this.#runtimeSpawner } : {}),
       sandboxLevel: config.sandbox.level,
       networkForShell: config.sandbox.networkForShell,
       interactionMode: config.agent.interactionMode ?? (config.agent.permissionMode === "plan" ? "plan" : "build"),
