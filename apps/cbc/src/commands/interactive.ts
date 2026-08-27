@@ -1161,6 +1161,7 @@ export class SessionPersistenceQueue {
   }
 }
 
+/** Schedule disposal of session resources after persistence queue is idle. */
 function disposeAfterPersistence(
   persistence: SessionPersistenceQueue,
   boot: { readonly dispose?: () => Promise<void> },
@@ -1184,6 +1185,7 @@ type InteractiveSelect = (
   choices: readonly string[],
 ) => Promise<number>;
 
+/** Capitalize the first character of a string. */
 function capitalize(text: string): string {
   return text.length === 0 ? text : text.charAt(0).toUpperCase() + text.slice(1);
 }
@@ -1201,6 +1203,7 @@ interface SettingDescriptor extends SettingsMenuItem {
   readonly apply: (session: ActiveSession, value: string) => SettingsMenuChange;
 }
 
+/** Build the list of available settings for the /setting picker menu. */
 function settingDescriptors(ui: InteractiveUi, session: ActiveSession): SettingDescriptor[] {
   return [
     {
@@ -1398,6 +1401,7 @@ function settingDescriptors(ui: InteractiveUi, session: ActiveSession): SettingD
   ];
 }
 
+/** Apply a setting change from the /setting picker to the session or UI. */
 function applySetting(
   ui: InteractiveUi,
   session: ActiveSession,
