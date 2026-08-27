@@ -157,6 +157,41 @@ describe("TODO recovery contract", () => {
     }
   });
 
+  test("reopens an active item when completion also changes its scope", () => {
+    const todos = controller();
+    expect(todos.replace({ expectedRevision: 0, reason: "track work", source: "model", items: [implementation] }).ok).toBe(true);
+    expect(todos.replace({
+      expectedRevision: 1,
+      reason: "start work",
+      source: "model",
+      items: [{ ...implementation, status: "active" }],
+    }).ok).toBe(true);
+
+    const reopened = todos.replace({
+      expectedRevision: 2,
+      reason: "finish expanded work",
+      source: "model",
+      items: [{
+        ...implementation,
+        text: "implement the parser and formatter",
+        status: "done",
+        evidence: ["claimed"],
+      }],
+    });
+
+    expect(reopened.ok).toBe(true);
+    if (reopened.ok) {
+      expect(reopened.state.items).toMatchObject([{
+        id: "impl",
+        text: "implement the parser and formatter",
+        status: "pending",
+      }]);
+      expect(reopened.transitionTrace).toMatchObject([
+        { revision: 3, id: "impl", from: "active", to: "pending", source: "host_recovery" },
+      ]);
+    }
+  });
+
   test("does not use unrelated delegated paths for completion", () => {
     const todos = controller();
     expect(todos.replace({ expectedRevision: 0, reason: "track work", source: "model", items: [implementation] }).ok).toBe(true);

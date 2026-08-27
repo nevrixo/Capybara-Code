@@ -1062,7 +1062,6 @@ export class AgentSession {
       approvals: options.approvals,
       normalizer: new HostActionNormalizer({
         defaultCwd: ".",
-        workspaceRoot: options.workspacePath,
         ...(options.runtime.capabilities?.networkDeny === undefined
           ? {}
           : { networkDenyAvailable: options.runtime.capabilities.networkDeny }),

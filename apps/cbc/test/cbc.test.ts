@@ -2891,34 +2891,21 @@ describe("action normalization", () => {
     expect(action.display).toBe("npm install sharp");
   });
 
-  test("npm installs on a WSL Windows mount avoid DrvFs bin-link failures up front", () => {
-    const mounted = new HostActionNormalizer({
-      defaultCwd: ".",
-      workspaceRoot: "/mnt/c/work/project",
-    });
-    const action = mounted.normalize("c1", "process.run", {
+  test("npm install arguments are never rewritten into a script-breaking install", () => {
+    const action = normalizer.normalize("c1", "process.run", {
       program: "npm",
       args: ["install"],
     });
 
-    expect(action.arguments.args).toEqual(["install", "--no-bin-links"]);
-    expect(action.command?.args).toEqual(["install", "--no-bin-links"]);
-    expect(action.display).toBe("npm install --no-bin-links");
+    expect(action.arguments.args).toEqual(["install"]);
+    expect(action.command?.args).toEqual(["install"]);
+    expect(action.display).toBe("npm install");
 
-    const explicit = mounted.normalize("c2", "process.run", {
+    const explicit = normalizer.normalize("c2", "process.run", {
       program: "npm",
-      args: ["install", "--bin-links=true"],
+      args: ["install", "--no-bin-links"],
     });
-    expect(explicit.command?.args).toEqual(["install", "--bin-links=true"]);
-
-    const native = new HostActionNormalizer({
-      defaultCwd: ".",
-      workspaceRoot: "/work/project",
-    }).normalize("c3", "process.run", {
-      program: "npm",
-      args: ["install"],
-    });
-    expect(native.command?.args).toEqual(["install"]);
+    expect(explicit.command?.args).toEqual(["install", "--no-bin-links"]);
   });
 
   test("skill.load displays the selected skill instead of only the tool id", () => {

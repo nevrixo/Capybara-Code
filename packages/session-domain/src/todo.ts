@@ -586,14 +586,19 @@ export function compileTodoTransition(input: TodoTransitionInput): TodoTransitio
     const previous = previousById.get(rawItem.id);
     let item = rawItem;
     if (previous !== undefined &&
-      (previous.status === "done" || previous.status === "blocked" || previous.status === "skipped") &&
       item.status !== "pending" && item.status !== "active" &&
       !scopesEqual(previous, item) &&
       !isEvidenceBackedAnalysisCompletion(previous, item)) {
+      // A model commonly refines an item's wording while reporting completion.
+      // Treat that as a scope change, but compile it into a conservative pending
+      // reopen instead of exposing a rejected TODO call. This keeps the newly
+      // declared work visible and prevents it from being falsely marked done.
       const { blockedReason: _blockedReason, ...rest } = item;
       item = { ...rest, status: "pending" };
-      revision += 1;
-      trace.push({ revision, id: item.id, from: previous.status, to: "pending", source: "host_recovery" });
+      if (previous.status !== "pending") {
+        revision += 1;
+        trace.push({ revision, id: item.id, from: previous.status, to: "pending", source: "host_recovery" });
+      }
       recovered = true;
     }
 

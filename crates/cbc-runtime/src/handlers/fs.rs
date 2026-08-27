@@ -400,15 +400,16 @@ fn read_one(
                 "cannot retain durable evidence for a sensitive path",
             ));
         }
-        if !mode.authoritative_for_write()
-            || start_line != 1
-            || !range.end_of_file
-            || range.truncated_by_bytes
-        {
+        // Exact range reads stream, validate, and hash the complete file even
+        // when only a bounded excerpt is returned. The checksum therefore binds
+        // durable evidence to the full revision without forcing the full source
+        // into the model context. Preview mode is the only non-authoritative
+        // read and remains ineligible.
+        if !mode.authoritative_for_write() {
             return Err(RpcError::taxonomy(
                 cbc_protocol::error_codes::INVALID_ARGUMENT,
                 "INVALID_ARGUMENT",
-                "recordEvidence requires a complete exact read from the first line",
+                "recordEvidence requires exact read mode",
             ));
         }
         let digest = range.checksum.as_deref().ok_or_else(|| {

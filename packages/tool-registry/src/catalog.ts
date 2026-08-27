@@ -140,7 +140,7 @@ const readRangeProperties = {
   },
   recordEvidence: {
     type: "boolean",
-    description: "Persist an opaque evidence ID only for a complete exact read; sensitive or partial reads are refused.",
+    description: "Persist an opaque evidence ID for an exact read. Exact mode hashes the complete file even when it returns a bounded excerpt; preview and sensitive reads are refused.",
   },
   allowAbsolute: { type: "boolean", default: false },
 };

@@ -2994,6 +2994,26 @@ describe("failure taxonomy (§11.2)", () => {
     expect(hint.guidance).toContain("environment");
   });
 
+  test("shell command-unavailable exit codes cannot trigger source rollback", () => {
+    for (const exitCode of [126, 127, 9009]) {
+      const hint = classifyFailure({
+        toolId: "process.run",
+        code: "PROCESS_EXIT_NONZERO",
+        message: `npm run build exited with ${exitCode}`,
+        exitCode,
+      });
+      expect(hint.category).toBe("environment_issue");
+    }
+
+    expect(classifyFailure({
+      toolId: "process.run",
+      code: "PROCESS_EXIT_NONZERO",
+      message: "npm run build failed",
+      text: "sh: 1: vite: not found",
+      exitCode: 1,
+    }).category).toBe("environment_issue");
+  });
+
   test("a denial is never reported as retryable", () => {
     const hint = classifyFailure({
       toolId: "fs.write",
