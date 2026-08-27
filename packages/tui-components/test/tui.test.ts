@@ -1537,6 +1537,24 @@ describe("completion popup (§6.14, §8.10)", () => {
     expect(accepted.text).toBe("/effort medium");
   });
 
+  test("accepting a readable label closes when its hidden insertion is the only match", () => {
+    const sessionSources = {
+      argumentValues: ({ command }: { command: string }) =>
+        command === "/resume"
+          ? [{
+              value: "2026-08-27 22:56 · Fix parser",
+              detail: "active · 2 turns · id bc2a",
+              insert: "ses_20260827135613_bc2a",
+            }]
+          : undefined,
+    };
+    const state = computeCompletions("/resume ", 8, sessionSources);
+    const accepted = acceptCompletion(state, "/resume ", 8, sessionSources);
+
+    expect(accepted.text).toBe("/resume ses_20260827135613_bc2a");
+    expect(accepted.state.open).toBe(false);
+  });
+
   test("a trailing space after a command shows every value for its argument", () => {
     const state = computeCompletions("/effort ", 8, sources);
     expect(state.open).toBe(true);

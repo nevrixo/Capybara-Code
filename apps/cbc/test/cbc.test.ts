@@ -50,6 +50,7 @@ import { NATIVE_TOOLS, okResult } from "@cbc/tool-registry";
 import { MODEL_REGISTRY } from "@cbc/provider-openai";
 import { ComposerSession } from "../src/composer.ts";
 import { worktreeOverlayLines } from "../src/commands/interactive.ts";
+import { buildResumeCandidates } from "../src/resume-picker.ts";
 import { decodeKeys, flushPendingSequence, inertKeyStream } from "../src/keys.ts";
 import { slashArgumentValues } from "../src/slash.ts";
 import {
@@ -825,6 +826,51 @@ describe("key decoding (§6.15, AC-05)", () => {
 // §6.14 / §6.15 composer session
 // ---------------------------------------------------------------------------
 
+describe("/resume candidate labels", () => {
+  test("sorts by the newest activity instant and never exposes an opaque id as the title", () => {
+    const candidates = buildResumeCandidates([
+      {
+        id: "ses_20260827120000_aaaa",
+        createdAt: "2026-08-27T12:00:00.000Z",
+        // 13:00 UTC: newer than the lexically larger 12:30 timestamp below.
+        updatedAt: "2026-08-27T09:00:00-04:00",
+        title: "Fix parser",
+        state: "active",
+        turnCount: 2,
+      },
+      {
+        id: "ses_20260827123000_bbbb",
+        createdAt: "2026-08-27T12:30:00.000Z",
+        updatedAt: "2026-08-27T12:30:00.000Z",
+        title: "Untitled session",
+        state: "completed",
+        turnCount: 0,
+      },
+      {
+        id: "ses_20260826090000_cccc",
+        createdAt: "2026-08-26T09:00:00.000Z",
+        updatedAt: "not-a-timestamp",
+        title: "Older work",
+        state: "interrupted",
+        turnCount: 1,
+      },
+    ]);
+
+    expect(candidates.map((candidate) => candidate.insert)).toEqual([
+      "ses_20260827120000_aaaa",
+      "ses_20260827123000_bbbb",
+      "ses_20260826090000_cccc",
+    ]);
+    expect(candidates[0]?.value).toContain("Fix parser");
+    expect(candidates[1]?.value).toContain("Empty session");
+    expect(candidates.every((candidate) =>
+      /^\d{4}-\d{2}-\d{2} \d{2}:\d{2} · /u.test(candidate.value)
+    )).toBe(true);
+    expect(candidates.every((candidate) => !candidate.value.includes("ses_"))).toBe(true);
+    expect(candidates[0]?.detail).toBe("active · 2 turns · id aaaa");
+  });
+});
+
 describe("composer session (§6.14, §6.15, AC-05, AC-20)", () => {
   const sources = {
     commands: SLASH_COMMANDS,
@@ -944,31 +990,42 @@ describe("composer session (§6.14, §6.15, AC-05, AC-20)", () => {
     }
   });
 
-  test("resume choices open a session picker and submit the selected id", () => {
+  test("resume choices submit a hidden session id from a readable label with Tab or Enter", () => {
     const sessions = [
-      { value: "ses_new", detail: "active · 2 turn(s) · Fix parser" },
-      { value: "ses_old", detail: "completed · 5 turn(s) · Refactor" },
-    ];
-    const composer = new ComposerSession({
-      sources: {
-        commands: SLASH_COMMANDS,
-        argumentValues: (input) => slashArgumentValues(input, { sessions }),
+      {
+        value: "2026-08-27 22:56 · Fix parser",
+        detail: "active · 2 turns · id bc2a",
+        insert: "ses_new",
       },
-    });
+      {
+        value: "2026-08-26 21:42 · Refactor",
+        detail: "completed · 5 turns · id f45b",
+        insert: "ses_old",
+      },
+    ];
+    for (const key of ["tab", "enter"] as const) {
+      const composer = new ComposerSession({
+        sources: {
+          commands: SLASH_COMMANDS,
+          argumentValues: (input) => slashArgumentValues(input, { sessions }),
+        },
+      });
 
-    type(composer, "/resume");
-    expect(composer.handle({ key: "enter" }, idle)).toEqual({ kind: "redraw" });
-    expect(composer.text).toBe("/resume ");
-    expect(composer.completion.kind).toBe("argument");
-    expect(composer.completion.candidates.map((candidate) => candidate.value)).toEqual([
-      "ses_new",
-      "ses_old",
-    ]);
+      type(composer, "/resume");
+      expect(composer.handle({ key: "enter" }, idle)).toEqual({ kind: "redraw" });
+      expect(composer.text).toBe("/resume ");
+      expect(composer.completion.kind).toBe("argument");
+      expect(composer.completion.candidates.map((candidate) => candidate.value)).toEqual([
+        "2026-08-27 22:56 · Fix parser",
+        "2026-08-26 21:42 · Refactor",
+      ]);
 
-    expect(composer.handle({ key: "tab" }, idle)).toEqual({
-      kind: "submit",
-      text: "/resume ses_new",
-    });
+      expect(composer.handle({ key }, idle)).toEqual({
+        kind: "submit",
+        text: "/resume ses_new",
+      });
+      expect(composer.completionOpen).toBe(false);
+    }
   });
 
   test("resume without recorded sessions submits the inline empty-state command", () => {

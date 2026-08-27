@@ -458,13 +458,16 @@ export function acceptCompletion(
 
   const recomputed = computeCompletions(next, nextCursor, sources);
 
-  // A list whose only remaining entry is the thing just accepted has nothing left
-  // to offer, so the popup closes and the next Tab submits the command. Leaving it
-  // open would mean accepting `/status` left a one-item popup on screen and the
-  // next Tab re-accepted the same value instead of sending the command.
+  // A list whose only remaining entry inserts the thing just accepted has nothing
+  // left to offer, so the popup closes and the next step can submit the command.
+  // Compare insertion identities rather than display labels: pickers such as
+  // `/resume` show a readable title while inserting an opaque session id.
   if (recomputed.open && recomputed.candidates.length === 1) {
     const only = recomputed.candidates[0];
-    if (only !== undefined && only.value === insertion.trimEnd()) {
+    if (
+      only !== undefined &&
+      (only.insert ?? only.value).trimEnd() === insertion.trimEnd()
+    ) {
       return {
         text: next,
         cursor: nextCursor,
