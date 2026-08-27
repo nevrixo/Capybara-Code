@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-27T14:16:14.807Z",
+  "generatedAt": "2026-08-27T14:30:26.264Z",
   "git": {
-    "commit": "0c4f3cc22d2857e4b0fcbcfcbdcd6d97b254133d",
-    "dirty": true,
-    "dirtyHash": "0409a09295f056348180e4958fd8d5651fdf1a56a375b9335e634b8b0edadda1"
+    "commit": "2daf303732aaa32d68bc9dfff4059f579b472395",
+    "dirty": false,
+    "dirtyHash": "4d1925db813ff1faf73b16e69479f8de20e768cc6ed15a9ddf7cd9906bce2ae8"
   },
   "roots": [
     "apps",
@@ -190,8 +190,8 @@
     },
     {
       "path": "apps/cbc/src/args.ts",
-      "bytes": 10266,
-      "sha256": "a90c021b3224d539ebeaf56288195b430b4192069d8870d1f56054983794adeb"
+      "bytes": 10542,
+      "sha256": "4853ada7cc3ffeff917154713a03d93831b7ed44b0bc974b5006d29c8d3fb102"
     },
     {
       "path": "apps/cbc/src/auth-mode.ts",
@@ -210,8 +210,8 @@
     },
     {
       "path": "apps/cbc/src/command-spec.ts",
-      "bytes": 4564,
-      "sha256": "7b0729f6f4ca9d2d32f7ad7dc8a5d8beb6595250a9ebaaf3377dbd1d8b5ddee6"
+      "bytes": 4693,
+      "sha256": "078960c0af7bb7efd8e8da7a80e767a1f6b720034aa13a0b29180c7e50b4fde9"
     },
     {
       "path": "apps/cbc/src/commands/auth.ts",
@@ -235,8 +235,8 @@
     },
     {
       "path": "apps/cbc/src/commands/interactive.ts",
-      "bytes": 83154,
-      "sha256": "9c9d2dac12b754fc9d499ac95c824151bb7c848c3a5c208fd4a6efcd59453b00"
+      "bytes": 83435,
+      "sha256": "e23e4ce519d7d63d021a2e09ad856be14cb1edcbd6a78d61f5375626270a9567"
     },
     {
       "path": "apps/cbc/src/commands/model.ts",
@@ -255,8 +255,8 @@
     },
     {
       "path": "apps/cbc/src/commands/update.ts",
-      "bytes": 3736,
-      "sha256": "7a9e4bb54a9de3d3e8136775f340744d57ccb7dd562794ae5c4b205939db9273"
+      "bytes": 3812,
+      "sha256": "edbdf1c5f9a9c5e5ffad45b7c1da3fa596a89d81158999b6a3d6276c903775df"
     },
     {
       "path": "apps/cbc/src/composer.ts",
@@ -390,8 +390,8 @@
     },
     {
       "path": "apps/cbc/src/router.ts",
-      "bytes": 3747,
-      "sha256": "966df7f1c3bd819cec90a9ca688f95f5c16a88ce2f523f23045a53110921a07e"
+      "bytes": 3818,
+      "sha256": "8bb3faed7a76f3e518a78aee7124e6c6308b3423fdf569a93b42536eabdb6dd9"
     },
     {
       "path": "apps/cbc/src/rules-store.ts",
@@ -485,8 +485,8 @@
     },
     {
       "path": "apps/cbc/src/update-store.ts",
-      "bytes": 5211,
-      "sha256": "85996d6e68b250c4dbd3fad3f5d54fe622bfb3522b457239e32a7c64b0185f27"
+      "bytes": 5475,
+      "sha256": "c1330c9b44e9d3ef8136798ce9a40b80faa649ff59aa6a8bf0efa8caeb5bfe2d"
     },
     {
       "path": "apps/cbc/src/verification-contract.ts",
@@ -2870,8 +2870,8 @@
     },
     {
       "path": "packages/tui-components/src/blocks.ts",
-      "bytes": 118112,
-      "sha256": "e7d66c022e050d93073c0853fa9dd90900ea014a99b8ca5d1caf65533ad3efbc"
+      "bytes": 118883,
+      "sha256": "2576d5bd9c7e10cd2f67f2ceffce19899dfb8daef13b021a29496e4831663da9"
     },
     {
       "path": "packages/tui-components/src/chrome.ts",
@@ -3130,8 +3130,8 @@
     },
     {
       "path": "scripts/build-runtime.ts",
-      "bytes": 8030,
-      "sha256": "d6aca4d838b4366fbfff09a671c6b4000bf5eddb9581e2f4a6f15b32f122ff60"
+      "bytes": 8593,
+      "sha256": "d22c9112eda5dd55ddb2479d7c379a430fb717677f64aaaab56aea9cc767825e"
     },
     {
       "path": "scripts/build-standalone.ts",
@@ -3195,8 +3195,8 @@
     },
     {
       "path": "scripts/smoke-release.ts",
-      "bytes": 7430,
-      "sha256": "8f9ea630fbe4912f6f5d7cdaa912d4448b09fc590cfb999643311c74e59acd7b"
+      "bytes": 7867,
+      "sha256": "8b3b76662307a81da213bceb7c95a4a5e799fcdabb3bf05f3446d9755d31a69c"
     },
     {
       "path": "scripts/source-truth.ts",
@@ -3214,5 +3214,5 @@
       "sha256": "3af6b7d3ec7041c90b18206fe898b904d8781a97c25369189f2733173c6d23a5"
     }
   ],
-  "digest": "9f973bdf9255c83b2f4476ef7e4fd32abe4bbedfd1b7c57991e53bb5213e92d3"
+  "digest": "b417c1ea7506dfcf6466ce994d9dabd28cad1b89ebd6bea8a87bf2ff8714b45b"
 }
