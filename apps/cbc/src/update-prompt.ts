@@ -10,9 +10,9 @@ import type { CommandContext } from "./commands/context.ts";
 import { stringWidth } from "@cbc/tui-components";
 
 import { UPDATE_REPO_URL, type ReleaseCandidate } from "./update-check.ts";
-import { readUpdateStore, withSkippedVersion, writeUpdateStore } from "./update-store.ts";
+import { automaticUpdateManager } from "./update-install.ts";
 
-export type UpdatePromptDecision = "update" | "skip" | "later";
+export type UpdatePromptDecision = "update" | "later";
 
 const BOX_COLOR = "\u001B[38;5;214m";
 const RESET = "\u001B[0m";
@@ -43,11 +43,12 @@ export function renderUpdateBoxLines(
     boxRow(`latest    \u001B[1;36m${candidate.version}\u001B[0m`),
     boxRow(""),
     boxRow("Source: github.com/nevrixo/Capybara-Code"),
-    boxRow(`Release: ${UPDATE_REPO_URL}/`),
-    boxRow(`         releases/tag/${candidate.tag}`),
+    boxRow("Release:"),
+    boxRow(`  ${UPDATE_REPO_URL}/`),
+    boxRow(`  releases/tag/${candidate.tag}`),
     boxRow(""),
-    boxRow("Updates replace the installed capy binary. Skip keeps"),
-    boxRow("this version and will not ask again until a newer one."),
+    boxRow("Update now installs it, or shows exact steps."),
+    boxRow("Next time keeps this version only for this run."),
     boxRow(""),
     bottomBorder,
     "",
@@ -59,7 +60,11 @@ export async function ensureUpdatePrompt(
   context: CommandContext,
   candidate: ReleaseCandidate,
 ): Promise<UpdatePromptDecision> {
-  const choices = ["1. Update now", "2. Skip this version"];
+  const manager = automaticUpdateManager(context.host);
+  const choices = [
+    manager === undefined ? "1. Show update instructions" : `1. Update now with ${manager}`,
+    "2. Remind me next time",
+  ];
 
   const termWidth = Math.min(84, Math.max(54, (context.host.io.columns || 80) - 4));
   for (const lineText of renderUpdateBoxLines(context.version, candidate, termWidth)) {
@@ -69,35 +74,21 @@ export async function ensureUpdatePrompt(
   const index = await context.host.io.select("", choices);
   // Esc / cancel is a session-only skip: nothing is persisted and the process
   // continues into the TUI.
-  return index === 0 ? "update" : index === 1 ? "skip" : "later";
+  return index === 0 ? "update" : "later";
 }
 
-/**
- * PR-1 scope for "Update now" (Q1): no self-install yet. Print the verified
- * manual path for the exact GitHub tag version and exit; the user re-runs
- * `capy`. Self-installing belongs to the later PRs in the plan.
- */
+/** Manual fallback for archive launches or a failed launcher handoff. */
 export function printUpdateGuidance(context: CommandContext, candidate: ReleaseCandidate): void {
   context.out("");
   context.out(`To update to ${candidate.version}, install the exact version with the`);
   context.out("package manager used to install Capybara Code:");
   context.out("");
   context.out(`  npm install -g capybara-code@${candidate.version}`);
+  context.out(`  bun install -g capybara-code@${candidate.version}`);
   context.out("");
   context.out("or download the archive and verify SHA256SUMS.txt before installing:");
   context.out("");
   context.out(`  ${candidate.htmlUrl}`);
   context.out("");
   context.out("Then run capy again.");
-}
-
-/** Persist "Skip this version" so it is not asked again until a newer release. */
-export async function recordSkippedUpdate(context: CommandContext, version: string): Promise<void> {
-  try {
-    const store = await readUpdateStore(context.host, context.paths);
-    const next = withSkippedVersion(store, version, new Date(context.host.now()).toISOString());
-    await writeUpdateStore(context.host, context.paths, next);
-  } catch {
-    // A failed write only means the user will be asked again sooner.
-  }
 }

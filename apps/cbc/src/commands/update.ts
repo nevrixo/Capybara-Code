@@ -3,8 +3,8 @@
  *
  * Interactive terminals get the same box the startup path shows; `--check`
  * reports through the exit code for scripts: 0 up to date, 2 update available,
- * 1 error. Neither form installs anything in this increment — the update path
- * never postinstalls on its own (§19.9), and a non-TTY never installs at all.
+ * 1 error. An interactive Update now choice hands the exact version to the
+ * npm/Bun launcher, while non-TTY checks remain read-only.
  */
 
 import { EXIT, type ExitCode } from "../exit.ts";
@@ -13,11 +13,10 @@ import {
   looksLikeSemver,
   resolveUpdate,
   runtimeVersionComparator,
-  type ReleaseCandidate,
   type UpdateFetcher,
 } from "../update-check.ts";
-import { ensureUpdatePrompt, printUpdateGuidance, recordSkippedUpdate } from "../update-prompt.ts";
-import { isVersionSkipped, type UpdateStore } from "../update-store.ts";
+import { requestAutomaticUpdate } from "../update-install.ts";
+import { ensureUpdatePrompt, printUpdateGuidance } from "../update-prompt.ts";
 import { ok, type CommandContext, type CommandResult } from "./context.ts";
 
 /** §9.3's script contract, deliberately distinct from EXIT.usage. */
@@ -62,10 +61,7 @@ export async function updateCommand(
     ...(options.fetcher !== undefined ? { fetcher: options.fetcher } : {}),
   });
 
-  const candidate =
-    result.candidate !== undefined && !(await candidateSkipped(context, result.store, result.candidate))
-      ? result.candidate
-      : undefined;
+  const candidate = result.candidate;
 
   if (candidate === undefined && result.error !== undefined) {
     context.warn(`update check failed: ${result.error}`);
@@ -89,26 +85,11 @@ export async function updateCommand(
 
   const decision = await ensureUpdatePrompt(context, candidate);
   if (decision === "update") {
+    const handoff = await requestAutomaticUpdate(context, candidate);
+    if (handoff !== undefined) return handoff;
     printUpdateGuidance(context, candidate);
     return ok();
   }
-  if (decision === "skip") {
-    await recordSkippedUpdate(context, candidate.version);
-    context.out(`skipped ${candidate.version}; capy will ask again for a newer release`);
-  }
+  context.out(`will remind you about ${candidate.version} the next time capy starts`);
   return ok();
-}
-
-/** Check if a release candidate has been marked as skipped by the user. */
-async function candidateSkipped(
-  context: CommandContext,
-  store: UpdateStore,
-  candidate: ReleaseCandidate,
-): Promise<boolean> {
-  try {
-    return await isVersionSkipped(store, candidate.version, runtimeVersionComparator(context));
-  } catch {
-    // Without a comparison there is no skip; asking is the safe direction.
-    return false;
-  }
 }

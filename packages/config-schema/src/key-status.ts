@@ -140,7 +140,7 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
   // ---- updates ----
   ["updates.channel", { status: "wired", consumer: "update command / manifest channel" }],
   ["updates.check", { status: "wired", consumer: "update command gate" }],
-  ["updates.intervalHours", { status: "wired", consumer: "update command background-check cadence" }],
+  ["updates.intervalHours", { status: "deprecated", note: "interactive startup now checks on every launch" }],
 
   // ---- provider ----
   ["provider.openai.transport", { status: "wired", consumer: "provider-openai turn session transport" }],

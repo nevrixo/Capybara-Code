@@ -60,7 +60,8 @@ import {
 import { ok, type CommandContext, type CommandResult } from "./context.ts";
 import { ensureTrust, trustLabel } from "../workspace-trust.ts";
 import { beginUpdateCheck, settleUpdateCheck } from "../update-check.ts";
-import { ensureUpdatePrompt, printUpdateGuidance, recordSkippedUpdate } from "../update-prompt.ts";
+import { requestAutomaticUpdate } from "../update-install.ts";
+import { ensureUpdatePrompt, printUpdateGuidance } from "../update-prompt.ts";
 
 export interface InteractiveArgs {
   readonly prompt?: string;
@@ -110,15 +111,12 @@ export async function interactive(
   if (settledUpdate.candidate !== undefined) {
     const updateDecision = await ensureUpdatePrompt(context, settledUpdate.candidate);
     if (updateDecision === "update") {
-      // The first increment prints the verified manual path and exits; the
-      // replaced binary must not keep running the loaded code (§5.4).
+      const handoff = await requestAutomaticUpdate(context, settledUpdate.candidate);
+      if (handoff !== undefined) return handoff;
       printUpdateGuidance(context, settledUpdate.candidate);
       return ok();
     }
-    if (updateDecision === "skip") {
-      await recordSkippedUpdate(context, settledUpdate.candidate.version);
-    }
-    // "later" (Esc) persists nothing: the next run may ask again.
+    // "later" (including Esc) persists nothing, so the next run asks again.
   }
 
   // P1-02: the `[ui]` config drives real render decisions — theme palette,

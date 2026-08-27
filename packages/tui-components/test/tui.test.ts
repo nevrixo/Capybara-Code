@@ -1380,11 +1380,11 @@ describe("timeline blocks (§6.4, §6.7–§6.12, AC-06)", () => {
     expect(text).toContain("Update Available");
     expect(text).toContain("0.12.5");
     // §10: the banner is the late-check fallback and must not contradict the
-    // blocking prompt — it points at a restart rather than installing.
+    // blocking prompt — it points at the same installer and says a restart asks again.
     const wide = renderUpdateBanner({ version: "0.12.5" }, context(160)).map(lineText).join("\n");
     expect(wide).toContain(updateBannerText("0.12.5"));
-    expect(wide).toContain("Restart capy");
-    expect(wide).toContain("package manager");
+    expect(wide).toContain("Run capy update");
+    expect(wide).toContain("restart capy to be asked again");
   });
 
   test("chronological timeline keeps delegated responses beside their action", () => {

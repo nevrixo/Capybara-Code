@@ -62,6 +62,12 @@ in this public alpha.
 
 - Use either npm or Bun globally for `capy`, not both, so their shims do not conflict.
 - Upgrade with the same package manager used for installation.
+- Interactive startup checks GitHub Releases on every launch. When a newer release
+  exists, choose **Update now** to install that exact version automatically with the
+  same global npm/Bun manager, or **Remind me next time** to continue and ask again
+  on the next launch.
+- Direct archive launches show verified exact-version instructions because they do
+  not have a package-manager launcher to replace the installation safely.
 - GitHub Release archives include `SHA256SUMS.txt` for manual checksum verification.
 - In WSL, install and run with native Linux `node`, `npm`, and `bun` rather than Windows executables under `/mnt/c/...`.
 

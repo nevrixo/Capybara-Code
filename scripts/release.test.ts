@@ -30,6 +30,17 @@ import {
 
 const require = createRequire(import.meta.url);
 const launcher = require("./release-launcher.cjs") as {
+  readonly UPDATE_HANDOFF_EXIT_CODE: number;
+  detectPackageManager(paths?: readonly string[]): "bun" | "npm";
+  packageManagerCommand(
+    manager: "bun" | "npm",
+    options?: Record<string, unknown>,
+  ): string;
+  packageManagerInvocation(
+    manager: "bun" | "npm",
+    options?: Record<string, unknown>,
+  ): { command: string; argsPrefix: readonly string[] };
+  parseUpdateRequest(raw: string): { version: string; tag: string };
   platformSpec(platform?: string, arch?: string): { packageName: string; binary: string } | undefined;
   main(argv?: readonly string[], options?: Record<string, unknown>): number;
 };
@@ -198,6 +209,107 @@ describe("public capy launcher", () => {
     });
     expect(exitCode).toBe(17);
     expect(received).toEqual({ binary: "/tmp/capy", argv: ["--version"] });
+  });
+
+  test("detects the global package manager from the launcher path", () => {
+    expect(launcher.detectPackageManager(["/home/dev/.bun/bin/capy"])).toBe("bun");
+    expect(
+      launcher.detectPackageManager([
+        "C:\\Users\\dev\\AppData\\Roaming\\npm\\node_modules\\capybara-code\\bin\\capy.cjs",
+      ]),
+    ).toBe("npm");
+    const bunCommand = launcher.packageManagerCommand("bun", {
+      platform: "linux",
+      env: { BUN_INSTALL: "/home/dev/.bun" },
+      paths: [],
+      exists: (path: string) => path.replace(/\\/g, "/") === "/home/dev/.bun/bin/bun",
+    });
+    expect(bunCommand.replace(/\\/g, "/")).toBe("/home/dev/.bun/bin/bun");
+
+    const windowsNpm = launcher.packageManagerInvocation("npm", {
+      platform: "win32",
+      execPath: "C:\\Program Files\\nodejs\\node.exe",
+      exists: (path: string) => path.endsWith("node_modules\\npm\\bin\\npm-cli.js"),
+    });
+    expect(windowsNpm.command).toBe("C:\\Program Files\\nodejs\\node.exe");
+    expect(windowsNpm.argsPrefix).toEqual([
+      "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js",
+    ]);
+  });
+
+  test("installs the exact requested version after the native binary exits", () => {
+    const updates: Array<{ command: string; args: readonly string[]; env?: Record<string, string> }> = [];
+    const output: string[] = [];
+    const version = "0.1.1-alpha.11";
+    const exitCode = launcher.main([], {
+      platform: "linux",
+      arch: "x64",
+      packageManager: "bun",
+      managerCommand: "/home/dev/.bun/bin/bun",
+      env: {
+        PATH: "/home/dev/.bun/bin:/usr/bin",
+        CAPYBARA_UPDATE_MANAGER: "attacker-controlled",
+        CAPYBARA_UPDATE_REQUEST_FILE: "/tmp/attacker-controlled",
+      },
+      resolveModule: () => "/tmp/capy",
+      spawn: () => ({ status: launcher.UPDATE_HANDOFF_EXIT_CODE, signal: null }),
+      readUpdateRequest: () => JSON.stringify({
+        schemaVersion: 1,
+        packageName: "capybara-code",
+        version,
+        tag: `v${version}`,
+      }),
+      spawnUpdate: (
+        command: string,
+        args: readonly string[],
+        options: { env?: Record<string, string> },
+      ) => {
+        updates.push({
+          command,
+          args,
+          ...(options.env === undefined ? {} : { env: options.env }),
+        });
+        return { status: 0, signal: null };
+      },
+      verifyInstalledVersion: () => version,
+      stdout: (line: string) => output.push(line),
+      stderr: (line: string) => output.push(line),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.command).toBe("/home/dev/.bun/bin/bun");
+    expect(updates[0]?.args).toEqual(["install", "-g", "capybara-code@0.1.1-alpha.11"]);
+    expect(updates[0]?.env?.CAPYBARA_UPDATE_MANAGER).toBeUndefined();
+    expect(updates[0]?.env?.CAPYBARA_UPDATE_REQUEST_FILE).toBeUndefined();
+    expect(output.join("\n")).toContain("installed successfully");
+  });
+
+  test("rejects malformed update requests before invoking a package manager", () => {
+    const errors: string[] = [];
+    let installed = false;
+    const exitCode = launcher.main([], {
+      platform: "linux",
+      arch: "x64",
+      packageManager: "npm",
+      resolveModule: () => "/tmp/capy",
+      spawn: () => ({ status: launcher.UPDATE_HANDOFF_EXIT_CODE, signal: null }),
+      readUpdateRequest: () => JSON.stringify({
+        schemaVersion: 1,
+        packageName: "capybara-code",
+        version: "alpha",
+        tag: "v0.1.1-alpha.11",
+      }),
+      spawnUpdate: () => {
+        installed = true;
+        return { status: 0, signal: null };
+      },
+      stderr: (line: string) => errors.push(line),
+    });
+
+    expect(exitCode).toBe(1);
+    expect(installed).toBe(false);
+    expect(errors.join("\n")).toContain("rejected the update request");
   });
 
   test("explains absent optional dependencies and unsupported hosts", () => {

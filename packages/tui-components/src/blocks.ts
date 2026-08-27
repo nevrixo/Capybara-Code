@@ -2278,11 +2278,11 @@ export function renderReportEvidence(
 
 /**
  * §10 fallback copy, shared with the host's late-check notice. The wording must
- * not contradict the blocking startup prompt: the banner never installs, and the
- * user is asked again on a restart.
+ * not contradict the blocking startup prompt: the banner links to the same
+ * interactive installer and the next launch asks again.
  */
 export function updateBannerText(version: string): string {
-  return `New version ${version}. Restart capy to be asked, or update with the package manager used to install Capybara Code.`;
+  return `New version ${version}. Run capy update to install it now, or restart capy to be asked again.`;
 }
 
 /** §6.19 / AC-41: a non-blocking banner naming the version and upgrade path. */

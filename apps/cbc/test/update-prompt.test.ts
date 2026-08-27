@@ -2,25 +2,27 @@ import { describe, expect, test } from "bun:test";
 
 import { CommandContext } from "../src/commands/context.ts";
 import type { Host, HostFs, HostIo } from "../src/host.ts";
-import { resolvePaths } from "../src/host.ts";
 import type { ReleaseCandidate } from "../src/update-check.ts";
 import {
   ensureUpdatePrompt,
   printUpdateGuidance,
-  recordSkippedUpdate,
   renderUpdateBoxLines,
 } from "../src/update-prompt.ts";
-import { readUpdateStore, updateStorePath } from "../src/update-store.ts";
 
 interface PromptHost extends Host {
   readonly out: string[];
   readonly files: Map<string, string>;
+  readonly presentedChoices: string[][];
   selections: number[];
 }
 
-function createPromptHost(selections: number[]): PromptHost {
+function createPromptHost(
+  selections: number[],
+  env: Record<string, string | undefined> = {},
+): PromptHost {
   const out: string[] = [];
   const files = new Map<string, string>();
+  const presentedChoices: string[][] = [];
   const normalize = (path: string): string => path.replace(/\\/g, "/").replace(/\/+$/, "");
 
   const io: HostIo = {
@@ -30,7 +32,10 @@ function createPromptHost(selections: number[]): PromptHost {
     stderr: () => undefined,
     readStdin: async () => "",
     prompt: async () => "",
-    select: async () => selections.shift() ?? -1,
+    select: async (_question, choices) => {
+      presentedChoices.push([...choices]);
+      return selections.shift() ?? -1;
+    },
     isTty: true,
     columns: 100,
     rows: 30,
@@ -54,7 +59,7 @@ function createPromptHost(selections: number[]): PromptHost {
   return {
     io,
     fs,
-    env: {},
+    env,
     cwd: "/work/project",
     homeDir: "/home/dev",
     platform: "linux",
@@ -66,12 +71,16 @@ function createPromptHost(selections: number[]): PromptHost {
     },
     out,
     files,
+    presentedChoices,
     selections,
   };
 }
 
-function contextFor(selections: number[]): { context: CommandContext; host: PromptHost } {
-  const host = createPromptHost(selections);
+function contextFor(
+  selections: number[],
+  env: Record<string, string | undefined> = {},
+): { context: CommandContext; host: PromptHost } {
+  const host = createPromptHost(selections, env);
   return { context: new CommandContext({ host, version: "0.1.1-alpha.7" }), host };
 }
 
@@ -94,7 +103,7 @@ describe("update prompt (§5.1, §5.4)", () => {
   });
 
   test("every box row has the same display width", () => {
-    const lines = renderUpdateBoxLines("0.1.1-alpha.7", candidate, 80)
+    const lines = renderUpdateBoxLines("0.1.1-alpha.7", candidate, 54)
       .filter((lineText) => lineText.includes("│") || lineText.includes("╭") || lineText.includes("╰"));
     const widths = new Set(
       lines.map((lineText) => lineText.replace(/\u001B\[[0-9;]*m/g, "").length),
@@ -102,31 +111,35 @@ describe("update prompt (§5.1, §5.4)", () => {
     expect(widths.size).toBe(1);
   });
 
-  test("Update now, Skip, and Esc map to update, skip, and later", async () => {
+  test("Update now, Next time, and Esc map to update and later", async () => {
     expect(await ensureUpdatePrompt(contextFor([0]).context, candidate)).toBe("update");
-    expect(await ensureUpdatePrompt(contextFor([1]).context, candidate)).toBe("skip");
+    expect(await ensureUpdatePrompt(contextFor([1]).context, candidate)).toBe("later");
     // -1 is what the host returns for Esc / cancel.
     expect(await ensureUpdatePrompt(contextFor([]).context, candidate)).toBe("later");
   });
 
-  test("Update now prints the exact-version command and the release URL", () => {
+  test("the launcher package manager and next-run choice are explicit", async () => {
+    const { context, host } = contextFor([1], {
+      CAPYBARA_UPDATE_MANAGER: "bun",
+      CAPYBARA_UPDATE_REQUEST_FILE: "/tmp/capy-update/request.json",
+    });
+    expect(await ensureUpdatePrompt(context, candidate)).toBe("later");
+    expect(host.presentedChoices[0]).toEqual([
+      "1. Update now with bun",
+      "2. Remind me next time",
+    ]);
+  });
+
+  test("manual guidance prints exact-version commands and the release URL", () => {
     const { context, host } = contextFor([]);
     printUpdateGuidance(context, candidate);
     const text = host.out.join("\n");
     expect(text).toContain("npm install -g capybara-code@0.1.1-alpha.8");
+    expect(text).toContain("bun install -g capybara-code@0.1.1-alpha.8");
     expect(text).toContain(candidate.htmlUrl);
     expect(text).toContain("SHA256SUMS.txt");
     expect(text.includes("capybara-code@alpha")).toBe(false);
     expect(text.includes("capybara-code@latest")).toBe(false);
-  });
-
-  test("Skip persists the version; Esc would not", async () => {
-    const { context, host } = contextFor([]);
-    await recordSkippedUpdate(context, candidate.version);
-    const paths = resolvePaths(host);
-    const store = await readUpdateStore(host, paths);
-    expect(Object.keys(store.skippedVersions)).toEqual(["0.1.1-alpha.8"]);
-    expect(host.files.has(updateStorePath(paths))).toBe(true);
   });
 
   test("the prompt never offers to exit the process", () => {

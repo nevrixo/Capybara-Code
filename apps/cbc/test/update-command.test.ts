@@ -183,7 +183,7 @@ describe("capy update (§9.3)", () => {
     await context.shutdown();
   });
 
-  test("a skipped release is not reported as available", async () => {
+  test("a legacy skipped release is reported again under remind-next-time semantics", async () => {
     const host = createCommandHost({ isTty: false });
     const context = await commandContext({ host });
     const paths = resolvePaths(host);
@@ -194,8 +194,8 @@ describe("capy update (§9.3)", () => {
     const result = await updateCommand(context, { check: true }, {
       fetcher: fetcherOf(200, releasesBody("0.1.1-alpha.8")),
     });
-    expect(result.code).toBe(EXIT.ok);
-    expect(host.out.join("\n")).toContain("up to date");
+    expect(result.code).toBe(2);
+    expect(host.out.join("\n")).toContain("update available: 0.1.1-alpha.8");
     await context.shutdown();
   });
 
@@ -233,11 +233,38 @@ describe("capy update (§9.3)", () => {
     expect(result.code).toBe(2);
     const text = host.out.join("\n");
     expect(text).toContain("npm install -g capybara-code@0.1.1-alpha.8");
+    expect(text).toContain("bun install -g capybara-code@0.1.1-alpha.8");
     expect(text).toContain("SHA256SUMS.txt");
     await context.shutdown();
   });
 
-  test("Update now on a TTY prints the guidance and exits successfully", async () => {
+  test("Update now on a launcher TTY writes an exact handoff request", async () => {
+    const requestFile = "/tmp/capy-update/request.json";
+    const host = createCommandHost({
+      env: {
+        CAPYBARA_UPDATE_MANAGER: "bun",
+        CAPYBARA_UPDATE_REQUEST_FILE: requestFile,
+      },
+    });
+    host.selections.push(0);
+    const context = await commandContext({ host });
+    const result = await updateCommand(context, {}, {
+      fetcher: fetcherOf(200, releasesBody("0.1.1-alpha.8")),
+    });
+    expect(result.code).toBe(EXIT.updateHandoff);
+    const text = host.out.join("\n");
+    expect(text).toContain("A new version of Capybara Code is available");
+    expect(text).toContain("with bun");
+    expect(JSON.parse(host.files.get(requestFile) ?? "{}")).toEqual({
+      schemaVersion: 1,
+      packageName: "capybara-code",
+      version: "0.1.1-alpha.8",
+      tag: "v0.1.1-alpha.8",
+    });
+    await context.shutdown();
+  });
+
+  test("Update now without a package launcher prints exact manual guidance", async () => {
     const host = createCommandHost();
     host.selections.push(0);
     const context = await commandContext({ host });
@@ -245,13 +272,11 @@ describe("capy update (§9.3)", () => {
       fetcher: fetcherOf(200, releasesBody("0.1.1-alpha.8")),
     });
     expect(result.code).toBe(EXIT.ok);
-    const text = host.out.join("\n");
-    expect(text).toContain("A new version of Capybara Code is available");
-    expect(text).toContain("npm install -g capybara-code@0.1.1-alpha.8");
+    expect(host.out.join("\n")).toContain("npm install -g capybara-code@0.1.1-alpha.8");
     await context.shutdown();
   });
 
-  test("Skip this version persists the decision", async () => {
+  test("Remind me next time persists no skip decision", async () => {
     const host = createCommandHost();
     host.selections.push(1);
     const context = await commandContext({ host });
@@ -260,7 +285,8 @@ describe("capy update (§9.3)", () => {
     });
     expect(result.code).toBe(EXIT.ok);
     const store = await readUpdateStore(host, resolvePaths(host));
-    expect(Object.keys(store.skippedVersions)).toEqual(["0.1.1-alpha.8"]);
+    expect(Object.keys(store.skippedVersions)).toEqual([]);
+    expect(host.out.join("\n")).toContain("the next time capy starts");
     await context.shutdown();
   });
 

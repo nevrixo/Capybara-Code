@@ -30,6 +30,8 @@ export const EXIT = {
   config: 9,
   /** Internal protocol or runtime failure. */
   internal: 10,
+  /** Internal launcher handoff: install the selected exact release after this binary exits. */
+  updateHandoff: 42,
 } as const;
 
 export type ExitCode = (typeof EXIT)[keyof typeof EXIT];
@@ -46,6 +48,7 @@ export const EXIT_DESCRIPTIONS: Readonly<Record<number, string>> = {
   8: "partial completion",
   9: "configuration error",
   10: "internal protocol or runtime failure",
+  42: "internal package-manager update handoff",
 };
 
 /**

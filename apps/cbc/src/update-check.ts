@@ -1,8 +1,9 @@
 /**
  * Startup update discovery — GitHub Releases is the version truth.
  *
- * The host fetches metadata and asks; it never interprets semver and never
- * installs. Version comparison is delegated to the runtime's `update.verify`
+ * The host fetches metadata and asks; it never interprets semver. Installation
+ * is handed to the npm/Bun launcher after the native binary exits. Version
+ * comparison is delegated to the runtime's `update.verify`
  * (version-compare mode), and every network failure fails open: a dead GitHub
  * must not stop `capy` from starting.
  *
@@ -17,7 +18,6 @@ import { type CbcPaths, type Host } from "./host.ts";
 import { safeOAuthRequest } from "./oauth-network.ts";
 import {
   emptyUpdateStore,
-  isVersionSkipped,
   readUpdateStore,
   withCheckResult,
   writeUpdateStore,
@@ -303,19 +303,16 @@ export interface ResolveUpdateResult {
 /**
  * Resolve the newest release from the cache or the network.
  *
- * A known-new, unskipped release in the cache prompts without any network I/O;
- * a fresh negative cache avoids the network too (§5.3). Network failures and
- * bad payloads fail open: the caller simply sees no candidate.
+ * Non-forced callers may reuse a known release or a fresh negative result.
+ * Interactive startup and `capy update` force a network attempt; a known newer
+ * release remains a fallback when that attempt fails.
  */
 export async function resolveUpdate(options: ResolveUpdateOptions): Promise<ResolveUpdateResult> {
   const store = await readUpdateStore(options.host, options.paths);
   const nowMs = (options.now ?? options.host.now)();
+  const cached = await newerCachedCandidate(options.currentVersion, store, options.isNewer);
 
-  if (store.lastKnown !== undefined && (await options.isNewer(options.currentVersion, store.lastKnown.version))) {
-    if (!(await isVersionSkipped(store, store.lastKnown.version, options.isNewer))) {
-      return { candidate: candidateFromCache(store.lastKnown), store, network: false };
-    }
-  }
+  if (!options.force && cached !== undefined) return { candidate: cached, store, network: false };
 
   if (!options.force && store.lastCheckAt !== undefined) {
     const elapsedMs = nowMs - Date.parse(store.lastCheckAt);
@@ -332,7 +329,12 @@ export async function resolveUpdate(options: ResolveUpdateOptions): Promise<Reso
       userAgent: `capybara-code/${options.currentVersion}`,
     });
     if (response.status < 200 || response.status >= 300) {
-      return { store, network: true, error: `GitHub returned status ${response.status}` };
+      return {
+        ...(cached === undefined ? {} : { candidate: cached }),
+        store,
+        network: true,
+        error: `GitHub returned status ${response.status}`,
+      };
     }
     const releases = parseGitHubReleases(JSON.parse(response.body));
     const candidate = await selectNewestRelease(releases, options.currentVersion, options.channel, options.isNewer);
@@ -351,8 +353,24 @@ export async function resolveUpdate(options: ResolveUpdateOptions): Promise<Reso
     await writeUpdateStoreSafely(options.host, options.paths, updated);
     return { ...(candidate !== undefined ? { candidate } : {}), store: updated, network: true };
   } catch (error) {
-    return { store, network: true, error: error instanceof Error ? error.message : String(error) };
+    return {
+      ...(cached === undefined ? {} : { candidate: cached }),
+      store,
+      network: true,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
+}
+
+async function newerCachedCandidate(
+  currentVersion: string,
+  store: UpdateStore,
+  isNewer: VersionComparator,
+): Promise<ReleaseCandidate | undefined> {
+  if (store.lastKnown === undefined) return undefined;
+  return (await isNewer(currentVersion, store.lastKnown.version))
+    ? candidateFromCache(store.lastKnown)
+    : undefined;
 }
 
 function candidateFromCache(lastKnown: UpdateLastKnown): ReleaseCandidate {
@@ -394,14 +412,20 @@ export interface UpdateCheckHandle {
  * Kick the check off before trust is even answered (§5.2), so the GitHub
  * response can arrive while the user reads the trust box.
  */
-export function beginUpdateCheck(context: CommandContext): UpdateCheckHandle {
+export function beginUpdateCheck(
+  context: CommandContext,
+  options: { readonly fetcher?: UpdateFetcher; readonly timeoutMs?: number } = {},
+): UpdateCheckHandle {
   return {
     startedAt: context.host.now(),
-    outcome: runStartupUpdateCheck(context),
+    outcome: runStartupUpdateCheck(context, options),
   };
 }
 
-async function runStartupUpdateCheck(context: CommandContext): Promise<UpdateCheckOutcome> {
+async function runStartupUpdateCheck(
+  context: CommandContext,
+  options: { readonly fetcher?: UpdateFetcher; readonly timeoutMs?: number },
+): Promise<UpdateCheckOutcome> {
   try {
     const loaded = await context.config();
     const updates = loaded.config.updates;
@@ -427,6 +451,9 @@ async function runStartupUpdateCheck(context: CommandContext): Promise<UpdateChe
       channel: updates.channel,
       intervalHours: updates.intervalHours,
       isNewer: runtimeVersionComparator(context),
+      force: true,
+      ...(options.fetcher !== undefined ? { fetcher: options.fetcher } : {}),
+      ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
     });
   } catch (error) {
     return {
@@ -459,33 +486,14 @@ export async function settleUpdateCheck(
   if (remainingMs > 0) {
     try {
       const outcome = await withDeadline(handle.outcome, remainingMs);
-      if (outcome.candidate !== undefined && !(await candidateIsSkipped(context, outcome))) {
-        return { candidate: outcome.candidate };
-      }
-      return {};
+      return outcome.candidate === undefined ? {} : { candidate: outcome.candidate };
     } catch {
       // The cap expired; fall through to the late path.
     }
   }
 
-  const late = handle.outcome
-    .then(async (outcome) => {
-      if (outcome.candidate === undefined) return undefined;
-      if (await candidateIsSkipped(context, outcome)) return undefined;
-      return outcome.candidate;
-    })
-    .catch(() => undefined);
+  const late = handle.outcome.then((outcome) => outcome.candidate).catch(() => undefined);
   return { late };
-}
-
-async function candidateIsSkipped(context: CommandContext, outcome: UpdateCheckOutcome): Promise<boolean> {
-  if (outcome.candidate === undefined) return false;
-  try {
-    return await isVersionSkipped(outcome.store, outcome.candidate.version, runtimeVersionComparator(context));
-  } catch {
-    // Failing open here means asking the user, which is the safe direction.
-    return false;
-  }
 }
 
 function withDeadline<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {

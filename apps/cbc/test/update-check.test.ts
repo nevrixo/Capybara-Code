@@ -395,7 +395,7 @@ describe("update cache and network resolution (§6.3)", () => {
     expect(calls).toEqual([UPDATE_RELEASES_API_URL]);
   });
 
-  test("a skipped last-known release falls back to the freshness rules", async () => {
+  test("a legacy skipped last-known release is eligible for next-run reminders", async () => {
     const host = createFakeHost();
     const paths = resolvePaths(host);
     const store = withSkippedVersion(
@@ -420,8 +420,59 @@ describe("update cache and network resolution (§6.3)", () => {
     });
 
     expect(result.network).toBe(false);
-    expect(result.candidate).toBeUndefined();
+    expect(result.candidate?.version).toBe("0.1.1-alpha.8");
     expect(calls).toEqual([]);
+  });
+
+  test("force bypasses a known-positive cache as well as a negative cache", async () => {
+    const host = createFakeHost();
+    const paths = resolvePaths(host);
+    const store = withCheckResult(emptyUpdateStore(), new Date(host.now()).toISOString(), {
+      version: "0.1.1-alpha.8",
+      tag: "v0.1.1-alpha.8",
+    });
+    host.files.set(updateStorePath(paths), JSON.stringify(store));
+    const calls: string[] = [];
+
+    const result = await resolveUpdate({
+      host,
+      paths,
+      currentVersion: "0.1.1-alpha.7",
+      channel: "stable",
+      intervalHours: 24,
+      isNewer: compare,
+      fetcher: fetcherReturning(RELEASE_LIST, calls),
+      force: true,
+    });
+
+    expect(result.network).toBe(true);
+    expect(calls).toEqual([UPDATE_RELEASES_API_URL]);
+    expect(result.candidate?.version).toBe("0.2.0-beta.1");
+  });
+
+  test("a forced check falls back to a known candidate when the network fails", async () => {
+    const host = createFakeHost();
+    const paths = resolvePaths(host);
+    const store = withCheckResult(emptyUpdateStore(), new Date(host.now()).toISOString(), {
+      version: "0.1.1-alpha.8",
+      tag: "v0.1.1-alpha.8",
+    });
+    host.files.set(updateStorePath(paths), JSON.stringify(store));
+
+    const result = await resolveUpdate({
+      host,
+      paths,
+      currentVersion: "0.1.1-alpha.7",
+      channel: "stable",
+      intervalHours: 24,
+      isNewer: compare,
+      fetcher: fetcherReturning("rate limited", [], 429),
+      force: true,
+    });
+
+    expect(result.network).toBe(true);
+    expect(result.error).toContain("429");
+    expect(result.candidate?.version).toBe("0.1.1-alpha.8");
   });
 
   test("check failures fail open and do not poison the cache", async () => {
@@ -539,10 +590,9 @@ describe("startup update settlement (§5.2)", () => {
     await context.shutdown();
   });
 
-  test("a fast check yields a prompt candidate through update.verify", async () => {
-    const { context, requests } = await fakeContext();
-    // An older skipped version must not block the candidate, and the decision
-    // goes through the runtime's comparison rather than host-side semver.
+  test("a fast check yields a prompt candidate", async () => {
+    const { context } = await fakeContext();
+    // Legacy skip records no longer suppress next-run reminders.
     const store = withSkippedVersion(emptyUpdateStore(), "0.1.1-alpha.6", "");
     const handle = {
       startedAt: context.host.now(),
@@ -558,16 +608,10 @@ describe("startup update settlement (§5.2)", () => {
     };
     const settled = await settleUpdateCheck(context, handle);
     expect(settled.candidate?.version).toBe("0.1.1-alpha.8");
-    const verifyCalls = requests.filter((request) => request.method === "update.verify");
-    expect(verifyCalls.length).toBeGreaterThan(0);
-    expect(verifyCalls[0]?.params).toMatchObject({
-      currentVersion: "0.1.1-alpha.8",
-      candidateVersion: "0.1.1-alpha.6",
-    });
     await context.shutdown();
   });
 
-  test("a skipped candidate never reaches the prompt", async () => {
+  test("a legacy skipped candidate reaches the prompt on the next run", async () => {
     const { context } = await fakeContext();
     const store = withSkippedVersion(emptyUpdateStore(), "0.1.1-alpha.8", "");
     const handle = {
@@ -583,7 +627,7 @@ describe("startup update settlement (§5.2)", () => {
       }),
     };
     const settled = await settleUpdateCheck(context, handle);
-    expect(settled.candidate).toBeUndefined();
+    expect(settled.candidate?.version).toBe("0.1.1-alpha.8");
     expect(settled.late).toBeUndefined();
     await context.shutdown();
   });
@@ -598,10 +642,32 @@ describe("startup update settlement (§5.2)", () => {
       JSON.stringify(withCheckResult(emptyUpdateStore(), "2020-01-01T00:00:00.000Z", undefined)),
     );
 
-    const handle = beginUpdateCheck(context);
+    const handle = beginUpdateCheck(context, {
+      fetcher: fetcherReturning(RELEASE_LIST, []),
+    });
     const outcome = await handle.outcome;
     expect(outcome.candidate).toBeUndefined();
     expect(outcome.error).toBeDefined();
+  });
+
+  test("beginUpdateCheck asks the network on every start despite a fresh negative cache", async () => {
+    const { context, host } = await fakeContext();
+    const paths = resolvePaths(host);
+    host.files.set(
+      updateStorePath(paths),
+      JSON.stringify(withCheckResult(emptyUpdateStore(), new Date(host.now()).toISOString(), undefined)),
+    );
+    const calls: string[] = [];
+
+    const handle = beginUpdateCheck(context, {
+      fetcher: fetcherReturning(RELEASE_LIST, calls),
+    });
+    const outcome = await handle.outcome;
+
+    expect(outcome.network).toBe(true);
+    expect(calls).toEqual([UPDATE_RELEASES_API_URL]);
+    expect(outcome.candidate?.version).toBe("0.2.0-beta.1");
+    await context.shutdown();
   });
 
   test("CBC_NO_UPDATE_CHECK keeps the check gated before any fetch", async () => {
