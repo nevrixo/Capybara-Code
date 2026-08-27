@@ -827,14 +827,14 @@ describe("key decoding (§6.15, AC-05)", () => {
 // ---------------------------------------------------------------------------
 
 describe("/resume candidate labels", () => {
-  test("sorts by the newest activity instant and never exposes an opaque id as the title", () => {
+  test("sorts by the newest activity instant and displays only human titles", () => {
     const candidates = buildResumeCandidates([
       {
         id: "ses_20260827120000_aaaa",
         createdAt: "2026-08-27T12:00:00.000Z",
         // 13:00 UTC: newer than the lexically larger 12:30 timestamp below.
         updatedAt: "2026-08-27T09:00:00-04:00",
-        title: "Fix parser",
+        title: "Vite로 미니게임 만들기",
         state: "active",
         turnCount: 2,
       },
@@ -861,13 +861,13 @@ describe("/resume candidate labels", () => {
       "ses_20260827123000_bbbb",
       "ses_20260826090000_cccc",
     ]);
-    expect(candidates[0]?.value).toContain("Fix parser");
-    expect(candidates[1]?.value).toContain("Empty session");
-    expect(candidates.every((candidate) =>
-      /^\d{4}-\d{2}-\d{2} \d{2}:\d{2} · /u.test(candidate.value)
-    )).toBe(true);
+    expect(candidates.map((candidate) => candidate.value)).toEqual([
+      "Vite로 미니게임 만들기",
+      "Empty session",
+      "Older work",
+    ]);
     expect(candidates.every((candidate) => !candidate.value.includes("ses_"))).toBe(true);
-    expect(candidates[0]?.detail).toBe("active · 2 turns · id aaaa");
+    expect(candidates.every((candidate) => candidate.detail === undefined)).toBe(true);
   });
 });
 

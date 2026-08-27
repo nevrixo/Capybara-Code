@@ -1,26 +1,22 @@
-import {
-  truncateToWidth,
-  type CompletionCandidate,
-} from "@cbc/tui-components";
+import { type CompletionCandidate } from "@cbc/tui-components";
 
 import type { RuntimeSessionSummary } from "./runtime.ts";
 
 const RESUME_CANDIDATE_LIMIT = 30;
-const RESUME_TITLE_COLUMNS = 52;
 const SESSION_ID_TIMESTAMP =
   /^ses_(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})_[^_]+$/u;
 
 type ResumeSessionSummary = Pick<
   RuntimeSessionSummary,
-  "id" | "createdAt" | "updatedAt" | "title" | "state" | "turnCount"
+  "id" | "createdAt" | "updatedAt" | "title" | "turnCount"
 >;
 
 /**
  * Build the `/resume` picker rows in most-recently-active order.
  *
- * The opaque session id remains the completion's inserted value, while the row
- * itself leads with a local timestamp and a human title. This keeps selection
- * exact without making users decode `ses_2026...` identifiers.
+ * The row exposes only the human title. The opaque session id remains the hidden
+ * inserted value so keyboard selection is exact without leaking implementation
+ * metadata into the picker.
  */
 export function buildResumeCandidates(
   sessions: readonly ResumeSessionSummary[],
@@ -30,12 +26,9 @@ export function buildResumeCandidates(
     .slice(0, RESUME_CANDIDATE_LIMIT)
     .map((session) => {
       const title = readableSessionTitle(session);
-      const timestamp = formatLocalMinute(sessionTimestampMs(session));
-      const turns = `${session.turnCount} ${session.turnCount === 1 ? "turn" : "turns"}`;
 
       return {
-        value: `${timestamp} · ${truncateToWidth(title, RESUME_TITLE_COLUMNS)}`,
-        detail: `${session.state} · ${turns} · id ${shortSessionId(session.id)}`,
+        value: title,
         insert: session.id,
       };
     });
@@ -72,22 +65,8 @@ function sessionTimestampMs(session: ResumeSessionSummary): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function formatLocalMinute(timestampMs: number | undefined): string {
-  if (timestampMs === undefined) return "Unknown time";
-  const date = new Date(timestampMs);
-  const pad = (value: number): string => String(value).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(
-    date.getHours(),
-  )}:${pad(date.getMinutes())}`;
-}
-
 function readableSessionTitle(session: ResumeSessionSummary): string {
   const title = session.title.replace(/\s+/gu, " ").trim();
   if (title.length > 0 && !/^untitled(?: session)?$/iu.test(title)) return title;
   return session.turnCount === 0 ? "Empty session" : "Untitled session";
-}
-
-function shortSessionId(id: string): string {
-  const suffix = /_([^_]+)$/u.exec(id)?.[1] ?? id;
-  return truncateToWidth(suffix, 12);
 }
