@@ -835,7 +835,6 @@ describe("/resume candidate labels", () => {
         // 13:00 UTC: newer than the lexically larger 12:30 timestamp below.
         updatedAt: "2026-08-27T09:00:00-04:00",
         title: "Vite로 미니게임 만들기",
-        state: "active",
         turnCount: 2,
       },
       {
@@ -843,7 +842,6 @@ describe("/resume candidate labels", () => {
         createdAt: "2026-08-27T12:30:00.000Z",
         updatedAt: "2026-08-27T12:30:00.000Z",
         title: "Untitled session",
-        state: "completed",
         turnCount: 0,
       },
       {
@@ -851,7 +849,6 @@ describe("/resume candidate labels", () => {
         createdAt: "2026-08-26T09:00:00.000Z",
         updatedAt: "not-a-timestamp",
         title: "Older work",
-        state: "interrupted",
         turnCount: 1,
       },
     ]);
