@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   pathIndexInvalidationForEvent,
+  persistAndRefreshResumeCandidates,
   prepareSessionReplacement,
   SessionPersistenceQueue,
 } from "../src/commands/interactive.ts";
@@ -105,6 +106,36 @@ describe("interactive session lifecycle", () => {
     expect(flushes).toBe(2);
     expect(snapshots).toBe(2);
     expect(maxActive).toBe(1);
+  });
+
+  test("resume candidates refresh only after the latest activity is durable", async () => {
+    let releaseFlush!: () => void;
+    const flushGate = new Promise<void>((resolve) => {
+      releaseFlush = resolve;
+    });
+    const order: string[] = [];
+    const session = {
+      async flush(): Promise<void> {
+        order.push("flush:start");
+        await flushGate;
+        order.push("flush:end");
+      },
+      async snapshot(): Promise<boolean> {
+        order.push("snapshot");
+        return true;
+      },
+    };
+    const queue = new SessionPersistenceQueue({ warn: () => undefined }, 10);
+
+    const pending = persistAndRefreshResumeCandidates(queue, session, async () => {
+      order.push("refresh");
+    });
+    await delay(20);
+    expect(order).toEqual(["flush:start"]);
+
+    releaseFlush();
+    await pending;
+    expect(order).toEqual(["flush:start", "flush:end", "snapshot", "refresh"]);
   });
 
   test("failed replacement preserves the current session object", async () => {

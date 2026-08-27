@@ -987,7 +987,14 @@ export async function interactive(
           process.off("SIGINT", onSignal);
         }
 
-        void persistence.persist(boot.session);
+        // Keep the synchronous completion source aligned with the durable store.
+        // The refresh waits for the queued journal write, but runs in the
+        // background so the next prompt remains immediately interactive.
+        void persistAndRefreshResumeCandidates(
+          persistence,
+          boot.session,
+          refreshResumeCandidates,
+        );
         // Fallback for providers that return without a terminal turn event. The
         // callback coalesces all native/process mutations observed during the turn.
         requestPathIndexRefresh?.();
@@ -1146,6 +1153,17 @@ export class SessionPersistenceQueue {
       }`,
     );
   }
+}
+
+/** Refresh `/resume` only after the session's latest activity is durable. */
+export async function persistAndRefreshResumeCandidates(
+  persistence: Pick<SessionPersistenceQueue, "persist" | "whenIdle">,
+  session: PersistableSession,
+  refresh: () => Promise<void>,
+): Promise<void> {
+  await persistence.persist(session);
+  await persistence.whenIdle();
+  await refresh();
 }
 
 /** Schedule disposal of session resources after persistence queue is idle. */
