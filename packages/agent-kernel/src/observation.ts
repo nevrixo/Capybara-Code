@@ -132,6 +132,7 @@ const ENVIRONMENT_CODES: readonly string[] = [
  */
 const MISSING_DEPENDENCY_PATTERNS: readonly RegExp[] = [
   /command not found/i,
+  /\b[a-z0-9_.-]+:\s*not found\b/i,
   /is not recognized as an internal or external command/i,
   /\bENOENT\b/,
   /\bEACCES\b/,
@@ -156,6 +157,14 @@ export function classifyFailure(input: {
   const code = input.code.toUpperCase();
   const haystack = `${input.message}\n${input.text ?? ""}`;
   const environmentSmell = MISSING_DEPENDENCY_PATTERNS.some((p) => p.test(haystack));
+  // POSIX shells reserve 126 for a command that cannot execute and 127 for a
+  // command that cannot be found. cmd.exe uses 9009 for the same missing-command
+  // condition. These are toolchain failures even when a wrapper (notably npm)
+  // replaces stderr with only a terse exit summary.
+  const commandUnavailableExit =
+    input.exitCode === 126 ||
+    input.exitCode === 127 ||
+    input.exitCode === 9009;
 
   let category: FailureCategory;
   if (SCHEMA_CODES.includes(code)) {
@@ -164,7 +173,7 @@ export function classifyFailure(input: {
     category = "permission_denied";
   } else if (ENVIRONMENT_CODES.includes(code)) {
     category = "environment_issue";
-  } else if (environmentSmell) {
+  } else if (commandUnavailableExit || environmentSmell) {
     // Checked before the default so a missing binary is never read as a defect
     // in the code under change.
     category = "environment_issue";

@@ -24,6 +24,7 @@ interface SmokeOptions {
   readonly expectedVersion?: string;
 }
 
+/** Extract a flag value from argv, supporting both --flag=value and --flag value syntax. */
 function valueFor(argv: readonly string[], flag: string): string | undefined {
   const inline = argv.find((value) => value.startsWith(`${flag}=`));
   if (inline !== undefined) return inline.slice(flag.length + 1);
@@ -55,6 +56,7 @@ export function runtimePathFor(stage: string, targetName: ReleaseTargetName): st
   }).runtimeBinary;
 }
 
+/** Map release target to runtime platform and architecture identifiers. */
 function runtimeIdentity(targetName: ReleaseTargetName): { platform: string; arch: string } {
   const target = releaseTarget(targetName);
   return {
@@ -63,6 +65,7 @@ function runtimeIdentity(targetName: ReleaseTargetName): { platform: string; arc
   };
 }
 
+/** Verify runtime identity matches expected target platform and architecture. */
 function assertRuntimeIdentity(
   value: unknown,
   targetName: ReleaseTargetName,
@@ -81,6 +84,7 @@ function assertRuntimeIdentity(
   }
 }
 
+/** Execute a binary with arguments and return combined stdout/stderr, throwing on failure. */
 async function execute(binary: string, args: readonly string[]): Promise<string> {
   const processResult = Bun.spawn({
     cmd: [binary, ...args],
@@ -98,6 +102,7 @@ async function execute(binary: string, args: readonly string[]): Promise<string>
   return `${stdout}${stderr}`;
 }
 
+/** Test runtime handshake by starting the runtime client and verifying initialization. */
 async function smokeRuntimeHandshake(
   binary: string,
   targetName: ReleaseTargetName,

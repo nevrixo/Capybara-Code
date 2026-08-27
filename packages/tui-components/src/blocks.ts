@@ -477,6 +477,7 @@ function wrapBody(text: string, context: BlockContext, prefix: string): string[]
   );
 }
 
+/** Cap commentary text to a fixed number of sentences (currently returns trimmed text). */
 export function capToSentences(text: string, _max = 8): string {
   return text.trim();
 }
@@ -633,6 +634,7 @@ export interface ToolCallOptions {
   readonly dimSucceeded?: boolean;
 }
 
+/** Format a tool call summary for display, handling error messages and truncation. */
 function friendlyToolSummary(item: ToolCallView): string | undefined {
   if (item.summary === undefined || item.summary.length === 0) return undefined;
   const raw = item.summary.trim();
@@ -645,6 +647,7 @@ function friendlyToolSummary(item: ToolCallView): string | undefined {
   return raw;
 }
 
+/** Check if a summary message indicates a retry or fallback operation. */
 function isRetryHint(summary: string): boolean {
   const lower = summary.toLowerCase();
   return lower.includes("retry") || lower.includes("retrying") || lower.includes("fallback") || lower.includes("overwrite");
@@ -669,6 +672,7 @@ function toolActionBadgeToken(toolId: string): ThemeToken {
   return "accent.cyan";
 }
 
+/** Check if a tool call originates from a subagent rather than the root agent. */
 function isSubagentToolCall(item: ToolCallView): boolean {
   return item.agentId !== undefined && item.agentId !== "root";
 }
@@ -824,6 +828,7 @@ export function renderToolCall(
   return lines;
 }
 
+/** Map tool call status to theme color token. */
 function toolStatusToken(status: TimelineToolCall["status"]): ThemeToken {
   return status === "succeeded"
     ? "accent.green"
@@ -832,6 +837,7 @@ function toolStatusToken(status: TimelineToolCall["status"]): ThemeToken {
       : "accent.cyan";
 }
 
+/** Extract addition and deletion counts from a tool call, returning undefined if neither exists. */
 function changeCounts(
   item: Pick<ToolCallView, "additions" | "deletions">,
 ): { additions: number; deletions: number } | undefined {
@@ -1299,6 +1305,7 @@ export function renderTaskToolTree(
   return lines;
 }
 
+/** Map task state to icon name for visual representation. */
 function taskStateIcon(state: TimelineTask["state"]): IconName {
   switch (state) {
     case "completed":
@@ -1313,6 +1320,7 @@ function taskStateIcon(state: TimelineTask["state"]): IconName {
   }
 }
 
+/** Map task state to theme color token. */
 function taskStateToken(state: TimelineTask["state"]): ThemeToken {
   switch (state) {
     case "completed":
@@ -1328,6 +1336,7 @@ function taskStateToken(state: TimelineTask["state"]): ThemeToken {
   }
 }
 
+/** Map task state to human-readable label. */
 function taskStateLabel(state: TimelineTask["state"]): string {
   switch (state) {
     case "completed":
@@ -1415,6 +1424,7 @@ export function renderJob(
  * side effects, the reason, and the offered choices.
  *
  * §6.4 calls this an amber inline decision card — inline, not a modal, per §6.3.
+ * @returns Human-readable category name for an action.
  */
 function actionCategoryName(action: string): string {
   const lower = action.toLowerCase();
@@ -1433,6 +1443,7 @@ function actionCategoryName(action: string): string {
   return `${action} request`;
 }
 
+/** Format permission choice labels for consistent display in the TUI. */
 function formatChoiceLabel(choice: string): string {
   if (choice === "Allow once") return "Yes";
   if (choice === "Allow for this turn") return "Yes, allow for this turn";

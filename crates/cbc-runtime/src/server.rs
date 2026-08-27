@@ -2480,12 +2480,16 @@ mod tests {
     }
 
     #[test]
-    fn memory_remember_reuses_only_runtime_exact_evidence() {
+    fn memory_remember_reuses_runtime_exact_evidence_from_bounded_output() {
         let (dir, state) = initialized();
         let workspace = dir.path().join("ws");
-        std::fs::write(workspace.join("memory.txt"), "evidence-backed fact\n").unwrap();
+        std::fs::write(
+            workspace.join("memory.txt"),
+            "evidence-backed fact\nsecond line\nthird line\n",
+        )
+        .unwrap();
 
-        let incomplete = dispatch(
+        let bounded = dispatch(
             &state,
             &request(
                 "fs.read",
@@ -2497,9 +2501,31 @@ mod tests {
                 }),
             ),
         )
-        .expect("incomplete read dispatched")
-        .expect_err("partial exact reads cannot become durable evidence");
-        assert_eq!(incomplete.code, error_codes::INVALID_ARGUMENT);
+        .expect("bounded exact read dispatched")
+        .expect("bounded exact read records full-revision evidence");
+        assert_eq!(bounded["excerpt"]["text"], "second line");
+        assert_eq!(bounded["excerpt"]["endOfFile"], false);
+        let bounded_evidence_id = bounded["evidenceId"]
+            .as_str()
+            .expect("bounded exact read returns evidence id")
+            .to_string();
+
+        let preview_error = dispatch(
+            &state,
+            &request(
+                "fs.read",
+                json!({
+                    "path": "memory.txt",
+                    "startLine": 2,
+                    "maxLines": 1,
+                    "mode": "preview",
+                    "recordEvidence": true,
+                }),
+            ),
+        )
+        .expect("preview read dispatched")
+        .expect_err("preview reads remain ineligible for durable evidence");
+        assert_eq!(preview_error.code, error_codes::INVALID_ARGUMENT);
 
         let observed = dispatch(
             &state,
@@ -2514,6 +2540,7 @@ mod tests {
             .as_str()
             .expect("exact read returns evidence id")
             .to_string();
+        assert_eq!(bounded_evidence_id, evidence_id);
         let workspace_identity = state.require_workspace().unwrap().fingerprint();
 
         let proposal = json!({

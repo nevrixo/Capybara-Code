@@ -123,6 +123,7 @@ export const COMMAND_REGISTRY: readonly CommandSpec[] = [
   },
 ];
 
+/** Find a command spec by name in the registry. */
 export function findCommand(name: string): CommandSpec | undefined {
   return COMMAND_REGISTRY.find((spec) => spec.name === name);
 }
@@ -134,6 +135,7 @@ export function commandTree(): Record<string, readonly string[]> {
   );
 }
 
+/** Return the list of public command names, excluding internal commands. */
 export function commandNames(): string[] {
   // The daemon's session-worker entry point is an internal spawn target, not a
   // public command. Keep it in the parser registry without advertising it.

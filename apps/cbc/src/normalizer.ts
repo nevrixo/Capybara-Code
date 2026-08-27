@@ -171,41 +171,6 @@ function normalizeArguments(toolId: string, args: Record<string, unknown>): Reco
   return normalized;
 }
 
-function isWindowsMountedWslPath(path: string): boolean {
-  return /^\/mnt\/[a-z](?:\/|$)/iu.test(path.replace(/\\/g, "/"));
-}
-
-/**
- * DrvFs cannot always create the executable links npm installs for package
- * binaries. Apply npm's own compatibility switch before dispatch so a normal
- * install does not fail once with EPERM and require a second model-visible call.
- * An explicit bin-links preference is always preserved.
- */
-function normalizeMountedWorkspaceProcess(
-  toolId: string,
-  args: Record<string, unknown>,
-  workspaceRoot: string | undefined,
-): Record<string, unknown> {
-  if (toolId !== "process.run" || workspaceRoot === undefined) return args;
-  const program = (stringField(args, "program") ?? "")
-    .replace(/\\/g, "/")
-    .split("/")
-    .at(-1)
-    ?.toLowerCase();
-  if (program !== "npm" && program !== "npm.cmd") return args;
-
-  const argv = stringArrayField(args, "args");
-  if (!["install", "i", "ci"].includes(argv[0]?.toLowerCase() ?? "")) return args;
-  if (argv.some((value) => /^--(?:no-)?bin-links(?:=|$)/iu.test(value))) return args;
-  if (argv.some((value) => value === "-g" || value === "--global")) return args;
-
-  const cwd = stringField(args, "cwd");
-  const mounted = cwd !== undefined && cwd.startsWith("/")
-    ? isWindowsMountedWslPath(cwd)
-    : isWindowsMountedWslPath(workspaceRoot);
-  return mounted ? { ...args, args: [...argv, "--no-bin-links"] } : args;
-}
-
 function truncate(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }
@@ -365,8 +330,6 @@ export type McpHintResolver = (
 export interface NormalizerOptions {
   /** Workspace-relative default cwd for process tools. */
   readonly defaultCwd?: string;
-  /** Absolute workspace root, used only for host filesystem compatibility. */
-  readonly workspaceRoot?: string;
   /** Whether the runtime can enforce `network = deny` for child processes. */
   readonly networkDenyAvailable?: boolean;
   /**
@@ -387,11 +350,7 @@ export class HostActionNormalizer implements ActionNormalizer {
 
   normalize(callId: string, toolId: string, args: Record<string, unknown>): ProposedAction {
     const defaultCwd = this.#options.defaultCwd ?? ".";
-    const normalizedArgs = normalizeMountedWorkspaceProcess(
-      toolId,
-      normalizeArguments(toolId, args),
-      this.#options.workspaceRoot,
-    );
+    const normalizedArgs = normalizeArguments(toolId, args);
     const command = commandFor(
       toolId,
       normalizedArgs,

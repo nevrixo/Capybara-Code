@@ -42,6 +42,7 @@ import { InputReader } from "../input-reader.ts";
 import { inertKeyStream } from "../keys.ts";
 import { configuredMcpSidebarServices } from "../mcp-host.ts";
 import { WorkspacePathMentionIndex } from "../path-mentions.ts";
+import { buildResumeCandidates } from "../resume-picker.ts";
 import { setUserConfigValue } from "../state.ts";
 import {
   REASONING_EFFORTS,
@@ -345,21 +346,7 @@ export async function interactive(
       try {
         const runtime = await context.runtime();
         const { sessions } = await runtime.listSessions({ limit: 30 });
-        const sorted = [...sessions].sort(
-          (a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id),
-        );
-        resumeCandidates = sorted.slice(0, 30).map((entry) => {
-          const rawTitle = entry.title?.trim() ?? "";
-          const hasTitle = rawTitle.length > 0 && rawTitle !== "Untitled session";
-          const display = hasTitle ? rawTitle : entry.id;
-          return {
-            value: display,
-            detail: hasTitle
-              ? `${entry.id} · ${entry.state} · ${entry.turnCount} turn(s)`
-              : `${entry.state} · ${entry.turnCount} turn(s)`,
-            insert: entry.id,
-          };
-        });
+        resumeCandidates = buildResumeCandidates(sessions);
       } catch {
         resumeCandidates = [];
       }
@@ -1161,6 +1148,7 @@ export class SessionPersistenceQueue {
   }
 }
 
+/** Schedule disposal of session resources after persistence queue is idle. */
 function disposeAfterPersistence(
   persistence: SessionPersistenceQueue,
   boot: { readonly dispose?: () => Promise<void> },
@@ -1184,6 +1172,7 @@ type InteractiveSelect = (
   choices: readonly string[],
 ) => Promise<number>;
 
+/** Capitalize the first character of a string. */
 function capitalize(text: string): string {
   return text.length === 0 ? text : text.charAt(0).toUpperCase() + text.slice(1);
 }
@@ -1201,6 +1190,7 @@ interface SettingDescriptor extends SettingsMenuItem {
   readonly apply: (session: ActiveSession, value: string) => SettingsMenuChange;
 }
 
+/** Build the list of available settings for the /setting picker menu. */
 function settingDescriptors(ui: InteractiveUi, session: ActiveSession): SettingDescriptor[] {
   return [
     {
@@ -1398,6 +1388,7 @@ function settingDescriptors(ui: InteractiveUi, session: ActiveSession): SettingD
   ];
 }
 
+/** Apply a setting change from the /setting picker to the session or UI. */
 function applySetting(
   ui: InteractiveUi,
   session: ActiveSession,

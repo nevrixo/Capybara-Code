@@ -36,6 +36,7 @@ export async function route(options: RouteOptions): Promise<ExitCode> {
   }
 }
 
+/** Dispatch a parsed command to its handler and return the result. */
 async function dispatch(context: CommandContext, command: Command): Promise<CommandResult> {
   switch (command.kind) {
     case "interactive":
