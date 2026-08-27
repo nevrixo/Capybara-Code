@@ -5,6 +5,7 @@ import type { InteractiveUi } from "../src/tui.ts";
 import { InputReader } from "../src/input-reader.ts";
 import type { KeyEvent, KeyStream } from "../src/keys.ts";
 import { WorkspacePathMentionIndex } from "../src/path-mentions.ts";
+import { slashArgumentValues, SLASH_COMMANDS } from "../src/slash.ts";
 
 class FakeKeyStream implements KeyStream {
   readonly active = true;
@@ -305,6 +306,36 @@ describe("input reader composer ownership", () => {
     keys.emit({ key: "enter" });
     expect(await prompt).toBe("inspect @src/main.ts");
     reader.stop();
+  });
+
+  test("title-only resume candidates submit hidden ids through Tab and Enter", async () => {
+    const sessions = [
+      { value: "가장 최근 대화", insert: "ses_latest" },
+      { value: "이전 대화", insert: "ses_older" },
+    ];
+
+    for (const key of ["tab", "enter"] as const) {
+      const keys = new FakeKeyStream();
+      const draws: DrawnComposer[] = [];
+      const reader = new InputReader({
+        keys,
+        ui: fakeUi(draws),
+        sources: {
+          commands: SLASH_COMMANDS,
+          argumentValues: (input) => slashArgumentValues(input, { sessions }),
+        },
+      });
+      reader.start();
+
+      const prompt = reader.readPrompt();
+      keys.emit({ key: "text", text: "/resume" });
+      keys.emit({ key: "enter" });
+      expect(draws.at(-1)?.text).toBe("/resume ");
+
+      keys.emit({ key });
+      expect(await prompt).toBe("/resume ses_latest");
+      reader.stop();
+    }
   });
 
   test("a submit carries pasted text verbatim; no attachments are staged (P1-02)", async () => {
