@@ -30,7 +30,7 @@
     },
     "apps/cbc": {
       "name": "capybara-code-dev",
-      "version": "0.1.1-alpha.7",
+      "version": "0.1.1-alpha.9",
       "bin": {
         "capy-dev": "./src/main.ts",
       },
