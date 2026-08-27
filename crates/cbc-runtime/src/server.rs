@@ -3001,7 +3001,7 @@ mod tests {
         let (_dir, state) = initialized();
         set_trust(&state, "trusted-always");
         let data = state.data_dir.lock().expect("data").clone();
-        let target = data.join("worktrees/demo/repo");
+        let target = data.join("worktrees").join("demo").join("repo");
         let receipt = issue_capability(
             &state,
             "worktree.create",
