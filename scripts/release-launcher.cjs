@@ -12,7 +12,7 @@
 const { spawnSync } = require("node:child_process");
 const { existsSync, mkdtempSync, readFileSync, rmSync } = require("node:fs");
 const { tmpdir } = require("node:os");
-const { dirname, join } = require("node:path");
+const { join, posix, win32 } = require("node:path");
 
 const UPDATE_HANDOFF_EXIT_CODE = 42;
 const UPDATE_REQUEST_FILE_ENV = "CAPYBARA_UPDATE_REQUEST_FILE";
@@ -58,6 +58,7 @@ function detectPackageManager(paths = [process.argv[1], __filename]) {
 /** Resolve the package-manager executable without evaluating a shell command. */
 function packageManagerCommand(manager, options = {}) {
   const platform = options.platform ?? process.platform;
+  const managerPath = platform === "win32" ? win32 : posix;
   const env = options.env ?? process.env;
   const pathExists = options.exists ?? existsSync;
   const sourcePaths = options.paths ?? [process.argv[1], __filename];
@@ -66,19 +67,21 @@ function packageManagerCommand(manager, options = {}) {
   if (manager === "bun") {
     const executable = platform === "win32" ? "bun.exe" : "bun";
     if (typeof env.BUN_INSTALL === "string" && env.BUN_INSTALL.length > 0) {
-      candidates.push(join(env.BUN_INSTALL, "bin", executable));
+      candidates.push(managerPath.join(env.BUN_INSTALL, "bin", executable));
     }
     for (const source of sourcePaths) {
       const normalized = normalizedPath(source);
       const marker = normalized.toLowerCase().indexOf("/.bun/");
-      if (marker !== -1) candidates.push(join(normalized.slice(0, marker + "/.bun".length), "bin", executable));
+      if (marker !== -1) {
+        candidates.push(managerPath.join(normalized.slice(0, marker + "/.bun".length), "bin", executable));
+      }
     }
     const absolute = candidates.find((candidate) => pathExists(candidate));
     return absolute ?? executable;
   }
 
   const executable = platform === "win32" ? "npm.cmd" : "npm";
-  candidates.push(join(dirname(options.execPath ?? process.execPath), executable));
+  candidates.push(managerPath.join(managerPath.dirname(options.execPath ?? process.execPath), executable));
   const absolute = candidates.find((candidate) => pathExists(candidate));
   return absolute ?? executable;
 }
@@ -88,7 +91,7 @@ function packageManagerInvocation(manager, options = {}) {
   const platform = options.platform ?? process.platform;
   if (manager === "npm" && platform === "win32") {
     const execPath = options.execPath ?? process.execPath;
-    const npmCli = join(dirname(execPath), "node_modules", "npm", "bin", "npm-cli.js");
+    const npmCli = win32.join(win32.dirname(execPath), "node_modules", "npm", "bin", "npm-cli.js");
     const pathExists = options.exists ?? existsSync;
     if (pathExists(npmCli)) return { command: execPath, argsPrefix: [npmCli] };
   }

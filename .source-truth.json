@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-27T17:04:01.636Z",
+  "generatedAt": "2026-08-27T17:13:20.918Z",
   "git": {
-    "commit": "c9896237b63e120aade5bd99f1c72e065991d4a6",
+    "commit": "db060b90978396fabb99e8ca4c59cff7ea5118c0",
     "dirty": true,
-    "dirtyHash": "0de94323ef53dd1a8062064be77b66b117d9a8349be8891599e01704d45238bb"
+    "dirtyHash": "7c47a679158a4c2dea54a413dbad7fa0499240fe345e6f0427aea97410a778ab"
   },
   "roots": [
     "apps",
@@ -3190,8 +3190,8 @@
     },
     {
       "path": "scripts/release-launcher.cjs",
-      "bytes": 10407,
-      "sha256": "ade3c63fc355c9b3eba7a173c4378f27322874fd6fb80124a3ceea203ad52f12"
+      "bytes": 10550,
+      "sha256": "775de6797f14fd65121ddd4119c0d9f5bea13d52ad2fc11696db81784ca01a89"
     },
     {
       "path": "scripts/release.test.ts",
@@ -3219,5 +3219,5 @@
       "sha256": "3af6b7d3ec7041c90b18206fe898b904d8781a97c25369189f2733173c6d23a5"
     }
   ],
-  "digest": "4413f738e37fab8e3f9fcd46bce65a808ce84802de074ab882eb99d0877b653c"
+  "digest": "a811d061bee7425f91deda64bc3d41eb3d8f74f87ce2e33fce01173bf8fb4f58"
 }
