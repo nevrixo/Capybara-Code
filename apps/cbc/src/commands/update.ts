@@ -99,6 +99,7 @@ export async function updateCommand(
   return ok();
 }
 
+/** Check if a release candidate has been marked as skipped by the user. */
 async function candidateSkipped(
   context: CommandContext,
   store: UpdateStore,

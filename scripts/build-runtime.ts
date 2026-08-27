@@ -15,6 +15,7 @@ const ROOT = new URL("..", import.meta.url).pathname
   .replace(/^\/([A-Za-z]:)/, "$1")
   .replace(/\/+$/, "");
 
+/** Generate path variants with forward and backward slashes for remapping. */
 function pathVariants(path: string): string[] {
   const trimmed = path.replace(/[\\/]+$/, "");
   if (trimmed.length === 0) return [];
@@ -25,10 +26,12 @@ function pathVariants(path: string): string[] {
   ])];
 }
 
+/** Quote a Rust compiler flag if it contains whitespace. */
 function quoteRustFlag(flag: string): string {
   return /\s/.test(flag) ? JSON.stringify(flag) : flag;
 }
 
+/** Parse a dotted version string into numeric components. */
 function versionParts(version: string): number[] {
   if (!/^\d+(?:\.\d+)+$/.test(version)) {
     throw new Error(`invalid dotted version '${version}'`);
@@ -83,6 +86,7 @@ export function assertGlibcBuildHost(baseline: string, output: string): string {
  * MSVC's link.exe can fail while processing large generated unwind tables on
  * some Windows toolchain revisions. The Rust toolchain ships a compatible
  * linker, so prefer it when the caller has not explicitly selected one.
+ * @returns Path to rust-lld.exe if available, undefined otherwise.
  */
 async function bundledRustLld(): Promise<string | undefined> {
   if (process.platform !== "win32" || process.env.CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER !== undefined) {
@@ -125,12 +129,14 @@ export function releaseRuntimeRustFlags(
   return [...flags];
 }
 
+/** Resolve the Cargo target directory from environment or default. */
 function cargoTargetDirectory(): string {
   const configured = process.env.CARGO_TARGET_DIR;
   if (configured === undefined || configured.trim().length === 0) return join(ROOT, "target");
   return isAbsolute(configured) ? configured : resolve(ROOT, configured);
 }
 
+/** Execute a command and return its stdout, throwing on failure. */
 function commandText(command: readonly string[]): string {
   const result = Bun.spawnSync({
     cmd: [...command],
@@ -146,6 +152,7 @@ function commandText(command: readonly string[]): string {
   return stdout;
 }
 
+/** Verify the Linux build host meets the glibc baseline requirement. */
 function verifyLinuxBuildHost(baseline: string): void {
   if (process.platform !== "linux") {
     throw new Error("CBC_RELEASE_GLIBC_BASELINE can only be enforced on a Linux build host");
@@ -154,6 +161,7 @@ function verifyLinuxBuildHost(baseline: string): void {
   console.log(`Linux release host glibc ${detected} (maximum ${baseline})`);
 }
 
+/** Verify the built runtime does not exceed the glibc baseline requirement. */
 function verifyLinuxRuntimeSymbols(baseline: string): void {
   const binary = join(cargoTargetDirectory(), "release", "cbc-runtime");
   const newest = newestGlibcSymbolVersion(commandText(["readelf", "--version-info", binary]));

@@ -30,10 +30,12 @@ export interface UpdateStore {
   readonly skippedVersions: Readonly<Record<string, UpdateSkipRecord>>;
 }
 
+/** Create an empty update store with default version. */
 export function emptyUpdateStore(): UpdateStore {
   return { version: 1, skippedVersions: {} };
 }
 
+/** Resolve the path to the update store JSON file. */
 export function updateStorePath(paths: CbcPaths): string {
   return join(paths.data, "updates.json");
 }
@@ -51,6 +53,7 @@ export async function readUpdateStore(host: Host, paths: CbcPaths): Promise<Upda
   }
 }
 
+/** Parse and validate unknown data into a typed UpdateStore, returning empty store on invalid data. */
 export function parseUpdateStore(parsed: unknown): UpdateStore {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return emptyUpdateStore();
   const record = parsed as Record<string, unknown>;
@@ -102,6 +105,7 @@ export function parseUpdateStore(parsed: unknown): UpdateStore {
   };
 }
 
+/** Write the update store to disk as JSON. */
 export async function writeUpdateStore(host: Host, paths: CbcPaths, store: UpdateStore): Promise<void> {
   await host.fs.mkdirp(paths.data);
   await host.fs.atomicWrite(updateStorePath(paths), `${JSON.stringify(store, null, 2)}\n`);

@@ -50,6 +50,7 @@ const VALUE_FLAG_NAMES: ReadonlySet<string> = new Set(
     .map((flag) => flag.name),
 );
 
+/** Split argv into positional arguments and flag tokens. */
 function tokenize(argv: readonly string[]): Tokens {
   const positionals: string[] = [];
   const rawFlags: Array<{ name: string; value: string | boolean }> = [];
@@ -94,6 +95,7 @@ function tokenize(argv: readonly string[]): Tokens {
   return { positionals, rawFlags };
 }
 
+/** Validate raw flags against allowed specs and build a typed map. */
 function validateFlags(
   rawFlags: Tokens["rawFlags"],
   allowed: readonly FlagSpec[],
@@ -118,6 +120,7 @@ function validateFlags(
   return flags;
 }
 
+/** Validate positional arguments match the command spec requirements. */
 function validatePositionals(
   operands: readonly string[],
   spec: CommandSpec,
@@ -219,6 +222,7 @@ export function parseArgs(argv: readonly string[]): ParseResult {
   }
 }
 
+/** Build a typed Command object from parsed subcommand arguments. */
 function buildSubcommand(
   commandName: string,
   subName: string,
