@@ -45,11 +45,18 @@ bun install -g capybara-code@alpha
 
 ### Supported platforms
 
-- Windows x64
-- macOS x64 and Apple Silicon (ARM64)
-- Ubuntu and WSL Linux x64 with glibc
+- Windows 10 version 1809 or newer, x64
+- macOS 13 Ventura or newer, Intel x64 and Apple Silicon (ARM64)
+- Ubuntu 20.04 or newer and Ubuntu on WSL2, Linux x64 with glibc 2.31 or newer
 
-Linux ARM64 and musl-based distributions are not supported in this public alpha.
+These are release compatibility floors, not only tested build hosts. Linux artifacts are built
+and smoke-tested on Ubuntu 20.04, the Rust sidecar is rejected if it requires a GLIBC symbol newer
+than 2.31, macOS binaries use deployment target 13.0, and the Windows sidecar statically links the
+compiler runtime. Every native release must start its packaged sidecar and complete the
+`runtime.initialize` protocol handshake before publishing.
+
+Linux ARM64, musl-based distributions, Windows ARM64, WSL1, and macOS 12 or older are not supported
+in this public alpha.
 
 ### Installation notes
 

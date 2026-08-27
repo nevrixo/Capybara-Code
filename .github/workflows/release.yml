@@ -56,16 +56,18 @@ jobs:
           - runner: windows-2025
             target: windows-x64
             package_dir: capybara-code-win32-x64
+            macos_deployment_target: ""
           - runner: macos-15-intel
             target: darwin-x64
             package_dir: capybara-code-darwin-x64
+            macos_deployment_target: "13.0"
           - runner: macos-15
             target: darwin-arm64
             package_dir: capybara-code-darwin-arm64
-          - runner: ubuntu-24.04
-            target: linux-x64
-            package_dir: capybara-code-linux-x64
+            macos_deployment_target: "13.0"
     runs-on: ${{ matrix.runner }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_deployment_target }}
     steps:
       - uses: actions/checkout@v6
 
@@ -113,9 +115,93 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # The oldest glibc available at link time becomes the binary's ABI floor.
+  # Build and execute the complete Linux package on Ubuntu 20.04 so a newer
+  # GitHub runner cannot silently raise the documented GLIBC 2.31 requirement.
+  build-linux:
+    name: Build linux-x64 (glibc 2.31)
+    needs: validate
+    runs-on: ubuntu-24.04
+    container:
+      image: ubuntu:20.04
+    env:
+      CBC_RELEASE_GLIBC_BASELINE: "2.31"
+    steps:
+      - name: Install Linux build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            binutils \
+            build-essential \
+            ca-certificates \
+            curl \
+            git \
+            pkg-config \
+            unzip \
+            xz-utils
+
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.10"
+
+      - name: Install the pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain 1.85.0
+          echo "${HOME}/.cargo/bin" >> "${GITHUB_PATH}"
+
+      - name: Verify Linux compatibility build environment
+        run: test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.31"
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build Rust runtime and verify GLIBC symbol versions
+        run: bun run build:runtime
+
+      - name: Build standalone Capybara Code
+        run: bun run build:capy -- --target linux-x64
+
+      - name: Assemble native npm package
+        run: bun run release:package -- --target linux-x64
+
+      - name: Build independent release archive
+        run: bun run release:archive -- --target linux-x64
+
+      - name: Smoke test binary, sidecar, and runtime.initialize handshake
+        run: bun run release:smoke -- --target linux-x64
+
+      - name: Pack native npm tarball before artifact transfer
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/npm-tarballs
+          npm pack "./dist/npm/capybara-code-linux-x64" --pack-destination dist/npm-tarballs
+
+      - name: Upload immutable npm tarball and native archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-linux-x64
+          path: |
+            dist/npm-tarballs/
+            dist/release/
+          if-no-files-found: error
+          retention-days: 7
+
   publish:
     name: Publish npm packages and GitHub prerelease
-    needs: [validate, build-native]
+    needs: [validate, build-native, build-linux]
     runs-on: ubuntu-24.04
     environment:
       name: npm-publish

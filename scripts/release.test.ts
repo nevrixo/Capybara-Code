@@ -5,6 +5,13 @@ import { join } from "node:path";
 import { createRequire } from "node:module";
 
 import { archiveNameFor } from "./archive-release.ts";
+import {
+  assertGlibcBuildHost,
+  compareDottedVersions,
+  newestGlibcSymbolVersion,
+  parseGlibcVersion,
+  releaseRuntimeRustFlags,
+} from "./build-runtime.ts";
 import { runtimeTargetDirectory } from "./build-standalone.ts";
 import { expectedVersionFromArgs } from "./check-release.ts";
 import { launcherPackageManifest, platformPackageManifest } from "./package-npm.ts";
@@ -99,6 +106,41 @@ describe("Public Alpha release metadata", () => {
     );
     const sharedTarget = join(tmpdir(), "capybara-shared-target");
     expect(runtimeTargetDirectory(root, sharedTarget)).toBe(sharedTarget);
+  });
+
+  test("enforces portable native runtime build settings", () => {
+    expect(compareDottedVersions("2.31", "2.9")).toBeGreaterThan(0);
+    expect(compareDottedVersions("2.31.0", "2.31")).toBe(0);
+    expect(parseGlibcVersion("glibc 2.31")).toBe("2.31");
+    expect(parseGlibcVersion("ldd (Ubuntu GLIBC 2.35-0ubuntu3.14) 2.35")).toBe("2.35");
+    expect(newestGlibcSymbolVersion("GLIBC_2.17 GLIBC_2.31 GLIBC_2.2.5")).toBe("2.31");
+    expect(assertGlibcBuildHost("2.31", "glibc 2.31")).toBe("2.31");
+    expect(() => assertGlibcBuildHost("2.31", "glibc 2.35")).toThrow("newer than supported baseline");
+
+    const windowsFlags = releaseRuntimeRustFlags("C:\\repo", ["C:\\Users\\builder"], "win32");
+    const linuxFlags = releaseRuntimeRustFlags("/repo", ["/home/builder"], "linux");
+    expect(windowsFlags).toContain("-Ctarget-feature=+crt-static");
+    expect(linuxFlags).not.toContain("-Ctarget-feature=+crt-static");
+  });
+
+  test("pins documented platform floors and performs a real sidecar handshake", async () => {
+    const [workflow, readme, smoke] = await Promise.all([
+      readFile(join(ROOT, ".github", "workflows", "release.yml"), "utf8"),
+      readFile(join(ROOT, "README.md"), "utf8"),
+      readFile(join(ROOT, "scripts", "smoke-release.ts"), "utf8"),
+    ]);
+
+    expect(workflow).toContain("image: ubuntu:20.04");
+    expect(workflow).toContain('CBC_RELEASE_GLIBC_BASELINE: "2.31"');
+    expect(workflow).toContain('macos_deployment_target: "13.0"');
+    expect(workflow).toContain("needs: [validate, build-native, build-linux]");
+    expect(smoke).toContain("await client.start()");
+    expect(smoke).toContain('"--capabilities"');
+
+    expect(readme).toContain("Windows 10 version 1809 or newer");
+    expect(readme).toContain("macOS 13 Ventura or newer");
+    expect(readme).toContain("Ubuntu 20.04 or newer");
+    expect(readme).toContain("glibc 2.31 or newer");
   });
 
   test("seals native npm packages before artifact transport can strip execute modes", async () => {
