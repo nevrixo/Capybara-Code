@@ -20,6 +20,7 @@ export type Command =
   | { readonly kind: "config"; readonly sub: "set"; readonly path: string; readonly value: string }
   | { readonly kind: "session-worker"; readonly sessionId?: string }
   | { readonly kind: "daemon"; readonly sub: "start" | "stop" | "status" | "logs" | "attach"; readonly sessionId?: string }
+  | { readonly kind: "update"; readonly check?: boolean }
   | { readonly kind: "version" }
   | { readonly kind: "help"; readonly topic?: string };
 
@@ -200,6 +201,13 @@ export function parseArgs(argv: readonly string[]): ParseResult {
         },
       };
     }
+    case "update":
+      return {
+        command: {
+          kind: "update",
+          ...(flags.has("--check") ? { check: true } : {}),
+        },
+      };
     case "version":
       return { command: { kind: "version" } };
     case "help":
@@ -284,6 +292,7 @@ export const HELP_TEXT = [
   "  auth logout [--all]              drop stored credentials",
   "  model refresh                    refresh model capabilities",
   "  config set <path> <value>        set a user configuration value",
+  "  update [--check]                 check for a newer release",
   "  version                          print the version",
   "  help [topic]                     show help",
 ].join("\n");

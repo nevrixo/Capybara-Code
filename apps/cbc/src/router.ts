@@ -10,6 +10,7 @@ import { daemonCommand } from "./commands/daemon.ts";
 import { sessionWorker } from "./commands/session-worker.ts";
 import { modelRefresh } from "./commands/model.ts";
 import { run } from "./commands/run.ts";
+import { updateCommand } from "./commands/update.ts";
 import type { Host } from "./host.ts";
 
 export interface RouteOptions {
@@ -77,6 +78,11 @@ async function dispatch(context: CommandContext, command: Command): Promise<Comm
       return await daemonCommand(context, {
         sub: command.sub,
         ...(command.sessionId !== undefined ? { sessionId: command.sessionId } : {}),
+      });
+
+    case "update":
+      return await updateCommand(context, {
+        ...(command.check === true ? { check: true } : {}),
       });
 
     case "version":

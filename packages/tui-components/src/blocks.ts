@@ -2265,6 +2265,15 @@ export function renderReportEvidence(
 // §6.19 update banner
 // ---------------------------------------------------------------------------
 
+/**
+ * §10 fallback copy, shared with the host's late-check notice. The wording must
+ * not contradict the blocking startup prompt: the banner never installs, and the
+ * user is asked again on a restart.
+ */
+export function updateBannerText(version: string): string {
+  return `New version ${version}. Restart capy to be asked, or update with the package manager used to install Capybara Code.`;
+}
+
 /** §6.19 / AC-41: a non-blocking banner naming the version and upgrade path. */
 export function renderUpdateBanner(
   input: { version: string },
@@ -2272,16 +2281,7 @@ export function renderUpdateBanner(
 ): StyledLine[] {
   return [
     line("banner", [segment("Update Available", { fg: "accent.amber", bold: true })]),
-    fitLine(
-      "banner",
-      [
-        segment(
-          `New version ${input.version} is available. Update with the package manager used to install Capybara Code.`,
-          { fg: "fg.primary" },
-        ),
-      ],
-      context,
-    ),
+    fitLine("banner", [segment(updateBannerText(input.version), { fg: "fg.primary" })], context),
   ];
 }
 

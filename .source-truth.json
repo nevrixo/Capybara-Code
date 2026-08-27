@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-26T22:21:22.940Z",
+  "generatedAt": "2026-08-27T00:20:54.142Z",
   "git": {
-    "commit": "330f1f8dae04a45dbae9cf21f8c622d5d4b76090",
+    "commit": "1fa78c6e8fa287bb1236f91786df16acb47a3c90",
     "dirty": true,
-    "dirtyHash": "92a00e8ae6dbc869c704afcbb3fa3ca0ef949fe6206f709cd3fc0a8ba4bde93e"
+    "dirtyHash": "685f21274d95571d19ba5aba793d9f78e44178651deb4b253b86c3136e8ca1da"
   },
   "roots": [
     "apps",
@@ -53,9 +53,9 @@
     "node": "v24.3.0",
     "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
-    "typescript": "unavailable"
+    "typescript": "5.9.3"
   },
-  "fileCount": 621,
+  "fileCount": 629,
   "historicalArtifacts": [],
   "files": [
     {
@@ -70,8 +70,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 5580,
-      "sha256": "ed9ec7f71f86bed8ecc26f4d39f9994c3313394439a366b48ec1acea64ffe785"
+      "bytes": 6156,
+      "sha256": "2e9e13b7bfc964454fa24ea284282036a4f284deda2a7e03de673dcce4ba4613"
     },
     {
       "path": "apps/capy-daemon/package.json",
@@ -190,8 +190,8 @@
     },
     {
       "path": "apps/cbc/src/args.ts",
-      "bytes": 9983,
-      "sha256": "db9880ed8979ea8060ac60cef8c9f0472ecd5955b5f3cf10d1d6b2d9ea0a5e56"
+      "bytes": 10266,
+      "sha256": "a90c021b3224d539ebeaf56288195b430b4192069d8870d1f56054983794adeb"
     },
     {
       "path": "apps/cbc/src/auth-mode.ts",
@@ -210,8 +210,8 @@
     },
     {
       "path": "apps/cbc/src/command-spec.ts",
-      "bytes": 4366,
-      "sha256": "b97247d6fdbf0cf39b0dfb34c3d03a0f0a13922410075640c1ecdd6a489c988d"
+      "bytes": 4564,
+      "sha256": "7b0729f6f4ca9d2d32f7ad7dc8a5d8beb6595250a9ebaaf3377dbd1d8b5ddee6"
     },
     {
       "path": "apps/cbc/src/commands/auth.ts",
@@ -225,8 +225,8 @@
     },
     {
       "path": "apps/cbc/src/commands/context.ts",
-      "bytes": 9632,
-      "sha256": "eaecb60fec393921bdbe0166ef39af7152141e724bfbfdcf94470b76bddea716"
+      "bytes": 9999,
+      "sha256": "067cca5b9e30fd6620230cc277bddea20c53ba04ecb8af3eae24429255a6efd7"
     },
     {
       "path": "apps/cbc/src/commands/daemon.ts",
@@ -235,8 +235,8 @@
     },
     {
       "path": "apps/cbc/src/commands/interactive.ts",
-      "bytes": 81956,
-      "sha256": "938686ef8afa369f15fb81972c369183fa2420283e186d24c2f0eac6e0b86ca0"
+      "bytes": 83707,
+      "sha256": "813fd18b6efbc4a6c451fbb7be7b263e97d8f807927f08a86be12f54b5575cd9"
     },
     {
       "path": "apps/cbc/src/commands/model.ts",
@@ -252,6 +252,11 @@
       "path": "apps/cbc/src/commands/session-worker.ts",
       "bytes": 2431,
       "sha256": "3794d9b459bfcb10db06124d0ad1a48d6fd588ee054895005b6b91021808062f"
+    },
+    {
+      "path": "apps/cbc/src/commands/update.ts",
+      "bytes": 3736,
+      "sha256": "7a9e4bb54a9de3d3e8136775f340744d57ccb7dd562794ae5c4b205939db9273"
     },
     {
       "path": "apps/cbc/src/composer.ts",
@@ -380,8 +385,8 @@
     },
     {
       "path": "apps/cbc/src/router.ts",
-      "bytes": 3559,
-      "sha256": "64b5cd5a0b9dcc2ed1ce7a27e6bb458de43eafaf4d167927f83ea82bd0e41070"
+      "bytes": 3747,
+      "sha256": "966df7f1c3bd819cec90a9ca688f95f5c16a88ce2f523f23045a53110921a07e"
     },
     {
       "path": "apps/cbc/src/rules-store.ts",
@@ -464,6 +469,21 @@
       "sha256": "d4659e6d27fa3329cc6c692ed7fd85154e60f2c6c778f5a729a86897702e4e78"
     },
     {
+      "path": "apps/cbc/src/update-check.ts",
+      "bytes": 18359,
+      "sha256": "bf39f57faf4c7874721f7a856e7e8fce9a0657323cc05168c3d467f142f8d812"
+    },
+    {
+      "path": "apps/cbc/src/update-prompt.ts",
+      "bytes": 4051,
+      "sha256": "0e0d3c71dc2fa797d50975831020b8aef21a880aea781aae883c98f500029647"
+    },
+    {
+      "path": "apps/cbc/src/update-store.ts",
+      "bytes": 5211,
+      "sha256": "85996d6e68b250c4dbd3fad3f5d54fe622bfb3522b457239e32a7c64b0185f27"
+    },
+    {
       "path": "apps/cbc/src/verification-contract.ts",
       "bytes": 5969,
       "sha256": "b95721e81213ecc419f661de02ebfbbce1882dd2d50ecaee7751ea1c50121698"
@@ -490,8 +510,8 @@
     },
     {
       "path": "apps/cbc/test/cbc.test.ts",
-      "bytes": 245200,
-      "sha256": "d2b2c253c996d94543987baae538dfee045637c80aff48f525e938c6d0988bb3"
+      "bytes": 245210,
+      "sha256": "3892705e2f8b6d68725be2865444512d0e077a26c1a4e6065c147735a4059287"
     },
     {
       "path": "apps/cbc/test/config-template.test.ts",
@@ -712,6 +732,26 @@
       "path": "apps/cbc/test/tui-revision.test.ts",
       "bytes": 12613,
       "sha256": "7d846c4e7f16257fe57df253e38c910030f495c9077925ddd67a0be94bb25c56"
+    },
+    {
+      "path": "apps/cbc/test/update-check.test.ts",
+      "bytes": 22929,
+      "sha256": "14370b3593b07ae6e8157d616ffbd82a8697bac7e5f9ac893cb0fbfb3d88536c"
+    },
+    {
+      "path": "apps/cbc/test/update-command.test.ts",
+      "bytes": 10456,
+      "sha256": "6b7d40110210a9c32168ffc9dd08c0e5f48cd1ce889eaf78d1953b97d62bb13e"
+    },
+    {
+      "path": "apps/cbc/test/update-prompt.test.ts",
+      "bytes": 4803,
+      "sha256": "bfdb195b25795776edb680db53c353770188d6c7a1a67c80a0bdbc2f82051450"
+    },
+    {
+      "path": "apps/cbc/test/update-store.test.ts",
+      "bytes": 5032,
+      "sha256": "ab1f02dc3708864a3c3664dceaef286ed1011a2878ac040e8eadc1dd6af9b0f6"
     },
     {
       "path": "apps/cbc/test/verification-contract.test.ts",
@@ -2820,8 +2860,8 @@
     },
     {
       "path": "packages/tui-components/src/blocks.ts",
-      "bytes": 117861,
-      "sha256": "65f1864f384a147fef390d007d689e4d2702baa55fccbbb9ba9a1a784b9adfc3"
+      "bytes": 118112,
+      "sha256": "e7d66c022e050d93073c0853fa9dd90900ea014a99b8ca5d1caf65533ad3efbc"
     },
     {
       "path": "packages/tui-components/src/chrome.ts",
@@ -2955,8 +2995,8 @@
     },
     {
       "path": "packages/tui-components/test/tui.test.ts",
-      "bytes": 124044,
-      "sha256": "b80ac4b45cd34e08bcbada06c5f84da042f3212f26c62a02cc747aeeab99780d"
+      "bytes": 124422,
+      "sha256": "176debb5f6c0d24d1d1c9d732500044452bde6070d41f3cc19665b03ba8f118b"
     },
     {
       "path": "pnpm-workspace.yaml",
@@ -3080,8 +3120,8 @@
     },
     {
       "path": "scripts/build-runtime.ts",
-      "bytes": 3475,
-      "sha256": "59ec674388e96891b0d74da385697ce855539bc1bd994d4fca48e99d3070537c"
+      "bytes": 8030,
+      "sha256": "d6aca4d838b4366fbfff09a671c6b4000bf5eddb9581e2f4a6f15b32f122ff60"
     },
     {
       "path": "scripts/build-standalone.ts",
@@ -3140,13 +3180,13 @@
     },
     {
       "path": "scripts/release.test.ts",
-      "bytes": 11019,
-      "sha256": "2aa1af2a50cc68c77c7f7c903c52b0eb2e6e2dd4ab6797f9746e5b873f4933c1"
+      "bytes": 13077,
+      "sha256": "adc3a9b9b7b9d6c353bc4b355614718aab7025587ba39e01626e1bd9a9be94fc"
     },
     {
       "path": "scripts/smoke-release.ts",
-      "bytes": 3784,
-      "sha256": "26b1a40a181b64da8d60cb6bd4f84b7aeb68e99bef21104f8025ccf8e9531e9b"
+      "bytes": 7430,
+      "sha256": "8f9ea630fbe4912f6f5d7cdaa912d4448b09fc590cfb999643311c74e59acd7b"
     },
     {
       "path": "scripts/source-truth.ts",
@@ -3164,5 +3204,5 @@
       "sha256": "3af6b7d3ec7041c90b18206fe898b904d8781a97c25369189f2733173c6d23a5"
     }
   ],
-  "digest": "13a4d3aae2490a64d820e7691c51ec0f5adcda273dcbebc5823bbfed98922342"
+  "digest": "09b020ae1ddbac309a90079e82873b8b4f5b706ad7fd3ee400f41b351a861a20"
 }
