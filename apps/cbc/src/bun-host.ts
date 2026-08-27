@@ -25,6 +25,7 @@ import {
   flushPendingSequence,
   inertKeyStream,
   type InputEvent,
+  type KeyDecodeState,
   type KeyEvent,
   type KeyStream,
 } from "./keys.ts";
@@ -93,6 +94,94 @@ async function writeClipboardCommand(command: ClipboardCommand, text: string): P
 export function selectClearSequence(choiceCount: number): string {
   const rows = Math.max(1, Math.floor(choiceCount) + 1);
   return `${ESC}[${rows}A${ESC}[0J`;
+}
+
+export interface SelectInputUpdate extends KeyDecodeState {
+  readonly selected: number;
+  readonly redraw: boolean;
+  readonly decision?: number;
+}
+
+interface AppliedSelectEvents {
+  readonly selected: number;
+  readonly redraw: boolean;
+  readonly decision?: number;
+}
+
+function applySelectEvents(
+  events: readonly InputEvent[],
+  choiceCount: number,
+  initialSelected: number,
+): AppliedSelectEvents {
+  let selected = initialSelected;
+  let redraw = false;
+
+  const move = (offset: number): void => {
+    selected = (selected + offset + choiceCount) % choiceCount;
+    redraw = true;
+  };
+
+  for (const event of events) {
+    if (!("key" in event)) continue;
+
+    if (event.key === "enter" || event.key === "ctrl+j") {
+      return { selected, redraw, decision: selected };
+    }
+    if (event.key === "escape" || event.key === "ctrl+c") {
+      return { selected, redraw, decision: -1 };
+    }
+    if (event.key === "up") {
+      move(-1);
+      continue;
+    }
+    if (event.key === "down") {
+      move(1);
+      continue;
+    }
+    if (event.key !== "text") continue;
+
+    for (const char of event.text ?? "") {
+      if (char === "k") {
+        move(-1);
+        continue;
+      }
+      if (char === "j") {
+        move(1);
+        continue;
+      }
+
+      const digit = Number.parseInt(char, 10);
+      if (char === String(digit) && digit >= 1 && digit <= choiceCount) {
+        selected = digit - 1;
+        return { selected, redraw: true, decision: selected };
+      }
+    }
+  }
+
+  return { selected, redraw };
+}
+
+/**
+ * Decode every key in a select-menu input chunk before applying it.
+ *
+ * Terminals may batch Down and Enter into one data event or split an escape
+ * sequence across multiple events. Comparing the raw chunk to one exact key made
+ * the batched form a no-op, after which a later Enter confirmed choice 1.
+ */
+export function decodeSelectInput(
+  chunk: string,
+  choiceCount: number,
+  selected: number,
+  state: KeyDecodeState = {},
+): SelectInputUpdate {
+  const decoded = decodeKeys(chunk, state);
+  const applied = applySelectEvents(decoded.events, choiceCount, selected);
+  return {
+    ...applied,
+    ...(decoded.pendingPaste !== undefined ? { pendingPaste: decoded.pendingPaste } : {}),
+    ...(decoded.pendingControl !== undefined ? { pendingControl: decoded.pendingControl } : {}),
+    ...(decoded.pendingSequence !== undefined ? { pendingSequence: decoded.pendingSequence } : {}),
+  };
 }
 
 type TerminalEncoding = "utf-8" | "windows-949";
@@ -715,11 +804,20 @@ class NodeHostIo implements HostIo {
 
     return await new Promise<number>((resolveSelect) => {
       const wasRaw = stdin.isRaw === true;
+      let keyState: KeyDecodeState = {};
+      let escapeTimer: ReturnType<typeof setTimeout> | undefined;
       stdin.setRawMode(true);
       stdin.resume();
       stdin.setEncoding("utf8");
 
+      const disarmEscapeTimer = (): void => {
+        if (escapeTimer === undefined) return;
+        clearTimeout(escapeTimer);
+        escapeTimer = undefined;
+      };
+
       const finish = (index: number): void => {
+        disarmEscapeTimer();
         stdin.removeListener("data", onData);
         stdin.setRawMode(wasRaw);
         // Restore cursor visibility
@@ -737,31 +835,33 @@ class NodeHostIo implements HostIo {
         resolveSelect(index);
       };
 
+      const applyUpdate = (update: SelectInputUpdate): void => {
+        selected = update.selected;
+        keyState = {
+          ...(update.pendingPaste !== undefined ? { pendingPaste: update.pendingPaste } : {}),
+          ...(update.pendingControl !== undefined ? { pendingControl: update.pendingControl } : {}),
+          ...(update.pendingSequence !== undefined ? { pendingSequence: update.pendingSequence } : {}),
+        };
+        if (update.redraw) draw(false);
+        if (update.decision !== undefined) {
+          finish(update.decision);
+          return;
+        }
+
+        if (update.pendingSequence === ESC) {
+          escapeTimer = setTimeout(() => {
+            escapeTimer = undefined;
+            const flushed = flushPendingSequence(keyState);
+            keyState = {};
+            applyUpdate(applySelectEvents(flushed.events, choices.length, selected));
+          }, 35);
+          (escapeTimer as unknown as { unref?: () => void }).unref?.();
+        }
+      };
+
       const onData = (raw: string): void => {
-        if (raw === "\r" || raw === "\n") {
-          finish(selected);
-          return;
-        }
-        if (raw === "\u0003" || raw === ESC) {
-          finish(-1);
-          return;
-        }
-        if (raw === `${ESC}[A` || raw === "k") {
-          selected = (selected - 1 + choices.length) % choices.length;
-          draw(false);
-          return;
-        }
-        if (raw === `${ESC}[B` || raw === "j") {
-          selected = (selected + 1) % choices.length;
-          draw(false);
-          return;
-        }
-        const digit = Number.parseInt(raw, 10);
-        if (Number.isInteger(digit) && digit >= 1 && digit <= choices.length) {
-          selected = digit - 1;
-          draw(false);
-          finish(selected);
-        }
+        disarmEscapeTimer();
+        applyUpdate(decodeSelectInput(raw, choices.length, selected, keyState));
       };
 
       stdin.on("data", onData);
