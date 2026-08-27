@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-27T14:50:57.885Z",
+  "generatedAt": "2026-08-27T19:07:00.553Z",
   "git": {
-    "commit": "8db1fbaa606fddb9d783464c67d71c2668917a83",
+    "commit": "266d24643e916794c9043b3738c9dc6edc7f372d",
     "dirty": true,
-    "dirtyHash": "570932b383ac2878de631523a11c9b8ddc2a53bc86ff6f394d651848539c0ed9"
+    "dirtyHash": "6364436722fcf79e0a6cdd77796fc1d6ef2f014ff69ed83ddbbb08047cc5d54e"
   },
   "roots": [
     "apps",
@@ -53,20 +53,20 @@
     "node": "v24.3.0",
     "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
-    "typescript": "unavailable"
+    "typescript": "5.9.3"
   },
   "fileCount": 631,
   "historicalArtifacts": [],
   "files": [
     {
       "path": "Cargo.lock",
-      "bytes": 22010,
-      "sha256": "667c689874247104075a4ea7bdec903e652450c3c1776404f10bfd4ebc5b75ed"
+      "bytes": 22021,
+      "sha256": "0f179b81ec7465fea74c414bf45e3827f1d5cde7318ae02ecc837475609c0b57"
     },
     {
       "path": "Cargo.toml",
-      "bytes": 1654,
-      "sha256": "9d1a1c66dd7b3df329f79d65ba7a9bd6beded0391afae18522549375131abaa3"
+      "bytes": 1672,
+      "sha256": "c713190efcd650b5f516e4a300031285abc9f9bce17bbb90d5c47372f198b60e"
     },
     {
       "path": "README.md",
@@ -1290,13 +1290,13 @@
     },
     {
       "path": "crates/cbc-update/Cargo.toml",
-      "bytes": 397,
-      "sha256": "5d3e95ab469c67e5ae1141c9d45478fbb1d152fce8e33349987d0c12c90414ac"
+      "bytes": 421,
+      "sha256": "9fab2bd449a8935bd4772e1c304cf98150b64ef14a41165122de5c9b433c2f17"
     },
     {
       "path": "crates/cbc-update/src/lib.rs",
-      "bytes": 17989,
-      "sha256": "85be595f9295bcc32b7721392beae2dcea975b990c2fa9ec97cfa319c9a1883a"
+      "bytes": 18084,
+      "sha256": "aebf2b14611fc23d45e10df479dd7f838b297264a364b631e3325cee8fa4c21d"
     },
     {
       "path": "crates/cbc-workspace/Cargo.toml",
@@ -3214,5 +3214,5 @@
       "sha256": "3af6b7d3ec7041c90b18206fe898b904d8781a97c25369189f2733173c6d23a5"
     }
   ],
-  "digest": "d35bf3e41eb7d1e5617f6d68287e3069e33f92e1a9580b9e1b9b4754d1de36c1"
+  "digest": "de16d511f38739c84e43125fbad52f6e3f3544702455acd5f7693ef3b350f8b9"
 }

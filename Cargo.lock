@@ -195,6 +195,7 @@ version = "0.1.1-alpha.9"
 dependencies = [
  "cbc-patch",
  "ed25519-dalek",
+ "semver",
  "serde",
  "serde_json",
  "sha2",

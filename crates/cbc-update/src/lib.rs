@@ -10,6 +10,7 @@
 use std::path::Path;
 
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -280,36 +281,23 @@ pub fn build_manifest(
 /// when the current version is itself a pre-release, so a stable channel shows
 /// stable updates only.
 pub fn is_newer(current: &str, candidate: &str) -> bool {
-    let Some((cur, cur_pre)) = parse_semver(current) else {
+    let Some(current) = parse_semver(current) else {
         return false;
     };
-    let Some((cand, cand_pre)) = parse_semver(candidate) else {
+    let Some(candidate) = parse_semver(candidate) else {
         return false;
     };
-    if cand_pre.is_some() && cur_pre.is_none() {
+
+    if !candidate.pre.is_empty() && current.pre.is_empty() {
         return false;
     }
-    if cand != cur {
-        return cand > cur;
-    }
-    match (cur_pre, cand_pre) {
-        (Some(_), None) => true,
-        (Some(a), Some(b)) => b > a,
-        (None, _) => false,
-    }
+
+    candidate.cmp_precedence(&current).is_gt()
 }
 
-fn parse_semver(raw: &str) -> Option<((u64, u64, u64), Option<String>)> {
-    let raw = raw.trim().trim_start_matches('v');
-    let (core, pre) = match raw.split_once('-') {
-        Some((c, p)) => (c, Some(p.to_string())),
-        None => (raw, None),
-    };
-    let mut parts = core.split('.');
-    let major = parts.next()?.parse().ok()?;
-    let minor = parts.next().unwrap_or("0").parse().ok()?;
-    let patch = parts.next().unwrap_or("0").parse().ok()?;
-    Some(((major, minor, patch), pre))
+fn parse_semver(raw: &str) -> Option<Version> {
+    let raw = raw.trim();
+    Version::parse(raw.strip_prefix('v').unwrap_or(raw)).ok()
 }
 
 #[cfg(test)]
@@ -518,6 +506,21 @@ mod tests {
         assert!(!is_newer("0.12.5", "0.12.5"));
         assert!(!is_newer("0.12.5", "0.12.4"));
         assert!(is_newer("v0.1.0", "v0.2.0"));
+    }
+
+    #[test]
+    fn compares_numeric_prerelease_identifiers_numerically() {
+        assert!(is_newer("0.1.1-alpha.9", "0.1.1-alpha.10"));
+        assert!(is_newer("0.1.1-alpha.10", "0.1.1-alpha.12"));
+        assert!(!is_newer("0.1.1-alpha.12", "0.1.1-alpha.9"));
+    }
+
+    #[test]
+    fn follows_semver_prerelease_precedence() {
+        assert!(is_newer("1.0.0-alpha", "1.0.0-alpha.1"));
+        assert!(is_newer("1.0.0-alpha.1", "1.0.0-alpha.beta"));
+        assert!(is_newer("1.0.0-beta.11", "1.0.0-rc.1"));
+        assert!(!is_newer("1.0.0+build.1", "1.0.0+build.2"));
     }
 
     #[test]
