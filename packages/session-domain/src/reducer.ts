@@ -443,6 +443,8 @@ export interface SessionViewModel {
   readonly reasoningEffort: string;
   readonly permissionMode: string;
   readonly permissionPreset?: string;
+  readonly skillCatalogRevision?: number;
+  readonly skillCatalogDigest?: string;
   readonly contextUsedTokens: number;
   readonly contextBudgetTokens: number;
   readonly notices: TimelineNotice[];
@@ -1328,6 +1330,19 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
     case "permission.changed": {
       const to = payloadOf(event).to;
       if (typeof to === "string") next.permissionPreset = to;
+      break;
+    }
+
+    case "skills.changed": {
+      const p = payloadOf(event);
+      const revision = p.revision;
+      const digest = p.digest;
+      if (typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 0) {
+        next.skillCatalogRevision = revision;
+      }
+      if (typeof digest === "string" && /^[a-f0-9]{64}$/u.test(digest)) {
+        next.skillCatalogDigest = digest;
+      }
       break;
     }
 

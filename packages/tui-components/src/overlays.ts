@@ -121,7 +121,11 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: "/permissions", description: "choose permission preset (read|edit|auto|yolo)", args: [{ name: "preset", values: ["read", "edit", "auto", "yolo"] }] },
   { name: "/mode", description: "switch Build or Plan interaction mode", args: [{ name: "mode", values: ["build", "plan"] }] },
   { name: "/status", description: "show usage, cost, and session status" },
-  { name: "/skills", description: "list or inspect Skills", args: [{ name: "skill" }] },
+  {
+    name: "/skills",
+    description: "list, inspect, reload, or diagnose Skills",
+    args: [{ name: "action or skill" }, { name: "skill" }],
+  },
   { name: "/mcp", description: "show MCP server health" },
   { name: "/context", description: "inspect the context budget" },
   { name: "/memory", description: "inspect, forget, or resolve durable memory", args: [{ name: "action", values: ["inspect", "forget", "resolve"] }] },

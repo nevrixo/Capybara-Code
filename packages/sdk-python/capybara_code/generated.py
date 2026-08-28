@@ -156,6 +156,7 @@ EVENT_KINDS = (
     "error.internal",
     "usage.updated",
     "permission.changed",
+    "skills.changed",
     "token_saving.changed",
     "token_saving.policy_applied",
     "token_saving.relaxed",

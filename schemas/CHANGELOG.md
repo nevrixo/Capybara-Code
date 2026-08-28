@@ -38,6 +38,18 @@ does not fail validation, so nothing would catch it except a human reading this 
 
 ---
 
+## events 1.0 — Skills catalog revision
+
+Added the journaled, hidden `skills.changed` event. It records the active Agent
+Skills catalog revision, metadata digest, counts, and invalidated names after a
+successful startup discovery or manual reload; Skill bodies are never included.
+
+## config — Agent Skills discovery
+
+Added the defaulted `skills` section for native/compatibility roots, explicit
+paths, bundled Skill selection, and bounded scan budgets. `skills.autoReload` is
+reserved as experimental while manual reload is the active implementation.
+
 ## config — experimental runtime surfaces default on
 
 `experimental.*` gates now default to `true`. A user can still set any gate to

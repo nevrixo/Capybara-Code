@@ -10,6 +10,8 @@ import { describe, expect, test } from "bun:test";
 
 import { parseArgs, HELP_TEXT } from "../src/args.ts";
 import { commandNames } from "../src/command-spec.ts";
+import { CommandContext } from "../src/commands/context.ts";
+import { skillsCommand } from "../src/commands/skills.ts";
 import { selectClearSequence, TerminalInputDecoder } from "../src/bun-host.ts";
 import { EXIT, CliError, exitForStatus } from "../src/exit.ts";
 import {
@@ -389,6 +391,28 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["config", "set", "a", "b", "c"])).toThrow(/at most 2 argument/);
   });
 
+  test("skills exposes list, doctor, and strict validation with JSON output", () => {
+    expect(parseArgs(["skills", "list", "--json"]).command).toEqual({
+      kind: "skills",
+      sub: "list",
+      json: true,
+    });
+    expect(parseArgs(["skills", "doctor"]).command).toEqual({
+      kind: "skills",
+      sub: "doctor",
+      json: false,
+    });
+    expect(parseArgs(["skills", "validate", "skill/SKILL.md", "--strict", "--json"]).command).toEqual({
+      kind: "skills",
+      sub: "validate",
+      path: "skill/SKILL.md",
+      strict: true,
+      json: true,
+    });
+    expect(() => parseArgs(["skills", "validate"])).toThrow(/needs <path>/);
+    expect(() => parseArgs(["skills", "list", "extra"])).toThrow(/at most 0 argument/);
+  });
+
   test("version and help are commands rather than flags", () => {
     expect(parseArgs(["version"]).command).toEqual({ kind: "version" });
     expect(parseArgs(["help", "auth"]).command).toEqual({ kind: "help", topic: "auth" });
@@ -397,7 +421,7 @@ describe("parseArgs", () => {
   });
 
   test("the registry and help expose only the minimal public surface", () => {
-    expect(commandNames()).toEqual(["run", "auth", "model", "config", "daemon", "update", "version", "help"]);
+    expect(commandNames()).toEqual(["run", "auth", "model", "config", "skills", "daemon", "update", "version", "help"]);
     for (const text of [
       "auth login",
       "auth api",
@@ -405,6 +429,9 @@ describe("parseArgs", () => {
       "auth logout",
       "model refresh",
       "config set",
+      "skills list",
+      "skills doctor",
+      "skills validate",
       "daemon start",
       "daemon stop",
       "daemon status",
@@ -418,12 +445,10 @@ describe("parseArgs", () => {
     }
     for (const removed of [
       "session",
-      "skills",
       "mcp",
       "lsp",
       "init",
       "trust",
-      "doctor",
       "completion",
       "permission",
       "--jsonl",
@@ -433,6 +458,53 @@ describe("parseArgs", () => {
     ]) {
       expect(HELP_TEXT).not.toContain(removed);
     }
+  });
+});
+
+describe("headless Skills commands", () => {
+  test("list --json writes one complete metadata-only document", async () => {
+    const host = createFakeHost({ env: { XDG_CONFIG_HOME: "/xdg" } });
+    host.files.set(
+      "/xdg/capybara/skills/custom/SKILL.md",
+      "---\nname: custom\ndescription: external test Skill\n---\nSECRET-BODY-SENTINEL\n",
+    );
+    const context = new CommandContext({ host, version: host.version, nonInteractive: true });
+    const result = await skillsCommand(context, { kind: "skills", sub: "list", json: true });
+    const output = host.out.join("").trim();
+    const json = JSON.parse(output) as { skills: Array<Record<string, unknown>> };
+
+    expect(result.code).toBe(EXIT.ok);
+    expect(output.split(/\r?\n/)).toHaveLength(1);
+    expect(json.skills.some((entry) => entry.name === "custom" && entry.scope === "user")).toBe(true);
+    expect(output).not.toContain("SECRET-BODY-SENTINEL");
+    expect(output).not.toContain("loadContent");
+  });
+
+  test("validate is lenient by default and strict mode promotes warnings", async () => {
+    const content = "---\nname: custom\ndescription: valid\nunknown-field: diagnostic\n---\nbody\n";
+    const looseHost = createFakeHost();
+    looseHost.files.set("/work/project/custom/SKILL.md", content);
+    const looseContext = new CommandContext({ host: looseHost, version: looseHost.version, nonInteractive: true });
+    expect((await skillsCommand(looseContext, {
+      kind: "skills",
+      sub: "validate",
+      path: "custom/SKILL.md",
+      json: true,
+      strict: false,
+    })).code).toBe(EXIT.ok);
+    expect((JSON.parse(looseHost.out.join("").trim()) as { ok: boolean }).ok).toBe(true);
+
+    const strictHost = createFakeHost();
+    strictHost.files.set("/work/project/custom/SKILL.md", content);
+    const strictContext = new CommandContext({ host: strictHost, version: strictHost.version, nonInteractive: true });
+    expect((await skillsCommand(strictContext, {
+      kind: "skills",
+      sub: "validate",
+      path: "custom/SKILL.md",
+      json: true,
+      strict: true,
+    })).code).toBe(EXIT.failure);
+    expect((JSON.parse(strictHost.out.join("").trim()) as { ok: boolean }).ok).toBe(false);
   });
 });
 
@@ -472,6 +544,14 @@ describe("paths", () => {
     expect(paths.config).toBe("/tmp/cbc/config");
     expect(paths.data).toBe("/tmp/cbc/data");
     expect(paths.cache).toBe("/tmp/cbc/cache");
+  });
+
+  test("CAPYBARA_CONFIG is a file override and its directory owns native Skills", () => {
+    const host = createFakeHost({ env: { CAPYBARA_CONFIG: "/etc/capybara/custom.toml" } });
+    const paths = resolvePaths(host);
+    expect(paths.config).toBe("/etc/capybara");
+    expect(paths.configFile).toBe("/etc/capybara/custom.toml");
+    expect(paths.skills).toBe("/etc/capybara/skills");
   });
 
   test("Windows uses APPDATA and LOCALAPPDATA", () => {
@@ -4543,6 +4623,28 @@ describe("slash router", () => {
   test("/model without an argument keeps the fallback list; with one it applies", () => {
     expect(parseSlash("/model")).toMatchObject({ kind: "overlay", overlay: "model_picker" });
     expect(parseSlash("/model gpt-5.6")).toMatchObject({ kind: "set_model", model: "gpt-5.6" });
+  });
+  test("/skills preserves subcommands and dynamic Skill names", () => {
+    expect(parseSlash("/skills doctor")).toEqual({
+      kind: "overlay",
+      overlay: "skills",
+      argument: "doctor",
+    });
+    const dynamic = [{ value: "release-check", detail: "project" }];
+    expect(slashArgumentValues(
+      { command: "/skills", index: 0, argument: undefined, query: "" },
+      { skills: dynamic },
+    )?.map((candidate) => candidate.value)).toEqual([
+      "list",
+      "show",
+      "reload",
+      "doctor",
+      "release-check",
+    ]);
+    expect(slashArgumentValues(
+      { command: "/skills", index: 1, argument: undefined, query: "", preceding: ["show"] },
+      { skills: dynamic },
+    )).toEqual(dynamic);
   });
   test("/effort selects an effort", () => {
     expect(parseSlash("/effort high")).toMatchObject({ kind: "set_reasoning", value: "high" });

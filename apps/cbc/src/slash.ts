@@ -200,23 +200,41 @@ export function slashArgumentValues(input: {
   readonly sessions?: readonly CompletionCandidate[];
   /** The active model lets effort completion hide unsupported values. */
   readonly model?: string;
+  /** Current stage-1 Skill catalog for /skills completion. */
+  readonly skills?: readonly CompletionCandidate[];
 } = {}): readonly CompletionCandidate[] | undefined {
-  if (input.index > 0) return undefined;
-
   switch (input.command) {
+    case "/skills": {
+      const subcommands: readonly CompletionCandidate[] = [
+        { value: "list", detail: "catalog" },
+        { value: "show", detail: "details" },
+        { value: "reload", detail: "rescan" },
+        { value: "doctor", detail: "diagnostics" },
+      ];
+      if (input.index === 0) return [...subcommands, ...(options.skills ?? [])];
+      if (input.index === 1 && input.preceding?.[0]?.toLowerCase() === "show") {
+        return options.skills ?? [];
+      }
+      return undefined;
+    }
     case "/model":
+      if (input.index > 0) return undefined;
       return MODEL_REGISTRY.map((model) => ({
         value: model.id,
       }));
     case "/effort":
+      if (input.index > 0) return undefined;
       return REASONING_EFFORTS.map((value) => ({ value, detail: "effort" }));
     case "/permissions":
+      if (input.index > 0) return undefined;
       return PERMISSION_PRESETS.map((value) =>
         value === "auto" ? { value, detail: "recommended" } : value === "yolo" ? { value, detail: "dangerous" } : { value },
       );
     case "/mode":
+      if (input.index > 0) return undefined;
       return ["build", "plan"].map((value) => ({ value, detail: value === "plan" ? "read-only" : "implementation" }));
     case "/resume":
+      if (input.index > 0) return undefined;
       // Unlike model/effort values, sessions are not part of the static command
       // table. Keep the resolver pure and let the interactive host provide the
       // current workspace's entries.

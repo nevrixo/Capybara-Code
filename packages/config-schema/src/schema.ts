@@ -422,6 +422,29 @@ export interface SdkConfig {
   reconnect: boolean;
   reconnectMaxAttempts: number;
 }
+
+/** Deterministic, bounded Agent Skills discovery. */
+export interface SkillsConfig {
+  enabled: boolean;
+  /** Additional user-selected roots. Relative paths are workspace-relative. */
+  paths: string[];
+  compatOpencode: boolean;
+  compatAgents: boolean;
+  compatClaude: boolean;
+  /** Keep migration aliases such as ~/.config/capybara-code/skills enabled. */
+  legacyPaths: boolean;
+  /** Reserved for the opt-in watcher; manual reload is always available. */
+  autoReload: boolean;
+  maxRoots: number;
+  maxCandidates: number;
+  maxDepth: number;
+  scanTimeoutMs: number;
+  builtin: {
+    enabled: boolean;
+    disabled: string[];
+  };
+}
+
 export interface CbcConfig {
   ui: UiConfig;
   model: ModelConfig;
@@ -445,6 +468,7 @@ export interface CbcConfig {
   plugins: PluginsConfig;
   appServer: AppServerConfig;
   sdk: SdkConfig;
+  skills: SkillsConfig;
   mcpServers: Record<string, McpServerConfig>;
   lspServers: Record<string, LspServerConfig>;
   keymap: Record<string, string>;
@@ -739,6 +763,20 @@ export function defaultConfig(): CbcConfig {
       events: { maxBatchEvents: 100, maxBatchBytes: 1_048_576, ackTimeoutSeconds: 30, slowClientPolicy: "replay" },
     },
     sdk: { reconnect: true, reconnectMaxAttempts: 8 },
+    skills: {
+      enabled: true,
+      paths: [],
+      compatOpencode: true,
+      compatAgents: true,
+      compatClaude: true,
+      legacyPaths: true,
+      autoReload: false,
+      maxRoots: 64,
+      maxCandidates: 512,
+      maxDepth: 8,
+      scanTimeoutMs: 1_500,
+      builtin: { enabled: true, disabled: [] },
+    },
 
     // Executable integrations live in the generated global TOML. Keeping these
     // maps empty makes that file the only source of service definitions.
@@ -1299,6 +1337,9 @@ const CONSTANT_FALSE_CONFIG_PATHS = new Set([
   "appServer.allowLoopbackWebsocket",
 ]);
 function validateDynamicValue(path: string, value: unknown): string | undefined {
+  if (path === "skills.paths" || path === "skills.builtin.disabled") {
+    return isStringArray(value) ? undefined : "expected an array of paths or Skill names";
+  }
   if (path === "model.context.minFreeTokens" || path === "model.context.targetFreeTokens") {
     return value === "auto" || (typeof value === "number" && Number.isFinite(value) && value >= 0)
       ? undefined
@@ -1439,6 +1480,10 @@ const INTEGER_CONSTRAINTS: Readonly<Record<string, IntegerConstraint>> = {
   "sessions.artifactRetentionDays": { minimum: 0 },
   "sessions.autoSnapshotEvents": { minimum: 1 },
   "updates.intervalHours": { minimum: 1 },
+  "skills.maxRoots": { minimum: 1, maximum: 256 },
+  "skills.maxCandidates": { minimum: 1, maximum: 10_000 },
+  "skills.maxDepth": { minimum: 0, maximum: 32 },
+  "skills.scanTimeoutMs": { minimum: 1, maximum: 60_000 },
   "provider.openai.native.maxHostedAgents": { minimum: 0 },
   "provider.openai.native.maxProgramToolCalls": { minimum: 0 },
   "provider.openai.native.maxProgramParallelCalls": { minimum: 1 },

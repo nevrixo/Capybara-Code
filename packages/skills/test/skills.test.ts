@@ -37,8 +37,9 @@ import {
 const VALID_SKILL = `---
 name: release-check
 description: Runs a focused pre-release verification workflow.
-version: 1.0.0
-compatibility: ">=0.1.0"
+x-capybara-version: 1.0.0
+compatibility: capybara
+x-capybara-requires: ">=0.1.0"
 tools:
   - fs.read
   - fs.search
@@ -78,7 +79,8 @@ describe("frontmatter (§16.3)", () => {
   test("parses scalars, block lists, and the body", () => {
     const parsed = parseFrontmatter(VALID_SKILL);
     expect(parsed.raw?.fields.name).toBe("release-check");
-    expect(parsed.raw?.fields.compatibility).toBe(">=0.1.0");
+    expect(parsed.raw?.fields.compatibility).toBe("capybara");
+    expect(parsed.raw?.fields["x-capybara-requires"]).toBe(">=0.1.0");
     expect(parsed.raw?.fields.tools).toEqual(["fs.read", "fs.search", "process.run"]);
     expect(parsed.raw?.body).toContain("# Release check");
     expect(parsed.issues).toHaveLength(0);
@@ -177,13 +179,14 @@ describe("skill manifest (§16.3)", () => {
     expect(result.issues.some((i) => i.field === "body")).toBe(true);
   });
 
-  test("an invalid name shape is rejected", () => {
+  test("an invalid name shape is diagnosed but remains loadable in lenient mode", () => {
     for (const name of ["Has Caps", "has space", "-leading", "under_score"]) {
       const result = parseSkill(`---\nname: ${name}\ndescription: d\n---\nbody\n`, {
         path: "a/SKILL.md",
         source: "user",
       });
-      expect(result.definition).toBeUndefined();
+      expect(result.definition).toBeDefined();
+      expect(result.issues.some((issue) => issue.field === "name" && issue.severity === "warning")).toBe(true);
     }
   });
 
@@ -359,7 +362,7 @@ describe("registry precedence (§16.2)", () => {
     const r = registry({ productVersion: "0.0.5" });
     const result = r.register([file(VALID_SKILL)]);
     expect(result.registered).toHaveLength(0);
-    expect(result.issues.some((i) => i.field === "compatibility")).toBe(true);
+    expect(result.issues.some((i) => i.field === "x-capybara-requires")).toBe(true);
   });
 });
 
@@ -566,7 +569,9 @@ describe("invocation and search (§16.5, SKILL-006)", () => {
     expect(Object.keys(catalogEntry(definition)).sort()).toEqual([
       "description",
       "name",
+      "origin",
       "risk",
+      "scope",
       "source",
       "userInvocable",
       "version",
@@ -675,5 +680,175 @@ describe("untrusted discovery body stripping (§13.6, AC-28, P0-15)", () => {
 
   test("an unclosed frontmatter block yields nothing", () => {
     expect(frontmatterOnly("---\nname: x\ndescription: d\n")).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Skills Discovery v2 parser and atomic registry contracts
+// ---------------------------------------------------------------------------
+
+describe("Agent Skills frontmatter compatibility v2", () => {
+  test("loads standard license, free-form compatibility, metadata, block scalars, and scalar allowed-tools", () => {
+    const result = parseSkill(`---
+name: git-release
+description: >
+  Create consistent releases: tags,
+  changelogs, and notes.
+license: MIT
+compatibility: opencode
+metadata:
+  audience: maintainers
+  workflow: github
+allowed-tools: Bash(git:*) Read
+---
+# Release
+Follow the release checklist.
+`, { path: "/skills/git-release/SKILL.md", source: "user" });
+
+    expect(result.definition?.manifest.description).toBe("Create consistent releases: tags, changelogs, and notes.");
+    expect(result.definition?.manifest.license).toBe("MIT");
+    expect(result.definition?.manifest.compatibility).toBe("opencode");
+    expect(result.definition?.manifest.metadata).toEqual({ audience: "maintainers", workflow: "github" });
+    expect(result.definition?.manifest.requestedTools).toEqual(["Bash(git:*)", "Read"]);
+    expect(result.issues.filter((issue) => issue.severity !== "warning")).toHaveLength(0);
+  });
+
+  test("accepts a quoted colon and inline metadata map", () => {
+    const result = parseSkill(`---
+name: release
+description: "Release: safely"
+metadata: { audience: maintainers, workflow: "git: github" }
+---
+body
+`, { path: "/skills/release/SKILL.md", source: "user" });
+    expect(result.definition?.manifest.description).toBe("Release: safely");
+    expect(result.definition?.manifest.metadata).toEqual({ audience: "maintainers", workflow: "git: github" });
+  });
+
+  test("rejects YAML tags, aliases, and merge keys", () => {
+    const tagged = parseSkill("---\nname: tagged\ndescription: !exec nope\n---\nbody\n", {
+      path: "/skills/tagged/SKILL.md",
+      source: "user",
+    });
+    expect(tagged.definition).toBeUndefined();
+    expect(tagged.issues.some((issue) => issue.field === "frontmatter")).toBe(true);
+
+    const merged = parseSkill("---\nname: merged\ndescription: d\nmetadata:\n  <<: *defaults\n---\nbody\n", {
+      path: "/skills/merged/SKILL.md",
+      source: "user",
+    });
+    expect(merged.definition).toBeUndefined();
+  });
+
+  test("standard compatibility is informational while x-capybara-requires gates", () => {
+    const informational = registry({ productVersion: "0.0.1" });
+    const accepted = informational.register([file(
+      "---\nname: cross-client\ndescription: d\ncompatibility: opencode\n---\nbody\n",
+      { path: "/skills/cross-client/SKILL.md", source: "user" },
+    )]);
+    expect(accepted.registered).toHaveLength(1);
+
+    const gated = registry({ productVersion: "0.1.0" });
+    const rejected = gated.register([file(
+      "---\nname: future\ndescription: d\nx-capybara-requires: \">=0.2.0 <1\"\n---\nbody\n",
+      { path: "/skills/future/SKILL.md", source: "user" },
+    )]);
+    expect(rejected.registered).toHaveLength(0);
+    expect(rejected.issues.some((issue) => issue.field === "x-capybara-requires")).toBe(true);
+  });
+});
+
+describe("atomic Skill registry replacement v2", () => {
+  test("canonical aliases deduplicate and precedence remains deterministic", () => {
+    const r = registry();
+    const content = "---\nname: duplicate\ndescription: d\n---\nbody\n";
+    const result = r.replace(r.prepare([
+      file(content, {
+        path: "/home/me/.claude/skills/duplicate/SKILL.md",
+        canonicalPath: "/home/me/.agents/skills/duplicate/SKILL.md",
+        source: "user",
+        scope: "user",
+        origin: "claude",
+        precedence: [1, Number.MAX_SAFE_INTEGER, 4, 0, "/home/me/.agents/skills/duplicate/SKILL.md"],
+      }),
+      file(content, {
+        path: "/home/me/.agents/skills/duplicate/SKILL.md",
+        canonicalPath: "/home/me/.agents/skills/duplicate/SKILL.md",
+        source: "user",
+        scope: "user",
+        origin: "agents",
+        precedence: [1, Number.MAX_SAFE_INTEGER, 3, 0, "/home/me/.agents/skills/duplicate/SKILL.md"],
+      }),
+    ]));
+    expect(result.registered).toHaveLength(1);
+    expect(result.registered[0]?.origin).toBe("agents");
+    expect(result.deduplicated).toHaveLength(1);
+    expect(result.shadowed).toHaveLength(0);
+  });
+
+  test("replace adds and removes Skills and invalidates changed loaded bodies", async () => {
+    const r = registry();
+    const original = "---\nname: live\ndescription: original\n---\nbody one\n";
+    const changed = "---\nname: live\ndescription: changed\n---\nbody two\n";
+    const originalFile = file(frontmatterOnly(original), {
+      path: "/skills/live/SKILL.md",
+      source: "user",
+      metadataOnly: true,
+      loadContent: async () => original,
+    });
+    r.replace(r.prepare([originalFile]));
+    expect((await r.loadAsync("live")).ok).toBe(true);
+    expect(r.isLoaded("live")).toBe(true);
+
+    const unchanged = r.replace(r.prepare([originalFile]));
+    expect(unchanged.invalidated).toHaveLength(0);
+    expect(r.isLoaded("live")).toBe(true);
+
+    const changedResult = r.replace(r.prepare([file(frontmatterOnly(changed), {
+      ...originalFile,
+      content: frontmatterOnly(changed),
+      loadContent: async () => changed,
+    })]));
+    expect(changedResult.invalidated).toEqual(["live"]);
+    expect(r.isLoaded("live")).toBe(false);
+
+    const removed = r.replace(r.prepare([]));
+    expect(removed.registered).toHaveLength(0);
+    expect(r.get("live")).toBeUndefined();
+  });
+
+  test("an in-flight lazy load cannot write into a newer revision", async () => {
+    const r = registry();
+    const original = "---\nname: slow\ndescription: old\n---\nold body\n";
+    let finish: ((value: string) => void) | undefined;
+    const deferred = new Promise<string>((resolve) => { finish = resolve; });
+    r.replace(r.prepare([file(frontmatterOnly(original), {
+      path: "/skills/slow/SKILL.md",
+      source: "user",
+      metadataOnly: true,
+      loadContent: async () => await deferred,
+    })]));
+    const pending = r.loadAsync("slow");
+    r.replace(r.prepare([file("---\nname: slow\ndescription: new\n---\nnew body\n", {
+      path: "/skills/slow/SKILL.md",
+      source: "user",
+    })]));
+    finish?.(original);
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("catalog changed");
+    expect(r.get("slow")?.manifest.description).toBe("new");
+  });
+
+  test("the prompt catalog is byte-stable for shuffled input", () => {
+    const contents = [
+      file("---\nname: alpha\ndescription: a\n---\na\n", { path: "/z/alpha/SKILL.md", source: "user" }),
+      file("---\nname: beta\ndescription: b\n---\nb\n", { path: "/a/beta/SKILL.md", source: "user" }),
+    ];
+    const first = registry();
+    first.replace(first.prepare(contents));
+    const second = registry();
+    second.replace(second.prepare([...contents].reverse()));
+    expect(JSON.stringify(first.promptCatalog())).toBe(JSON.stringify(second.promptCatalog()));
   });
 });

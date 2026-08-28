@@ -7,6 +7,7 @@ import type { RiskClass, ToolDefinition } from "@cbc/tool-registry";
 import {
   booleanField,
   listField,
+  mapField,
   parseFrontmatter,
   scalarField,
   type FrontmatterIssue,
@@ -20,20 +21,35 @@ import {
  * than being resolved away.
  */
 export const SKILL_SEARCH_ROOTS: readonly { source: SkillSource; root: string }[] = [
-  { source: "agents-dir", root: ".agents/skills" },
   { source: "project", root: ".capybara/skills" },
-  { source: "user", root: "~/.config/capybara-code/skills" },
+  { source: "project", root: ".opencode/skills" },
+  { source: "agents-dir", root: ".agents/skills" },
+  { source: "project", root: ".claude/skills" },
+  { source: "user", root: "<resolved config>/skills" },
+  { source: "user", root: "~/.config/opencode/skills" },
+  { source: "user", root: "~/.agents/skills" },
+  { source: "user", root: "~/.claude/skills" },
   { source: "builtin", root: "<bundled>" },
 ];
 
 export type SkillSource = "agents-dir" | "project" | "user" | "builtin";
+export type SkillScope = "project" | "user" | "builtin";
+export type SkillOrigin =
+  | "explicit"
+  | "capybara"
+  | "opencode"
+  | "agents"
+  | "claude"
+  | "legacy"
+  | "bundled";
+export type SkillPrecedence = readonly [number, number, number, number, string];
 
 /**
  * Whether a source is workspace-supplied and therefore untrusted content (§16.6).
  * A user-level or bundled Skill was installed deliberately by the operator.
  */
-export function isProjectSource(source: SkillSource): boolean {
-  return source === "agents-dir" || source === "project";
+export function isProjectSource(source: SkillSource, scope?: SkillScope): boolean {
+  return scope === "project" || source === "agents-dir" || source === "project";
 }
 
 /** §16.3 `risk` values. */
@@ -62,9 +78,13 @@ export function riskCeiling(risk: SkillRisk | undefined): RiskClass {
 export interface SkillManifest {
   readonly name: string;
   readonly description: string;
-  readonly version?: string;
-  /** Semver range this Skill claims compatibility with. */
+  readonly license?: string;
+  /** Agent Skills environment note; informational, never a version gate. */
   readonly compatibility?: string;
+  readonly metadata?: Readonly<Record<string, string>>;
+  /** Capybara product-version gate. */
+  readonly requiresCapybara?: string;
+  readonly version?: string;
   /**
    * §16.6: "frontmatter tool list은 권한 부여가 아니라 request declaration".
    * This is an upper bound the host may narrow, never a grant.
@@ -82,10 +102,14 @@ export interface SkillDefinition {
   /** Full `SKILL.md` body. Loaded at §16.4 stage 2, never at startup. */
   readonly body: string;
   readonly source: SkillSource;
+  readonly scope: SkillScope;
+  readonly origin: SkillOrigin;
   /** Path of the `SKILL.md` itself. */
   readonly path: string;
+  readonly canonicalPath: string;
   /** Directory the Skill owns; references may not escape it (SKILL-005). */
   readonly directory: string;
+  readonly precedence?: SkillPrecedence;
 }
 
 /** §16.4 stage 1: the only thing in the startup prompt (SKILL-001). */
@@ -94,6 +118,8 @@ export interface SkillCatalogEntry {
   readonly description: string;
   readonly risk?: SkillRisk;
   readonly source: SkillSource;
+  readonly scope: SkillScope;
+  readonly origin: SkillOrigin;
   readonly version?: string;
   readonly userInvocable: boolean;
 }
@@ -104,6 +130,8 @@ export function catalogEntry(definition: SkillDefinition): SkillCatalogEntry {
     description: definition.manifest.description,
     ...(definition.manifest.risk !== undefined ? { risk: definition.manifest.risk } : {}),
     source: definition.source,
+    scope: definition.scope,
+    origin: definition.origin,
     ...(definition.manifest.version !== undefined
       ? { version: definition.manifest.version }
       : {}),
@@ -120,8 +148,10 @@ export interface SkillParseResult {
 const KNOWN_FIELDS = new Set([
   "name",
   "description",
+  "license",
   "version",
   "compatibility",
+  "metadata",
   "tools",
   "risk",
   "model_profile",
@@ -129,14 +159,24 @@ const KNOWN_FIELDS = new Set([
   "user_invocable",
   "allowed_paths",
   "allowed-tools",
+  "x-capybara-requires",
+  "x-capybara-version",
+  "x-capybara-risk",
+  "x-capybara-model-profile",
+  "x-capybara-user-invocable",
+  "x-capybara-allowed-paths",
 ]);
 
 /** §16.3 requires a name that can appear as `$name` in the composer (§16.5). */
-const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export interface ParseSkillOptions {
   readonly path: string;
   readonly source: SkillSource;
+  readonly scope?: SkillScope;
+  readonly origin?: SkillOrigin;
+  readonly canonicalPath?: string;
+  readonly precedence?: SkillPrecedence;
   readonly directory?: string;
   /**
    * §13.6 / AC-28: an untrusted project Skill is listed from metadata only, so
@@ -158,6 +198,7 @@ export function parseSkill(raw: string, options: ParseSkillOptions): SkillParseR
   const parsed = parseFrontmatter(raw);
   if (parsed.raw === undefined) return { issues: parsed.issues };
 
+  const unsafeFrontmatter = parsed.issues.some((issue) => issue.severity !== "warning");
   const issues: FrontmatterIssue[] = [...parsed.issues];
   const front = parsed.raw;
 
@@ -167,56 +208,106 @@ export function parseSkill(raw: string, options: ParseSkillOptions): SkillParseR
         field: key,
         message: `unknown frontmatter field '${key}'`,
         ...(front.lines[key] !== undefined ? { line: front.lines[key] } : {}),
+        severity: "warning",
       });
     }
   }
 
   const name = scalarField(front, "name", issues)?.trim() ?? "";
+  const directory = options.directory ?? directoryOf(options.path);
   if (name.length === 0) {
     issues.push({ field: "name", message: "name is required (§16.3)" });
-  } else if (!NAME_PATTERN.test(name)) {
+  } else if (name.length > 64 || !NAME_PATTERN.test(name)) {
     issues.push({
       field: "name",
-      message: `'${name}' must be lowercase letters, digits, and hyphens, starting alphanumeric`,
+      message: `'${name}' should be at most 64 lowercase alphanumeric characters and single hyphens`,
+      severity: "warning",
+    });
+  }
+  const directoryName = directory.replace(/\\/g, "/").replace(/\/+$/, "").split("/").at(-1);
+  if (name.length > 0 && directoryName !== undefined && directoryName !== name) {
+    issues.push({
+      field: "name",
+      message: `Skill name '${name}' does not match its directory '${directoryName}'`,
+      severity: "warning",
     });
   }
 
   const description = scalarField(front, "description", issues)?.trim() ?? "";
   if (description.length === 0) {
     issues.push({ field: "description", message: "description is required (§16.3)" });
-  } else if (description.length > 500) {
-    // Stage 1 metadata sits in the cached prefix; a paragraph per Skill defeats it.
+  } else if (description.length > 4_096) {
     issues.push({
       field: "description",
-      message: `the description is ${description.length} characters; keep it under 500 so the catalog stays cheap (§16.4)`,
+      message: `the description is ${description.length} characters, over the 4096-character safety limit`,
+      severity: "error",
+    });
+  } else if (description.length > 1_024) {
+    issues.push({
+      field: "description",
+      message: `the description is ${description.length} characters; Agent Skills recommends at most 1024`,
+      severity: "warning",
     });
   }
 
-  const riskRaw = scalarField(front, "risk", issues)?.trim();
+  const license = scalarField(front, "license", issues)?.trim();
+  const compatibility = scalarField(front, "compatibility", issues)?.trim();
+  if (compatibility !== undefined && compatibility.length > 500) {
+    issues.push({
+      field: "compatibility",
+      message: `compatibility is ${compatibility.length} characters; Agent Skills recommends at most 500`,
+      severity: "warning",
+    });
+  }
+  if (compatibility !== undefined && isValidRange(compatibility)) {
+    issues.push({
+      field: "compatibility",
+      message: "compatibility is now informational; use 'x-capybara-requires' for a Capybara version gate",
+      severity: "warning",
+    });
+  }
+  const metadata = mapField(front, "metadata", issues);
+
+  const requiresCapybara = scalarField(front, "x-capybara-requires", issues)?.trim();
+  if (requiresCapybara !== undefined && !isValidRange(requiresCapybara)) {
+    issues.push({
+      field: "x-capybara-requires",
+      message: `'${requiresCapybara}' is not a recognized version range`,
+      severity: "error",
+    });
+  }
+
+  const riskRaw = aliasedScalar(front, "x-capybara-risk", "risk", issues)?.trim();
   if (riskRaw !== undefined && !SKILL_RISKS.includes(riskRaw as SkillRisk)) {
     issues.push({
-      field: "risk",
+      field: "x-capybara-risk",
       message: `'${riskRaw}' is not one of ${SKILL_RISKS.join(", ")}`,
+      severity: "warning",
     });
   }
   const risk = SKILL_RISKS.includes(riskRaw as SkillRisk) ? (riskRaw as SkillRisk) : undefined;
 
-  const compatibility = scalarField(front, "compatibility", issues)?.trim();
-  if (compatibility !== undefined && !isValidRange(compatibility)) {
-    issues.push({
-      field: "compatibility",
-      message: `'${compatibility}' is not a recognized version range`,
-    });
-  }
-
-  // `allowed-tools` is the Agent Skills spelling; `tools` is §16.3's. Accept both
-  // so a standard-compliant Skill from the wider ecosystem loads unchanged (P8).
-  const requestedTools = listField(front, "tools") ?? listField(front, "allowed-tools");
-  const userInvocable = booleanField(front, "user_invocable", issues) ?? true;
-  const version = scalarField(front, "version", issues)?.trim();
-  const modelProfile = scalarField(front, "model_profile", issues)?.trim();
+  const requestedTools = requestedToolField(front, issues);
+  const userInvocable = aliasedBoolean(
+    front,
+    "x-capybara-user-invocable",
+    "user_invocable",
+    issues,
+  ) ?? true;
+  const version = aliasedScalar(front, "x-capybara-version", "version", issues)?.trim();
+  const modelProfile = aliasedScalar(
+    front,
+    "x-capybara-model-profile",
+    "model_profile",
+    issues,
+  )?.trim();
   const tags = listField(front, "tags");
-  const allowedPaths = listField(front, "allowed_paths");
+  const allowedPaths = aliasedList(
+    front,
+    "x-capybara-allowed-paths",
+    "allowed_paths",
+    issues,
+  );
 
   const body = front.body.trim();
   if (body.length === 0 && options.allowEmptyBody !== true) {
@@ -224,15 +315,21 @@ export function parseSkill(raw: string, options: ParseSkillOptions): SkillParseR
   }
 
   const fatal = issues.filter((issue) =>
-    ["name", "description", "body", "frontmatter", "file"].includes(issue.field),
+    issue.severity !== "warning" &&
+    ["name", "description", "body", "frontmatter", "file", "x-capybara-requires"].includes(issue.field),
   );
-  if (fatal.length > 0) return { issues };
+  if (unsafeFrontmatter || fatal.length > 0) return { issues };
 
   const manifest: SkillManifest = {
     name,
     description,
-    ...(version !== undefined && version.length > 0 ? { version } : {}),
+    ...(license !== undefined && license.length > 0 ? { license } : {}),
     ...(compatibility !== undefined && compatibility.length > 0 ? { compatibility } : {}),
+    ...(metadata !== undefined ? { metadata } : {}),
+    ...(requiresCapybara !== undefined && requiresCapybara.length > 0
+      ? { requiresCapybara }
+      : {}),
+    ...(version !== undefined && version.length > 0 ? { version } : {}),
     ...(requestedTools !== undefined ? { requestedTools } : {}),
     ...(risk !== undefined ? { risk } : {}),
     ...(modelProfile !== undefined && modelProfile.length > 0 ? { modelProfile } : {}),
@@ -246,11 +343,87 @@ export function parseSkill(raw: string, options: ParseSkillOptions): SkillParseR
       manifest,
       body,
       source: options.source,
+      scope: options.scope ?? scopeForSource(options.source),
+      origin: options.origin ?? originForSource(options.source),
       path: options.path,
-      directory: options.directory ?? directoryOf(options.path),
+      canonicalPath: options.canonicalPath ?? options.path,
+      directory,
+      ...(options.precedence !== undefined ? { precedence: options.precedence } : {}),
     },
     issues,
   };
+}
+
+function requestedToolField(
+  front: NonNullable<ReturnType<typeof parseFrontmatter>["raw"]>,
+  issues: FrontmatterIssue[],
+): string[] | undefined {
+  const standard = front.fields["allowed-tools"];
+  if (front.fields.tools !== undefined) deprecatedField(front, "tools", "allowed-tools", issues);
+  const selected = standard ?? front.fields.tools;
+  if (selected === undefined) return undefined;
+  if (typeof selected === "string") {
+    return selected.split(/\s+/).map((value) => value.trim()).filter((value) => value.length > 0);
+  }
+  if (Array.isArray(selected)) return [...selected];
+  issues.push({ field: "allowed-tools", message: "allowed-tools must be a string or list", severity: "error" });
+  return undefined;
+}
+
+function aliasedScalar(
+  front: NonNullable<ReturnType<typeof parseFrontmatter>["raw"]>,
+  current: string,
+  legacy: string,
+  issues: FrontmatterIssue[],
+): string | undefined {
+  if (front.fields[legacy] !== undefined) deprecatedField(front, legacy, current, issues);
+  return scalarField(front, front.fields[current] !== undefined ? current : legacy, issues);
+}
+
+function aliasedBoolean(
+  front: NonNullable<ReturnType<typeof parseFrontmatter>["raw"]>,
+  current: string,
+  legacy: string,
+  issues: FrontmatterIssue[],
+): boolean | undefined {
+  if (front.fields[legacy] !== undefined) deprecatedField(front, legacy, current, issues);
+  return booleanField(front, front.fields[current] !== undefined ? current : legacy, issues);
+}
+
+function aliasedList(
+  front: NonNullable<ReturnType<typeof parseFrontmatter>["raw"]>,
+  current: string,
+  legacy: string,
+  issues: FrontmatterIssue[],
+): string[] | undefined {
+  if (front.fields[legacy] !== undefined) deprecatedField(front, legacy, current, issues);
+  return listField(front, front.fields[current] !== undefined ? current : legacy);
+}
+
+function deprecatedField(
+  front: NonNullable<ReturnType<typeof parseFrontmatter>["raw"]>,
+  legacy: string,
+  current: string,
+  issues: FrontmatterIssue[],
+): void {
+  issues.push({
+    field: legacy,
+    message: `'${legacy}' is deprecated; use '${current}'`,
+    ...(front.lines[legacy] !== undefined ? { line: front.lines[legacy] } : {}),
+    severity: "warning",
+  });
+}
+
+function scopeForSource(source: SkillSource): SkillScope {
+  if (source === "builtin") return "builtin";
+  if (source === "user") return "user";
+  return "project";
+}
+
+function originForSource(source: SkillSource): SkillOrigin {
+  if (source === "builtin") return "bundled";
+  if (source === "agents-dir") return "agents";
+  return "capybara";
 }
 
 /**
@@ -425,9 +598,17 @@ function directoryOf(path: string): string {
   return slash === -1 ? "" : normalized.slice(0, slash);
 }
 
-/** Very small semver-range recognizer for §16.3 `compatibility`. */
+/** Restricted semver-range recognizer for the x-capybara-requires extension. */
 function isValidRange(range: string): boolean {
-  return /^(\*|[<>]=?|\^|~)?\s*\d+(\.\d+)?(\.\d+)?(\s*-\s*\d+(\.\d+)?(\.\d+)?)?$/.test(range.trim());
+  const trimmed = range.trim();
+  if (trimmed === "*") return true;
+  return trimmed.split("||").every((group) => {
+    const normalized = group.trim().replace(/,/g, " ");
+    const hyphen = /^(\d+(?:\.\d+){0,2})\s+-\s+(\d+(?:\.\d+){0,2})$/.exec(normalized);
+    if (hyphen !== null) return parseVersion(hyphen[1] ?? "") !== undefined && parseVersion(hyphen[2] ?? "") !== undefined;
+    const tokens = normalized.split(/\s+/).filter((token) => token.length > 0);
+    return tokens.length > 0 && tokens.every((token) => /^(?:[<>]=?|\^|~)?\d+(?:\.\d+){0,2}$/.test(token));
+  });
 }
 
 /**
@@ -437,43 +618,47 @@ function isValidRange(range: string): boolean {
  */
 export function satisfiesCompatibility(version: string, range: string | undefined): boolean {
   if (range === undefined || range.trim() === "*") return true;
-  const trimmed = range.trim();
   const target = parseVersion(version);
   if (target === undefined) return false;
-
-  const match = /^([<>]=?|\^|~)?\s*(.+)$/.exec(trimmed);
-  if (match === null) return false;
-  const operator = match[1] ?? "=";
-  const bound = parseVersion(match[2] ?? "");
-  if (bound === undefined) return false;
-
-  const cmp = compareVersions(target, bound);
-  switch (operator) {
-    case ">=":
-      return cmp >= 0;
-    case ">":
-      return cmp > 0;
-    case "<=":
-      return cmp <= 0;
-    case "<":
-      return cmp < 0;
-    case "^":
-      // Same major, at or above the bound.
-      return target[0] === bound[0] && cmp >= 0;
-    case "~":
-      // Same major and minor, at or above the bound.
-      return target[0] === bound[0] && target[1] === bound[1] && cmp >= 0;
-    default:
-      return cmp === 0;
-  }
+  return range.split("||").some((group) => satisfiesGroup(target, group.trim()));
 }
 
 type Version = [number, number, number];
 
 function parseVersion(raw: string): Version | undefined {
-  const match = /^(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(raw.trim());
+  const match = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-+].*)?$/.exec(raw.trim());
   if (match === null) return undefined;
   return [Number(match[1] ?? 0), Number(match[2] ?? 0), Number(match[3] ?? 0)];
+}
+
+function satisfiesGroup(target: Version, raw: string): boolean {
+  const normalized = raw.replace(/,/g, " ");
+  const hyphen = /^(\d+(?:\.\d+){0,2})\s+-\s+(\d+(?:\.\d+){0,2})$/.exec(normalized);
+  if (hyphen !== null) {
+    const lower = parseVersion(hyphen[1] ?? "");
+    const upper = parseVersion(hyphen[2] ?? "");
+    return lower !== undefined && upper !== undefined && compareVersions(target, lower) >= 0 && compareVersions(target, upper) <= 0;
+  }
+  const tokens = normalized.split(/\s+/).filter((token) => token.length > 0);
+  return tokens.length > 0 && tokens.every((token) => satisfiesComparator(target, token));
+}
+
+function satisfiesComparator(target: Version, token: string): boolean {
+  const match = /^([<>]=?|\^|~)?(\d+(?:\.\d+){0,2})$/.exec(token);
+  if (match === null) return false;
+  const operator = match[1] ?? "=";
+  const bound = parseVersion(match[2] ?? "");
+  if (bound === undefined) return false;
+  const cmp = compareVersions(target, bound);
+  switch (operator) {
+    case ">=": return cmp >= 0;
+    case ">": return cmp > 0;
+    case "<=": return cmp <= 0;
+    case "<": return cmp < 0;
+    case "^": return target[0] === bound[0] && cmp >= 0;
+    case "~": return target[0] === bound[0] && target[1] === bound[1] && cmp >= 0;
+    default: return cmp === 0;
+  }
 }
 
 function compareVersions(a: Version, b: Version): number {

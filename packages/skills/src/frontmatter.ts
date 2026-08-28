@@ -1,17 +1,15 @@
 /**
- * `SKILL.md` frontmatter — PRD §16.3, §16.6, §T8.
+ * Restricted YAML frontmatter for Agent Skills.
  *
- * §16.6 treats a project Skill as untrusted content, and §T8 lists a malicious
- * Skill package as a named threat. So this is a deliberately small parser for the
- * flat scalar-and-list subset §16.3 documents, not a general YAML reader: anchors,
- * merge keys, nested maps, and multi-document streams are all constructs the
- * format has no use for and every one of them is more surface to get wrong.
- *
- * Anything outside the subset is reported as an issue rather than guessed at.
+ * The parser intentionally implements only the data shapes the Agent Skills
+ * format needs: scalars, scalar lists, one string-to-string metadata map, and
+ * literal/folded block scalars. YAML tags, anchors, aliases, merge keys, and
+ * nested containers are rejected so discovery never becomes an object-construction
+ * or expansion surface.
  */
 
-/** Field values §16.3 allows: a scalar or a list of scalars. */
-export type FrontmatterValue = string | string[];
+export type FrontmatterMap = Readonly<Record<string, string>>;
+export type FrontmatterValue = string | string[] | FrontmatterMap;
 
 export interface RawFrontmatter {
   readonly fields: Record<string, FrontmatterValue>;
@@ -24,6 +22,7 @@ export interface FrontmatterIssue {
   readonly field: string;
   readonly message: string;
   readonly line?: number;
+  readonly severity?: "error" | "warning";
 }
 
 export interface FrontmatterParseResult {
@@ -31,179 +30,183 @@ export interface FrontmatterParseResult {
   readonly issues: FrontmatterIssue[];
 }
 
-/** §16.6: a Skill file that is absurdly large is a denial-of-context problem. */
+/** A complete Skill body is loaded only on explicit skill.load. */
 export const MAX_SKILL_BYTES = 256 * 1024;
-/** Startup discovery reads at most this many bytes per on-disk Skill. */
+/** Startup discovery reads only this frontmatter-sized prefix. */
 export const MAX_SKILL_CATALOG_BYTES = 32 * 1024;
 
-/**
- * Split a `SKILL.md` into frontmatter fields and body.
- *
- * Returns issues instead of throwing, because §16.8's `skill validate` has to be
- * able to report *every* problem in a file rather than stopping at the first.
- */
+interface ParsedBlock<T> {
+  readonly value: T;
+  /** Next frontmatter line index to inspect. */
+  readonly next: number;
+}
+
+/** Parse the safe Agent Skills subset without throwing. */
 export function parseFrontmatter(raw: string): FrontmatterParseResult {
   const issues: FrontmatterIssue[] = [];
-
-  if (raw.length > MAX_SKILL_BYTES) {
+  const bytes = new TextEncoder().encode(raw).byteLength;
+  if (bytes > MAX_SKILL_BYTES) {
     return {
-      issues: [
-        {
-          field: "file",
-          message: `the file is ${raw.length} bytes, over the ${MAX_SKILL_BYTES} byte limit`,
-        },
-      ],
+      issues: [{
+        field: "file",
+        message: `the file is ${bytes} bytes, over the ${MAX_SKILL_BYTES} byte limit`,
+        severity: "error",
+      }],
     };
   }
 
   const normalized = raw.replace(/\r\n/g, "\n").replace(/^\uFEFF/, "");
   const lines = normalized.split("\n");
-
   if (lines[0]?.trim() !== "---") {
     return {
-      issues: [
-        {
-          field: "frontmatter",
-          message: "a SKILL.md must open with a '---' frontmatter delimiter",
-          line: 1,
-        },
-      ],
+      issues: [{
+        field: "frontmatter",
+        message: "a SKILL.md must open with a '---' frontmatter delimiter",
+        line: 1,
+        severity: "error",
+      }],
     };
   }
 
   let closing = -1;
-  for (let i = 1; i < lines.length; i += 1) {
-    if (lines[i]?.trim() === "---") {
-      closing = i;
+  for (let index = 1; index < lines.length; index += 1) {
+    if (lines[index]?.trim() === "---") {
+      closing = index;
       break;
     }
   }
   if (closing === -1) {
     return {
-      issues: [
-        { field: "frontmatter", message: "the frontmatter block is never closed with '---'" },
-      ],
+      issues: [{
+        field: "frontmatter",
+        message: "the frontmatter block is never closed with '---'",
+        severity: "error",
+      }],
     };
   }
 
   const fields: Record<string, FrontmatterValue> = {};
   const fieldLines: Record<string, number> = {};
-  let currentListKey: string | undefined;
-
-  for (let i = 1; i < closing; i += 1) {
-    const line = lines[i] ?? "";
-    const lineNumber = i + 1;
-
-    if (line.trim().length === 0) continue;
-    // A comment line.
-    if (/^\s*#/.test(line)) continue;
-
-    // ---- List item under the previous key ----
-    const listMatch = /^(\s*)-\s*(.*)$/.exec(line);
-    if (listMatch !== null) {
-      if (currentListKey === undefined) {
-        issues.push({
-          field: "frontmatter",
-          message: "a list item appears before any field name",
-          line: lineNumber,
-        });
-        continue;
-      }
-      const value = unquote((listMatch[2] ?? "").trim());
-      if (value.length === 0) {
-        issues.push({
-          field: currentListKey,
-          message: "a list item is empty",
-          line: lineNumber,
-        });
-        continue;
-      }
-      const existing = fields[currentListKey];
-      if (Array.isArray(existing)) {
-        existing.push(value);
-      } else {
-        fields[currentListKey] = [value];
-      }
+  let index = 1;
+  while (index < closing) {
+    const line = lines[index] ?? "";
+    const lineNumber = index + 1;
+    if (line.trim().length === 0 || /^\s*#/.test(line)) {
+      index += 1;
+      continue;
+    }
+    if (/^\s/.test(line)) {
+      issues.push({
+        field: "frontmatter",
+        message: "unexpected indentation outside a list, metadata map, or block scalar",
+        line: lineNumber,
+        severity: "error",
+      });
+      index += 1;
       continue;
     }
 
-    // ---- `key: value` ----
     const fieldMatch = /^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/.exec(line);
     if (fieldMatch === null) {
       issues.push({
         field: "frontmatter",
-        message: `line ${lineNumber} is neither a 'key: value' pair nor a list item`,
+        message: `line ${lineNumber} is neither a 'key: value' pair nor supported YAML`,
         line: lineNumber,
+        severity: "error",
       });
+      index += 1;
       continue;
     }
 
     const key = fieldMatch[1] ?? "";
-    const rest = (fieldMatch[2] ?? "").trim();
-
-    if (key in fields) {
-      issues.push({ field: key, message: `duplicate field '${key}'`, line: lineNumber });
+    const rest = stripInlineComment(fieldMatch[2] ?? "").trim();
+    if (Object.prototype.hasOwnProperty.call(fields, key)) {
+      issues.push({
+        field: key,
+        message: `duplicate field '${key}'; the later value wins`,
+        line: lineNumber,
+        severity: "warning",
+      });
     }
     fieldLines[key] = lineNumber;
 
+    if (isUnsafeYamlToken(rest)) {
+      issues.push({
+        field: "frontmatter",
+        message: `YAML tags, anchors, and aliases are not allowed in '${key}'`,
+        line: lineNumber,
+        severity: "error",
+      });
+      index += 1;
+      continue;
+    }
+
+    if (/^[|>][+-]?$/.test(rest)) {
+      const parsed = parseBlockScalar(lines, index + 1, closing, rest.startsWith(">"));
+      fields[key] = parsed.value;
+      index = parsed.next;
+      continue;
+    }
+
     if (rest.length === 0) {
-      // A block list follows on subsequent lines.
-      currentListKey = key;
-      fields[key] = [];
+      if (key === "metadata") {
+        const parsed = parseMetadataMap(lines, index + 1, closing, issues);
+        fields[key] = parsed.value;
+        index = parsed.next;
+      } else {
+        const parsed = parseBlockList(lines, index + 1, closing, key, issues);
+        fields[key] = parsed.value;
+        index = parsed.next;
+      }
       continue;
     }
 
-    currentListKey = undefined;
-
-    // Inline flow list: `tools: [a, b]`.
     if (rest.startsWith("[") && rest.endsWith("]")) {
-      const inner = rest.slice(1, -1).trim();
-      fields[key] =
-        inner.length === 0
-          ? []
-          : inner
-              .split(",")
-              .map((part) => unquote(part.trim()))
-              .filter((part) => part.length > 0);
+      fields[key] = parseFlowList(rest.slice(1, -1), key, lineNumber, issues);
+      index += 1;
       continue;
     }
 
-    fields[key] = unquote(rest);
+    if (rest.startsWith("{") && rest.endsWith("}")) {
+      if (key !== "metadata") {
+        issues.push({
+          field: "frontmatter",
+          message: `nested maps are supported only for 'metadata', not '${key}'`,
+          line: lineNumber,
+          severity: "error",
+        });
+      } else {
+        fields[key] = parseFlowMap(rest.slice(1, -1), lineNumber, issues);
+      }
+      index += 1;
+      continue;
+    }
+
+    fields[key] = parseScalar(rest);
+    index += 1;
   }
 
-  // A key that opened a block list but received no items is an empty list, which
-  // is meaningful (an explicit "no tools requested") and kept as such.
-  const bodyStart = closing + 1;
-  const body = lines.slice(bodyStart).join("\n");
-
-  return { raw: { fields, body, lines: fieldLines }, issues };
+  return {
+    raw: {
+      fields,
+      body: lines.slice(closing + 1).join("\n"),
+      lines: fieldLines,
+    },
+    issues,
+  };
 }
 
-/**
- * Reduce a `SKILL.md` to its frontmatter block, dropping the body.
- *
- * §13.6 / AC-28: untrusted discovery may *list* a project Skill from its
- * metadata, but the body must not be read into the process at all. Keeping only
- * the delimited frontmatter means the manifest parses while the body never
- * exists in memory to leak, render, or be loaded by accident.
- */
+/** Keep only the bounded manifest, never a discovered Skill body. */
 export function frontmatterOnly(raw: string): string {
   const normalized = raw.replace(/\r\n/g, "\n").replace(/^\uFEFF/, "");
   const lines = normalized.split("\n");
-  // No frontmatter delimiter: nothing may be listed, and handing the whole file
-  // through would defeat the point — return an empty document and let the parser
-  // report the file as invalid.
   if (lines[0]?.trim() !== "---") return "";
-  for (let i = 1; i < lines.length; i += 1) {
-    if (lines[i]?.trim() === "---") {
-      return lines.slice(0, i + 1).join("\n");
-    }
+  for (let index = 1; index < lines.length; index += 1) {
+    if (lines[index]?.trim() === "---") return lines.slice(0, index + 1).join("\n");
   }
-  // Never closed: keep nothing; the parser will report the unterminated block.
   return "";
 }
 
-/** Read a field as a scalar, reporting when a list was supplied instead. */
 export function scalarField(
   raw: RawFrontmatter,
   key: string,
@@ -211,22 +214,41 @@ export function scalarField(
 ): string | undefined {
   const value = raw.fields[key];
   if (value === undefined) return undefined;
-  if (Array.isArray(value)) {
+  if (typeof value !== "string") {
     issues.push({
       field: key,
-      message: `'${key}' must be a single value, not a list`,
+      message: `'${key}' must be a single value`,
       ...(raw.lines[key] !== undefined ? { line: raw.lines[key] } : {}),
+      severity: "error",
     });
     return undefined;
   }
   return value;
 }
 
-/** Read a field as a list, accepting a lone scalar as a one-element list. */
+/** Read a list, accepting a scalar as one item for legacy Capybara fields. */
 export function listField(raw: RawFrontmatter, key: string): string[] | undefined {
   const value = raw.fields[key];
   if (value === undefined) return undefined;
-  return Array.isArray(value) ? [...value] : [value];
+  if (typeof value === "string") return [value];
+  return Array.isArray(value) ? [...value] : undefined;
+}
+
+export function mapField(
+  raw: RawFrontmatter,
+  key: string,
+  issues: FrontmatterIssue[],
+): Readonly<Record<string, string>> | undefined {
+  const value = raw.fields[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" && !Array.isArray(value)) return { ...value };
+  issues.push({
+    field: key,
+    message: `'${key}' must be a string-to-string map`,
+    ...(raw.lines[key] !== undefined ? { line: raw.lines[key] } : {}),
+    severity: "error",
+  });
+  return undefined;
 }
 
 export function booleanField(
@@ -243,16 +265,272 @@ export function booleanField(
     field: key,
     message: `'${value}' is not a boolean`,
     ...(raw.lines[key] !== undefined ? { line: raw.lines[key] } : {}),
+    severity: "error",
   });
   return undefined;
 }
 
-function unquote(value: string): string {
+function parseBlockList(
+  lines: readonly string[],
+  start: number,
+  closing: number,
+  key: string,
+  issues: FrontmatterIssue[],
+): ParsedBlock<string[]> {
+  const values: string[] = [];
+  let index = start;
+  while (index < closing) {
+    const line = lines[index] ?? "";
+    if (line.trim().length === 0 || /^\s*#/.test(line)) {
+      index += 1;
+      continue;
+    }
+    if (!/^\s/.test(line)) break;
+    const match = /^\s+-\s*(.*)$/.exec(line);
+    if (match === null) {
+      issues.push({
+        field: "frontmatter",
+        message: `only scalar list items are allowed under '${key}'`,
+        line: index + 1,
+        severity: "error",
+      });
+      index += 1;
+      continue;
+    }
+    const raw = stripInlineComment(match[1] ?? "").trim();
+    if (raw.length === 0 || isUnsafeYamlToken(raw)) {
+      issues.push({
+        field: key,
+        message: raw.length === 0 ? "a list item is empty" : "YAML tags, anchors, and aliases are not allowed",
+        line: index + 1,
+        severity: "error",
+      });
+    } else {
+      values.push(parseScalar(raw));
+    }
+    index += 1;
+  }
+  return { value: values, next: index };
+}
+
+function parseMetadataMap(
+  lines: readonly string[],
+  start: number,
+  closing: number,
+  issues: FrontmatterIssue[],
+): ParsedBlock<Record<string, string>> {
+  const value: Record<string, string> = {};
+  let index = start;
+  while (index < closing) {
+    const line = lines[index] ?? "";
+    if (line.trim().length === 0 || /^\s*#/.test(line)) {
+      index += 1;
+      continue;
+    }
+    if (!/^\s/.test(line)) break;
+    const match = /^\s+([^:]+?)\s*:\s*(.*)$/.exec(line);
+    if (match === null) {
+      issues.push({
+        field: "frontmatter",
+        message: "metadata entries must be indented 'key: value' pairs",
+        line: index + 1,
+        severity: "error",
+      });
+      index += 1;
+      continue;
+    }
+    const key = parseScalar((match[1] ?? "").trim());
+    const raw = stripInlineComment(match[2] ?? "").trim();
+    if (key === "<<" || raw.length === 0 || isUnsafeYamlToken(raw) || /^[{[]/.test(raw)) {
+      issues.push({
+        field: "metadata",
+        message: "metadata keys and values must be plain strings; merge keys and nested values are not allowed",
+        line: index + 1,
+        severity: "error",
+      });
+    } else if (Object.prototype.hasOwnProperty.call(value, key)) {
+      issues.push({
+        field: "metadata",
+        message: `duplicate metadata key '${key}'; the later value wins`,
+        line: index + 1,
+        severity: "warning",
+      });
+      value[key] = parseScalar(raw);
+    } else {
+      value[key] = parseScalar(raw);
+    }
+    index += 1;
+  }
+  return { value, next: index };
+}
+
+function parseBlockScalar(
+  lines: readonly string[],
+  start: number,
+  closing: number,
+  folded: boolean,
+): ParsedBlock<string> {
+  let end = start;
+  while (end < closing) {
+    const line = lines[end] ?? "";
+    if (line.trim().length > 0 && !/^\s/.test(line)) break;
+    end += 1;
+  }
+  const body = lines.slice(start, end);
+  const indents = body
+    .filter((line) => line.trim().length > 0)
+    .map((line) => /^\s*/.exec(line)?.[0].length ?? 0)
+    .filter((indent) => indent > 0);
+  const indent = indents.length > 0 ? Math.min(...indents) : 0;
+  const normalized = body.map((line) => line.trim().length === 0 ? "" : line.slice(indent));
+  return { value: folded ? foldLines(normalized) : normalized.join("\n"), next: end };
+}
+
+function foldLines(lines: readonly string[]): string {
+  const paragraphs: string[] = [];
+  let current: string[] = [];
+  const flush = (): void => {
+    if (current.length === 0) return;
+    paragraphs.push(current.join(" "));
+    current = [];
+  };
+  for (const line of lines) {
+    if (line.length === 0) flush();
+    else current.push(line);
+  }
+  flush();
+  return paragraphs.join("\n");
+}
+
+function parseFlowList(
+  body: string,
+  key: string,
+  line: number,
+  issues: FrontmatterIssue[],
+): string[] {
+  if (body.trim().length === 0) return [];
+  const values: string[] = [];
+  for (const part of splitFlow(body)) {
+    const raw = stripInlineComment(part).trim();
+    if (raw.length === 0 || isUnsafeYamlToken(raw) || /^[{[]/.test(raw)) {
+      issues.push({
+        field: key,
+        message: "flow lists may contain scalar values only",
+        line,
+        severity: "error",
+      });
+      continue;
+    }
+    values.push(parseScalar(raw));
+  }
+  return values;
+}
+
+function parseFlowMap(
+  body: string,
+  line: number,
+  issues: FrontmatterIssue[],
+): Record<string, string> {
+  const value: Record<string, string> = {};
+  if (body.trim().length === 0) return value;
+  for (const part of splitFlow(body)) {
+    const colon = findUnquoted(part, ":");
+    if (colon < 1) {
+      issues.push({
+        field: "metadata",
+        message: "metadata flow entries must be 'key: value' pairs",
+        line,
+        severity: "error",
+      });
+      continue;
+    }
+    const key = parseScalar(part.slice(0, colon).trim());
+    const raw = stripInlineComment(part.slice(colon + 1)).trim();
+    if (key === "<<" || raw.length === 0 || isUnsafeYamlToken(raw) || /^[{[]/.test(raw)) {
+      issues.push({
+        field: "metadata",
+        message: "metadata must contain string keys and string values only",
+        line,
+        severity: "error",
+      });
+      continue;
+    }
+    value[key] = parseScalar(raw);
+  }
+  return value;
+}
+
+function parseScalar(value: string): string {
   if (value.length < 2) return value;
   const first = value[0];
   const last = value[value.length - 1];
-  if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+  if (first === "'" && last === "'") return value.slice(1, -1).replace(/''/g, "'");
+  if (first === '"' && last === '"') {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (typeof parsed === "string") return parsed;
+    } catch {}
     return value.slice(1, -1);
   }
   return value;
+}
+
+function isUnsafeYamlToken(value: string): boolean {
+  return /^[!&*]/.test(value.trim());
+}
+
+function stripInlineComment(value: string): string {
+  let quote: string | undefined;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index] ?? "";
+    if (quote !== undefined) {
+      if (char === "\\" && quote === '"') index += 1;
+      else if (char === quote) quote = undefined;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "#" && (index === 0 || /\s/.test(value[index - 1] ?? ""))) {
+      return value.slice(0, index);
+    }
+  }
+  return value;
+}
+
+function splitFlow(value: string): string[] {
+  const parts: string[] = [];
+  let quote: string | undefined;
+  let start = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index] ?? "";
+    if (quote !== undefined) {
+      if (char === "\\" && quote === '"') index += 1;
+      else if (char === quote) quote = undefined;
+      continue;
+    }
+    if (char === '"' || char === "'") quote = char;
+    else if (char === ",") {
+      parts.push(value.slice(start, index));
+      start = index + 1;
+    }
+  }
+  parts.push(value.slice(start));
+  return parts;
+}
+
+function findUnquoted(value: string, needle: string): number {
+  let quote: string | undefined;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index] ?? "";
+    if (quote !== undefined) {
+      if (char === "\\" && quote === '"') index += 1;
+      else if (char === quote) quote = undefined;
+      continue;
+    }
+    if (char === '"' || char === "'") quote = char;
+    else if (char === needle) return index;
+  }
+  return -1;
 }

@@ -73,6 +73,8 @@ export const EVENT_KINDS = [
   "error.internal",
   "usage.updated",
   "permission.changed",
+  /** Active Agent Skills catalog snapshot changed. */
+  "skills.changed",
   /** Token saving: the user-facing level changed (`/setting`). */
   "token_saving.changed",
   /** Token saving: the effective policy applied to a turn (journaled for replay). */
@@ -403,6 +405,7 @@ const KIND_DEFAULTS: Record<
   "error.internal": { level: "error", visibility: "timeline", durability: "journaled" },
   "usage.updated": { level: "info", visibility: "drawer", durability: "journaled" },
   "permission.changed": { level: "info", visibility: "hidden", durability: "journaled" },
+  "skills.changed": { level: "info", visibility: "hidden", durability: "journaled" },
   // Token saving events carry settings, numbers, and relaxation reasons only —
   // never prompt text, file contents, or tool output — and are journaled even
   // when performance telemetry is off, because a replayed turn must reproduce

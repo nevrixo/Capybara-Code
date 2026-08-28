@@ -101,6 +101,7 @@ import {
 import {
   SkillRegistry,
   builtinSkillFiles,
+  type RegisterResult,
   type SkillDefinition,
   type SkillFile,
 } from "@cbc/skills";
@@ -772,7 +773,7 @@ export class AgentSession {
     });
     this.#contextScopes.set("root", this.#rootContextScope);
     this.skills = new SkillRegistry({
-      productVersion: "0.1.0",
+      productVersion: options.host.version,
       workspaceTrusted: options.trust === "trusted-always" || options.trust === "trusted-once",
     });
     // One read cache serves the root executor and every child executor the
@@ -1357,6 +1358,16 @@ export class AgentSession {
   /** Register the bundled Skills plus any discovered on disk (짠16.2). */
   registerSkills(files: readonly SkillFile[] = []): void {
     this.skills.register([...builtinSkillFiles(), ...files]);
+  }
+
+  /** Atomically replace discovery state and invalidate stale legacy body markers. */
+  replaceSkills(files: readonly SkillFile[]): RegisterResult {
+    const result = this.skills.replace(this.skills.prepare(files));
+    for (const name of [...this.#loadedSkills.keys()]) {
+      const current = this.skills.get(name);
+      if (current === undefined || !this.skills.isLoaded(name)) this.#loadedSkills.delete(name);
+    }
+    return result;
   }
 
   /** Record a Skill body the model explicitly loaded (짠16.4 stage 2). */

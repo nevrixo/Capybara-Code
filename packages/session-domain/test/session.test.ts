@@ -1957,6 +1957,18 @@ describe("hierarchical compaction (§18.9)", () => {
   });
 });
 
+describe("Skills catalog projection", () => {
+  test("tracks the active revision and metadata digest without a body", () => {
+    const digest = "a".repeat(64);
+    const model = reduce(emptyViewModel("s"), build([[
+      "skills.changed",
+      { revision: 4, digest, accepted: 12, invalidated: ["old"] },
+    ]])[0] as CbcEvent);
+    expect(model.skillCatalogRevision).toBe(4);
+    expect(model.skillCatalogDigest).toBe(digest);
+  });
+});
+
 describe("token saving projection (§20.8)", () => {
   test("policy_applied projects requested, effective, and reasons", () => {
     let model = emptyViewModel("s");

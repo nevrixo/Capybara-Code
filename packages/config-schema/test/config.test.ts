@@ -205,6 +205,20 @@ describe("defaults (§21.4)", () => {
     // Service catalogs come from the auto-generated global TOML, not hidden defaults.
     expect(config.mcpServers).toEqual({});
     expect(config.lspServers).toEqual({});
+    expect(config.skills).toEqual({
+      enabled: true,
+      paths: [],
+      compatOpencode: true,
+      compatAgents: true,
+      compatClaude: true,
+      legacyPaths: true,
+      autoReload: false,
+      maxRoots: 64,
+      maxCandidates: 512,
+      maxDepth: 8,
+      scanTimeoutMs: 1_500,
+      builtin: { enabled: true, disabled: [] },
+    });
   });
 
   test("include every §10.3 model profile", () => {
@@ -223,6 +237,45 @@ describe("defaults (§21.4)", () => {
     expect(config.model.context.compactionPolicy).toBe("adaptive");
     expect(config.model.context.providerCompactionMode).toBe("auto");
     expect(config.model.context.emergencyRatio).toBe(0.9);
+  });
+});
+
+describe("Skills discovery configuration", () => {
+  test("round-trips paths, builtin exclusions, compatibility flags, and scan budgets from TOML", () => {
+    const values = normalizeConfigKeys(parseToml(`
+      [skills]
+      paths = ["~/shared", "./team"]
+      compat_opencode = false
+      max_candidates = 99
+      max_depth = 4
+      scan_timeout_ms = 750
+
+      [skills.builtin]
+      disabled = ["code-review", "release-check"]
+    `).values);
+    const merged = mergeConfig([{ source: "user", values }]);
+    expect(merged.issues.filter((issue) => issue.severity === "error")).toEqual([]);
+    expect(merged.config.skills.paths).toEqual(["~/shared", "./team"]);
+    expect(merged.config.skills.compatOpencode).toBe(false);
+    expect(merged.config.skills.maxCandidates).toBe(99);
+    expect(merged.config.skills.maxDepth).toBe(4);
+    expect(merged.config.skills.scanTimeoutMs).toBe(750);
+    expect(merged.config.skills.builtin.disabled).toEqual(["code-review", "release-check"]);
+  });
+
+  test("rejects unsafe array element types and out-of-range scan budgets", () => {
+    const merged = mergeConfig([{
+      source: "user",
+      values: {
+        "skills.paths": ["ok", 7],
+        "skills.maxRoots": 0,
+        "skills.maxDepth": 33,
+        "skills.scanTimeoutMs": 60_001,
+      },
+    }]);
+    for (const path of ["skills.paths", "skills.maxRoots", "skills.maxDepth", "skills.scanTimeoutMs"]) {
+      expect(merged.issues.some((issue) => issue.path === path && issue.severity === "error")).toBe(true);
+    }
   });
 });
 
@@ -674,6 +727,12 @@ describe("config key status (P1-04)", () => {
     expect(configKeyInfo("sandbox.level")?.consumer).toContain("runtime");
     expect(configKeyInfo("subagents.maxConcurrent")?.consumer).toContain("scheduler");
     expect(configKeyInfo("subagents.maxPerTurn")?.status).toBe("deprecated");
+  });
+
+  test("classifies Skills discovery keys without overclaiming the reserved watcher", () => {
+    expect(configKeyInfo("skills.paths")?.status).toBe("wired");
+    expect(configKeyInfo("skills.maxCandidates")?.consumer).toContain("SkillDiscoveryService");
+    expect(configKeyInfo("skills.autoReload")?.status).toBe("experimental");
   });
 
   test("setting an experimental key warns that it is not applied", () => {
