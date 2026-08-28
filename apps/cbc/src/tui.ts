@@ -262,6 +262,8 @@ export class InteractiveUi {
   #timelineMaxScrollOffset: number | undefined;
   /** Physical size of the last painted frame, used to detect resize before input. */
   #lastFrameSize: { columns: number; rows: number } | undefined;
+  /** Explicit size reported by the renderer; shared by layout and frame geometry. */
+  #reportedTerminalSize: { columns: number; rows: number } | undefined;
   /** Session-scoped visual index; plain append-only mode needs no frame projection. */
   #timelineProjection: ProjectedTimeline | undefined;
   #restored = false;
@@ -443,6 +445,35 @@ export class InteractiveUi {
 
   get dirtyRegions(): readonly FrameRegion[] {
     return [...this.#dirtyRegions];
+  }
+
+  /**
+   * Apply one terminal resize atomically to layout, frame geometry, and cursor
+   * coordinates. OpenTUI's resize event is authoritative; host dimensions may
+   * still contain the pre-resize value while that event is being handled.
+   */
+  resize(columns: number, rows: number): void {
+    const current = this.#terminalSize();
+    const next = {
+      columns: Number.isFinite(columns) ? Math.max(1, Math.floor(columns)) : current.columns,
+      rows: Number.isFinite(rows) ? Math.max(1, Math.floor(rows)) : current.rows,
+    };
+    this.#reportedTerminalSize = next;
+    this.#selection = undefined;
+    this.#isDraggingScrollbar = false;
+    this.#replan(next);
+    this.#markFrameDirty(
+      "layout",
+      "timeline",
+      "live",
+      "sidebar",
+      "composer",
+      "completion",
+      "status",
+      "overlay",
+      "selection",
+    );
+    if (this.#fullScreen) this.#scheduleFrame({ clearScreen: true });
   }
 
   setSessionInfo(sessionId: string, credentialSource?: string): void {
@@ -1589,9 +1620,8 @@ export class InteractiveUi {
             mouse: this.#options.uiMouse !== false,
           });
           this.#openTui = view;
-          this.#disposeOpenTuiResize = view.onResize(() => {
-            this.#replan();
-            this.#scheduleFrame({ clearScreen: true });
+          this.#disposeOpenTuiResize = view.onResize((columns, rows) => {
+            this.resize(columns, rows);
           });
           this.#scheduleFrame({ immediate: true });
           return;
@@ -3052,6 +3082,9 @@ export class InteractiveUi {
   }
 
   #terminalSize(): { columns: number; rows: number } {
+    if (this.#openTui === undefined && this.#reportedTerminalSize !== undefined) {
+      return this.#reportedTerminalSize;
+    }
     return {
       columns: Math.max(
         1,
@@ -3074,10 +3107,9 @@ export class InteractiveUi {
    * terminal resized mid-turn wraps correctly on the next block rather than at the
    * next turn.
    */
-  #replan(): void {
+  #replan(size: { readonly columns: number; readonly rows: number } = this.#terminalSize()): void {
     this.#invalidateTimelineScrollRange();
-    const columns = this.#options.host.io.columns ?? this.#options.decision.capabilities.columns;
-    const rows = this.#options.host.io.rows ?? this.capabilities.rows;
+    const { columns, rows } = size;
     const plan = planLayout(columns, {
       rows,
       ...(this.#sidebarVisible !== undefined ? { sidebarVisible: this.#sidebarVisible } : {}),

@@ -63,6 +63,8 @@ export interface HostFs {
   remove(path: string): Promise<void>;
   /** Whether the path is a directory. */
   isDirectory(path: string): Promise<boolean>;
+  /** Resolve symlinks/junctions for deterministic discovery and containment. */
+  realpath?(path: string): Promise<string | undefined>;
   /**
    * Filesystem identity of a directory, mirroring the Rust trust store's
    * `filesystem_id` (§13.6): `"<dev>:<ino>"` on Unix, `undefined` elsewhere or
@@ -121,14 +123,18 @@ export function resolvePaths(host: Pick<Host, "env" | "homeDir" | "platform" | "
   const windows = host.platform === "win32";
 
   const capybaraHome = env.CAPYBARA_HOME;
+  const configFileOverride = env.CAPYBARA_CONFIG !== undefined && env.CAPYBARA_CONFIG.trim().length > 0
+    ? env.CAPYBARA_CONFIG
+    : undefined;
 
   const configRoot =
-    env.CAPYBARA_CONFIG ??
-    (capybaraHome !== undefined
+    configFileOverride !== undefined
+      ? parentOf(configFileOverride)
+      : capybaraHome !== undefined
       ? join(capybaraHome, "config")
       : windows
         ? join(env.APPDATA ?? join(home, "AppData", "Roaming"), "capybara")
-        : join(env.XDG_CONFIG_HOME ?? join(home, ".config"), "capybara"));
+        : join(env.XDG_CONFIG_HOME ?? join(home, ".config"), "capybara");
 
   const dataRoot =
     env.CAPYBARA_DATA_DIR ??
@@ -166,7 +172,7 @@ export function resolvePaths(host: Pick<Host, "env" | "homeDir" | "platform" | "
 
   return {
     config: configRoot,
-    configFile: join(configRoot, "config.toml"),
+    configFile: configFileOverride ?? join(configRoot, "config.toml"),
     data: dataRoot,
     cache: cacheRoot,
     logs: logRoot,

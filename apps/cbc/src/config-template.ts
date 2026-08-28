@@ -30,6 +30,24 @@ destructive = "ask"
 credentials = "deny"
 external_side_effect = "ask"
 
+# Skills are discovered from the native Capybara root plus compatible
+# .opencode, .agents, and .claude roots. Add shared roots here when needed.
+[skills]
+enabled = true
+paths = []
+compat_opencode = true
+compat_agents = true
+compat_claude = true
+legacy_paths = true
+max_roots = 64
+max_candidates = 512
+max_depth = 8
+scan_timeout_ms = 1500
+
+[skills.builtin]
+enabled = true
+disabled = []
+
 [mcp.servers.context7]
 transport = "streamable_http"
 url = "https://mcp.context7.com/mcp"

@@ -4,6 +4,7 @@ import { HELP_TEXT, type Command } from "./args.ts";
 import { CliError, EXIT, type ExitCode } from "./exit.ts";
 import { authApi, authLogin, authLogout, authStatus } from "./commands/auth.ts";
 import { configSet } from "./commands/config.ts";
+import { skillsCommand } from "./commands/skills.ts";
 import { CommandContext, type CommandResult } from "./commands/context.ts";
 import { interactive } from "./commands/interactive.ts";
 import { daemonCommand } from "./commands/daemon.ts";
@@ -69,6 +70,9 @@ async function dispatch(context: CommandContext, command: Command): Promise<Comm
 
     case "config":
       return await configSet(context, { path: command.path, value: command.value });
+
+    case "skills":
+      return await skillsCommand(context, command);
 
     case "session-worker":
       return await sessionWorker(context, {

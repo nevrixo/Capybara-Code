@@ -18,6 +18,8 @@ export type Command =
   | { readonly kind: "auth"; readonly sub: "logout"; readonly all: boolean }
   | { readonly kind: "model"; readonly sub: "refresh" }
   | { readonly kind: "config"; readonly sub: "set"; readonly path: string; readonly value: string }
+  | { readonly kind: "skills"; readonly sub: "list" | "doctor"; readonly json: boolean }
+  | { readonly kind: "skills"; readonly sub: "validate"; readonly path: string; readonly json: boolean; readonly strict: boolean }
   | { readonly kind: "session-worker"; readonly sessionId?: string }
   | { readonly kind: "daemon"; readonly sub: "start" | "stop" | "status" | "logs" | "attach"; readonly sessionId?: string }
   | { readonly kind: "update"; readonly check?: boolean }
@@ -258,6 +260,20 @@ function buildSubcommand(
       value: operands[1] as string,
     };
   }
+  if (commandName === "skills") {
+    if (subName === "list" || subName === "doctor") {
+      return { kind: "skills", sub: subName, json: flags.has("--json") };
+    }
+    if (subName === "validate") {
+      return {
+        kind: "skills",
+        sub: "validate",
+        path: operands[0] as string,
+        json: flags.has("--json"),
+        strict: flags.has("--strict"),
+      };
+    }
+  }
   if (commandName === "daemon") {
     switch (subName) {
       case "start":
@@ -296,6 +312,9 @@ export const HELP_TEXT = [
   "  auth logout [--all]              drop stored credentials",
   "  model refresh                    refresh model capabilities",
   "  config set <path> <value>        set a user configuration value",
+  "  skills list [--json]             list discovered Skills",
+  "  skills doctor [--json]           explain discovery and rejection details",
+  "  skills validate <path>           validate one SKILL.md",
   "  update [--check]                 check for a newer release",
   "  version                          print the version",
   "  help [topic]                     show help",

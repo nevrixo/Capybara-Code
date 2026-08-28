@@ -87,6 +87,31 @@ export const COMMAND_REGISTRY: readonly CommandSpec[] = [
     ],
   },
   {
+    name: "skills",
+    summary: "inspect and validate Agent Skills discovery",
+    subcommands: [
+      {
+        name: "list",
+        summary: "list active Skills",
+        flags: [{ name: "--json", kind: "boolean", summary: "write metadata as JSON" }],
+      },
+      {
+        name: "doctor",
+        summary: "show discovery roots and rejection reasons",
+        flags: [{ name: "--json", kind: "boolean", summary: "write diagnostics as JSON" }],
+      },
+      {
+        name: "validate",
+        summary: "validate one SKILL.md",
+        flags: [
+          { name: "--json", kind: "boolean", summary: "write validation as JSON" },
+          { name: "--strict", kind: "boolean", summary: "treat compatibility warnings as failures" },
+        ],
+        positionals: [{ label: "<path>", required: true }],
+      },
+    ],
+  },
+  {
     name: "session-worker",
     summary: "internal: own a session as a daemon child process",
     flags: [

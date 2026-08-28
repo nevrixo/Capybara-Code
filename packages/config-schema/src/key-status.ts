@@ -142,6 +142,10 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
   ["updates.check", { status: "wired", consumer: "update command gate" }],
   ["updates.intervalHours", { status: "deprecated", note: "interactive startup now checks on every launch" }],
 
+  // ---- Agent Skills discovery ----
+  ["skills.autoReload", { status: "experimental", note: "manual `/skills reload` is implemented; filesystem watching is not enabled yet" }],
+  ["skills.", { status: "wired", consumer: "SkillDiscoveryService / SkillRegistry" }],
+
   // ---- provider ----
   ["provider.openai.transport", { status: "wired", consumer: "provider-openai turn session transport" }],
   ["provider.openai.serviceTier", { status: "wired", consumer: "provider-openai Responses request service tier" }],

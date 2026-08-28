@@ -15,7 +15,7 @@ import {
   REPOSITORY_MAP_CACHE_MAX_BYTES,
   parseRepositoryMapCache,
 } from "@cbc/context-engine";
-import type { ConfigPermissionRule } from "@cbc/config-schema";
+import { MANUAL_MODEL_PROFILE, type ConfigPermissionRule } from "@cbc/config-schema";
 import { mcpActionArgumentsHash, type StoredRule } from "@cbc/permissions";
 import { EVENT_SCHEMA_VERSION, isKnownEventKind, type CbcEvent } from "@cbc/protocol";
 import {
@@ -42,7 +42,6 @@ import {
   type SessionViewModel,
   type TimelineItem,
 } from "@cbc/session-domain";
-import { builtinSkillFiles } from "@cbc/skills";
 import { APP_COMMAND_SCHEMA_VERSION } from "@cbc/app-protocol";
 import { AppServer } from "@cbc/app-server";
 import { CapybaraClient } from "@cbc/sdk";
@@ -62,7 +61,11 @@ import {
   type InteractiveBrokerOptions,
 } from "./approvals.ts";
 import type { CommandContext } from "./commands/context.ts";
-import { discoverSkillFiles, skillRoots } from "./skill-discovery.ts";
+import {
+  SkillDiscoveryService,
+  type SkillDiscoveryInput,
+} from "./skill-discovery.ts";
+import { skillDiscoveryStartupNotice } from "./skill-diagnostics.ts";
 import { resolveAccountSession, resolveCredential } from "./credentials.ts";
 import { workspaceIdentityFor } from "./host.ts";
 import { buildProvider, installationId, safetyIdentifierFor } from "./provider.ts";
@@ -119,6 +122,8 @@ export interface Bootstrapped {
   readonly mockedProvider: boolean;
   readonly resumedFrom?: RuntimeSessionSummary;
   readonly warnings: string[];
+  readonly skillDiscovery: SkillDiscoveryService;
+  readonly skillDiscoveryInput: SkillDiscoveryInput;
   /** Managed Python and TypeScript language-server lifecycle for this session. */
   readonly lspHost: LspHost;
   /** Loads and projects one immutable page preceding the resident session history. */
@@ -644,16 +649,25 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
   sessionForMcp = session;
   sessionForLsp = session;
 
-  // ---- §16.2 Skills, catalog only (stage 1) ----
-  const discovered = await discoverSkillFiles(
-    context.host,
-    skillRoots(context.host, context.workspacePath, context.paths.share),
-    { workspaceTrusted: trust === "trusted-always" || trust === "trusted-once" },
-  );
-  const registered = session.skills.register([...builtinSkillFiles(), ...discovered]);
-  for (const issue of registered.issues) {
-    warnings.push(`skill ${issue.path}: ${issue.field}: ${issue.message}`);
+  // ---- Skills Discovery v2, catalog metadata only (progressive stage 1) ----
+  const skillDiscoveryInput: SkillDiscoveryInput = {
+    cwd: context.host.cwd,
+    workspacePath: context.workspacePath,
+    nativeSkillsPath: context.paths.skills,
+    config: effective.skills,
+  };
+  const skillDiscovery = new SkillDiscoveryService({
+    host: context.host,
+    replace: (files) => session.replaceSkills(files),
+  });
+  const skillSnapshot = await skillDiscovery.discover(skillDiscoveryInput);
+  for (const issue of skillSnapshot.diagnostics) {
+    if (issue.severity === "error") {
+      warnings.push(`skill ${issue.path}: ${issue.field}: ${issue.message}`);
+    }
   }
+  const skillNotice = skillDiscoveryStartupNotice(skillSnapshot);
+  if (skillNotice !== undefined) warnings.push(skillNotice);
 
   // ---- §18.2 project instructions, trust-gated ----
   await session.context.loadInstructions({
@@ -739,6 +753,16 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
       });
     }
   }
+
+  session.emit("skills.changed", {
+    reason: "startup",
+    revision: skillSnapshot.revision,
+    digest: skillSnapshot.digest,
+    accepted: skillSnapshot.accepted.length,
+    rejected: skillSnapshot.rejected.length,
+    shadowed: skillSnapshot.shadowed.length,
+    invalidated: skillSnapshot.invalidated,
+  });
 
   if (effective.experimental.durableMemory && effective.memory.enabled) {
     try {
@@ -850,6 +874,8 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
     mockedProvider: choice.mocked,
     ...(resumedFrom !== undefined ? { resumedFrom } : {}),
     warnings,
+    skillDiscovery,
+    skillDiscoveryInput,
     ...(loadEarlierHistory !== undefined ? { loadEarlierHistory } : {}),
     ...(daemon.mode === "daemon" ? { daemon } : {}),
     ...(daemonClient !== undefined ? { daemonClient } : {}),
@@ -1407,8 +1433,9 @@ function withActiveProfile<T extends Awaited<ReturnType<CommandContext["requireC
   config: T,
 ): T {
   const name = config.model.profile;
+  if (name === "auto" || name === MANUAL_MODEL_PROFILE) return config;
   const profile = config.model.profiles[name];
-  if (profile === undefined || name === "auto") return config;
+  if (profile === undefined) return config;
 
   const next = structuredCloneConfig(config);
   next.model.default = profile.model;

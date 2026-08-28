@@ -14,7 +14,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import process from "node:process";
 
@@ -628,6 +628,14 @@ class NodeHostFs implements HostFs {
       return (await stat(path)).isDirectory();
     } catch {
       return false;
+    }
+  }
+
+  async realpath(path: string): Promise<string | undefined> {
+    try {
+      return (await realpath(path)).replace(/\\/g, "/");
+    } catch {
+      return undefined;
     }
   }
 

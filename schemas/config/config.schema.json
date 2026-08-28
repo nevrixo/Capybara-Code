@@ -28,6 +28,7 @@
     "plugins",
     "appServer",
     "sdk",
+    "skills",
     "mcpServers",
     "lspServers",
     "keymap"
@@ -1386,6 +1387,33 @@
       "properties": {
         "reconnect": { "type": "boolean", "default": true },
         "reconnectMaxAttempts": { "type": "integer", "minimum": 0, "default": 8 }
+      }
+    },
+    "skills": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "paths", "compatOpencode", "compatAgents", "compatClaude", "legacyPaths", "autoReload", "maxRoots", "maxCandidates", "maxDepth", "scanTimeoutMs", "builtin"],
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "paths": { "type": "array", "items": { "type": "string" }, "default": [] },
+        "compatOpencode": { "type": "boolean", "default": true },
+        "compatAgents": { "type": "boolean", "default": true },
+        "compatClaude": { "type": "boolean", "default": true },
+        "legacyPaths": { "type": "boolean", "default": true },
+        "autoReload": { "type": "boolean", "default": false },
+        "maxRoots": { "type": "integer", "minimum": 1, "maximum": 256, "default": 64 },
+        "maxCandidates": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 512 },
+        "maxDepth": { "type": "integer", "minimum": 0, "maximum": 32, "default": 8 },
+        "scanTimeoutMs": { "type": "integer", "minimum": 1, "maximum": 60000, "default": 1500 },
+        "builtin": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "disabled"],
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "disabled": { "type": "array", "items": { "type": "string" }, "default": [] }
+          }
+        }
       }
     },
     "mcpServers": {

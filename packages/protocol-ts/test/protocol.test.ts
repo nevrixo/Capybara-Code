@@ -73,7 +73,7 @@ describe("event envelope (§20.6)", () => {
   });
 
   test("every registered kind has defaults", () => {
-    expect(EVENT_KINDS.length).toBe(58);
+    expect(EVENT_KINDS.length).toBe(59);
     expect(RUNTIME_FEATURE_EVENT_KINDS.length).toBeGreaterThan(80);
     for (const kind of ALL_EVENT_KINDS) {
       const defaults = defaultsForKind(kind);
@@ -81,6 +81,12 @@ describe("event envelope (§20.6)", () => {
       expect(defaults.visibility).toBeTruthy();
       expect(defaults.durability).toBeTruthy();
     }
+  });
+
+  test("Skills catalog changes are known, hidden, and journaled", () => {
+    expect(isKnownEventKind("skills.changed")).toBe(true);
+    expect(mustJournal("skills.changed")).toBe(true);
+    expect(defaultsForKind("skills.changed").visibility).toBe("hidden");
   });
 
   test("runtime-feature kinds are known and journaled by default except live LSP/plugin hooks", () => {

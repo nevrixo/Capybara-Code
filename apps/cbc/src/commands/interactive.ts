@@ -12,12 +12,11 @@
  */
 
 import { isTokenSavingLevel } from "@cbc/agent-kernel";
-import type { ReasoningEffort } from "@cbc/config-schema";
+import { MANUAL_MODEL_PROFILE, type ReasoningEffort } from "@cbc/config-schema";
 import type { CbcEvent } from "@cbc/protocol";
 import type { SessionViewModel } from "@cbc/session-domain";
 import { clampEffortToModel, findModel, MODEL_REGISTRY } from "@cbc/provider-openai";
 import { describeEffectivePermissionPolicy, isPermissionPreset, resolvePermissionPolicy } from "@cbc/permissions";
-import { renderSkillList } from "@cbc/skills";
 import { SUBAGENT_ROLES, roleDefinition } from "@cbc/subagents";
 import {
   DEFAULT_KEYMAP,
@@ -35,6 +34,11 @@ import {
 } from "@cbc/tui-components";
 
 import { bootstrapSession, warmContext } from "../bootstrap.ts";
+import {
+  renderSkillDoctor,
+  renderSkillSnapshotDetail,
+  renderSkillSnapshotList,
+} from "../skill-diagnostics.ts";
 import { submitTurnOverApp } from "../session-app-client.ts";
 import type { ToolBridges } from "../tools.ts";
 import { EXIT, type ExitCode } from "../exit.ts";
@@ -66,6 +70,20 @@ import { ensureUpdatePrompt, printUpdateGuidance } from "../update-prompt.ts";
 export interface InteractiveArgs {
   readonly prompt?: string;
   readonly noDaemon?: boolean;
+}
+
+/** Persist concrete model controls without letting the auto router replace them. */
+export function explicitModelConfigSettings(input: {
+  readonly modelId?: string;
+  readonly reasoningEffort?: ReasoningEffort;
+}): ReadonlyArray<readonly [string, string]> {
+  return [
+    ["model.profile", MANUAL_MODEL_PROFILE],
+    ...(input.modelId === undefined ? [] : [["model.default", input.modelId] as const]),
+    ...(input.reasoningEffort === undefined
+      ? []
+      : [["model.reasoningEffort", input.reasoningEffort] as const]),
+  ];
 }
 
 export function worktreeOverlayLines(listed: {
@@ -728,6 +746,10 @@ export async function interactive(
           const values = slashArgumentValues(input, {
             sessions: resumeCandidates,
             model: boot.session.liveModelId,
+            skills: boot.session.skills.catalog().map((entry) => ({
+              value: entry.name,
+              detail: `${entry.scope}/${entry.origin}`,
+            })),
           });
           if (values === undefined) return undefined;
           const currentValues =
@@ -1547,13 +1569,10 @@ async function handleSlash(
         ui.setReasoningEffort(clamped.effort);
       }
 
-      const settings = [
-        ["model.profile", "auto"],
-        ["model.default", descriptor.id],
-        ...(clamped.clamped !== undefined
-          ? [["model.reasoningEffort", clamped.effort] as const]
-          : []),
-      ] as const;
+      const settings = explicitModelConfigSettings({
+        modelId: descriptor.id,
+        ...(clamped.clamped !== undefined ? { reasoningEffort: clamped.effort } : {}),
+      });
       const { setUserConfigValue } = await import("../state.ts");
       for (const [path, value] of settings) {
         const written = await setUserConfigValue(context.host, path, value);
@@ -1585,10 +1604,7 @@ async function handleSlash(
         : clampEffortToModel(descriptor, requested);
       session.setReasoningEffort(clamped.effort);
       ui.setReasoningEffort(clamped.effort);
-      const settings = [
-        ["model.profile", "auto"],
-        ["model.reasoningEffort", clamped.effort],
-      ] as const;
+      const settings = explicitModelConfigSettings({ reasoningEffort: clamped.effort });
       const { setUserConfigValue } = await import("../state.ts");
       for (const [path, value] of settings) {
         const written = await setUserConfigValue(context.host, path, value);
@@ -1791,7 +1807,7 @@ async function handleSlash(
       // plain mode the same content is printed inline. Pickers use the host's
       // keyboard select surface when one is available, while the remaining overlays
       // render their read-only contents inline.
-      return await handleOverlay(context, ui, boot, intent.overlay);
+      return await handleOverlay(context, ui, boot, intent.overlay, intent.argument);
 
     case "resume": {
       const id = intent.id?.trim();
@@ -1828,6 +1844,7 @@ async function handleOverlay(
   ui: InteractiveUi,
   boot: Awaited<ReturnType<typeof bootstrapSession>>,
   overlay: string,
+  argument?: string,
 ): Promise<SlashOutcome> {
   const session = boot.session;
 
@@ -1862,7 +1879,54 @@ async function handleOverlay(
     }
 
     case "skills": {
-      ui.openOverlay("skills", [...renderSkillList(session.skills.catalog())]);
+      const raw = argument?.trim() ?? "";
+      const [action, ...rest] = raw.split(/\s+/).filter((part) => part.length > 0);
+      if (action === "reload") {
+        const snapshot = await boot.skillDiscovery.reload(boot.skillDiscoveryInput);
+        if (snapshot.applied) {
+          session.emit("skills.changed", {
+            reason: "reload",
+            revision: snapshot.revision,
+            digest: snapshot.digest,
+            accepted: snapshot.accepted.length,
+            rejected: snapshot.rejected.length,
+            shadowed: snapshot.shadowed.length,
+            invalidated: snapshot.invalidated,
+          });
+        }
+        ui.openOverlay("skills", [
+          snapshot.applied
+            ? `Reloaded Skills at revision ${snapshot.revision}.`
+            : `Skill reload was incomplete; retained revision ${snapshot.revision}.`,
+          "",
+          ...renderSkillSnapshotList(snapshot),
+        ]);
+        return "continue";
+      }
+      const snapshot = boot.skillDiscovery.lastSnapshot();
+      if (snapshot === undefined) {
+        ui.openOverlay("skills", ["Skill discovery has not completed yet."]);
+        return "continue";
+      }
+      if (action === "doctor") {
+        ui.openOverlay("skills", renderSkillDoctor(snapshot));
+        return "continue";
+      }
+      if (action === "show") {
+        const name = rest.join(" ").trim();
+        ui.openOverlay(
+          "skills",
+          name.length > 0
+            ? renderSkillSnapshotDetail(snapshot, session.skills, name)
+            : ["Usage: /skills show <name>"],
+        );
+        return "continue";
+      }
+      if (action !== undefined && action !== "list") {
+        ui.openOverlay("skills", renderSkillSnapshotDetail(snapshot, session.skills, action));
+        return "continue";
+      }
+      ui.openOverlay("skills", renderSkillSnapshotList(snapshot));
       return "continue";
     }
 
