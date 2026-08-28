@@ -30,6 +30,12 @@ export type FinalAnswerEvidence = "hidden" | "collapsed" | "expanded";
 export type SubagentDetail = "drawer" | "inline";
 export type SidebarVisibility = "auto" | "show" | "hide";
 
+/**
+ * Reserved profile for an explicit /model or /effort choice. Unlike named
+ * profiles, it keeps the concrete model fields and disables utility routing.
+ */
+export const MANUAL_MODEL_PROFILE = "manual";
+
 export interface UiConfig {
   theme: string;
   color: ColorMode;
@@ -1672,7 +1678,10 @@ function validateSemantics(
       message: "tool activation limit must be at least 1",
     });
   }
-  if (!(config.model.profile in config.model.profiles)) {
+  if (
+    config.model.profile !== MANUAL_MODEL_PROFILE &&
+    !(config.model.profile in config.model.profiles)
+  ) {
     issues.push({
       severity: "error",
       path: "model.profile",

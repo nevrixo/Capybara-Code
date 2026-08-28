@@ -12,7 +12,7 @@
  */
 
 import { isTokenSavingLevel } from "@cbc/agent-kernel";
-import type { ReasoningEffort } from "@cbc/config-schema";
+import { MANUAL_MODEL_PROFILE, type ReasoningEffort } from "@cbc/config-schema";
 import type { CbcEvent } from "@cbc/protocol";
 import type { SessionViewModel } from "@cbc/session-domain";
 import { clampEffortToModel, findModel, MODEL_REGISTRY } from "@cbc/provider-openai";
@@ -65,6 +65,20 @@ import { ensureUpdatePrompt, printUpdateGuidance, recordSkippedUpdate } from "..
 export interface InteractiveArgs {
   readonly prompt?: string;
   readonly noDaemon?: boolean;
+}
+
+/** Persist concrete model controls without letting the auto router replace them. */
+export function explicitModelConfigSettings(input: {
+  readonly modelId?: string;
+  readonly reasoningEffort?: ReasoningEffort;
+}): ReadonlyArray<readonly [string, string]> {
+  return [
+    ["model.profile", MANUAL_MODEL_PROFILE],
+    ...(input.modelId === undefined ? [] : [["model.default", input.modelId] as const]),
+    ...(input.reasoningEffort === undefined
+      ? []
+      : [["model.reasoningEffort", input.reasoningEffort] as const]),
+  ];
 }
 
 export function worktreeOverlayLines(listed: {
@@ -1549,13 +1563,10 @@ async function handleSlash(
         ui.setReasoningEffort(clamped.effort);
       }
 
-      const settings = [
-        ["model.profile", "auto"],
-        ["model.default", descriptor.id],
-        ...(clamped.clamped !== undefined
-          ? [["model.reasoningEffort", clamped.effort] as const]
-          : []),
-      ] as const;
+      const settings = explicitModelConfigSettings({
+        modelId: descriptor.id,
+        ...(clamped.clamped !== undefined ? { reasoningEffort: clamped.effort } : {}),
+      });
       const { setUserConfigValue } = await import("../state.ts");
       for (const [path, value] of settings) {
         const written = await setUserConfigValue(context.host, path, value);
@@ -1587,10 +1598,7 @@ async function handleSlash(
         : clampEffortToModel(descriptor, requested);
       session.setReasoningEffort(clamped.effort);
       ui.setReasoningEffort(clamped.effort);
-      const settings = [
-        ["model.profile", "auto"],
-        ["model.reasoningEffort", clamped.effort],
-      ] as const;
+      const settings = explicitModelConfigSettings({ reasoningEffort: clamped.effort });
       const { setUserConfigValue } = await import("../state.ts");
       for (const [path, value] of settings) {
         const written = await setUserConfigValue(context.host, path, value);

@@ -49,7 +49,10 @@ import {
 import { NATIVE_TOOLS, okResult } from "@cbc/tool-registry";
 import { MODEL_REGISTRY } from "@cbc/provider-openai";
 import { ComposerSession } from "../src/composer.ts";
-import { worktreeOverlayLines } from "../src/commands/interactive.ts";
+import {
+  explicitModelConfigSettings,
+  worktreeOverlayLines,
+} from "../src/commands/interactive.ts";
 import { buildResumeCandidates } from "../src/resume-picker.ts";
 import { decodeKeys, flushPendingSequence, inertKeyStream } from "../src/keys.ts";
 import { slashArgumentValues } from "../src/slash.ts";
@@ -2598,6 +2601,47 @@ describe("interactive UI (§6.2, §6.21)", () => {
     expect(frame).toContain("gpt-5.6-luna");
     expect(frame).toContain("max effort");
     expect(frame).not.toContain("gpt-5.6-sol");
+    instance.restore();
+  });
+
+  test("reflows terminal x/y resizes without changing pinned model chrome", () => {
+    const host = createFakeHost({ isTty: true, columns: 140, env: { NO_COLOR: "1" } });
+    const decision = decideRenderMode({ host, rendererAvailable: true });
+    const instance = new InteractiveUi({
+      host,
+      decision,
+      writer: new LineWriter(host, decision),
+      workspacePath: "/work/project",
+      version: "0.1.0-test",
+      sidebarVisibility: "show",
+    });
+    const stale = {
+      ...emptyViewModel("ses_resize_model"),
+      modelId: "gpt-5.6-terra",
+      reasoningEffort: "medium" as const,
+    };
+    instance.flush(stale);
+    instance.setModel("gpt-5.6-sol");
+    instance.setReasoningEffort("low");
+
+    host.out.length = 0;
+    instance.resize(76, 12);
+    const compact = host.out.at(-1) ?? "";
+    expect(instance.layout.columns).toBe(76);
+    expect(instance.layout.showSidebar).toBe(false);
+    expect(compact.split("\r\n")).toHaveLength(12);
+    expect(compact).toContain("gpt-5.6-sol");
+    expect(compact).toContain("low effort");
+    expect(compact).not.toContain("gpt-5.6-terra");
+
+    instance.resize(140, 30);
+    const expanded = host.out.at(-1) ?? "";
+    expect(instance.layout.columns).toBe(140);
+    expect(instance.layout.showSidebar).toBe(true);
+    expect(expanded.split("\r\n")).toHaveLength(30);
+    expect(expanded).toContain("gpt-5.6-sol");
+    expect(expanded).toContain("low effort");
+    expect(expanded).not.toContain("gpt-5.6-terra");
     instance.restore();
   });
 
@@ -5307,17 +5351,24 @@ describe("TOML upsert", () => {
       'args = ["-y", "pkg"]',
     );
   });
-  test("effort and model selections persist through the user config", async () => {
+  test("explicit effort and model selections persist through the manual profile", async () => {
     const host = createFakeHost();
-    const effort = await setUserConfigValue(host, "model.reasoningEffort", "high");
-    const profile = await setUserConfigValue(host, "model.profile", "auto");
-    const model = await setUserConfigValue(host, "model.default", "gpt-5.6-terra");
-    expect(effort.issues).toHaveLength(0);
-    expect(profile.issues).toHaveLength(0);
-    expect(model.issues).toHaveLength(0);
+    const settings = explicitModelConfigSettings({
+      modelId: "gpt-5.6-terra",
+      reasoningEffort: "high",
+    });
+    expect(settings).toEqual([
+      ["model.profile", "manual"],
+      ["model.default", "gpt-5.6-terra"],
+      ["model.reasoningEffort", "high"],
+    ]);
+    for (const [path, value] of settings) {
+      const written = await setUserConfigValue(host, path, value);
+      expect(written.issues).toHaveLength(0);
+    }
     const toml = host.files.get(resolvePaths(host).configFile) ?? "";
     expect(toml).toContain('reasoning_effort = "high"');
-    expect(toml).toContain('profile = "auto"');
+    expect(toml).toContain('profile = "manual"');
     expect(toml).toContain('default = "gpt-5.6-terra"');
 });
 

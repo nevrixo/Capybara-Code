@@ -542,6 +542,24 @@ describe("validation (§21.7)", () => {
     );
   });
 
+  test("manual model selections use the concrete model fields without a named profile", () => {
+    const merged = mergeConfig([{
+      source: "user",
+      values: {
+        "model.profile": "manual",
+        "model.default": "gpt-5.6-sol",
+        "model.reasoningEffort": "low",
+      },
+    }]);
+
+    expect(merged.issues.some((i) => i.path === "model.profile" && i.severity === "error")).toBe(
+      false,
+    );
+    expect(merged.config.model.profile).toBe("manual");
+    expect(merged.config.model.default).toBe("gpt-5.6-sol");
+    expect(merged.config.model.reasoningEffort).toBe("low");
+  });
+
   test("project maxOutputTokens is not mistaken for a credential token", () => {
     const merged = mergeConfig([
       { source: "project", values: { "model.maxOutputTokens": 13_000 } },

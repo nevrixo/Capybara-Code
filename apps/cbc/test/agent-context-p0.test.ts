@@ -19,6 +19,14 @@ describe("AgentSession Context P0 production loop", () => {
     expect(shouldAutoRoute({ ...model, default: "gpt-5.6-luna" })).toBe(false);
     expect(shouldAutoRoute(model, true)).toBe(false);
     expect(shouldAutoRoute({ ...model, profile: "fast", default: "gpt-5.6-terra" })).toBe(false);
+    expect(
+      shouldAutoRoute({
+        ...model,
+        profile: "manual",
+        default: "gpt-5.6-sol",
+        reasoningEffort: "low",
+      }),
+    ).toBe(false);
   });
 
   test("fs.read is promoted once into L6 before the next provider sample", async () => {

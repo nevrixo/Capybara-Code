@@ -15,7 +15,7 @@ import {
   REPOSITORY_MAP_CACHE_MAX_BYTES,
   parseRepositoryMapCache,
 } from "@cbc/context-engine";
-import type { ConfigPermissionRule } from "@cbc/config-schema";
+import { MANUAL_MODEL_PROFILE, type ConfigPermissionRule } from "@cbc/config-schema";
 import { mcpActionArgumentsHash, type StoredRule } from "@cbc/permissions";
 import { EVENT_SCHEMA_VERSION, isKnownEventKind, type CbcEvent } from "@cbc/protocol";
 import {
@@ -1407,8 +1407,9 @@ function withActiveProfile<T extends Awaited<ReturnType<CommandContext["requireC
   config: T,
 ): T {
   const name = config.model.profile;
+  if (name === "auto" || name === MANUAL_MODEL_PROFILE) return config;
   const profile = config.model.profiles[name];
-  if (profile === undefined || name === "auto") return config;
+  if (profile === undefined) return config;
 
   const next = structuredCloneConfig(config);
   next.model.default = profile.model;
