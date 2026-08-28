@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-28T19:19:09.606Z",
+  "generatedAt": "2026-08-28T19:22:09.157Z",
   "git": {
-    "commit": "07bfc4e5f4212acf02a3f53bc5ab266314b5dd43",
+    "commit": "91ab6d4e0fad843b0e7fc04574bf32a15c1f026d",
     "dirty": true,
-    "dirtyHash": "5c893e7883f70c3b1fb45f9490697704efa43c686d1ae97bbc3e63f6fa0c1ced"
+    "dirtyHash": "b8f1c772e1b724cdee2842b044defc2bee77910736563de46d89ffc683a323a4"
   },
   "roots": [
     "apps",
@@ -61,12 +61,12 @@
     {
       "path": "Cargo.lock",
       "bytes": 22034,
-      "sha256": "dcc1afd04a34ede17d65fcc1e301d89c6fd27d6487d20ae7785593ac66bf27ce"
+      "sha256": "1016c954d770e81fea8c58c473477cae5feb755d21495c8483fd54af1fc13f28"
     },
     {
       "path": "Cargo.toml",
       "bytes": 1673,
-      "sha256": "8f7f9af73da72dc46d24d781d1be35d49477abc5c7085520e178bbaa436eaf5f"
+      "sha256": "96f77fdf73b15186a60370572c29c417720cce2f9a100c2c71e3710b2ee0d2e9"
     },
     {
       "path": "README.md",
@@ -171,7 +171,7 @@
     {
       "path": "apps/cbc/package.json",
       "bytes": 302,
-      "sha256": "3c4cdd328334b9c5aa6bdc2b3f6d274b6fd126e6e4c2786b298c4309881e665e"
+      "sha256": "b1a763a5983bbf7b6cc8952013d39c549fb9584ec4ddacd36917a250bd4b9519"
     },
     {
       "path": "apps/cbc/src/account-login.ts",
@@ -331,7 +331,7 @@
     {
       "path": "apps/cbc/src/main.ts",
       "bytes": 1000,
-      "sha256": "80ca3c08c264156c922ef05b692d8fdb02f83f7ba78262452bb1c92d8e4cc448"
+      "sha256": "850f2850ba894834bd004b482fd4554315c236ea101e3ee641ab2085d9cba620"
     },
     {
       "path": "apps/cbc/src/mcp-credentials.ts",
@@ -926,7 +926,7 @@
     {
       "path": "bun.lock",
       "bytes": 20753,
-      "sha256": "d54491ed5f0fe1046cc3e56b5a8baa47f4966564508922712b82e57009c2488d"
+      "sha256": "a291e7f472f6c97dc00d56d73c16067e86f6ebe8b9605db4f901319f36bc8575"
     },
     {
       "path": "crates/cbc-artifacts/Cargo.toml",
@@ -1581,7 +1581,7 @@
     {
       "path": "package.json",
       "bytes": 2538,
-      "sha256": "7a2d32c1bd10631d300625299c96a14c82d74a5c37644fc06111bb893ea96de5"
+      "sha256": "7aa274e851b55260a24745bdb661f20b52070da5f6e4ad2f75a8b312bc303ba0"
     },
     {
       "path": "packages/agent-graph-domain/package.json",
@@ -3211,7 +3211,7 @@
     {
       "path": "scripts/release.test.ts",
       "bytes": 17326,
-      "sha256": "30795b7c5706fed3bb4852b5c5b915adebe42c62d8667edab82c56b87bf7592f"
+      "sha256": "fc6b5ad690da844a328c71f0dfc77b6460e6216ba2b071793cff14b0ac4152f7"
     },
     {
       "path": "scripts/smoke-release.ts",
@@ -3234,5 +3234,5 @@
       "sha256": "3af6b7d3ec7041c90b18206fe898b904d8781a97c25369189f2733173c6d23a5"
     }
   ],
-  "digest": "2cf0ac5f8595d84bc32cba1470057a7c8b5b3f1bd86ea101da2c77a9c67cf464"
+  "digest": "9f71a3f68d2fc2da28e044f8e244ecfc24f0bce1d44ff5c89499b4c3b1662ec6"
 }
