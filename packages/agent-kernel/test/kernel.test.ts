@@ -134,6 +134,8 @@ interface HarnessOptions {
   readonly toolGraph?: KernelOptions["toolGraph"];
   readonly promptInputs?: KernelOptions["promptInputs"];
   readonly interactionMode?: KernelOptions["interactionMode"];
+  readonly deepPlanMode?: KernelOptions["deepPlanMode"];
+  readonly deepPlanReadiness?: KernelOptions["deepPlanReadiness"];
   readonly todoState?: KernelOptions["todoState"];
 }
 
@@ -289,6 +291,12 @@ function harness(options: HarnessOptions) {
     ...(options.toolGraph !== undefined ? { toolGraph: options.toolGraph } : {}),
     ...(options.interactionMode !== undefined
       ? { interactionMode: options.interactionMode }
+      : {}),
+    ...(options.deepPlanMode !== undefined
+      ? { deepPlanMode: options.deepPlanMode }
+      : {}),
+    ...(options.deepPlanReadiness !== undefined
+      ? { deepPlanReadiness: options.deepPlanReadiness }
       : {}),
     ...(options.todoState !== undefined ? { todoState: options.todoState } : {}),
   });
@@ -1020,6 +1028,23 @@ describe("prompt assembly (§10.9, §11.4, §18.1)", () => {
     expect(deepPlan.stablePrefixText).toContain("You are in Deep Plan mode");
     expect(deepPlan.stablePrefixText).toContain("user.ask_batch");
     expect(deepPlan.stablePrefixDigest).not.toBe(ordinaryPlan.stablePrefixDigest);
+  });
+
+  test("keeps the compact decision ledger in the variable suffix", () => {
+    const first = assemblePrompt({
+      ...base,
+      interactionMode: "plan",
+      deepPlanMode: "on",
+      deepPlanState: "Deep Plan decisions:\n- cache.layer = memory [user; resolved]",
+    });
+    const second = assemblePrompt({
+      ...base,
+      interactionMode: "plan",
+      deepPlanMode: "on",
+      deepPlanState: "Deep Plan decisions:\n- cache.layer = redis [user; resolved]",
+    });
+    expect(JSON.stringify(first.input)).toContain("cache.layer = memory");
+    expect(first.stablePrefixDigest).toBe(second.stablePrefixDigest);
   });
 
 
@@ -2337,6 +2362,85 @@ describe("root TODO completion gate", () => {
     expect(result.state).toBe("completed");
     expect(result.report.status).toBe("completed");
     expect(result.answer).toBe("Implementation plan is ready.");
+  });
+});
+
+describe("Deep Plan completion gate", () => {
+  test("withholds an early Plan final and continues the same turn", async () => {
+    const provider = new MockProvider({
+      steps: [
+        { text: "The plan is ready too early." },
+        { text: "The evidence-backed Plan Contract is ready." },
+      ],
+    });
+    let checks = 0;
+    const { kernel, events } = harness({
+      steps: [],
+      provider,
+      interactionMode: () => "plan",
+      deepPlanMode: () => "on",
+      deepPlanReadiness: () =>
+        checks++ === 0
+          ? { ready: false, blockers: ["blocking decision 'cache.layer' is unresolved"] }
+          : { ready: true, blockers: [] },
+    });
+
+    const result = await kernel.runTurn("plan the cache", new AbortController().signal);
+
+    expect(result.state).toBe("completed");
+    expect(result.answer).toBe("The evidence-backed Plan Contract is ready.");
+    expect(provider.callCount).toBe(2);
+    expect(JSON.stringify(provider.requests[1]?.input)).toContain("DEEP_PLAN_INCOMPLETE");
+    expect(JSON.stringify(provider.requests[1]?.input)).toContain("cache.layer");
+    expect(
+      result.history.some((item) =>
+        item.type === "message" &&
+        item.phase === "commentary" &&
+        JSON.stringify(item.content).includes("ready too early")
+      ),
+    ).toBe(true);
+    const finals = payloadsOf(events, "assistant.final") as Array<{ answer?: string }>;
+    expect(finals).toEqual([
+      expect.objectContaining({ answer: "The evidence-backed Plan Contract is ready." }),
+    ]);
+  });
+
+  test("reports partial truthfully when readiness cannot continue within budget", async () => {
+    const { kernel, provider } = harness({
+      steps: [{ text: "The plan is ready." }],
+      interactionMode: () => "plan",
+      deepPlanMode: () => "on",
+      deepPlanReadiness: () => ({
+        ready: false,
+        blockers: ["the Plan Contract predates the latest questionnaire answers"],
+      }),
+      limits: { ...ROOT_LIMITS, maxModelSteps: 1 },
+    });
+
+    const result = await kernel.runTurn("plan the cache", new AbortController().signal);
+
+    expect(provider.callCount).toBe(1);
+    expect(result.state).toBe("partial");
+    expect(result.report.status).toBe("partial");
+    expect(result.answer).toContain("could not complete the Deep Plan");
+    expect(result.answer).not.toContain("The plan is ready.");
+  });
+
+  test("is inactive outside a Deep Plan Plan turn", async () => {
+    for (const options of [
+      { interactionMode: () => "build" as const, deepPlanMode: () => "on" as const },
+      { interactionMode: () => "plan" as const, deepPlanMode: () => "off" as const },
+    ]) {
+      const { kernel, provider } = harness({
+        steps: [{ text: "Ordinary final." }],
+        ...options,
+        deepPlanReadiness: () => ({ ready: false, blockers: ["must not run"] }),
+      });
+      const result = await kernel.runTurn("ordinary work", new AbortController().signal);
+      expect(provider.callCount).toBe(1);
+      expect(result.state).toBe("completed");
+      expect(result.answer).toBe("Ordinary final.");
+    }
   });
 });
 

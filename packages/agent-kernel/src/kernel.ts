@@ -198,6 +198,31 @@ function renderUnfinishedTodoAnswer(items: readonly TodoProjectionItem[]): strin
   return `I could not complete all root TODO items. Remaining: ${describeUnfinishedTodos(items)}.`;
 }
 
+function deepPlanBlockerLine(blocker: string): string {
+  const normalized = blocker.replace(/\s+/gu, " ").trim();
+  return `- ${normalized.length > 0 ? normalized.slice(0, 500) : "unknown readiness blocker"}`;
+}
+
+/** Deterministic continuation injected when a Deep Plan candidate final is early. */
+function renderDeepPlanContinuationPrompt(blockers: readonly string[]): string {
+  return [
+    "DEEP_PLAN_INCOMPLETE:",
+    "Do not finalize yet.",
+    "Unresolved Deep Plan blockers:",
+    ...(blockers.length > 0
+      ? blockers.map(deepPlanBlockerLine)
+      : ["- host readiness did not pass"]),
+    "Inspect available evidence or ask the user with user.ask_batch, then update the structured Plan Contract with todo.write.",
+  ].join("\n");
+}
+
+function renderIncompleteDeepPlanAnswer(blockers: readonly string[]): string {
+  const summary = blockers.slice(0, 3).map((blocker) =>
+    blocker.replace(/\s+/gu, " ").trim()
+  ).join("; ");
+  return `I could not complete the Deep Plan. Remaining: ${summary || "host readiness did not pass"}.`;
+}
+
 /** A withheld final stays in model context without becoming a durable final answer. */
 function asIntermediateAssistantItems(items: readonly ModelInputItem[]): ModelInputItem[] {
   return items.map((item) =>
@@ -629,6 +654,11 @@ export interface KernelOptions {
   readonly interactionMode?: () => "build" | "plan";
   /** Immutable Deep Plan policy captured at the same turn boundary. */
   readonly deepPlanMode?: () => "off" | "on";
+  /** Combined host Plan + Deep Plan readiness, evaluated at candidate-final time. */
+  readonly deepPlanReadiness?: () => {
+    readonly ready: boolean;
+    readonly blockers: readonly string[];
+  };
   /** Root TODO projection used to prevent false completed reports. */
   readonly todoState?: () => readonly { readonly status: string; readonly text: string }[];
   /**
@@ -1415,6 +1445,55 @@ export class AgentKernel {
         }
 
         case "verifying": {
+          if (
+            this.#options.role === "root" &&
+            this.#activeInteractionMode === "plan" &&
+            this.#activeDeepPlanMode === "on" &&
+            this.#options.deepPlanReadiness !== undefined
+          ) {
+            let readiness: { readonly ready: boolean; readonly blockers: readonly string[] };
+            try {
+              readiness = this.#options.deepPlanReadiness();
+            } catch (error) {
+              readiness = {
+                ready: false,
+                blockers: [
+                  `Deep Plan readiness could not be evaluated: ${error instanceof Error ? error.message : String(error)}`,
+                ],
+              };
+            }
+            if (!readiness.ready) {
+              const exhausted = budgetExhausted(budget, this.#limits, this.#now());
+              const withheldText = finalText.trim();
+              const withheldItemId = finalItemId;
+              this.#appendWithheldFinal(pendingFinalItems);
+              pendingFinalItems = [];
+              pendingFinalCameFromWrapUp = false;
+              if (withheldText.length > 0) {
+                emit("assistant.commentary", {
+                  text: withheldText,
+                  ...(withheldItemId !== undefined ? { itemId: withheldItemId } : {}),
+                });
+              }
+              finalText = "";
+              finalItemId = undefined;
+              if (exhausted === undefined) {
+                pendingUserInput = renderDeepPlanContinuationPrompt(readiness.blockers);
+                emit("assistant.commentary", {
+                  text: `Continuing Deep Plan: ${readiness.blockers.length} readiness blocker(s) remain. The final answer is withheld.`,
+                  commentaryKind: "verification",
+                });
+                machine.apply("todo_incomplete");
+                break;
+              }
+              finalText = renderIncompleteDeepPlanAnswer(readiness.blockers);
+              this.#stopReason =
+                `Deep Plan readiness is incomplete; ${describeExhaustion(exhausted, this.#limits)}`;
+              machine.apply("todo_unresolved");
+              break;
+            }
+          }
+
           // A root TODO is a build obligation, not merely report metadata. Check
           // before verification so an optimistic no-tool answer cannot make the
           // turn terminal while work remains.

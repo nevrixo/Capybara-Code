@@ -215,6 +215,8 @@ export interface PromptInputs {
   readonly interactionMode?: "build" | "plan";
   /** User-owned conversational policy captured immutably at turn start. */
   readonly deepPlanMode?: "off" | "on";
+  /** Compact host-owned decision ledger; full questionnaire history stays journaled. */
+  readonly deepPlanState?: string;
   /**
    * Short host token-saving directive. It lives in the variable suffix, never
    * in the stable prefix, so a level change does not break the prefix cache.
@@ -661,6 +663,12 @@ export function assemblePrompt(inputs: PromptInputs, options: { readonly version
   }
   if (inputs.taskDescription !== undefined && inputs.taskDescription.length > 0) {
     const rendered = `Current task:\n${inputs.taskDescription}`;
+    variableSections.push(rendered);
+    layerText.L4_task_and_plan.push(rendered);
+    taskSize += rendered.length;
+  }
+  if (inputs.deepPlanState !== undefined && inputs.deepPlanState.length > 0) {
+    const rendered = inputs.deepPlanState;
     variableSections.push(rendered);
     layerText.L4_task_and_plan.push(rendered);
     taskSize += rendered.length;

@@ -322,6 +322,7 @@ export async function interactive(
     const fullScreenUserAskBatch: NonNullable<ToolBridges["askBatch"]> = async (
       input,
       signal,
+      onDraftChange,
     ) => {
       if (signal.aborted) {
         return {
@@ -333,7 +334,7 @@ export async function interactive(
       const onAbort = (): void => ui.cancelUserQuestionnaire();
       signal.addEventListener("abort", onAbort, { once: true });
       try {
-        return await ui.requestUserQuestionnaire(input);
+        return await ui.requestUserQuestionnaire(input, onDraftChange);
       } finally {
         signal.removeEventListener("abort", onAbort);
       }

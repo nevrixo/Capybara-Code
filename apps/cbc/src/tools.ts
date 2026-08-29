@@ -18,7 +18,12 @@ import { isSensitivePath } from "@cbc/context-engine";
 import { actionHash, classifyCommand, type ProposedAction } from "@cbc/permissions";
 import type { GeneratedImageOutput } from "@cbc/provider-openai";
 import { RuntimeRpcError, type CapabilityReceipt, type StructuredEditResponse, type ToolErrorCode } from "@cbc/protocol";
-import type { UserAskBatchInput, UserAskBatchResult } from "@cbc/session-domain";
+import {
+  DeepPlanError,
+  type DeepPlanAnswer,
+  type UserAskBatchInput,
+  type UserAskBatchResult,
+} from "@cbc/session-domain";
 import { errorResult, okResult, type ArtifactRef, type ToolResult } from "@cbc/tool-registry";
 
 import { MergeCoordinator, containsConflictMarkers } from "../../capy-daemon/src/merge-coordinator.ts";
@@ -99,6 +104,10 @@ export interface ToolBridges {
   readonly askBatch?: (
     input: UserAskBatchInput,
     signal: AbortSignal,
+    onDraftChange?: (
+      answers: readonly DeepPlanAnswer[],
+      activeQuestionIndex: number,
+    ) => void,
   ) => Promise<UserAskBatchResult>;
   /** `lsp.*` — supplied by the supervised local LSP host. */
   readonly lsp?: (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
@@ -358,6 +367,12 @@ function renderStructuredEditResponse(response: StructuredEditResponse): string 
 
 
 export function toolErrorFrom(error: unknown): ToolResult {
+  if (error instanceof DeepPlanError) {
+    return errorResult(error.code, error.message, {
+      retryable: false,
+      details: { deepPlanCode: error.code },
+    });
+  }
   if (error instanceof RuntimeRpcError) {
     return errorResult(error.taxonomy, error.message, {
       retryable: error.retryable,
