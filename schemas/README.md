@@ -9,6 +9,7 @@ schemas/
 ├─ events/     the domain event envelope and its kinds           (§20.6–§20.7)
 ├─ config/     the configuration surface                          (§21.4)
 ├─ tools/      tool definitions and the result envelope          (§12.2, §12.4)
+├─ integration/ client capability, trigger, and action contracts
 └─ CHANGELOG.md
 ```
 

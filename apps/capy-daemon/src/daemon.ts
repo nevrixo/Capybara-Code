@@ -177,6 +177,7 @@ export class CapybaraDaemon {
         approvals: true,
         localDaemon: true,
       },
+      transport: process.platform === "win32" ? "named-pipe" : "local-socket",
     });
 
     if (this.#options.listen !== false) {
@@ -325,6 +326,15 @@ export class CapybaraDaemon {
     const daemon = this;
 
     return {
+      supportedMethods: [
+        "session.ensure",
+        "session.attach",
+        "session.detach",
+        "turn.submit",
+        "worktree.list",
+        "approval.list",
+        "approval.resolve",
+      ],
       async registerClient(): Promise<void> {},
       async createSubscription(input) {
         const record = {

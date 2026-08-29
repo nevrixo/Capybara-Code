@@ -219,6 +219,8 @@ export class CapybaraClient {
         interactivePrompts: true,
         artifactStreaming: true,
         richDiff: true,
+        taskTree: true,
+        planReview: true,
       },
     };
     const result = await this.request<AppInitializeResult>("server.initialize", params);

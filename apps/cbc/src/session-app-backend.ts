@@ -45,6 +45,7 @@ export interface SessionAppBackendOptions {
 }
 
 export class SessionAppBackend implements AppServerBackend {
+  readonly supportedMethods: readonly AppMethod[];
   readonly #session: AgentSession;
   readonly #sessionId: string;
   readonly #now: () => string;
@@ -68,6 +69,22 @@ export class SessionAppBackend implements AppServerBackend {
     if (options.worktrees !== undefined) this.#worktrees = options.worktrees;
     if (options.graph !== undefined) this.#graph = options.graph;
     if (options.plugins !== undefined) this.#plugins = options.plugins;
+    this.supportedMethods = Object.freeze([
+      "session.create",
+      "session.get",
+      "session.pause",
+      "session.resume",
+      "turn.submit",
+      "turn.wait",
+      "turn.cancel",
+      "memory.list",
+      "memory.search",
+      ...(options.memory?.forget === undefined ? [] : ["memory.forget" as const]),
+      ...(options.memory?.resolve === undefined ? [] : ["memory.resolveContest" as const]),
+      "worktree.list",
+      "graph.get",
+      "plugin.list",
+    ] satisfies AppMethod[]);
   }
 
   get lastTurn(): TurnResult | undefined {

@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-28T17:34:09.731Z",
+  "generatedAt": "2026-08-29T19:13:26.145Z",
   "git": {
-    "commit": "dde087c6893025cc9f7dfa94794ec6ea796dd1fd",
+    "commit": "ed439b4f1c076e68179d4b2f496fd7b5bdaeb4a7",
     "dirty": true,
-    "dirtyHash": "1c299508b403cee674992a2575bbbbaa998bd02a21aee98567ba2716e9f02edb"
+    "dirtyHash": "c7f1da2c45ab204791408695c7099db87b39b41758ef3f12a8f71d0c1ff3d425"
   },
   "roots": [
     "apps",
@@ -55,7 +55,7 @@
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
     "typescript": "5.9.3"
   },
-  "fileCount": 634,
+  "fileCount": 636,
   "historicalArtifacts": [],
   "files": [
     {
@@ -85,8 +85,8 @@
     },
     {
       "path": "apps/capy-daemon/src/daemon.ts",
-      "bytes": 18657,
-      "sha256": "9a4d3c4cd3028a3f6e31448d641ca74f3372122c4ccf08cc5ce9bfe0a0ae7add"
+      "bytes": 18950,
+      "sha256": "be655047c89c33a30e87a26fdbbdcd2ee473aad49c6984572ab6bff66d5e05aa"
     },
     {
       "path": "apps/capy-daemon/src/event-hub.ts",
@@ -410,8 +410,8 @@
     },
     {
       "path": "apps/cbc/src/session-app-backend.ts",
-      "bytes": 10492,
-      "sha256": "7cd9e242b59099b524c46c51a9b97c042a373754d73727dc3d7cb68644291d6f"
+      "bytes": 11052,
+      "sha256": "276785388ec383f4115fe6539180b85002ca35ec6b1df99cb3d54c68d43a7405"
     },
     {
       "path": "apps/cbc/src/session-app-client.ts",
@@ -1689,6 +1689,11 @@
       "sha256": "09d16daf5d73967521a4bc292a646e9df1193b7f6807c6fcfe63d85945d4a745"
     },
     {
+      "path": "packages/app-protocol/src/capabilities.ts",
+      "bytes": 2406,
+      "sha256": "69fbe3155d43e8eb51efe7b8ab3fdcc76fa1587c9fc99070073ddf51df349511"
+    },
+    {
       "path": "packages/app-protocol/src/commands.ts",
       "bytes": 5768,
       "sha256": "1593d912e1d6a2fdba90a0fb48662175f5df54cc73234d131ef803a1757d4550"
@@ -1705,13 +1710,13 @@
     },
     {
       "path": "packages/app-protocol/src/handshake.ts",
-      "bytes": 1879,
-      "sha256": "4e312510e2d581e5051334bb3f47f4a6e834857e3de6b2c12d251fcf50cb1451"
+      "bytes": 2065,
+      "sha256": "c25244e377ce405b9ca2074ba07513c9d7dbb6c2631943fae5738fb6a9328792"
     },
     {
       "path": "packages/app-protocol/src/index.ts",
-      "bytes": 151,
-      "sha256": "53c81809a927797150bb0aaf9985872a4546f3746a4d561b7dc663a29892d789"
+      "bytes": 186,
+      "sha256": "8581b72d23a2046e8ad898ad97e57f115fd40f183bcbd4b70a497126b03a1f72"
     },
     {
       "path": "packages/app-protocol/src/methods.ts",
@@ -1730,8 +1735,8 @@
     },
     {
       "path": "packages/app-server/src/index.ts",
-      "bytes": 29558,
-      "sha256": "718fa5445c74f761f6d43915090cd303c9710fbaa5ca416ca49650ea83f811f7"
+      "bytes": 35406,
+      "sha256": "4f84c9eca4adcfa59ce7b5b88d5c78e6e96150f78e09c54643ebf37a86b79abc"
     },
     {
       "path": "packages/app-server/src/runtime-backend.ts",
@@ -1740,8 +1745,8 @@
     },
     {
       "path": "packages/app-server/test/app-server.test.ts",
-      "bytes": 12821,
-      "sha256": "9707175d783d7b62e9c9664262e37d0015707365aff1d3ef0fca0a0e367c7269"
+      "bytes": 14531,
+      "sha256": "89a14fcc3a73876a1424e20310762b203ad39f06acac839d5525c87c62069552"
     },
     {
       "path": "packages/app-server/test/runtime-backend.test.ts",
@@ -2530,8 +2535,8 @@
     },
     {
       "path": "packages/sdk-python/capybara_code/client.py",
-      "bytes": 13266,
-      "sha256": "ea0d94b897a2a053aa208a13f2c50b103e4bc0a72302ed676c44042d645c2062"
+      "bytes": 13344,
+      "sha256": "8ec65737604bbf9dbfa056d40a6d001e3fe7eedeb4469413b094eb72e916a898"
     },
     {
       "path": "packages/sdk-python/capybara_code/errors.py",
@@ -2580,8 +2585,8 @@
     },
     {
       "path": "packages/sdk-typescript/src/client.ts",
-      "bytes": 9437,
-      "sha256": "c6e39657097352b740c940672f8e69b82ae5314b855b010252e532f0a105941b"
+      "bytes": 9487,
+      "sha256": "95346f67d557e5020cde70e5919010c8f26ace759060baaec32d9360099bf689"
     },
     {
       "path": "packages/sdk-typescript/src/generated.ts",
@@ -3035,13 +3040,13 @@
     },
     {
       "path": "schemas/CHANGELOG.md",
-      "bytes": 10722,
-      "sha256": "025ef584072f2fb58a28fed9f797e4697616416039ce845c0eaaea14db0b05dc"
+      "bytes": 11094,
+      "sha256": "bd2d7942db9932c21323cb575531ca85b986780cacaecddd86a94d0e59db2475"
     },
     {
       "path": "schemas/README.md",
-      "bytes": 3123,
-      "sha256": "18ba0b7a45b0318dcf7e5e6f1b27bb48016f2a2e60a6ecafaaa1e8b7c97a1dfa"
+      "bytes": 3192,
+      "sha256": "85093fafd727ba7baa35c9a87b9e46389ccfecc0d42f5af72674618c1929c29c"
     },
     {
       "path": "schemas/agent-graph/command.schema.json",
@@ -3060,8 +3065,8 @@
     },
     {
       "path": "schemas/app/handshake.schema.json",
-      "bytes": 3312,
-      "sha256": "74e2b69857172b4263b25aaba38f7b57104246e17cec0ff2134bf4b521e8082a"
+      "bytes": 3529,
+      "sha256": "4f1bae1f2598526eb8db6e550a785d9a480065e999b012360a2247aabf0b67d2"
     },
     {
       "path": "schemas/app/rpc.schema.json",
@@ -3087,6 +3092,11 @@
       "path": "schemas/events/event.schema.json",
       "bytes": 16083,
       "sha256": "76faecd498fddc9fe29ded5b6778b96a46ce600e57c967d5079545abe327f9e2"
+    },
+    {
+      "path": "schemas/integration/client-capabilities.schema.json",
+      "bytes": 2319,
+      "sha256": "30073fad0a1e53d3e8fec47eeda7506cff764496c3ee17b792cbfe5d0e88ba09"
     },
     {
       "path": "schemas/lsp/result.schema.json",
@@ -3229,5 +3239,5 @@
       "sha256": "3af6b7d3ec7041c90b18206fe898b904d8781a97c25369189f2733173c6d23a5"
     }
   ],
-  "digest": "a89ff6d00c1a1f954123ef9ccc922ca3924bbbb156517157dcea024903a73c8c"
+  "digest": "752df585d5310bbc3fb19d27fcfd3a662353a2f138cab8b991d6f94994f5e179"
 }

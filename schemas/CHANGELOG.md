@@ -38,6 +38,13 @@ does not fail validation, so nothing would catch it except a human reading this 
 
 ---
 
+## app capability schema 2.0 — method support snapshot
+
+App Protocol initialization now includes a connection-scoped, digest-bound
+capability snapshot. It distinguishes implemented, role-limited, policy-disabled,
+and unsupported methods and negotiates event and presentation features with the
+client. The previous flat capability map remains available for 1.x clients.
+
 ## events 1.0 — Skills catalog revision
 
 Added the journaled, hidden `skills.changed` event. It records the active Agent

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { EventReplayResult } from "@cbc/app-protocol";
+import { APP_METHODS, type AppMethod, type EventReplayResult } from "@cbc/app-protocol";
 
 import {
   AppServer,
@@ -10,10 +10,15 @@ import {
 const T0 = "2026-08-25T00:00:00.000Z";
 
 class FakeBackend implements AppServerBackend {
+  readonly supportedMethods: readonly AppMethod[];
   readonly clients: string[] = [];
   readonly subscriptions = new Map<string, AppServerSubscription>();
   readonly calls: Array<{ method: string; clientId: string }> = [];
   readonly replayCalls: Array<Parameters<AppServerBackend["replaySubscription"]>[0]> = [];
+
+  constructor(supportedMethods: readonly AppMethod[] = APP_METHODS) {
+    this.supportedMethods = supportedMethods;
+  }
 
   async registerClient(
     input: Parameters<AppServerBackend["registerClient"]>[0],
@@ -119,8 +124,9 @@ function initializeRequest(id = 1) {
 
 function server(
   roles: readonly ("observer" | "controller" | "approval_resolver" | "administrator-local")[],
+  supportedMethods: readonly AppMethod[] = APP_METHODS,
 ) {
-  const backend = new FakeBackend();
+  const backend = new FakeBackend(supportedMethods);
   const app = new AppServer({
     backend,
     daemonId: "daemon_local",
@@ -140,6 +146,36 @@ async function initialize(app: AppServer): Promise<string> {
 }
 
 describe("AppServer dispatch", () => {
+  test("reports a role-aware capability snapshot and rejects unsupported methods", async () => {
+    const { app } = server(["observer"], ["session.list", "turn.submit"]);
+    const initialized = await app.dispatch(undefined, initializeRequest());
+    expect("result" in initialized).toBe(true);
+    if (!("result" in initialized)) return;
+    const result = initialized.result as {
+      connectionId: string;
+      capabilitySnapshot: {
+        schemaRevision: string;
+        snapshotDigest: string;
+        methods: Record<string, { state: string; requiresRole?: string }>;
+      };
+    };
+    expect(result.capabilitySnapshot.schemaRevision).toBe("2.0");
+    expect(result.capabilitySnapshot.snapshotDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(Object.isFrozen(result.capabilitySnapshot)).toBe(true);
+    expect(Object.isFrozen(result.capabilitySnapshot.methods["session.list"])).toBe(true);
+    expect(result.capabilitySnapshot.methods["session.list"]?.state).toBe("available");
+    expect(result.capabilitySnapshot.methods["turn.submit"]?.state).toBe("read-only");
+    expect(result.capabilitySnapshot.methods["plugin.install"]?.state).toBe("unsupported");
+
+    const unsupported = await app.dispatch(result.connectionId, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "plugin.install",
+      params: {},
+    });
+    expect("error" in unsupported && unsupported.error.data.code).toBe("APP_METHOD_UNSUPPORTED");
+  });
+
   test("requires initialize before any client method", async () => {
     const { app } = server(["observer"]);
     const response = await app.dispatch(undefined, {

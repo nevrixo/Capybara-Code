@@ -1,4 +1,5 @@
 import { AppProtocolError, structuredError } from "./errors.ts";
+import type { AppCapabilitySnapshot } from "./capabilities.ts";
 
 export const APP_PROTOCOL_VERSION = "1.0" as const;
 
@@ -20,6 +21,8 @@ export interface AppInitializeParams {
     readonly interactivePrompts: boolean;
     readonly artifactStreaming: boolean;
     readonly richDiff: boolean;
+    readonly taskTree?: boolean;
+    readonly planReview?: boolean;
   };
   readonly authentication?: { readonly challengeResponse?: string };
 }
@@ -37,6 +40,7 @@ export interface AppInitializeResult {
   readonly daemonId: string;
   readonly connectionId: string;
   readonly capabilities: Readonly<Record<string, boolean | string | number>>;
+  readonly capabilitySnapshot: AppCapabilitySnapshot;
   readonly limits: AppServerLimits;
 }
 
