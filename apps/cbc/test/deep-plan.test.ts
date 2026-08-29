@@ -139,6 +139,7 @@ async function makeSession(options: {
   }>;
   readonly nonInteractive?: boolean;
   readonly events?: CbcEvent[];
+  readonly open?: boolean;
 }): Promise<AgentSession> {
   let now = 1_000;
   const events = options.events ?? [];
@@ -160,7 +161,7 @@ async function makeSession(options: {
     now: () => ++now,
     onEvent: (event) => { events.push(event); },
   });
-  await session.open();
+  if (options.open !== false) await session.open();
   return session;
 }
 
@@ -217,6 +218,9 @@ describe("Deep Plan AgentSession integration", () => {
     expect(JSON.stringify(provider.requests[1]?.input)).toContain("cache.layer");
     expect(JSON.stringify(provider.requests[3]?.input)).toContain("cache.failure_policy");
     expect(events.filter((event) => event.kind === "assistant.final")).toHaveLength(1);
+    session.compactContext({ userRequested: true });
+    expect(session.promptInputs().deepPlanState).toContain("cache.layer");
+    expect(session.promptInputs().deepPlanState).toContain("cache.failure_policy");
 
     const revised = await session.submit(
       "Revise the Plan to preserve stale-value metrics.",
@@ -229,6 +233,36 @@ describe("Deep Plan AgentSession integration", () => {
     expect(session.deepPlanState.planRevision).toBe(2);
     expect(session.deepPlanState.phase).toBe("review_ready");
     expect(provider.requests).toHaveLength(7);
+
+    const replayProvider = new MockProvider({
+      steps: [
+        { toolCalls: [{ callId: "submitted-retry", name: "user.ask_batch", arguments: firstQuestion() }] },
+        { toolCalls: [planWrite("plan-after-process-resume", 2)] },
+        { text: "The replay-safe Plan Contract is ready." },
+      ],
+    });
+    let reopened = false;
+    const replayed = await makeSession({
+      provider: replayProvider,
+      open: false,
+      askBatch: async (input) => {
+        reopened = true;
+        return {
+          questionnaireId: input.questionnaireId,
+          status: "cancelled",
+          answers: [],
+        };
+      },
+    });
+    replayed.hydrate(events);
+    const replayResult = await replayed.submit(
+      "Continue the reviewed cache Plan.",
+      new AbortController().signal,
+    );
+    expect(replayResult.state).toBe("completed");
+    expect(reopened).toBe(false);
+    expect(replayed.deepPlanState.questionnaireResults).toHaveLength(2);
+    expect(replayed.deepPlanState.planRevision).toBe(3);
   });
 
   test("withholds a no-question early final until todo.write produces a ready Plan", async () => {
@@ -279,5 +313,70 @@ describe("Deep Plan AgentSession integration", () => {
       expect(provider.requests).toHaveLength(2);
       expect(session.deepPlanState.phase).toBe("paused");
     }
+  });
+
+  test("journal replay restores a paused card, tab, draft, and retry identity", async () => {
+    const firstProvider = new MockProvider({
+      steps: [
+        { toolCalls: [{ callId: "ask-before-detach", name: "user.ask_batch", arguments: firstQuestion() }] },
+        { text: "Deep Plan paused for later." },
+      ],
+    });
+    const firstEvents: CbcEvent[] = [];
+    const first = await makeSession({
+      provider: firstProvider,
+      events: firstEvents,
+      askBatch: async (input, _signal, onDraftChange) => {
+        const answers: DeepPlanAnswer[] = [{
+          questionId: "layer",
+          decisionKey: "cache.layer",
+          selectedOptionIds: ["memory"],
+        }];
+        onDraftChange?.(answers, 0);
+        return {
+          questionnaireId: input.questionnaireId,
+          status: "paused",
+          answers,
+        };
+      },
+    });
+    await first.submit("Plan the cache behavior", new AbortController().signal);
+    expect(first.deepPlanState.phase).toBe("paused");
+    expect(first.viewModel.deepPlan?.pendingQuestionnaire?.draftAnswers).toHaveLength(1);
+
+    const resumedProvider = new MockProvider({
+      steps: [
+        { toolCalls: [{ callId: "ask-after-attach", name: "user.ask_batch", arguments: firstQuestion() }] },
+        { toolCalls: [planWrite("plan-after-resume")] },
+        { text: "The resumed Plan Contract is ready." },
+      ],
+    });
+    let restoredDraft: readonly DeepPlanAnswer[] = [];
+    const resumed = await makeSession({
+      provider: resumedProvider,
+      open: false,
+      askBatch: async (input) => {
+        restoredDraft =
+          (input as UserAskBatchInput & { draftAnswers?: readonly DeepPlanAnswer[] }).draftAnswers ?? [];
+        return {
+          questionnaireId: input.questionnaireId,
+          status: "submitted",
+          answers: restoredDraft,
+        };
+      },
+    });
+    resumed.hydrate(firstEvents);
+    expect(resumed.deepPlanState.phase).toBe("paused");
+    expect(resumed.deepPlanState.pendingQuestionnaire?.questionnaireId).toBe("cache-scope");
+
+    const result = await resumed.submit(
+      "Continue the previous cache Plan.",
+      new AbortController().signal,
+    );
+    expect(result.state).toBe("completed");
+    expect(result.answer).toBe("The resumed Plan Contract is ready.");
+    expect(restoredDraft[0]?.selectedOptionIds).toEqual(["memory"]);
+    expect(resumed.deepPlanState.phase).toBe("review_ready");
+    expect(resumed.deepPlanState.questionnaireResults).toHaveLength(1);
   });
 });

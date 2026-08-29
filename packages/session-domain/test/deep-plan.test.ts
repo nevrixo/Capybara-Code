@@ -1,10 +1,16 @@
 import { describe, expect, test } from "bun:test";
+import { EventSequencer, createEvent } from "@cbc/protocol";
 
 import {
   DeepPlanController,
   DeepPlanError,
   assessDeepPlanReadiness,
   compactDeepPlanProjection,
+  deserializeModel,
+  emptyViewModel,
+  parseDeepPlanState,
+  reduce,
+  serializeModel,
   type UserAskBatchInput,
 } from "../src/index.ts";
 
@@ -356,5 +362,41 @@ describe("DeepPlanController ledger and readiness", () => {
     });
     expect(controller.current().decisions).toEqual([]);
     expect(controller.current().round).toBe(0);
+  });
+});
+
+describe("Deep Plan durable state", () => {
+  test("validates, hydrates, reduces, and snapshots a pending questionnaire", () => {
+    const controller = activeController();
+    controller.openQuestionnaire(questionnaire());
+    controller.updateQuestionnaireDraft("cache-round-1", [{
+      questionId: "layer",
+      decisionKey: "cache.layer",
+      selectedOptionIds: ["redis"],
+    }], 1);
+    const state = controller.current();
+    expect(parseDeepPlanState(structuredClone(state))).toEqual(state);
+    expect(parseDeepPlanState({ ...state, phase: "corrupt" })).toBeUndefined();
+
+    const hydrated = new DeepPlanController({ mode: "off", now: clock() });
+    expect(hydrated.hydrate(state)).toBe(true);
+    expect(hydrated.current()).toEqual(state);
+
+    const event = createEvent(
+      new EventSequencer(),
+      "deep_plan.questionnaire_updated",
+      { state },
+      { sessionId: "deep-plan-durable" },
+    );
+    const model = reduce(emptyViewModel("deep-plan-durable"), event);
+    expect(model.turnStatus).toBe("waiting_user_input");
+    expect(model.live.kind).toBe("waiting_user_input");
+    expect(model.deepPlan?.pendingQuestionnaire?.activeQuestionIndex).toBe(1);
+
+    const restored = deserializeModel(serializeModel(model));
+    expect(restored?.deepPlan).toEqual(model.deepPlan);
+    expect(restored?.deepPlan?.pendingQuestionnaire?.draftAnswers[0]?.selectedOptionIds).toEqual([
+      "redis",
+    ]);
   });
 });

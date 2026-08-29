@@ -81,6 +81,17 @@ export const EVENT_KINDS = [
   "token_saving.policy_applied",
   /** Token saving: the effective level was relaxed below the requested one. */
   "token_saving.relaxed",
+  /** Deep Plan durable state transitions and questionnaire resume checkpoints. */
+  "deep_plan.started",
+  "deep_plan.questionnaire_opened",
+  "deep_plan.questionnaire_updated",
+  "deep_plan.questionnaire_answered",
+  "deep_plan.plan_written",
+  "deep_plan.paused",
+  "deep_plan.resumed",
+  "deep_plan.draft_requested",
+  "deep_plan.completed",
+  "deep_plan.cancelled",
 ] as const;
 
 /** v1.3 provider-native lifecycle kinds, kept separate for legacy consumers. */
@@ -413,6 +424,16 @@ const KIND_DEFAULTS: Record<
   "token_saving.changed": { level: "info", visibility: "hidden", durability: "journaled" },
   "token_saving.policy_applied": { level: "info", visibility: "hidden", durability: "journaled" },
   "token_saving.relaxed": { level: "warning", visibility: "hidden", durability: "journaled" },
+  "deep_plan.started": { level: "info", visibility: "hidden", durability: "journaled" },
+  "deep_plan.questionnaire_opened": { level: "info", visibility: "hidden", durability: "journaled" },
+  "deep_plan.questionnaire_updated": { level: "info", visibility: "hidden", durability: "journaled" },
+  "deep_plan.questionnaire_answered": { level: "info", visibility: "hidden", durability: "journaled" },
+  "deep_plan.plan_written": { level: "info", visibility: "hidden", durability: "journaled" },
+  "deep_plan.paused": { level: "info", visibility: "hidden", durability: "journaled" },
+  "deep_plan.resumed": { level: "info", visibility: "hidden", durability: "journaled" },
+  "deep_plan.draft_requested": { level: "info", visibility: "hidden", durability: "journaled" },
+  "deep_plan.completed": { level: "success", visibility: "hidden", durability: "journaled" },
+  "deep_plan.cancelled": { level: "warning", visibility: "hidden", durability: "journaled" },
   "model.capability_snapshot": { level: "info", visibility: "hidden", durability: "journaled" },
   "model.route_decided": { level: "info", visibility: "hidden", durability: "journaled" },
   "model.phase_changed": { level: "info", visibility: "hidden", durability: "journaled" },

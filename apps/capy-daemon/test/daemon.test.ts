@@ -214,6 +214,60 @@ describe("session attach/detach and approvals", () => {
 
     await daemon.stop();
   });
+
+  test("pending questionnaire survives controller detach and blocks workspace eviction", async () => {
+    const dir = runtimeDir();
+    const daemon = new CapybaraDaemon({
+      runtimeDir: dir,
+      backend: fakeBackend(),
+      listen: false,
+      executableDigest: DIGEST,
+    });
+    await daemon.start();
+    await daemon.attachSession({
+      sessionId: "ses_questions",
+      workspaceIdentityDigest: "ws_questions",
+      connectionId: "conn_questions",
+      clientId: "client_questions",
+      mode: "controller",
+    });
+    const workspace = daemon.workspaces.get("ws_questions")!;
+    const actor = workspace.getSession("ses_questions")!;
+    await actor.dispatch({
+      kind: "submit_turn",
+      turnId: "turn_questions",
+      clientId: "client_questions",
+      prompt: "plan",
+    });
+    await actor.dispatch({
+      kind: "mark_waiting_user_input",
+      questionnaireId: "cache-round-1",
+    });
+    const detached = await daemon.detachSession({
+      sessionId: "ses_questions",
+      workspaceIdentityDigest: "ws_questions",
+      connectionId: "conn_questions",
+    });
+    expect(detached.lifecycle).toBe("waiting_user_input");
+    expect(detached.pendingUserInputId).toBe("cache-round-1");
+    expect(detached.activeTurnId).toBe("turn_questions");
+    expect(workspace.isIdle(Date.now() + 60_000)).toBe(false);
+
+    await actor.dispatch({
+      kind: "attach_client",
+      connectionId: "conn_questions_2",
+      clientId: "client_questions",
+      mode: "controller",
+    });
+    const resolved = await actor.dispatch({
+      kind: "resolve_user_input",
+      clientId: "client_questions",
+      questionnaireId: "cache-round-1",
+    });
+    expect(resolved.lifecycle).toBe("running");
+    expect(resolved.pendingUserInputId).toBeUndefined();
+    await daemon.stop();
+  });
 });
 
 describe("event hub cursor", () => {

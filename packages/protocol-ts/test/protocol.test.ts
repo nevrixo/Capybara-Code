@@ -73,7 +73,7 @@ describe("event envelope (§20.6)", () => {
   });
 
   test("every registered kind has defaults", () => {
-    expect(EVENT_KINDS.length).toBe(59);
+    expect(EVENT_KINDS.length).toBe(69);
     expect(RUNTIME_FEATURE_EVENT_KINDS.length).toBeGreaterThan(80);
     for (const kind of ALL_EVENT_KINDS) {
       const defaults = defaultsForKind(kind);
@@ -87,6 +87,12 @@ describe("event envelope (§20.6)", () => {
     expect(isKnownEventKind("skills.changed")).toBe(true);
     expect(mustJournal("skills.changed")).toBe(true);
     expect(defaultsForKind("skills.changed").visibility).toBe("hidden");
+  });
+
+  test("Deep Plan questionnaire checkpoints are hidden and journaled", () => {
+    expect(isKnownEventKind("deep_plan.questionnaire_opened")).toBe(true);
+    expect(mustJournal("deep_plan.questionnaire_updated")).toBe(true);
+    expect(defaultsForKind("deep_plan.questionnaire_answered").visibility).toBe("hidden");
   });
 
   test("runtime-feature kinds are known and journaled by default except live LSP/plugin hooks", () => {

@@ -269,6 +269,251 @@ export function createDeepPlanState(
   };
 }
 
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function stateInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+function parseStoredAnswer(raw: unknown): DeepPlanAnswer | undefined {
+  const value = recordValue(raw);
+  if (value === undefined) return undefined;
+  if (typeof value.questionId !== "string" || typeof value.decisionKey !== "string") {
+    return undefined;
+  }
+  const selectedOptionIds = value.selectedOptionIds;
+  if (
+    selectedOptionIds !== undefined &&
+    (!Array.isArray(selectedOptionIds) ||
+      selectedOptionIds.some((entry) => typeof entry !== "string"))
+  ) return undefined;
+  if (value.customText !== undefined && typeof value.customText !== "string") return undefined;
+  const questionId = sanitizeDeepPlanText(value.questionId);
+  const decisionKey = sanitizeDeepPlanText(value.decisionKey);
+  if (questionId.length === 0 || decisionKey.length === 0) return undefined;
+  const customText =
+    typeof value.customText === "string"
+      ? sanitizeDeepPlanText(value.customText).slice(0, 2_000)
+      : undefined;
+  return {
+    questionId,
+    decisionKey,
+    ...(selectedOptionIds === undefined
+      ? {}
+      : {
+          selectedOptionIds: [
+            ...new Set(selectedOptionIds.map((entry) => sanitizeDeepPlanText(entry))),
+          ],
+        }),
+    ...(customText === undefined || customText.length === 0 ? {} : { customText }),
+  };
+}
+
+/** Validate an untrusted journal/snapshot state before it reaches the controller. */
+export function parseDeepPlanState(raw: unknown): DeepPlanState | undefined {
+  const value = recordValue(raw);
+  if (value === undefined || (value.mode !== "off" && value.mode !== "on")) return undefined;
+  const phases: readonly DeepPlanPhase[] = [
+    "idle",
+    "investigating",
+    "questioning",
+    "drafting",
+    "validating",
+    "review_ready",
+    "revising",
+    "paused",
+    "completed",
+    "cancelled",
+  ];
+  if (typeof value.phase !== "string" || !phases.includes(value.phase as DeepPlanPhase)) {
+    return undefined;
+  }
+  const revision = stateInteger(value.revision);
+  const turnRevision = stateInteger(value.turnRevision);
+  const round = stateInteger(value.round);
+  const answerRevision = stateInteger(value.answerRevision);
+  const planAnswerRevision = stateInteger(value.planAnswerRevision);
+  if (
+    revision === undefined ||
+    turnRevision === undefined ||
+    round === undefined ||
+    answerRevision === undefined ||
+    planAnswerRevision === undefined ||
+    typeof value.draftNow !== "boolean" ||
+    typeof value.updatedAt !== "string" ||
+    !Array.isArray(value.answers) ||
+    !Array.isArray(value.decisions) ||
+    !Array.isArray(value.contradictions) ||
+    !Array.isArray(value.questionnaireResults)
+  ) return undefined;
+
+  const answers: DeepPlanAnswerRecord[] = [];
+  for (const rawAnswer of value.answers) {
+    const stored = recordValue(rawAnswer);
+    const answer = parseStoredAnswer(rawAnswer);
+    const storedRevision = stateInteger(stored?.answerRevision);
+    if (
+      stored === undefined ||
+      answer === undefined ||
+      typeof stored.questionnaireId !== "string" ||
+      storedRevision === undefined ||
+      typeof stored.answeredAt !== "string"
+    ) return undefined;
+    answers.push({
+      ...answer,
+      questionnaireId: sanitizeDeepPlanText(stored.questionnaireId),
+      answerRevision: storedRevision,
+      answeredAt: stored.answeredAt,
+    });
+  }
+
+  const decisions: DeepPlanDecision[] = [];
+  for (const rawDecision of value.decisions) {
+    const decision = recordValue(rawDecision);
+    if (
+      decision === undefined ||
+      typeof decision.key !== "string" ||
+      !["unresolved", "resolved", "assumed", "conflicted"].includes(String(decision.status)) ||
+      !["user", "repository", "conversation", "assumption"].includes(String(decision.source)) ||
+      typeof decision.blocking !== "boolean" ||
+      (decision.evidenceRefs !== undefined &&
+        (!Array.isArray(decision.evidenceRefs) ||
+          decision.evidenceRefs.some((entry) => typeof entry !== "string")))
+    ) return undefined;
+    decisions.push({
+      key: sanitizeDeepPlanText(decision.key),
+      status: decision.status as DeepPlanDecision["status"],
+      ...(decision.value === undefined ? {} : { value: structuredClone(decision.value) }),
+      source: decision.source as DeepPlanDecision["source"],
+      ...(decision.evidenceRefs === undefined
+        ? {}
+        : { evidenceRefs: [...new Set(decision.evidenceRefs as string[])] }),
+      blocking: decision.blocking,
+    });
+  }
+
+  const contradictions: DeepPlanContradiction[] = [];
+  for (const rawContradiction of value.contradictions) {
+    const contradiction = recordValue(rawContradiction);
+    if (
+      contradiction === undefined ||
+      typeof contradiction.decisionKey !== "string" ||
+      typeof contradiction.detail !== "string" ||
+      typeof contradiction.recordedAt !== "string" ||
+      !Array.isArray(contradiction.evidenceRefs) ||
+      contradiction.evidenceRefs.some((entry) => typeof entry !== "string")
+    ) return undefined;
+    contradictions.push({
+      decisionKey: sanitizeDeepPlanText(contradiction.decisionKey),
+      detail: sanitizeDeepPlanText(contradiction.detail),
+      evidenceRefs: [...contradiction.evidenceRefs] as string[],
+      recordedAt: contradiction.recordedAt,
+    });
+  }
+
+  const questionnaireResults: DeepPlanQuestionnaireRecord[] = [];
+  for (const rawRecord of value.questionnaireResults) {
+    const stored = recordValue(rawRecord);
+    const result = recordValue(stored?.result);
+    if (
+      stored === undefined ||
+      result === undefined ||
+      typeof stored.questionnaireId !== "string" ||
+      typeof stored.completedAt !== "string" ||
+      typeof result.questionnaireId !== "string" ||
+      !["submitted", "draft_now", "paused", "cancelled", "unavailable"].includes(String(result.status)) ||
+      !Array.isArray(result.answers)
+    ) return undefined;
+    const resultAnswers = result.answers.map(parseStoredAnswer);
+    if (resultAnswers.some((answer) => answer === undefined)) return undefined;
+    questionnaireResults.push({
+      questionnaireId: sanitizeDeepPlanText(stored.questionnaireId),
+      completedAt: stored.completedAt,
+      result: {
+        questionnaireId: sanitizeDeepPlanText(result.questionnaireId),
+        status: result.status as DeepPlanQuestionnaireStatus,
+        answers: resultAnswers as DeepPlanAnswer[],
+      },
+    });
+  }
+
+  let pendingQuestionnaire: DeepPlanQuestionnaire | undefined;
+  if (value.pendingQuestionnaire !== undefined) {
+    const pending = recordValue(value.pendingQuestionnaire);
+    if (pending === undefined || !Array.isArray(pending.questions)) return undefined;
+    try {
+      const normalized = normalizeQuestionnaire(
+        pending as unknown as UserAskBatchInput,
+        typeof pending.openedAt === "string" ? pending.openedAt : value.updatedAt,
+      );
+      const draftAnswers = Array.isArray(pending.draftAnswers)
+        ? pending.draftAnswers.map(parseStoredAnswer)
+        : [];
+      if (draftAnswers.some((answer) => answer === undefined)) return undefined;
+      const activeQuestionIndex = stateInteger(pending.activeQuestionIndex) ?? 0;
+      pendingQuestionnaire = {
+        ...normalized,
+        activeQuestionIndex: Math.min(
+          normalized.questions.length - 1,
+          activeQuestionIndex,
+        ),
+        draftAnswers: draftAnswers as DeepPlanAnswer[],
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
+  for (const key of [
+    "activeTurnKey",
+    "taskEpochId",
+    "goalDigest",
+    "workspaceIdentityDigest",
+    "pausedReason",
+  ] as const) {
+    if (value[key] !== undefined && typeof value[key] !== "string") return undefined;
+  }
+  const planTurnRevision =
+    value.planTurnRevision === undefined ? undefined : stateInteger(value.planTurnRevision);
+  const planRevision =
+    value.planRevision === undefined ? undefined : stateInteger(value.planRevision);
+  if (
+    (value.planTurnRevision !== undefined && planTurnRevision === undefined) ||
+    (value.planRevision !== undefined && planRevision === undefined)
+  ) return undefined;
+  return cloneState({
+    mode: value.mode,
+    phase: value.phase as DeepPlanPhase,
+    revision,
+    turnRevision,
+    ...(typeof value.activeTurnKey === "string" ? { activeTurnKey: value.activeTurnKey } : {}),
+    ...(typeof value.taskEpochId === "string" ? { taskEpochId: value.taskEpochId } : {}),
+    ...(typeof value.goalDigest === "string" ? { goalDigest: value.goalDigest } : {}),
+    ...(typeof value.workspaceIdentityDigest === "string"
+      ? { workspaceIdentityDigest: value.workspaceIdentityDigest }
+      : {}),
+    round,
+    ...(pendingQuestionnaire === undefined ? {} : { pendingQuestionnaire }),
+    answers,
+    decisions,
+    contradictions,
+    questionnaireResults,
+    answerRevision,
+    planAnswerRevision,
+    ...(planTurnRevision === undefined ? {} : { planTurnRevision }),
+    ...(planRevision === undefined ? {} : { planRevision }),
+    draftNow: value.draftNow,
+    ...(typeof value.pausedReason === "string" ? { pausedReason: value.pausedReason } : {}),
+    updatedAt: value.updatedAt,
+  });
+}
+
 function normalizeQuestionnaire(input: UserAskBatchInput, now: string): DeepPlanQuestionnaire {
   const questionnaireId = bounded(input.questionnaireId, "questionnaireId", 200);
   const reason = bounded(input.reason, "reason", 1_200);
@@ -591,6 +836,13 @@ export class DeepPlanController {
 
   current(): DeepPlanState {
     return cloneState(this.#state);
+  }
+
+  hydrate(raw: unknown): boolean {
+    const state = parseDeepPlanState(raw);
+    if (state === undefined) return false;
+    this.#state = state;
+    return true;
   }
 
   setMode(mode: DeepPlanMode): void {

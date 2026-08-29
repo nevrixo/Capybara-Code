@@ -300,6 +300,9 @@ export class CapybaraDaemon {
           lastJournalSequence: state.lastJournalSequence,
           hadOpenTurn: state.activeTurnId !== undefined,
           pendingApprovalIds: [...state.pendingApprovalIds],
+          ...(state.pendingUserInputId === undefined
+            ? {}
+            : { pendingQuestionnaireId: state.pendingUserInputId }),
         });
       }
     }

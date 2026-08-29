@@ -909,6 +909,11 @@ export class AgentSession {
       askBatch: async (input, signal) => {
         const opened = this.#deepPlan.openQuestionnaire(input);
         if (opened.kind === "replay") return opened.result;
+        this.#emit("deep_plan.questionnaire_opened", {
+          questionnaireId: opened.questionnaire.questionnaireId,
+          resumed: opened.kind === "pending",
+          state: this.#deepPlan.current(),
+        }, this.#currentScope());
         const result = await questionnaireBridge(
           opened.questionnaire,
           signal,
@@ -918,9 +923,28 @@ export class AgentSession {
               answers,
               activeQuestionIndex,
             );
+            this.#emit("deep_plan.questionnaire_updated", {
+              questionnaireId: opened.questionnaire.questionnaireId,
+              activeQuestionIndex,
+              state: this.#deepPlan.current(),
+            }, this.#currentScope());
           },
         );
-        return this.#deepPlan.completeQuestionnaire(result);
+        const completed = this.#deepPlan.completeQuestionnaire(result);
+        const eventKind: CbcEventKind =
+          completed.status === "submitted"
+            ? "deep_plan.questionnaire_answered"
+            : completed.status === "draft_now"
+              ? "deep_plan.draft_requested"
+              : completed.status === "cancelled"
+                ? "deep_plan.cancelled"
+                : "deep_plan.paused";
+        this.#emit(eventKind, {
+          questionnaireId: completed.questionnaireId,
+          status: completed.status,
+          state: this.#deepPlan.current(),
+        }, this.#currentScope());
+        return completed;
       },
       mcp: options.bridges?.mcp ?? options.mcpBridge ?? extensions.bridges.mcp,
       ...(options.bridges?.lsp !== undefined ? { lsp: options.bridges.lsp } : {}),
@@ -1375,6 +1399,9 @@ export class AgentSession {
       this.#turnCounter = Math.max(this.#turnCounter, options.seed.turnCounter);
     }
     this.recorder.hydrate(events, options.finalPosition);
+    if (this.recorder.model.deepPlan !== undefined) {
+      this.#deepPlan.hydrate(this.recorder.model.deepPlan);
+    }
     this.#todoController.hydrate(this.recorder.model.todo);
     // The controller is the fail-closed authority for hydrated Plan state. Keep
     // the reducer/UI projection in lockstep when a snapshot contained malformed
@@ -2761,6 +2788,11 @@ export class AgentSession {
       result.state.document !== undefined
     ) {
       this.#deepPlan.notePlanWritten(result.state.revision);
+      this.#emit("deep_plan.plan_written", {
+        planRevision: result.state.revision,
+        answerRevision: this.#deepPlan.current().answerRevision,
+        state: this.#deepPlan.current(),
+      }, this.#currentScope());
     }
     return {
       result: okResult(
@@ -3884,16 +3916,32 @@ export class AgentSession {
     this.#deepPlan.setMode(activeDeepPlanMode);
     if (activeDeepPlanMode === "on") {
       const prior = this.#deepPlan.current();
+      const resumePaused = prior.phase === "paused";
       const continuingPlan =
-        this.#todoController.current().document !== undefined &&
         prior.goalDigest !== undefined &&
-        ["validating", "review_ready", "completed", "revising"].includes(prior.phase);
+        (
+          prior.phase === "paused" ||
+          (
+            this.#todoController.current().document !== undefined &&
+            ["validating", "review_ready", "completed", "revising"].includes(prior.phase)
+          )
+        );
       this.#deepPlan.beginTurn({
         turnKey: `${epoch.current.id}:${this.#turnCounter + 1}`,
         taskEpochId: epoch.current.id,
         goalDigest: continuingPlan ? prior.goalDigest : stableDigest(prompt),
         workspaceIdentityDigest: epoch.current.workspaceIdentityDigest,
       });
+      if (resumePaused) {
+        this.#deepPlan.resume();
+        this.#emit("deep_plan.resumed", {
+          state: this.#deepPlan.current(),
+        }, this.#currentScope());
+      } else {
+        this.#emit("deep_plan.started", {
+          state: this.#deepPlan.current(),
+        }, this.#currentScope());
+      }
     }
     if (epoch.reset) {
       this.kernel.resetProviderContinuation();
@@ -3960,6 +4008,9 @@ export class AgentSession {
         !["paused", "cancelled"].includes(this.#deepPlan.current().phase)
       ) {
         this.#deepPlan.markReviewReady();
+        this.#emit("deep_plan.completed", {
+          state: this.#deepPlan.current(),
+        }, this.#currentScope());
       }
       // Cancelling stops the current turn, but it does not revoke the user's
       // digest-bound approval. Keep it for a follow-up "continue" request;

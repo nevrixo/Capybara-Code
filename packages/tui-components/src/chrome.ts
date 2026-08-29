@@ -65,6 +65,7 @@ export function visibleLiveState(
   if (
     live.kind === "working" ||
     live.kind === "waiting_for_task" ||
+    live.kind === "waiting_user_input" ||
     live.kind === "running_tests" ||
     live.kind === "awaiting_approval"
   ) {
@@ -94,6 +95,8 @@ export function liveStateLabel(live: LiveState): string {
       return "Running tests...";
     case "awaiting_approval":
       return "Approval required";
+    case "waiting_user_input":
+      return "Waiting for your answers";
     case "complete":
       return "Turn complete";
     case "partial":
