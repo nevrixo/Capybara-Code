@@ -13,3 +13,4 @@ export * from "./journal.ts";
 export * from "./persistence.ts";
 export * from './epoch.ts';
 export * from "./reasoning-replay.ts";
+export * from "./deep-plan.ts";
