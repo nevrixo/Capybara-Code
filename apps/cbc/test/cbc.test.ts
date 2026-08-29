@@ -1621,6 +1621,142 @@ describe("interactive UI (§6.2, §6.21)", () => {
     instance.restore();
   });
 
+  test("questionnaire focus submits a structured single-select answer", async () => {
+    const host = createFakeHost({ isTty: true, columns: 100, env: { NO_COLOR: "1" } });
+    const decision = decideRenderMode({ host, rendererAvailable: true });
+    const instance = new InteractiveUi({
+      host,
+      decision,
+      writer: new LineWriter(host, decision),
+      workspacePath: "/work/project",
+      version: "0.1.0-test",
+    });
+    const pending = instance.requestUserQuestionnaire({
+      questionnaireId: "cache-1",
+      reason: "Choose the cache layer",
+      questions: [{
+        id: "layer",
+        decisionKey: "cache.layer",
+        tab: "Layer",
+        question: "Where should values live?",
+        kind: "single_select",
+        required: true,
+        options: [{ id: "memory", label: "Memory" }, { id: "redis", label: "Redis" }],
+      }],
+    });
+    expect(instance.userAskActive).toBe(true);
+    instance.handleUserAskKey({ key: "down" });
+    instance.handleUserAskKey({ key: "enter" });
+    expect(await pending).toEqual({
+      questionnaireId: "cache-1",
+      status: "submitted",
+      answers: [{
+        questionId: "layer",
+        decisionKey: "cache.layer",
+        selectedOptionIds: ["redis"],
+      }],
+    });
+    expect(instance.userAskActive).toBe(false);
+    instance.restore();
+  });
+
+  test("questionnaire supports multi-select, text, required validation, and draft-now", async () => {
+    const host = createFakeHost({ isTty: true, columns: 100, env: { NO_COLOR: "1" } });
+    const decision = decideRenderMode({ host, rendererAvailable: true });
+    const instance = new InteractiveUi({
+      host,
+      decision,
+      writer: new LineWriter(host, decision),
+      workspacePath: "/work/project",
+      version: "0.1.0-test",
+    });
+    const pending = instance.requestUserQuestionnaire({
+      questionnaireId: "cache-2",
+      reason: "Choose behavior",
+      questions: [
+        {
+          id: "data",
+          decisionKey: "cache.data",
+          tab: "Data",
+          question: "What should be cached?",
+          kind: "multi_select",
+          required: true,
+          options: [{ id: "api", label: "API" }, { id: "query", label: "Query" }],
+        },
+        {
+          id: "failure",
+          decisionKey: "cache.failure",
+          tab: "Failure",
+          question: "Fallback behavior?",
+          kind: "text",
+          required: true,
+        },
+      ],
+    });
+    instance.handleUserAskKey({ key: "text", text: " " });
+    instance.handleUserAskKey({ key: "tab" });
+    instance.handleUserAskKey({ key: "ctrl+enter" });
+    expect(instance.userAskActive).toBe(true);
+    instance.handleUserAskKey({ key: "text", text: "원본으로 폴백" });
+    instance.handleUserAskKey({ key: "escape" });
+    instance.handleUserAskKey({ key: "down" });
+    instance.handleUserAskKey({ key: "enter" });
+    expect(await pending).toEqual({
+      questionnaireId: "cache-2",
+      status: "draft_now",
+      answers: [
+        {
+          questionId: "data",
+          decisionKey: "cache.data",
+          selectedOptionIds: ["api"],
+        },
+        {
+          questionId: "failure",
+          decisionKey: "cache.failure",
+          customText: "원본으로 폴백",
+        },
+      ],
+    });
+    instance.restore();
+  });
+
+  test("session reset cancels a questionnaire while preserving its draft result", async () => {
+    const host = createFakeHost({ isTty: true, columns: 100, env: { NO_COLOR: "1" } });
+    const decision = decideRenderMode({ host, rendererAvailable: true });
+    const instance = new InteractiveUi({
+      host,
+      decision,
+      writer: new LineWriter(host, decision),
+      workspacePath: "/work/project",
+      version: "0.1.0-test",
+    });
+    const pending = instance.requestUserQuestionnaire({
+      questionnaireId: "resume-1",
+      reason: "Resume safely",
+      questions: [{
+        id: "notes",
+        decisionKey: "notes",
+        tab: "Notes",
+        question: "Notes?",
+        kind: "text",
+        required: false,
+      }],
+    });
+    instance.handleUserAskKey({ key: "text", text: "draft" });
+    instance.resetSession(emptyViewModel("replacement"));
+    expect(await pending).toEqual({
+      questionnaireId: "resume-1",
+      status: "cancelled",
+      answers: [{
+        questionId: "notes",
+        decisionKey: "notes",
+        customText: "draft",
+      }],
+    });
+    expect(instance.userAskActive).toBe(false);
+    instance.restore();
+  });
+
   test("collapses repeated notices", () => {
     const host = createFakeHost({ isTty: true, columns: 120, env: { NO_COLOR: "1" } });
     const decision = decideRenderMode({ host, rendererAvailable: true });

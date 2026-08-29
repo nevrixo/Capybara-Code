@@ -22,7 +22,19 @@
 
 import type { ApprovalRequest } from "@cbc/permissions";
 import type { CbcEvent } from "@cbc/protocol";
-import type { SessionViewModel, TaskState, TimelineApproval, TimelineItem, TimelineSubagentEvent, TimelineTask } from "@cbc/session-domain";
+import type {
+  DeepPlanAnswer,
+  DeepPlanQuestion,
+  DeepPlanQuestionnaire,
+  SessionViewModel,
+  TaskState,
+  TimelineApproval,
+  TimelineItem,
+  TimelineSubagentEvent,
+  TimelineTask,
+  UserAskBatchInput,
+  UserAskBatchResult,
+} from "@cbc/session-domain";
 import {
   PagedTimelineStore,
   ProjectedTimeline,
@@ -39,6 +51,7 @@ import {
   renderApproval,
   renderPlanApprovalPicker,
   renderInputPrompt,
+  renderQuestionnaire,
   renderUserAsk,
   renderCompletionPopup,
   renderComposer,
@@ -53,6 +66,7 @@ import {
   isCapturingOverlay,
   projectTimeline,
   restoreSequence,
+  questionnairePauseActions,
   segment,
   stringWidth,
   graphemes,
@@ -87,6 +101,26 @@ import {
   type ToastState,
   type ToolDetail,
 } from "@cbc/tui-components";
+
+type QuestionnaireRequest = UserAskBatchInput & Partial<
+  Pick<DeepPlanQuestionnaire, "activeQuestionIndex" | "draftAnswers">
+>;
+
+interface QuestionnaireFocus {
+  readonly input: QuestionnaireRequest;
+  answers: DeepPlanAnswer[];
+  activeQuestionIndex: number;
+  optionCursor: number;
+  textCursor: number;
+  editingCustom: boolean;
+  pauseMenuSelected?: number | undefined;
+  validationMessage?: string | undefined;
+  readonly resolve: (result: UserAskBatchResult) => void;
+  readonly onDraftChange?: (
+    answers: readonly DeepPlanAnswer[],
+    activeQuestionIndex: number,
+  ) => void;
+}
 
 /** Concise choices shown when a ready Plan Contract asks what to do next. */
 export const PLAN_APPROVAL_CHOICES = [
@@ -811,6 +845,9 @@ export class InteractiveUi {
       }
     | undefined;
 
+  /** A batch questionnaire sharing the same single key-stream owner. */
+  #questionnaire: QuestionnaireFocus | undefined;
+
   /** True while a document overlay is open. */
   get overlayOpen(): boolean {
     return this.#overlay !== undefined;
@@ -841,7 +878,7 @@ export class InteractiveUi {
 
   /** True while a `user.ask` choice card owns the session key stream. */
   get userAskActive(): boolean {
-    return this.#userAsk !== undefined;
+    return this.#questionnaire !== undefined || this.#userAsk !== undefined;
   }
 
   /** Current semantic renderer context for host-built document overlays. */
@@ -1198,6 +1235,9 @@ export class InteractiveUi {
   /** Present a `user.ask` choice list inside the active TUI frame. */
   requestUserAsk(question: string, choices: readonly string[]): Promise<number> {
     if (!this.#fullScreen || choices.length === 0) return Promise.resolve(-1);
+    if (this.#questionnaire !== undefined) {
+      this.#finishQuestionnaire("cancelled");
+    }
     if (this.#userAsk !== undefined) {
       const pending = this.#userAsk;
       this.#userAsk = undefined;
@@ -1212,6 +1252,10 @@ export class InteractiveUi {
 
   /** Route one key to the focused `user.ask` choice list. */
   handleUserAskKey(event: InputEvent): void {
+    if (this.#questionnaire !== undefined) {
+      this.#handleQuestionnaireKey(event);
+      return;
+    }
     const ask = this.#userAsk;
     if (ask === undefined || isMouseEvent(event)) return;
     const count = ask.choices.length;
@@ -1266,6 +1310,503 @@ export class InteractiveUi {
         }
         return;
       }
+      default:
+        return;
+    }
+  }
+
+  /** Present one structured questionnaire inside the active TUI frame. */
+  requestUserQuestionnaire(
+    input: QuestionnaireRequest,
+    onDraftChange?: (
+      answers: readonly DeepPlanAnswer[],
+      activeQuestionIndex: number,
+    ) => void,
+  ): Promise<UserAskBatchResult> {
+    if (!this.#fullScreen || input.questions.length === 0) {
+      return Promise.resolve({
+        questionnaireId: input.questionnaireId,
+        status: "unavailable",
+        answers: [],
+      });
+    }
+    if (this.#userAsk !== undefined) {
+      const pending = this.#userAsk;
+      this.#userAsk = undefined;
+      pending.resolve(-1);
+    }
+    if (this.#questionnaire !== undefined) {
+      const pending = this.#questionnaire;
+      this.#questionnaire = undefined;
+      pending.resolve({
+        questionnaireId: pending.input.questionnaireId,
+        status: "cancelled",
+        answers: pending.answers,
+      });
+    }
+    if (this.#questionnaire !== undefined) this.#finishQuestionnaire("cancelled");
+    const activeQuestionIndex = Math.max(
+      0,
+      Math.min(input.questions.length - 1, input.activeQuestionIndex ?? 0),
+    );
+    const answers = (input.draftAnswers ?? []).map((answer) => ({
+      ...answer,
+      ...(answer.selectedOptionIds === undefined
+        ? {}
+        : { selectedOptionIds: [...answer.selectedOptionIds] }),
+    }));
+    return new Promise<UserAskBatchResult>((resolve) => {
+      this.#questionnaire = {
+        input,
+        answers,
+        activeQuestionIndex,
+        optionCursor: 0,
+        textCursor: 0,
+        editingCustom: false,
+        resolve,
+        ...(onDraftChange === undefined ? {} : { onDraftChange }),
+      };
+      this.#resetQuestionnaireCursor();
+      this.#invalidateTimelineScrollRange();
+      this.#scheduleFrame();
+    });
+  }
+
+  /** Abort a focused questionnaire without leaking its key ownership. */
+  cancelUserQuestionnaire(): void {
+    this.#finishQuestionnaire("cancelled");
+  }
+
+  #questionnaireAnswer(
+    focus: QuestionnaireFocus,
+    questionId: string,
+  ): DeepPlanAnswer | undefined {
+    return focus.answers.find((answer) => answer.questionId === questionId);
+  }
+
+  #questionnaireAnswerPresent(answer: DeepPlanAnswer | undefined): boolean {
+    return answer !== undefined && (
+      (answer.selectedOptionIds?.length ?? 0) > 0 ||
+      (answer.customText?.trim().length ?? 0) > 0
+    );
+  }
+
+  #currentQuestionnaireQuestion(focus: QuestionnaireFocus): DeepPlanQuestion | undefined {
+    return focus.input.questions[focus.activeQuestionIndex];
+  }
+
+  #setQuestionnaireAnswer(focus: QuestionnaireFocus, answer: DeepPlanAnswer): void {
+    const index = focus.answers.findIndex((candidate) => candidate.questionId === answer.questionId);
+    const normalized: DeepPlanAnswer = {
+      ...answer,
+      ...(answer.selectedOptionIds === undefined
+        ? {}
+        : { selectedOptionIds: [...answer.selectedOptionIds] }),
+    };
+    if (!this.#questionnaireAnswerPresent(normalized)) {
+      if (index >= 0) focus.answers.splice(index, 1);
+    } else if (index < 0) {
+      focus.answers.push(normalized);
+    } else {
+      focus.answers[index] = normalized;
+    }
+    focus.validationMessage = undefined;
+    this.#notifyQuestionnaireDraft(focus);
+  }
+
+  #notifyQuestionnaireDraft(focus: QuestionnaireFocus): void {
+    if (focus.onDraftChange === undefined) return;
+    try {
+      focus.onDraftChange(
+        focus.answers.map((answer) => ({
+          ...answer,
+          ...(answer.selectedOptionIds === undefined
+            ? {}
+            : { selectedOptionIds: [...answer.selectedOptionIds] }),
+        })),
+        focus.activeQuestionIndex,
+      );
+    } catch {
+      focus.validationMessage = "The questionnaire draft could not be persisted.";
+    }
+  }
+
+  #finishQuestionnaire(status: UserAskBatchResult["status"]): void {
+    const focus = this.#questionnaire;
+    if (focus === undefined) return;
+    this.#questionnaire = undefined;
+    this.#invalidateTimelineScrollRange();
+    focus.resolve({
+      questionnaireId: focus.input.questionnaireId,
+      status,
+      answers: focus.answers.map((answer) => ({
+        ...answer,
+        ...(answer.selectedOptionIds === undefined
+          ? {}
+          : { selectedOptionIds: [...answer.selectedOptionIds] }),
+      })),
+    });
+    this.#scheduleFrame();
+  }
+
+  #resetQuestionnaireCursor(): void {
+    const focus = this.#questionnaire;
+    if (focus === undefined) return;
+    const question = this.#currentQuestionnaireQuestion(focus);
+    if (question === undefined) return;
+    const answer = this.#questionnaireAnswer(focus, question.id);
+    const selectedId = answer?.selectedOptionIds?.[0];
+    const selectedIndex = selectedId === undefined
+      ? -1
+      : (question.options ?? []).findIndex((option) => option.id === selectedId);
+    focus.optionCursor = selectedIndex >= 0
+      ? selectedIndex
+      : (answer?.customText?.length ?? 0) > 0 && question.allowCustom === true
+        ? (question.options ?? []).length
+        : 0;
+    focus.textCursor = answer?.customText?.length ?? 0;
+    focus.editingCustom = false;
+  }
+
+  #moveQuestionnaire(delta: number): void {
+    const focus = this.#questionnaire;
+    if (focus === undefined || focus.input.questions.length === 0) return;
+    focus.activeQuestionIndex =
+      (focus.activeQuestionIndex + delta + focus.input.questions.length) %
+      focus.input.questions.length;
+    focus.validationMessage = undefined;
+    this.#resetQuestionnaireCursor();
+    this.#notifyQuestionnaireDraft(focus);
+    this.#scheduleFrame();
+  }
+
+  #submitQuestionnaire(): void {
+    const focus = this.#questionnaire;
+    if (focus === undefined) return;
+    const missing = focus.input.questions.findIndex((question) =>
+      question.required &&
+      !this.#questionnaireAnswerPresent(this.#questionnaireAnswer(focus, question.id))
+    );
+    if (missing >= 0) {
+      focus.activeQuestionIndex = missing;
+      focus.validationMessage =
+        `Answer required: ${focus.input.questions[missing]?.tab ?? "question"}`;
+      this.#resetQuestionnaireCursor();
+      this.#notifyQuestionnaireDraft(focus);
+      this.#scheduleFrame();
+      return;
+    }
+    this.#finishQuestionnaire("submitted");
+  }
+
+  #advanceQuestionnaireOrSubmit(): void {
+    const focus = this.#questionnaire;
+    if (focus === undefined) return;
+    if (focus.activeQuestionIndex >= focus.input.questions.length - 1) {
+      this.#submitQuestionnaire();
+    } else {
+      this.#moveQuestionnaire(1);
+    }
+  }
+
+  #activateQuestionnaireOption(index: number): void {
+    const focus = this.#questionnaire;
+    if (focus === undefined) return;
+    const question = this.#currentQuestionnaireQuestion(focus);
+    if (question === undefined || question.kind === "text") return;
+    const options = question.options ?? [];
+    focus.optionCursor = Math.max(
+      0,
+      Math.min(options.length + (question.allowCustom === true ? 1 : 0) - 1, index),
+    );
+    if (focus.optionCursor >= options.length && question.allowCustom === true) {
+      focus.editingCustom = true;
+      const answer = this.#questionnaireAnswer(focus, question.id);
+      this.#setQuestionnaireAnswer(focus, {
+        questionId: question.id,
+        decisionKey: question.decisionKey,
+        ...(question.kind === "multi_select" && answer?.selectedOptionIds !== undefined
+          ? { selectedOptionIds: answer.selectedOptionIds }
+          : {}),
+        ...(answer?.customText === undefined ? {} : { customText: answer.customText }),
+      });
+      focus.textCursor = answer?.customText?.length ?? 0;
+      this.#scheduleFrame();
+      return;
+    }
+    const option = options[focus.optionCursor];
+    if (option === undefined) return;
+    const answer = this.#questionnaireAnswer(focus, question.id);
+    if (question.kind === "multi_select") {
+      const selected = new Set(answer?.selectedOptionIds ?? []);
+      if (selected.has(option.id)) selected.delete(option.id);
+      else selected.add(option.id);
+      this.#setQuestionnaireAnswer(focus, {
+        questionId: question.id,
+        decisionKey: question.decisionKey,
+        ...(selected.size === 0 ? {} : { selectedOptionIds: [...selected] }),
+        ...(answer?.customText === undefined ? {} : { customText: answer.customText }),
+      });
+      this.#scheduleFrame();
+      return;
+    }
+    this.#setQuestionnaireAnswer(focus, {
+      questionId: question.id,
+      decisionKey: question.decisionKey,
+      selectedOptionIds: [option.id],
+    });
+    this.#advanceQuestionnaireOrSubmit();
+  }
+
+  #questionnaireTextTarget(focus: QuestionnaireFocus): boolean {
+    const question = this.#currentQuestionnaireQuestion(focus);
+    return question?.kind === "text" || focus.editingCustom;
+  }
+
+  #insertQuestionnaireText(value: string): void {
+    const focus = this.#questionnaire;
+    if (focus === undefined || !this.#questionnaireTextTarget(focus)) return;
+    const question = this.#currentQuestionnaireQuestion(focus);
+    if (question === undefined) return;
+    const answer = this.#questionnaireAnswer(focus, question.id);
+    const current = answer?.customText ?? "";
+    const clean = value
+      .replace(/\r?\n/gu, " ")
+      .replace(/[\u0000-\u001F\u007F-\u009F]/gu, "");
+    const available = Math.max(0, 2_000 - current.length);
+    const inserted = clean.slice(0, available);
+    if (inserted.length === 0) return;
+    const cursor = Math.max(0, Math.min(current.length, focus.textCursor));
+    const customText = current.slice(0, cursor) + inserted + current.slice(cursor);
+    focus.textCursor = cursor + inserted.length;
+    this.#setQuestionnaireAnswer(focus, {
+      questionId: question.id,
+      decisionKey: question.decisionKey,
+      ...(question.kind === "multi_select" && answer?.selectedOptionIds !== undefined
+        ? { selectedOptionIds: answer.selectedOptionIds }
+        : {}),
+      customText,
+    });
+    this.#scheduleFrame();
+  }
+
+  #backspaceQuestionnaireText(): void {
+    const focus = this.#questionnaire;
+    if (focus === undefined || !this.#questionnaireTextTarget(focus)) return;
+    const question = this.#currentQuestionnaireQuestion(focus);
+    if (question === undefined) return;
+    const answer = this.#questionnaireAnswer(focus, question.id);
+    const current = answer?.customText ?? "";
+    const cursor = Math.max(0, Math.min(current.length, focus.textCursor));
+    if (cursor === 0) return;
+    const before = graphemes(current.slice(0, cursor));
+    before.pop();
+    const prefix = before.join("");
+    const customText = prefix + current.slice(cursor);
+    focus.textCursor = prefix.length;
+    this.#setQuestionnaireAnswer(focus, {
+      questionId: question.id,
+      decisionKey: question.decisionKey,
+      ...(question.kind === "multi_select" && answer?.selectedOptionIds !== undefined
+        ? { selectedOptionIds: answer.selectedOptionIds }
+        : {}),
+      ...(customText.length === 0 ? {} : { customText }),
+    });
+    this.#scheduleFrame();
+  }
+
+  #moveQuestionnaireTextCursor(delta: -1 | 1): void {
+    const focus = this.#questionnaire;
+    if (focus === undefined || !this.#questionnaireTextTarget(focus)) return;
+    const question = this.#currentQuestionnaireQuestion(focus);
+    if (question === undefined) return;
+    const current = this.#questionnaireAnswer(focus, question.id)?.customText ?? "";
+    if (delta < 0) {
+      const before = graphemes(current.slice(0, focus.textCursor));
+      before.pop();
+      focus.textCursor = before.join("").length;
+    } else {
+      const next = graphemes(current.slice(focus.textCursor))[0];
+      if (next !== undefined) focus.textCursor += next.length;
+    }
+    this.#scheduleFrame();
+  }
+
+  #handleQuestionnaireKey(event: InputEvent): void {
+    const focus = this.#questionnaire;
+    if (focus === undefined || isMouseEvent(event)) return;
+
+    if (focus.pauseMenuSelected !== undefined) {
+      const actions = questionnairePauseActions(focus.input.allowDraftNow !== false);
+      switch (event.key) {
+        case "up":
+        case "ctrl+p":
+          focus.pauseMenuSelected =
+            (focus.pauseMenuSelected - 1 + actions.length) % actions.length;
+          break;
+        case "down":
+        case "ctrl+n":
+        case "tab":
+          focus.pauseMenuSelected = (focus.pauseMenuSelected + 1) % actions.length;
+          break;
+        case "home":
+          focus.pauseMenuSelected = 0;
+          break;
+        case "end":
+          focus.pauseMenuSelected = actions.length - 1;
+          break;
+        case "escape":
+          focus.pauseMenuSelected = undefined;
+          break;
+        case "ctrl+c":
+          this.#finishQuestionnaire("cancelled");
+          return;
+        case "enter": {
+          const action = actions[focus.pauseMenuSelected];
+          if (action?.status === "return") focus.pauseMenuSelected = undefined;
+          else if (action?.status !== undefined) this.#finishQuestionnaire(action.status);
+          return;
+        }
+        case "text": {
+          const digit = event.text === undefined ? undefined : /^[1-9]$/.exec(event.text)?.[0];
+          const index = digit === undefined ? -1 : Number(digit) - 1;
+          const action = actions[index];
+          if (action?.status === "return") focus.pauseMenuSelected = undefined;
+          else if (action?.status !== undefined) this.#finishQuestionnaire(action.status);
+          return;
+        }
+        default:
+          return;
+      }
+      this.#scheduleFrame();
+      return;
+    }
+
+    const question = this.#currentQuestionnaireQuestion(focus);
+    if (question === undefined) return;
+    const optionCount =
+      (question.options?.length ?? 0) + (question.allowCustom === true ? 1 : 0);
+    switch (event.key) {
+      case "escape":
+        focus.pauseMenuSelected = 0;
+        focus.validationMessage = undefined;
+        this.#scheduleFrame();
+        return;
+      case "ctrl+c":
+        this.#finishQuestionnaire("cancelled");
+        return;
+      case "ctrl+enter":
+        this.#submitQuestionnaire();
+        return;
+      case "shift+tab":
+      case "left":
+        this.#moveQuestionnaire(-1);
+        return;
+      case "tab":
+      case "right":
+        this.#moveQuestionnaire(1);
+        return;
+      case "up":
+      case "ctrl+p":
+        if (question.kind !== "text" && optionCount > 0) {
+          focus.optionCursor = (focus.optionCursor - 1 + optionCount) % optionCount;
+          focus.editingCustom = false;
+          this.#scheduleFrame();
+        }
+        return;
+      case "down":
+      case "ctrl+n":
+        if (question.kind !== "text" && optionCount > 0) {
+          focus.optionCursor = (focus.optionCursor + 1) % optionCount;
+          focus.editingCustom = false;
+          this.#scheduleFrame();
+        }
+        return;
+      case "ctrl+b":
+        this.#moveQuestionnaireTextCursor(-1);
+        return;
+      case "ctrl+f":
+        this.#moveQuestionnaireTextCursor(1);
+        return;
+      case "home":
+        if (this.#questionnaireTextTarget(focus)) {
+          focus.textCursor = 0;
+        } else {
+          focus.optionCursor = 0;
+        }
+        this.#scheduleFrame();
+        return;
+      case "end":
+        if (this.#questionnaireTextTarget(focus)) {
+          focus.textCursor =
+            this.#questionnaireAnswer(focus, question.id)?.customText?.length ?? 0;
+        } else {
+          focus.optionCursor = Math.max(0, optionCount - 1);
+        }
+        this.#scheduleFrame();
+        return;
+      case "backspace":
+        this.#backspaceQuestionnaireText();
+        return;
+      case "ctrl+u":
+        if (this.#questionnaireTextTarget(focus)) {
+          const answer = this.#questionnaireAnswer(focus, question.id);
+          this.#setQuestionnaireAnswer(focus, {
+            questionId: question.id,
+            decisionKey: question.decisionKey,
+            ...(question.kind === "multi_select" && answer?.selectedOptionIds !== undefined
+              ? { selectedOptionIds: answer.selectedOptionIds }
+              : {}),
+          });
+          focus.textCursor = 0;
+          this.#scheduleFrame();
+        }
+        return;
+      case "paste":
+        this.#insertQuestionnaireText(event.text ?? "");
+        return;
+      case "text": {
+        if (this.#questionnaireTextTarget(focus)) {
+          this.#insertQuestionnaireText(event.text ?? "");
+          return;
+        }
+        if (question.kind === "multi_select" && event.text === " ") {
+          this.#activateQuestionnaireOption(focus.optionCursor);
+          return;
+        }
+        const digit = event.text === undefined ? undefined : /^[1-9]$/.exec(event.text)?.[0];
+        const index = digit === undefined ? -1 : Number(digit) - 1;
+        if (index >= 0 && index < optionCount) this.#activateQuestionnaireOption(index);
+        return;
+      }
+      case "enter":
+        if (this.#questionnaireTextTarget(focus)) {
+          if (
+            question.required &&
+            !this.#questionnaireAnswerPresent(this.#questionnaireAnswer(focus, question.id))
+          ) {
+            focus.validationMessage = `Answer required: ${question.tab}`;
+            this.#scheduleFrame();
+            return;
+          }
+          focus.editingCustom = false;
+          this.#advanceQuestionnaireOrSubmit();
+          return;
+        }
+        if (question.kind === "single_select") {
+          this.#activateQuestionnaireOption(focus.optionCursor);
+          return;
+        }
+        if (
+          question.kind === "multi_select" &&
+          focus.optionCursor >= (question.options?.length ?? 0) &&
+          question.allowCustom === true
+        ) {
+          this.#activateQuestionnaireOption(focus.optionCursor);
+          return;
+        }
+        this.#advanceQuestionnaireOrSubmit();
+        return;
       default:
         return;
     }
@@ -1822,6 +2363,15 @@ export class InteractiveUi {
       const pending = this.#userAsk;
       this.#userAsk = undefined;
       pending.resolve(-1);
+    }
+    if (this.#questionnaire !== undefined) {
+      const pending = this.#questionnaire;
+      this.#questionnaire = undefined;
+      pending.resolve({
+        questionnaireId: pending.input.questionnaireId,
+        status: "cancelled",
+        answers: pending.answers,
+      });
     }
     // Timeline ids restart at the same sequence-derived values in every session.
     // A projection is session-scoped: never reuse same-id/same-revision groups
@@ -2547,6 +3097,15 @@ export class InteractiveUi {
       this.#userAsk = undefined;
       pending.resolve(-1);
     }
+    if (this.#questionnaire !== undefined) {
+      const pending = this.#questionnaire;
+      this.#questionnaire = undefined;
+      pending.resolve({
+        questionnaireId: pending.input.questionnaireId,
+        status: "cancelled",
+        answers: pending.answers,
+      });
+    }
     this.#stopLiveAnimation();
     if (this.#toastTimer !== undefined) {
       clearTimeout(this.#toastTimer);
@@ -2873,6 +3432,7 @@ export class InteractiveUi {
         this.#approval === undefined &&
         this.#planApproval === undefined &&
         this.#userAsk === undefined &&
+        this.#questionnaire === undefined &&
         this.#promptRequest === undefined);
     const sessionModel =
       displayModel === undefined
@@ -2889,6 +3449,7 @@ export class InteractiveUi {
     const approval = this.#approval;
     const planApproval = this.#planApproval;
     const userAsk = this.#userAsk;
+    const questionnaire = this.#questionnaire;
     const overlayLines =
       this.#overlay !== undefined
         ? renderOverlay(
@@ -2922,12 +3483,38 @@ export class InteractiveUi {
         ? renderUserAsk(userAsk, blockContext(capabilities, targetWidth))
         : undefined;
 
+    const questionnaireCardLines =
+      questionnaire !== undefined
+        ? renderQuestionnaire({
+            questionnaireId: questionnaire.input.questionnaireId,
+            reason: questionnaire.input.reason,
+            questions: questionnaire.input.questions,
+            allowDraftNow: questionnaire.input.allowDraftNow !== false,
+            activeQuestionIndex: questionnaire.activeQuestionIndex,
+            answers: questionnaire.answers,
+            optionCursor: questionnaire.optionCursor,
+            textCursor: questionnaire.textCursor,
+            ...(questionnaire.editingCustom ? { editingCustom: true } : {}),
+            ...(questionnaire.pauseMenuSelected === undefined
+              ? {}
+              : { pauseMenuSelected: questionnaire.pauseMenuSelected }),
+            ...(questionnaire.validationMessage === undefined
+              ? {}
+              : { validationMessage: questionnaire.validationMessage }),
+          }, blockContext(capabilities, targetWidth))
+        : undefined;
+
     const promptCardLines =
       this.#promptRequest !== undefined
         ? renderInputPrompt(this.#promptRequest, blockContext(capabilities, targetWidth))
         : undefined;
 
-    const activeCardLines = userAskCardLines ?? promptCardLines ?? approvalCardLines ?? planApprovalCardLines;
+    const activeCardLines =
+      questionnaireCardLines ??
+      userAskCardLines ??
+      promptCardLines ??
+      approvalCardLines ??
+      planApprovalCardLines;
 
     const renderedFrame = this.#perf.measure(
       showHome ? "chrome_render" : "timeline_render",

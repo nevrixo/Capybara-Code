@@ -319,11 +319,33 @@ export async function interactive(
         : "declined";
     };
 
+    const fullScreenUserAskBatch: NonNullable<ToolBridges["askBatch"]> = async (
+      input,
+      signal,
+    ) => {
+      if (signal.aborted) {
+        return {
+          questionnaireId: input.questionnaireId,
+          status: "cancelled",
+          answers: [],
+        };
+      }
+      const onAbort = (): void => ui.cancelUserQuestionnaire();
+      signal.addEventListener("abort", onAbort, { once: true });
+      try {
+        return await ui.requestUserQuestionnaire(input);
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+      }
+    };
+
     const bootstrapOptions = (resume: string | undefined) => ({
       context,
       ...(args.noDaemon === true ? { noDaemon: true } : {}),
       ...(resume !== undefined ? { resume } : {}),
-      ...(fullScreen ? { bridges: { ask: fullScreenUserAsk } } : {}),
+      ...(fullScreen
+        ? { bridges: { ask: fullScreenUserAsk, askBatch: fullScreenUserAskBatch } }
+        : {}),
       interactiveApprovals: {
         host: context.host,
         explain: async () => {
