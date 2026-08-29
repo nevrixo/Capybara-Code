@@ -18,6 +18,7 @@ import {
 
 import {
   FileSystemPackageInstallStore,
+  ImmutableCachePackageResolver,
   InMemoryPackageInstallStore,
   LocalPathPackageResolver,
   MemoryPackageResolver,
@@ -354,6 +355,64 @@ describe("FileSystemPackageInstallStore", () => {
       idempotencyKey: "filesystem-tamper",
       allowUnsignedLocal: true,
     })).rejects.toThrow(/cached package digest mismatch/);
+  });
+
+  test("restores an exact lock from immutable cache without changing the lockfile", async () => {
+    const root = mkdtempSync(join(tmpdir(), "capy-package-restore-"));
+    temporaryDirectories.push(root);
+    const resolved = fixture({ sourceKind: "local-path", signed: false });
+    const lockfilePath = join(root, ".capybara", "packages.lock.json");
+    const cacheRoot = join(root, "cache");
+    const firstHost: PackageActivationHost = {
+      activate: async () => undefined,
+      healthCheck: async () => true,
+      rollback: async () => undefined,
+    };
+    const firstStore = new FileSystemPackageInstallStore({
+      lockfilePath,
+      cacheRoot,
+      activationHost: firstHost,
+    });
+    await new PackageInstallerService({
+      resolver: new MemoryPackageResolver(new Map([[resolved.source, resolved]])),
+      store: firstStore,
+      newId: (prefix) => prefix + "initial",
+    }).install({
+      source: resolved.source,
+      scope: "project",
+      idempotencyKey: "restore-fixture",
+      allowUnsignedLocal: true,
+    });
+    const before = readFileSync(lockfilePath, "utf8");
+    const lockfile = JSON.parse(before);
+    const restored: string[] = [];
+    const restoreStore = new FileSystemPackageInstallStore({
+      lockfilePath,
+      cacheRoot,
+      activationHost: {
+        activate: async (input) => { restored.push(input.verified.manifest.id); },
+        healthCheck: async () => true,
+        rollback: async () => undefined,
+      },
+    });
+    const restoreService = new PackageInstallerService({
+      resolver: new ImmutableCachePackageResolver({ cacheRoot, lockfile }),
+      store: restoreStore,
+      newId: (prefix) => prefix + "fresh-process",
+    });
+
+    const activations = await restoreService.restore({
+      requests: {
+        schemaVersion: "1.0",
+        packages: [{ source: resolved.source, scope: "project" }],
+      },
+      lockfile,
+      offline: true,
+    });
+
+    expect(activations).toHaveLength(1);
+    expect(restored).toEqual(["acme/typescript-quality"]);
+    expect(readFileSync(lockfilePath, "utf8")).toBe(before);
   });
 
   test("restores the lockfile and removes a new cache entry after failed health", async () => {

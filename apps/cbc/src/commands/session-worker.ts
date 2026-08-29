@@ -7,6 +7,8 @@
 
 import { createInterface } from "node:readline";
 
+import type { AppMethod } from "@cbc/app-protocol";
+
 import { bootstrapSession } from "../bootstrap.ts";
 import { EXIT } from "../exit.ts";
 import { ok, type CommandContext, type CommandResult } from "./context.ts";
@@ -127,6 +129,24 @@ async function dispatchWorkerMessage(
       ? params.reason
       : "cancelled through daemon App Protocol";
     return { taskId, result: await boot.session.cancelTaskResult(taskId, reason) };
+  }
+  if (message.method === "plugin.list") {
+    return { plugins: boot.packageRuntime.plugins() };
+  }
+  if (
+    message.method !== undefined
+    && boot.packageRuntime.appMethods().includes(message.method as AppMethod)
+  ) {
+    const {
+      sessionId: _sessionId,
+      idempotencyKey,
+      ...payload
+    } = params;
+    return await boot.packageRuntime.dispatchApp({
+      method: message.method as AppMethod,
+      payload,
+      ...(typeof idempotencyKey === "string" ? { idempotencyKey } : {}),
+    });
   }
   throw Object.assign(new Error("method not found"), { code: -32601 });
 }

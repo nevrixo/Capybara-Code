@@ -121,6 +121,7 @@ import {
   workspaceChangeObserved,
   type Execution,
   type ToolBridges,
+  type ToolExecutorOptions,
   type ToolObservationAck,
   type ToolObservationEnvelope,
 } from "./tools.ts";
@@ -168,6 +169,8 @@ export interface AgentSessionOptions {
   readonly mcpBridge?: NonNullable<ToolBridges["mcp"]>;
   /** Resolved catalog risk shared by the root and every child normalizer. */
   readonly mcpHint?: McpHintResolver;
+  /** Isolated package plugin bridge shared by the root and every child executor. */
+  readonly pluginInvoke?: ToolExecutorOptions["pluginInvoke"];
   readonly inferencePolicy?: InferencePolicyPort;
   /** Whether the utility router may replace the configured model per turn. */
   readonly autoRoute?: boolean;
@@ -794,6 +797,7 @@ export class AgentSession {
       provider: options.provider,
       approvals: options.approvals,
       ...(options.mcpHint !== undefined ? { mcpHint: options.mcpHint } : {}),
+      ...(options.pluginInvoke !== undefined ? { pluginInvoke: options.pluginInvoke } : {}),
       readCache,
       permissionContext: () => this.permissionContext(),
       promptInputs: () => this.promptInputs(),
@@ -908,6 +912,7 @@ export class AgentSession {
       pluginRuntime:
         options.config.experimental.pluginRuntime &&
         options.config.plugins.enabled,
+      ...(options.pluginInvoke !== undefined ? { pluginInvoke: options.pluginInvoke } : {}),
       memoryScopes: {
         workspace: options.config.memory.workspaceEnabled,
         session: options.config.memory.sessionEnabled,

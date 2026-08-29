@@ -11,6 +11,7 @@ import {
   CommandDeduplicator,
   type AppClientRole,
   type AppInitializeParams,
+  type AppMethod,
   type CommandEnvelope,
   type EventReplayResult,
   type OperationReceipt,
@@ -43,6 +44,28 @@ import { SessionWorkerHost, type SessionExecutor } from "./session-worker-host.t
 import { gracefulShutdown } from "./shutdown.ts";
 import { WorktreeManager } from "./worktree-manager.ts";
 import { WorkspaceSupervisorRegistry } from "./workspace-supervisor.ts";
+
+const DAEMON_PACKAGE_READ_METHODS = new Set<AppMethod>([
+  "plugin.list",
+  "plugin.inspect",
+  "plugin.grants",
+  "package.inspect",
+  ...(process.env.CAPYBARA_PACKAGE_REGISTRY === undefined
+    ? []
+    : ["package.search" as const]),
+]);
+const DAEMON_PACKAGE_MUTATION_METHODS = new Set<AppMethod>([
+  "plugin.install",
+  "plugin.update",
+  "plugin.enable",
+  "plugin.disable",
+  "plugin.resolveGrant",
+  "package.install",
+  "package.remove",
+  "package.update",
+  "package.verify",
+  "package.bootstrap",
+]);
 
 export interface CapybaraDaemonOptions {
   readonly daemonId?: string;
@@ -350,6 +373,8 @@ export class CapybaraDaemon {
         "worktree.list",
         "approval.list",
         "approval.resolve",
+        ...DAEMON_PACKAGE_READ_METHODS,
+        ...DAEMON_PACKAGE_MUTATION_METHODS,
       ],
       async registerClient(): Promise<void> {},
       async createSubscription(input) {
@@ -436,6 +461,23 @@ export class CapybaraDaemon {
         return { ...daemon.health() };
       },
       async dispatch(input) {
+        if (DAEMON_PACKAGE_READ_METHODS.has(input.method)) {
+          const params = isRecord(input.params) ? input.params : {};
+          const sessionId = requireString(params.sessionId);
+          return await daemon.workers.request(sessionId, input.method, params);
+        }
+        if (DAEMON_PACKAGE_MUTATION_METHODS.has(input.method)) {
+          const command = appCommand(input.params);
+          return (await commands.execute(command, async () => {
+            const payload = requireRecord(command.payload);
+            const sessionId = requireString(command.sessionId ?? payload.sessionId);
+            const result = await daemon.workers.request(sessionId, input.method, {
+              ...payload,
+              idempotencyKey: command.idempotencyKey,
+            });
+            return completedReceipt(command, daemon.#now(), result);
+          })).receipt;
+        }
         if (
           input.method === "graph.get"
           || input.method === "graph.listNodes"

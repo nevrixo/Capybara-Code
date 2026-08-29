@@ -158,4 +158,72 @@ describe("embedded App Protocol client", () => {
     expect(cancellations).toEqual(["agent_1"]);
     await client.close();
   });
+
+  test("routes package extensions with admin role, command receipts, and dedupe", async () => {
+    const calls: Array<{ method: string; payload: unknown; idempotencyKey?: string }> = [];
+    const backend = new SessionAppBackend({
+      session: { viewModel: { timeline: [] } } as never,
+      sessionId: "ses_packages",
+      extensions: {
+        supportedMethods: ["package.inspect", "package.install", "plugin.enable"],
+        dispatch: async (input) => {
+          calls.push({
+            method: input.method,
+            payload: input.payload,
+            ...(input.idempotencyKey === undefined
+              ? {}
+              : { idempotencyKey: input.idempotencyKey }),
+          });
+          return { ok: true, method: input.method };
+        },
+      },
+    });
+    const app = new AppServer({
+      backend,
+      daemonId: "daemon_packages",
+      authorizer: {
+        authorize: async () => ["observer", "administrator-local"] as const,
+      },
+      now: () => "2026-08-30T00:00:00.000Z",
+    });
+    const client = await CapybaraClient.connect({
+      transport: "stdio",
+      client: { id: "client_admin", name: "admin", version: "1.0.0", kind: "cli" },
+      createTransport: () => createInProcessAppTransport(app),
+    });
+    expect(client.initializeResult?.capabilitySnapshot.methods["package.install"]?.state)
+      .toBe("available");
+    expect(client.initializeResult?.capabilitySnapshot.methods["package.search"]?.state)
+      .toBe("unsupported");
+    await client.request("package.inspect", { packageId: "acme/quality" });
+    const command = {
+      schemaVersion: "1.0",
+      commandId: "cmd_package_install",
+      idempotencyKey: "idem_package_install",
+      correlationId: "cor_package_install",
+      clientId: "client_admin",
+      sessionId: "ses_packages",
+      issuedAt: "2026-08-30T00:00:00.000Z",
+      payload: { source: "registry:acme/quality", scope: "project" },
+    };
+    const first = await client.request<{ status: string; result: { ok: boolean } }>(
+      "package.install",
+      { command },
+    );
+    const replay = await client.request<{ status: string; result: { ok: boolean } }>(
+      "package.install",
+      { command },
+    );
+    expect(first.status).toBe("completed");
+    expect(replay).toEqual(first);
+    expect(calls).toEqual([
+      { method: "package.inspect", payload: { packageId: "acme/quality" } },
+      {
+        method: "package.install",
+        payload: { source: "registry:acme/quality", scope: "project" },
+        idempotencyKey: "idem_package_install",
+      },
+    ]);
+    await client.close();
+  });
 });

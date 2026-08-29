@@ -131,7 +131,17 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: "/memory", description: "inspect, forget, or resolve durable memory", args: [{ name: "action", values: ["inspect", "forget", "resolve"] }] },
   { name: "/graph", description: "inspect the durable agent graph" },
   { name: "/worktree", description: "inspect isolated writer worktrees" },
-  { name: "/plugins", description: "inspect installed plugin grants" },
+  {
+    name: "/plugins",
+    description: "search, install, update, remove, inspect, enable, disable, or list plugins",
+    args: [
+      {
+        name: "action",
+        values: ["list", "search", "install", "update", "remove", "inspect", "enable", "disable", "grants"],
+      },
+      { name: "package or plugin", hint: "registry source, package id, or plugin id" },
+    ],
+  },
   { name: "/compact", description: "compact the session context" },
   { name: "/new", description: "start a new chat" },
   { name: "/resume", description: "resume a session", args: [{ name: "session" }] },

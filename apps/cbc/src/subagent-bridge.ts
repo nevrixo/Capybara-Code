@@ -71,6 +71,7 @@ import {
   RuntimeToolExecutor,
   type Execution,
   type ToolBridges,
+  type ToolExecutorOptions,
   type ToolObservationEnvelope,
   type ToolObservationResult,
 } from "./tools.ts";
@@ -105,6 +106,7 @@ export interface SubagentBridgeOptions {
   ) => void;
   readonly bridges?: ToolBridges;
   readonly mcpHint?: McpHintResolver;
+  readonly pluginInvoke?: ToolExecutorOptions["pluginInvoke"];
   /**
    * The read cache shared with the root executor. Forwarded to every child
    * executor so a child's re-read of a file the parent just read is a cache
@@ -707,6 +709,12 @@ export class SubagentBridge {
       worktreeMultiAgent:
         this.#options.config.experimental.worktreeMultiAgent &&
         this.#options.config.worktrees.enabled,
+      pluginRuntime:
+        this.#options.config.experimental.pluginRuntime &&
+        this.#options.config.plugins.enabled,
+      ...(this.#options.pluginInvoke !== undefined
+        ? { pluginInvoke: this.#options.pluginInvoke }
+        : {}),
     }).filter((tool) => {
       if (tool.id.startsWith("task.")) {
         return canDelegate && delegatedTaskTools.has(tool.id);

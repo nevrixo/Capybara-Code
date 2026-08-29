@@ -42,6 +42,14 @@ export interface SessionAppBackendOptions {
   readonly worktrees?: { list(): Promise<unknown> };
   readonly graph?: { snapshot(): unknown };
   readonly plugins?: { list(): unknown };
+  readonly extensions?: {
+    readonly supportedMethods: readonly AppMethod[];
+    dispatch(input: {
+      readonly method: AppMethod;
+      readonly payload: unknown;
+      readonly idempotencyKey?: string;
+    }): Promise<unknown>;
+  };
 }
 
 export class SessionAppBackend implements AppServerBackend {
@@ -54,8 +62,10 @@ export class SessionAppBackend implements AppServerBackend {
   readonly #worktrees?: SessionAppBackendOptions["worktrees"];
   readonly #graph?: SessionAppBackendOptions["graph"];
   readonly #plugins?: SessionAppBackendOptions["plugins"];
+  readonly #extensions?: SessionAppBackendOptions["extensions"];
   readonly #dedupe = new CommandDeduplicator<{ prompt?: string }, TurnResult["report"]>();
   readonly #taskDedupe = new CommandDeduplicator<unknown, unknown>();
+  readonly #extensionDedupe = new CommandDeduplicator<unknown, unknown>();
   readonly #subscriptions = new Map<string, AppServerSubscription>();
   readonly #clients = new Set<string>();
   #lastTurn: TurnResult | undefined;
@@ -70,6 +80,14 @@ export class SessionAppBackend implements AppServerBackend {
     if (options.worktrees !== undefined) this.#worktrees = options.worktrees;
     if (options.graph !== undefined) this.#graph = options.graph;
     if (options.plugins !== undefined) this.#plugins = options.plugins;
+    if (options.extensions !== undefined) {
+      for (const method of options.extensions.supportedMethods) {
+        if (!SESSION_EXTENSION_METHODS.has(method)) {
+          throw new Error("unsupported embedded extension method: " + method);
+        }
+      }
+      this.#extensions = options.extensions;
+    }
     this.supportedMethods = Object.freeze([
       "session.create",
       "session.get",
@@ -90,6 +108,7 @@ export class SessionAppBackend implements AppServerBackend {
       "task.message",
       "task.cancel",
       "plugin.list",
+      ...(options.extensions?.supportedMethods ?? []),
     ] satisfies AppMethod[]);
   }
 
@@ -270,6 +289,26 @@ export class SessionAppBackend implements AppServerBackend {
     if (input.method === "plugin.list") {
       return this.#plugins?.list() ?? { plugins: [] };
     }
+    if (
+      this.#extensions !== undefined
+      && this.#extensions.supportedMethods.includes(input.method)
+    ) {
+      if (READ_ONLY_EXTENSION_METHODS.has(input.method)) {
+        return await this.#extensions.dispatch({
+          method: input.method,
+          payload: input.params,
+        });
+      }
+      const envelope = commandEnvelope<unknown>(input.params);
+      return (await this.#extensionDedupe.execute(envelope, async () => {
+        const result = await this.#extensions!.dispatch({
+          method: input.method,
+          payload: envelope.payload,
+          idempotencyKey: envelope.idempotencyKey,
+        });
+        return operationReceipt(envelope, this.#now(), result);
+      })).receipt;
+    }
     if (input.method !== "turn.submit") {
       throw new Error(input.method + " is not available in the embedded session backend");
     }
@@ -322,6 +361,30 @@ export class SessionAppBackend implements AppServerBackend {
     return existing;
   }
 }
+
+const SESSION_EXTENSION_METHODS = new Set<AppMethod>([
+  "plugin.inspect",
+  "plugin.install",
+  "plugin.update",
+  "plugin.enable",
+  "plugin.disable",
+  "plugin.grants",
+  "plugin.resolveGrant",
+  "package.search",
+  "package.inspect",
+  "package.install",
+  "package.remove",
+  "package.update",
+  "package.verify",
+  "package.bootstrap",
+]);
+
+const READ_ONLY_EXTENSION_METHODS = new Set<AppMethod>([
+  "plugin.inspect",
+  "plugin.grants",
+  "package.search",
+  "package.inspect",
+]);
 
 function commandEnvelope<T = { prompt?: string }>(params: unknown): CommandEnvelope<T> {
   if (typeof params !== "object" || params === null || !("command" in params)) {

@@ -7,6 +7,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { generateKeyPairSync } from "node:crypto";
 
 import { parseArgs, HELP_TEXT } from "../src/args.ts";
 import { commandNames } from "../src/command-spec.ts";
@@ -445,6 +446,39 @@ describe("parseArgs", () => {
       kind: "trust",
       showDiff: true,
     });
+    expect(parseArgs(["bootstrap", "--frozen", "--offline"]).command).toEqual({
+      kind: "bootstrap",
+      frozen: true,
+      offline: true,
+      scope: "project",
+    });
+    expect(parseArgs([
+      "package",
+      "add",
+      "path:packages/example",
+      "--user",
+      "--allow-unsigned-local",
+    ]).command).toEqual({
+      kind: "package",
+      sub: "add",
+      source: "path:packages/example",
+      scope: "user",
+      allowUnsignedLocal: true,
+      grantRequested: false,
+      offline: false,
+    });
+    expect(parseArgs(["package", "list", "--effective"]).command).toEqual({
+      kind: "package",
+      sub: "list",
+      scope: "effective",
+    });
+    expect(parseArgs(["plugin", "disable", "acme/quality"]).command).toEqual({
+      kind: "plugin",
+      sub: "disable",
+      pluginId: "acme/quality",
+    });
+    expect(() => parseArgs(["package", "add", "path:x", "--project", "--user"]))
+      .toThrow(/only one/);
     expect(() => parseArgs(["integration", "doctor", "unknown"])).toThrow(/vscode, acp, or github/);
     expect(() => parseArgs(["--version"])).toThrow(/unknown flag --version/);
     expect(() => parseArgs(["--help"])).toThrow(/unknown flag --help/);
@@ -461,6 +495,9 @@ describe("parseArgs", () => {
       "integration",
       "github",
       "trust",
+      "bootstrap",
+      "package",
+      "plugin",
       "skills",
       "daemon",
       "update",
@@ -474,6 +511,12 @@ describe("parseArgs", () => {
       "auth logout",
       "model refresh",
       "config set",
+      "bootstrap",
+      "package search",
+      "package update",
+      "package verify",
+      "plugin list",
+      "plugin enable",
       "skills list",
       "skills doctor",
       "skills validate",
@@ -492,7 +535,6 @@ describe("parseArgs", () => {
       "session",
       "mcp",
       "lsp",
-      "init",
       "completion",
       "permission",
       "--jsonl",
@@ -992,6 +1034,36 @@ describe("/resume candidate labels", () => {
     ]);
     expect(candidates.every((candidate) => !candidate.value.includes("ses_"))).toBe(true);
     expect(candidates.every((candidate) => candidate.detail === undefined)).toBe(true);
+  });
+});
+
+describe("signed package registry configuration", () => {
+  test("enables package.search only with an HTTPS URL and pinned public key", async () => {
+    const { publicKey } = generateKeyPairSync("ed25519");
+    const host = createFakeHost({
+      env: {
+        CAPYBARA_PACKAGE_REGISTRY: "https://registry.example/v1/",
+        CAPYBARA_PACKAGE_ROOT_KEYS_JSON: JSON.stringify({
+          schemaVersion: "1.0",
+          keys: {
+            "registry-root-2026": publicKey
+              .export({ format: "pem", type: "spki" })
+              .toString(),
+          },
+        }),
+      },
+    });
+    const context = new CommandContext({ host, version: host.version });
+    expect((await context.packages()).appMethods()).toContain("package.search");
+    await context.shutdown();
+  });
+
+  test("fails config when registry URL and pinned keys are incomplete", async () => {
+    const host = createFakeHost({
+      env: { CAPYBARA_PACKAGE_REGISTRY: "https://registry.example/v1/" },
+    });
+    const context = new CommandContext({ host, version: host.version });
+    await expect(context.packages()).rejects.toMatchObject({ code: EXIT.config });
   });
 });
 

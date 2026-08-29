@@ -13,6 +13,7 @@ export const APP_METHODS = [
   "edit.preview", "edit.apply", "edit.getReceipt", "diff.get", "diff.getFile",
   "worktree.list", "worktree.get", "worktree.getProposal", "worktree.discard", "merge.preview", "merge.apply", "merge.resolve",
   "plugin.list", "plugin.inspect", "plugin.install", "plugin.update", "plugin.enable", "plugin.disable", "plugin.grants", "plugin.resolveGrant",
+  "package.search", "package.inspect", "package.install", "package.remove", "package.update", "package.verify", "package.bootstrap",
   "artifact.getMetadata", "artifact.read", "artifact.stream", "artifact.export",
 ] as const;
 

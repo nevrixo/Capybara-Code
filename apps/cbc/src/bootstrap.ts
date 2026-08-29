@@ -126,6 +126,8 @@ export interface Bootstrapped {
   readonly skillDiscoveryInput: SkillDiscoveryInput;
   /** Managed Python and TypeScript language-server lifecycle for this session. */
   readonly lspHost: LspHost;
+  /** Shared package/plugin state used by embedded and daemon worker surfaces. */
+  readonly packageRuntime: import("./package-runtime.ts").PackageRuntime;
   /** Loads and projects one immutable page preceding the resident session history. */
   readonly loadEarlierHistory?: () => Promise<readonly TimelineItem[] | undefined>;
   /** P0-15: shut down any MCP server children for this session. */
@@ -576,6 +578,18 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
         }
       : undefined;
 
+  const packageRuntime = await context.packages();
+  try {
+    warnings.push(...await packageRuntime.restoreAll());
+  } catch (error) {
+    warnings.push(
+      "package runtime state could not be restored: "
+      + (error instanceof Error ? error.message : String(error)),
+    );
+  }
+  const pluginRuntimeEnabled =
+    effective.experimental.pluginRuntime && effective.plugins.enabled;
+
   const session = new AgentSession({
     host: context.host,
     runtime,
@@ -598,6 +612,9 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
       ? { executableCapabilities }
       : {}),
     ...(sessionBridges !== undefined ? { bridges: sessionBridges } : {}),
+    ...(pluginRuntimeEnabled
+      ? { pluginInvoke: (input) => packageRuntime.invoke(input) }
+      : {}),
     ...(mcpHost !== undefined
       ? {
           mcpBridge: mcpHost.bridge,
@@ -654,7 +671,10 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
     cwd: context.host.cwd,
     workspacePath: context.workspacePath,
     nativeSkillsPath: context.paths.skills,
-    config: effective.skills,
+    config: {
+      ...effective.skills,
+      paths: [...effective.skills.paths, ...packageRuntime.skillRoots()],
+    },
   };
   const skillDiscovery = new SkillDiscoveryService({
     host: context.host,
@@ -801,6 +821,13 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
       worktrees: {
         list: async () => await runtime.listWorktrees(),
       },
+      plugins: {
+        list: () => ({ plugins: packageRuntime.plugins() }),
+      },
+      extensions: {
+        supportedMethods: packageRuntime.appMethods(),
+        dispatch: (input) => packageRuntime.dispatchApp(input),
+      },
     }),
     daemonId: "embedded_" + sessionId.replace(/[^a-zA-Z0-9_]/g, ""),
     serverVersion: context.version,
@@ -867,6 +894,7 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
     session,
     appClient,
     lspHost,
+    packageRuntime,
     runtime,
     sessionId,
     granted,

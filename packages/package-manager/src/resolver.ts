@@ -3,11 +3,14 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import type {
   CapybaraPackageSignature,
+  PackageLockfile,
   ResolvedPackage,
 } from "./contracts.ts";
+import { packageCacheEntryPath } from "./filesystem-store.ts";
 import {
   PackageVerificationError,
   parsePackageManifest,
+  validatePackageLockfile,
 } from "./verify.ts";
 
 export interface PackageResolveOptions {
@@ -135,6 +138,63 @@ export class RegistryPackageResolver implements PackageResolver {
       );
     }
     return resolved;
+  }
+}
+
+export interface ImmutableCachePackageResolverOptions {
+  readonly cacheRoot: string;
+  readonly lockfile: PackageLockfile | (() => Promise<PackageLockfile>);
+}
+
+/** Read only bytes pinned by an already-validated lockfile from the immutable cache. */
+export class ImmutableCachePackageResolver implements PackageResolver {
+  readonly #cacheRoot: string;
+  readonly #lockfile: ImmutableCachePackageResolverOptions["lockfile"];
+
+  constructor(options: ImmutableCachePackageResolverOptions) {
+    this.#cacheRoot = resolve(options.cacheRoot);
+    this.#lockfile = options.lockfile;
+  }
+
+  async resolve(source: string): Promise<ResolvedPackage> {
+    const lockfile = typeof this.#lockfile === "function"
+      ? await this.#lockfile()
+      : this.#lockfile;
+    validatePackageLockfile(lockfile);
+    const matches = Object.entries(lockfile.packages)
+      .filter(([, entry]) => entry.source === source);
+    if (matches.length !== 1) {
+      throw new UnsupportedPackageSourceError(
+        matches.length === 0
+          ? "immutable cache has no lock entry for " + source
+          : "immutable cache source is ambiguous: " + source,
+      );
+    }
+    const [packageId, entry] = matches[0]!;
+    const packageRoot = packageCacheEntryPath(
+      this.#cacheRoot,
+      packageId,
+      entry.version,
+      entry.packageDigest,
+    );
+    const manifestPath = resolve(packageRoot, "capybara.package.json");
+    await assertRegularFile(packageRoot, manifestPath);
+    const manifestBytes = new Uint8Array(await readFile(manifestPath));
+    const manifest = parsePackageManifest(manifestBytes);
+    const files = [];
+    for (const path of Object.keys(manifest.integrity.files).sort()) {
+      const absolute = resolve(packageRoot, ...path.split("/"));
+      await assertRegularFile(packageRoot, absolute);
+      files.push({ path, bytes: new Uint8Array(await readFile(absolute)) });
+    }
+    return Object.freeze({
+      source,
+      sourceKind: entry.sourceKind,
+      manifestBytes,
+      files: Object.freeze(files),
+      signatureVerified: entry.sourceKind === "registry"
+        && entry.signature?.verified === true,
+    });
   }
 }
 

@@ -1520,6 +1520,15 @@ async function handleSlash(
       const policy = session.permissionContext().effectivePolicy ?? configuredPolicy;
       const saving = session.tokenSaving;
       const savingPlan = saving.plan;
+      const projectTrust = await context.projectTrustSnapshot();
+      let packageSummary = "unavailable";
+      try {
+        const packages = await (await context.packages()).list("effective");
+        packageSummary = packages.length + " effective";
+      } catch (error) {
+        packageSummary = "invalid: "
+          + (error instanceof Error ? error.message : String(error));
+      }
       const savingLines = savingPlan === undefined
         ? [`Token save ${saving.requestedLevel.toUpperCase()}`]
         : savingPlan.effectiveLevel === savingPlan.requestedLevel
@@ -1537,6 +1546,11 @@ async function handleSlash(
         `Mode       ${model.modeState.selected.toUpperCase()}`,
         ...savingLines,
         ...describeEffectivePermissionPolicy(policy),
+        "Project    " + projectTrust.projectDigest.slice(0, 16)
+          + " · config " + projectTrust.configDigest.slice(0, 12),
+        "Packages   " + packageSummary
+          + " · request " + projectTrust.packageManifestDigest.slice(0, 12)
+          + " · lock " + projectTrust.packageLockDigest.slice(0, 12),
         `Trust      ${await context.trust()}`,
         `Sandbox    ${loaded.config.sandbox.level}`,
         `Source    ${session.permissionPreset !== undefined && session.permissionPreset !== permissions.preset ? "session" : (loaded.provenance["permissions.preset"] ?? loaded.provenance["agent.permissionMode"] ?? "default")}`,
@@ -1997,10 +2011,131 @@ async function handleOverlay(
     }
 
     case "plugins": {
-      ui.openOverlay("plugins", [
-        "Plugin grants are workspace-bound. Default runtime has no ambient network or write authority.",
-        "Before-hooks may only deny or narrow. After-hooks are fail-open.",
-      ]);
+      const runtime = await context.packages();
+      const raw = argument?.trim() ?? "";
+      const [action, ...rest] = raw.split(/\s+/).filter((part) => part.length > 0);
+      const value = rest.join(" ");
+      const operationId = "tui:" + (action ?? "list") + ":" + crypto.randomUUID();
+      try {
+        if (action === "search") {
+          const results = await runtime.searchRegistry(value);
+          ui.openOverlay(
+            "plugins",
+            results.length === 0
+              ? ["No signed registry packages matched."]
+              : results.map((item) =>
+                  item.id + " " + item.latest + "  " + item.description
+                ),
+          );
+          return "continue";
+        }
+        if (action === "install") {
+          if (value.startsWith("path:")) {
+            ui.openOverlay("plugins", [
+              "Unsigned local installation needs an explicit terminal warning.",
+              "Use: capy package add " + value + " --allow-unsigned-local",
+            ]);
+            return "continue";
+          }
+          const receipt = await runtime.add({
+            source: value,
+            scope: "project",
+            idempotencyKey: operationId,
+          });
+          ui.openOverlay("plugins", [
+            "Installed " + (receipt.packageId ?? value) + ".",
+            "Receipt " + receipt.receiptId + " · " + receipt.status,
+          ]);
+          return "continue";
+        }
+        if (action === "update") {
+          const plugin = runtime.inspectPlugin(value);
+          const packageId = plugin?.packageId ?? value;
+          const packageInfo = await runtime.inspectPackage(packageId, "effective");
+          if (packageInfo === undefined) throw new Error("package is not installed: " + packageId);
+          const receipts = await runtime.update({
+            packageId,
+            scope: packageInfo.scope,
+            idempotencyKey: operationId,
+          });
+          ui.openOverlay("plugins", receipts.map((receipt) =>
+            "Updated " + (receipt.packageId ?? packageId) + " · " + receipt.status
+          ));
+          return "continue";
+        }
+        if (action === "remove") {
+          const plugin = runtime.inspectPlugin(value);
+          const packageId = plugin?.packageId ?? value;
+          const packageInfo = await runtime.inspectPackage(packageId, "effective");
+          if (packageInfo === undefined) throw new Error("package is not installed: " + packageId);
+          const receipt = await runtime.remove({
+            packageId,
+            scope: packageInfo.scope,
+            idempotencyKey: operationId,
+          });
+          ui.openOverlay("plugins", ["Removed " + packageId + " · " + receipt.status]);
+          return "continue";
+        }
+        if (action === "enable" || action === "disable") {
+          const plugin = await runtime.setPluginEnabled(value, action === "enable");
+          ui.openOverlay("plugins", [
+            plugin.id + " is now " + (plugin.enabled ? "enabled" : "disabled") + ".",
+          ]);
+          return "continue";
+        }
+        if (action === "inspect" || action === "grants") {
+          const plugin = runtime.inspectPlugin(value);
+          if (plugin === undefined) throw new Error("plugin is not installed: " + value);
+          const lines = [
+            plugin.id + " " + plugin.version + " [" + plugin.scope + "]",
+            "Package: " + (plugin.packageId ?? "unknown"),
+            "Runtime: " + plugin.runtimeKind,
+            "State: " + (plugin.enabled ? "enabled" : "disabled")
+              + " · " + plugin.health.status,
+            "Requested: " + JSON.stringify(plugin.requested),
+            "Granted:   " + JSON.stringify(plugin.grants),
+          ];
+          ui.openOverlay("plugins", lines);
+          return "continue";
+        }
+        if (action !== undefined && action !== "list") {
+          ui.openOverlay("plugins", [
+            "Unknown action: " + action,
+            "Use search, install, update, remove, inspect, enable, disable, grants, or list.",
+          ]);
+          return "continue";
+        }
+        const packages = new Map(
+          (await runtime.list("effective")).map((item) => [item.id, item]),
+        );
+        const plugins = runtime.plugins();
+        ui.openOverlay(
+          "plugins",
+          plugins.length === 0
+            ? [
+                "No active plugins.",
+                "Use /plugins search <query> or /plugins install registry:<id>.",
+              ]
+            : plugins.flatMap((plugin) => {
+                const owner = plugin.packageId === undefined
+                  ? undefined
+                  : packages.get(plugin.packageId);
+                return [
+                  plugin.id + " " + plugin.version + " [" + plugin.scope + "] "
+                    + (plugin.enabled ? "enabled" : "disabled")
+                    + " · " + plugin.health.status,
+                  "  " + (owner?.source ?? "unknown source")
+                    + " · " + (owner?.signatureVerified ? "signature verified" : "local unverified")
+                    + " · " + (owner?.packageDigest ?? "digest unavailable"),
+                  "  grant " + JSON.stringify(plugin.grants),
+                ];
+              }),
+        );
+      } catch (error) {
+        ui.openOverlay("plugins", [
+          "Plugin action failed: " + (error instanceof Error ? error.message : String(error)),
+        ]);
+      }
       return "continue";
     }
 

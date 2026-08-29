@@ -5,6 +5,7 @@ import type {
   PackageActivation,
   PackageActivationHost,
 } from "@cbc/package-manager";
+import type { PluginPermissionRequest } from "@cbc/plugin-sdk";
 import { verifyPluginManifestDocument } from "@cbc/plugin-sdk";
 
 import {
@@ -17,6 +18,10 @@ export class PluginSupervisorPackageActivationHost implements PackageActivationH
   readonly #projectTrusted: boolean;
   readonly #packagePlugins = new Map<string, readonly string[]>();
   readonly #rollbackSpecs = new Map<string, readonly PluginWorkerSpec[]>();
+  readonly #pluginOwners = new Map<string, string>();
+  readonly #rollbackOwners = new Map<string, ReadonlyMap<string, string>>();
+  readonly #pluginGrants = new Map<string, PluginPermissionRequest>();
+  readonly #rollbackGrants = new Map<string, ReadonlyMap<string, PluginPermissionRequest>>();
 
   constructor(options: {
     readonly supervisor: PluginSupervisor;
@@ -24,6 +29,14 @@ export class PluginSupervisorPackageActivationHost implements PackageActivationH
   }) {
     this.#supervisor = options.supervisor;
     this.#projectTrusted = options.projectTrusted;
+  }
+
+  packageForPlugin(pluginId: string): string | undefined {
+    return this.#pluginOwners.get(pluginId);
+  }
+
+  grantsForPlugin(pluginId: string): PluginPermissionRequest | undefined {
+    return this.#pluginGrants.get(pluginId);
   }
 
   async activate(input: PackageActivation): Promise<void> {
@@ -52,22 +65,53 @@ export class PluginSupervisorPackageActivationHost implements PackageActivationH
       });
     }
     const previous: PluginWorkerSpec[] = [];
+    const previousOwners = new Map<string, string>();
+    const previousGrants = new Map<string, PluginPermissionRequest>();
     for (const pluginId of this.#packagePlugins.get(packageId) ?? specs.map((item) => item.pluginId)) {
       const inspected = this.#supervisor.inspect(pluginId);
+      const existingOwner = this.#pluginOwners.get(pluginId);
+      if (inspected !== undefined && existingOwner !== undefined && existingOwner !== packageId) {
+        throw new Error(
+          "plugin id collision: " + pluginId + " is already owned by " + existingOwner,
+        );
+      }
       if (inspected !== undefined) previous.push(inspected.spec);
+      const owner = existingOwner;
+      if (owner !== undefined) previousOwners.set(pluginId, owner);
+      const grant = this.#pluginGrants.get(pluginId);
+      if (grant !== undefined) previousGrants.set(pluginId, grant);
       this.#supervisor.uninstall(pluginId);
+      this.#pluginOwners.delete(pluginId);
+      this.#pluginGrants.delete(pluginId);
     }
     this.#rollbackSpecs.set(packageId, Object.freeze(previous));
+    this.#rollbackOwners.set(packageId, previousOwners);
+    this.#rollbackGrants.set(packageId, previousGrants);
     const installed: string[] = [];
     try {
       for (const spec of specs) {
         this.#supervisor.install(spec);
         installed.push(spec.pluginId);
+        this.#pluginOwners.set(spec.pluginId, packageId);
+        const admission = input.pluginAdmissions.find(
+          (item) => item.pluginId === spec.pluginId,
+        );
+        this.#pluginGrants.set(spec.pluginId, admission?.grants ?? {});
       }
       this.#packagePlugins.set(packageId, Object.freeze(installed));
     } catch (error) {
-      for (const pluginId of installed) this.#supervisor.uninstall(pluginId);
-      for (const spec of previous) this.#supervisor.install(spec);
+      for (const pluginId of installed) {
+        this.#supervisor.uninstall(pluginId);
+        this.#pluginOwners.delete(pluginId);
+        this.#pluginGrants.delete(pluginId);
+      }
+      for (const spec of previous) {
+        this.#supervisor.install(spec);
+        const owner = previousOwners.get(spec.pluginId);
+        if (owner !== undefined) this.#pluginOwners.set(spec.pluginId, owner);
+        const grant = previousGrants.get(spec.pluginId);
+        if (grant !== undefined) this.#pluginGrants.set(spec.pluginId, grant);
+      }
       throw error;
     }
   }
@@ -84,12 +128,25 @@ export class PluginSupervisorPackageActivationHost implements PackageActivationH
   ): Promise<void> {
     for (const pluginId of this.#packagePlugins.get(packageId) ?? []) {
       this.#supervisor.uninstall(pluginId);
+      if (this.#pluginOwners.get(pluginId) === packageId) this.#pluginOwners.delete(pluginId);
+      this.#pluginGrants.delete(pluginId);
     }
     this.#packagePlugins.delete(packageId);
     const specs = this.#rollbackSpecs.get(packageId) ?? [];
+    const owners = this.#rollbackOwners.get(packageId) ?? new Map<string, string>();
+    const grants = this.#rollbackGrants.get(packageId)
+      ?? new Map<string, PluginPermissionRequest>();
     this.#rollbackSpecs.delete(packageId);
+    this.#rollbackOwners.delete(packageId);
+    this.#rollbackGrants.delete(packageId);
     if (previous !== undefined) {
-      for (const spec of specs) this.#supervisor.install(spec);
+      for (const spec of specs) {
+        this.#supervisor.install(spec);
+        const owner = owners.get(spec.pluginId);
+        if (owner !== undefined) this.#pluginOwners.set(spec.pluginId, owner);
+        const grant = grants.get(spec.pluginId);
+        if (grant !== undefined) this.#pluginGrants.set(spec.pluginId, grant);
+      }
       if (specs.length > 0) {
         this.#packagePlugins.set(packageId, Object.freeze(specs.map((item) => item.pluginId)));
       }

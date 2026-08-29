@@ -12,6 +12,10 @@
  */
 
 import type { CbcConfig } from "@cbc/config-schema";
+import {
+  RegistryPackageResolver,
+  SignedStaticRegistryTransport,
+} from "@cbc/package-manager";
 import type { TrustState } from "@cbc/permissions";
 import type { RuntimeSpawner } from "@cbc/protocol";
 
@@ -19,6 +23,7 @@ import { CliError, EXIT, type ExitCode } from "../exit.ts";
 import { expandHome, join, resolvePaths, type CbcPaths, type Host } from "../host.ts";
 import { LineWriter, decideRenderMode, type RenderDecision } from "../output.ts";
 import { Runtime } from "../runtime.ts";
+import { PackageRuntime } from "../package-runtime.ts";
 import {
   captureProjectTrustSnapshot,
   type ProjectTrustSnapshot,
@@ -53,6 +58,7 @@ export class CommandContext {
   readonly nonInteractive: boolean;
   readonly #runtimeSpawner: RuntimeSpawner | undefined;
   #runtime: Runtime | undefined;
+  #packageRuntime: PackageRuntime | undefined;
   #config: LoadedConfig | undefined;
   #trust: TrustState | undefined;
   #trustStore: TrustStore | undefined;
@@ -246,11 +252,36 @@ export class CommandContext {
     return this.#runtime !== undefined;
   }
 
+  /** Lazily create the host-owned package runtime after trust has been resolved. */
+  async packages(): Promise<PackageRuntime> {
+    if (this.#packageRuntime !== undefined) return this.#packageRuntime;
+    const trust = await this.trust();
+    const registry = await packageRegistryFromEnvironment(this.host);
+    this.#packageRuntime = new PackageRuntime({
+      workspacePath: this.workspacePath,
+      dataRoot: this.paths.data,
+      cacheRoot: this.paths.cache,
+      projectTrusted: trust === "trusted-always" || trust === "trusted-once",
+      now: () => new Date(this.host.now()).toISOString(),
+      ...(registry === undefined
+        ? {}
+        : {
+            registryResolver: new RegistryPackageResolver(registry),
+            registryCatalog: registry,
+          }),
+    });
+    return this.#packageRuntime;
+  }
+
   async shutdown(): Promise<void> {
-    if (this.#runtime === undefined) return;
-    const runtime = this.#runtime;
-    this.#runtime = undefined;
-    await runtime.stop().catch(() => undefined);
+    const packages = this.#packageRuntime;
+    this.#packageRuntime = undefined;
+    await packages?.dispose().catch(() => undefined);
+    if (this.#runtime !== undefined) {
+      const runtime = this.#runtime;
+      this.#runtime = undefined;
+      await runtime.stop().catch(() => undefined);
+    }
   }
 }
 
@@ -315,4 +346,79 @@ export function collapseDotSegments(path: string): string {
   }
   const joined = `${prefix}${segments.join("/")}`;
   return joined.length > 1 ? joined.replace(/\/+$/, "") : joined;
+}
+
+async function packageRegistryFromEnvironment(
+  host: Host,
+): Promise<SignedStaticRegistryTransport | undefined> {
+  const baseUrl = host.env.CAPYBARA_PACKAGE_REGISTRY;
+  const keyFile = host.env.CAPYBARA_PACKAGE_ROOT_KEYS_FILE;
+  const inlineKeys = host.env.CAPYBARA_PACKAGE_ROOT_KEYS_JSON;
+  if (baseUrl === undefined && keyFile === undefined && inlineKeys === undefined) {
+    return undefined;
+  }
+  if (baseUrl === undefined || baseUrl.trim().length === 0) {
+    throw new CliError(
+      EXIT.config,
+      "CAPYBARA_PACKAGE_REGISTRY is required when package root keys are configured",
+    );
+  }
+  if ((keyFile === undefined) === (inlineKeys === undefined)) {
+    throw new CliError(
+      EXIT.config,
+      "configure exactly one of CAPYBARA_PACKAGE_ROOT_KEYS_FILE or CAPYBARA_PACKAGE_ROOT_KEYS_JSON",
+    );
+  }
+  let raw: string | undefined;
+  if (keyFile !== undefined) {
+    const expanded = expandHome(keyFile, host.homeDir);
+    const path = /^[A-Za-z]:[\\/]/u.test(expanded) || expanded.startsWith("/")
+      ? expanded
+      : join(host.cwd, expanded);
+    raw = await host.fs.read(path);
+    if (raw === undefined) {
+      throw new CliError(EXIT.config, "package registry root-key file was not found: " + path);
+    }
+  } else {
+    raw = inlineKeys;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw!);
+  } catch {
+    throw new CliError(EXIT.config, "package registry root keys are not valid JSON");
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new CliError(EXIT.config, "package registry root-key document must be an object");
+  }
+  const document = parsed as Record<string, unknown>;
+  if (
+    document.schemaVersion !== "1.0"
+    || typeof document.keys !== "object"
+    || document.keys === null
+    || Array.isArray(document.keys)
+    || Object.keys(document).some((key) => key !== "schemaVersion" && key !== "keys")
+  ) {
+    throw new CliError(EXIT.config, "package registry root-key document is malformed");
+  }
+  const keys = document.keys as Record<string, unknown>;
+  if (
+    Object.keys(keys).length === 0
+    || Object.values(keys).some((value) => typeof value !== "string")
+  ) {
+    throw new CliError(EXIT.config, "package registry root-key document has no valid PEM keys");
+  }
+  try {
+    return new SignedStaticRegistryTransport({
+      baseUrl,
+      pinnedKeys: keys as Record<string, string>,
+      now: () => host.now(),
+    });
+  } catch (error) {
+    throw new CliError(
+      EXIT.config,
+      "package registry configuration is invalid",
+      [error instanceof Error ? error.message : String(error)],
+    );
+  }
 }

@@ -168,6 +168,7 @@ const OBSERVER_METHODS = new Set<AppMethod>([
   "edit.preview", "edit.getReceipt", "diff.get", "diff.getFile",
   "worktree.list", "worktree.get", "worktree.getProposal", "merge.preview",
   "plugin.list", "plugin.inspect", "plugin.grants",
+  "package.search", "package.inspect",
   "artifact.getMetadata", "artifact.read", "artifact.stream",
 ]);
 
@@ -175,6 +176,7 @@ const APPROVAL_METHODS = new Set<AppMethod>(["approval.resolve", "approval.cance
 const ADMIN_METHODS = new Set<AppMethod>([
   "workspace.trust.set",
   "plugin.install", "plugin.update", "plugin.enable", "plugin.disable", "plugin.resolveGrant",
+  "package.install", "package.remove", "package.update", "package.verify", "package.bootstrap",
 ]);
 
 /**

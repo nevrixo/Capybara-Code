@@ -24,6 +24,68 @@ export type Command =
   | { readonly kind: "integration"; readonly sub: "doctor"; readonly target?: "vscode" | "acp" | "github" }
   | { readonly kind: "github"; readonly sub: "install" | "doctor" }
   | { readonly kind: "trust"; readonly showDiff: boolean }
+  | {
+      readonly kind: "bootstrap";
+      readonly frozen: boolean;
+      readonly offline: boolean;
+      readonly scope: "project" | "user";
+    }
+  | { readonly kind: "package"; readonly sub: "search"; readonly query: string }
+  | {
+      readonly kind: "package";
+      readonly sub: "info";
+      readonly packageId: string;
+      readonly scope: "project" | "user" | "effective";
+    }
+  | {
+      readonly kind: "package";
+      readonly sub: "add";
+      readonly source: string;
+      readonly scope: "project" | "user";
+      readonly allowUnsignedLocal: boolean;
+      readonly grantRequested: boolean;
+      readonly offline: boolean;
+    }
+  | {
+      readonly kind: "package";
+      readonly sub: "verify";
+      readonly source: string;
+      readonly scope: "project" | "user";
+      readonly allowUnsignedLocal: boolean;
+      readonly offline: boolean;
+    }
+  | {
+      readonly kind: "package";
+      readonly sub: "remove";
+      readonly packageId: string;
+      readonly scope: "project" | "user";
+    }
+  | {
+      readonly kind: "package";
+      readonly sub: "update";
+      readonly packageId?: string;
+      readonly scope: "project" | "user";
+      readonly offline: boolean;
+    }
+  | {
+      readonly kind: "package";
+      readonly sub: "list" | "doctor";
+      readonly packageId?: string;
+      readonly scope: "project" | "user" | "effective";
+    }
+  | {
+      readonly kind: "package";
+      readonly sub: "publish";
+      readonly path: string;
+      readonly dryRun: boolean;
+    }
+  | { readonly kind: "package"; readonly sub: "init"; readonly path: string }
+  | { readonly kind: "plugin"; readonly sub: "list" }
+  | {
+      readonly kind: "plugin";
+      readonly sub: "inspect" | "enable" | "disable" | "grants";
+      readonly pluginId: string;
+    }
   | { readonly kind: "auth"; readonly sub: "login"; readonly device: boolean }
   | { readonly kind: "auth"; readonly sub: "api"; readonly fromStdin: boolean }
   | { readonly kind: "auth"; readonly sub: "status" }
@@ -225,6 +287,15 @@ export function parseArgs(argv: readonly string[]): ParseResult {
       return { command: { kind: "acp" } };
     case "trust":
       return { command: { kind: "trust", showDiff: flags.has("--show-diff") } };
+    case "bootstrap":
+      return {
+        command: {
+          kind: "bootstrap",
+          frozen: flags.has("--frozen"),
+          offline: flags.has("--offline"),
+          scope: mutationScope(flags, "capy bootstrap"),
+        },
+      };
     case "session-worker": {
       const sessionId = flags.get("--session-id")?.value;
       return {
@@ -297,6 +368,87 @@ function buildSubcommand(
   if (commandName === "github" && (subName === "install" || subName === "doctor")) {
     return { kind: "github", sub: subName };
   }
+  if (commandName === "package") {
+    switch (subName) {
+      case "search":
+        return { kind: "package", sub: "search", query: operands[0] as string };
+      case "info":
+        return {
+          kind: "package",
+          sub: "info",
+          packageId: operands[0] as string,
+          scope: listScope(flags, "capy package info"),
+        };
+      case "add":
+        return {
+          kind: "package",
+          sub: "add",
+          source: operands[0] as string,
+          scope: mutationScope(flags, "capy package add"),
+          allowUnsignedLocal: flags.has("--allow-unsigned-local"),
+          grantRequested: flags.has("--grant-requested"),
+          offline: flags.has("--offline"),
+        };
+      case "verify":
+        return {
+          kind: "package",
+          sub: "verify",
+          source: operands[0] as string,
+          scope: mutationScope(flags, "capy package verify"),
+          allowUnsignedLocal: flags.has("--allow-unsigned-local"),
+          offline: flags.has("--offline"),
+        };
+      case "remove":
+        return {
+          kind: "package",
+          sub: "remove",
+          packageId: operands[0] as string,
+          scope: mutationScope(flags, "capy package remove"),
+        };
+      case "update":
+        return {
+          kind: "package",
+          sub: "update",
+          ...(operands[0] === undefined ? {} : { packageId: operands[0] }),
+          scope: mutationScope(flags, "capy package update"),
+          offline: flags.has("--offline"),
+        };
+      case "list":
+      case "doctor":
+        return {
+          kind: "package",
+          sub: subName,
+          ...(subName === "doctor" && operands[0] !== undefined
+            ? { packageId: operands[0] }
+            : {}),
+          scope: listScope(flags, "capy package " + subName),
+        };
+      case "publish":
+        return {
+          kind: "package",
+          sub: "publish",
+          path: operands[0] ?? ".",
+          dryRun: flags.has("--dry-run"),
+        };
+      case "init":
+        return { kind: "package", sub: "init", path: operands[0] ?? "." };
+    }
+  }
+  if (commandName === "plugin") {
+    if (subName === "list") return { kind: "plugin", sub: "list" };
+    if (
+      subName === "inspect"
+      || subName === "enable"
+      || subName === "disable"
+      || subName === "grants"
+    ) {
+      return {
+        kind: "plugin",
+        sub: subName,
+        pluginId: operands[0] as string,
+      };
+    }
+  }
   if (commandName === "config" && subName === "set") {
     return {
       kind: "config",
@@ -337,6 +489,29 @@ function buildSubcommand(
   throw usageError("unsupported command: capy " + commandName + " " + subName);
 }
 
+function mutationScope(
+  flags: Map<string, FlagToken>,
+  context: string,
+): "project" | "user" {
+  if (flags.has("--project") && flags.has("--user")) {
+    throw usageError(context + " accepts only one of --project or --user");
+  }
+  return flags.has("--user") ? "user" : "project";
+}
+
+function listScope(
+  flags: Map<string, FlagToken>,
+  context: string,
+): "project" | "user" | "effective" {
+  const selected = ["--project", "--user", "--effective"].filter((flag) => flags.has(flag));
+  if (selected.length > 1) {
+    throw usageError(context + " accepts only one scope flag");
+  }
+  if (flags.has("--project")) return "project";
+  if (flags.has("--user")) return "user";
+  return "effective";
+}
+
 export const HELP_TEXT = [
   "Capybara Code - independent coding agent for GPT-5.6",
   "",
@@ -351,6 +526,12 @@ export const HELP_TEXT = [
   "  integration doctor [target]      diagnose vscode, acp, or github",
   "  github install|doctor            manage GitHub Action integration",
   "  trust [--show-diff]              inspect or approve project trust",
+  "  bootstrap [--frozen] [--offline] reconstruct declared packages",
+  "  package search|info|add|remove   discover and change packages",
+  "  package update|list|doctor       maintain immutable package locks",
+  "  package verify|publish|init      verify or author packages",
+  "  plugin list|inspect              inspect plugin runtimes",
+  "  plugin enable|disable|grants     control plugin state and authority",
   "  daemon start                     start the local daemon",
   "  daemon stop                      stop the local daemon",
   "  daemon status                    show daemon health",

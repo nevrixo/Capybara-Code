@@ -98,11 +98,11 @@ export class FileSystemPackageInstallStore implements PackageInstallStore {
     resolvedPackage: ResolvedPackage,
   ): Promise<StagedPackage> {
     const stagingRoot = this.#insideCache("staging", safeSegment(operationId));
-    const packageRoot = this.#insideCache(
-      "packages",
-      safeSegment(verified.manifest.id),
-      safeSegment(verified.manifest.version),
-      verified.packageDigest.slice("sha256:".length),
+    const packageRoot = packageCacheEntryPath(
+      this.#cacheRoot,
+      verified.manifest.id,
+      verified.manifest.version,
+      verified.packageDigest,
     );
     await rm(stagingRoot, { recursive: true, force: true });
     await mkdir(stagingRoot, { recursive: true, mode: 0o700 });
@@ -233,6 +233,26 @@ function safeSegment(value: string): string {
     throw new Error("package cache segment is invalid");
   }
   return segment;
+}
+
+export function packageCacheEntryPath(
+  cacheRoot: string,
+  packageId: string,
+  version: string,
+  packageDigest: string,
+): string {
+  if (!/^sha256:[a-f0-9]{64}$/u.test(packageDigest)) {
+    throw new Error("package cache digest is invalid");
+  }
+  const path = resolve(
+    cacheRoot,
+    "packages",
+    safeSegment(packageId),
+    safeSegment(version),
+    packageDigest.slice("sha256:".length),
+  );
+  assertWithin(resolve(cacheRoot), path);
+  return path;
 }
 
 async function atomicJsonWrite(path: string, value: unknown): Promise<void> {

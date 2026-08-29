@@ -35,11 +35,15 @@ export interface StagedPackage {
   readonly created?: boolean;
 }
 
+export interface PackagePluginAdmission extends PluginInstallAdmission {
+  readonly grants: PluginPermissionRequest;
+}
+
 export interface PackageActivation {
   readonly verified: VerifiedPackage;
   readonly stage: StagedPackage;
   readonly scope: PackageInstallScope;
-  readonly pluginAdmissions: readonly PluginInstallAdmission[];
+  readonly pluginAdmissions: readonly PackagePluginAdmission[];
 }
 
 export interface PackageInstallStore {
@@ -295,7 +299,10 @@ export class PackageInstallerService {
     validatePackageRequestFile(input.requests);
     validatePackageLockfile(input.lockfile);
     if (input.frozen && input.requests.packages.length !== Object.keys(input.lockfile.packages).length) {
-      throw new Error("frozen bootstrap request and lockfile package counts differ");
+      throw new PackageVerificationError(
+        "PACKAGE_FROZEN_MISMATCH",
+        "frozen bootstrap request and lockfile package counts differ",
+      );
     }
     const receipts = [];
     for (const [index, request] of input.requests.packages.entries()) {
@@ -307,7 +314,10 @@ export class PackageInstallerService {
       });
       const expected = input.lockfile.packages[verified.manifest.id];
       if (input.frozen && expected === undefined) {
-        throw new Error("frozen bootstrap lock is missing " + verified.manifest.id);
+        throw new PackageVerificationError(
+          "PACKAGE_FROZEN_MISMATCH",
+          "frozen bootstrap lock is missing " + verified.manifest.id,
+        );
       }
       receipts.push(await this.install({
         source: request.source,
@@ -316,10 +326,89 @@ export class PackageInstallerService {
         idempotencyKey: input.idempotencyKey + ":" + String(index),
         allowUnsignedLocal: request.source.startsWith("path:"),
         ...(input.offline === undefined ? {} : { offline: input.offline }),
-        ...(expected === undefined ? {} : { expectedLockEntry: expected }),
+        ...(!input.frozen || expected === undefined ? {} : { expectedLockEntry: expected }),
       }));
     }
     return Object.freeze(receipts);
+  }
+
+  /**
+   * Re-activate an exact locked environment in a fresh host process without
+   * rewriting the lockfile or manufacturing install receipts.
+   */
+  async restore(input: {
+    readonly requests: PackageRequestFile;
+    readonly lockfile: PackageLockfile;
+    readonly offline?: boolean;
+  }): Promise<readonly PackageActivation[]> {
+    validatePackageRequestFile(input.requests);
+    validatePackageLockfile(input.lockfile);
+    if (input.requests.packages.length !== Object.keys(input.lockfile.packages).length) {
+      throw new PackageVerificationError(
+        "PACKAGE_FROZEN_MISMATCH",
+        "restore request and lockfile package counts differ",
+      );
+    }
+    const activated: PackageActivation[] = [];
+    const completed: Array<{
+      readonly activation: PackageActivation;
+      readonly lockEntry: PackageLockEntry;
+    }> = [];
+    try {
+      for (const request of input.requests.packages) {
+        const resolved = await this.#resolver.resolve(request.source, {
+          ...(input.offline === undefined ? {} : { offline: input.offline }),
+        });
+        const verified = verifyResolvedPackage(resolved, {
+          allowUnsignedLocal: request.source.startsWith("path:"),
+        });
+        const expected = input.lockfile.packages[verified.manifest.id];
+        if (expected === undefined) {
+          throw new PackageVerificationError(
+            "PACKAGE_FROZEN_MISMATCH",
+            "restore lock is missing " + verified.manifest.id,
+          );
+        }
+        const grants = Object.freeze({ ...(request.grants ?? {}) });
+        assertGrantNarrowing(grants, verified.manifest.permissions);
+        const actual = lockEntryFor(verified, grants);
+        if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+          throw new PackageVerificationError(
+            "PACKAGE_FROZEN_MISMATCH",
+            "cached package does not match the frozen lock entry",
+          );
+        }
+        const pluginAdmissions = admitContainedPlugins(
+          verified,
+          resolved,
+          request.scope,
+          grants,
+        );
+        const stage = await this.#store.stage(this.#newId("pkgrestore_"), verified, resolved);
+        const activation: PackageActivation = {
+          verified,
+          stage,
+          scope: request.scope,
+          pluginAdmissions,
+        };
+        await this.#store.activate(activation);
+        completed.push({ activation, lockEntry: expected });
+        if (!await this.#store.healthCheck(activation)) {
+          throw new Error("restored package activation health check failed");
+        }
+        activated.push(activation);
+      }
+    } catch (error) {
+      for (const item of completed.reverse()) {
+        await this.#store.rollback(
+          item.activation.verified.manifest.id,
+          item.lockEntry,
+        ).catch(() => undefined);
+        await this.#store.cleanup(item.activation.stage).catch(() => undefined);
+      }
+      throw error;
+    }
+    return Object.freeze(activated);
   }
 
   async #readLockfile(): Promise<PackageLockfile> {
@@ -383,7 +472,7 @@ function admitContainedPlugins(
   resolved: ResolvedPackage,
   scope: PackageInstallScope,
   grants: PluginPermissionRequest,
-): readonly PluginInstallAdmission[] {
+): readonly PackagePluginAdmission[] {
   const files = new Map(resolved.files.map((file) => [file.path, file.bytes]));
   const admissions = [];
   for (const pluginManifestPath of verified.manifest.contents.plugins ?? []) {
@@ -418,7 +507,7 @@ function admitContainedPlugins(
         ? {}
         : { signature: { keyId: plugin.signature.keyId, verified: signatureVerified } }),
     };
-    admissions.push(admitPluginInstall({
+    const admission = admitPluginInstall({
       scope,
       sourceKind: verified.sourceKind,
       source: verified.source,
@@ -426,7 +515,8 @@ function admitContainedPlugins(
       files: pluginFiles,
       lockEntry,
       signaturePolicy: verified.sourceKind === "registry" ? "required" : "allow-unverified",
-    }));
+    });
+    admissions.push(Object.freeze({ ...admission, grants: pluginGrants }));
   }
   return Object.freeze(admissions);
 }

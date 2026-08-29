@@ -638,7 +638,53 @@ describe("default App backend session receipts", () => {
       },
     });
     expect("result" in messaged && (messaged.result as { status: string }).status).toBe("completed");
-    expect(workerRequests.map((entry) => entry.method)).toEqual(["graph.get", "task.message"]);
+
+    const packageInspect = await daemon.dispatch(connectionId, {
+      jsonrpc: "2.0",
+      id: 73,
+      method: "package.inspect",
+      params: { sessionId, packageId: "acme/quality" },
+    });
+    expect("result" in packageInspect).toBe(true);
+    const packageInstallRequest = {
+      jsonrpc: "2.0" as const,
+      id: 74,
+      method: "package.install",
+      params: {
+        command: command("package-install", {
+          source: "registry:acme/quality",
+          scope: "project",
+        }, sessionId),
+      },
+    };
+    const packageInstalled = await daemon.dispatch(connectionId, packageInstallRequest);
+    const packageReplayed = await daemon.dispatch(
+      connectionId,
+      { ...packageInstallRequest, id: 75 },
+    );
+    expect(
+      "result" in packageInstalled
+      && (packageInstalled.result as { status: string }).status,
+    ).toBe("completed");
+    expect(
+      "result" in packageReplayed
+      && (packageReplayed.result as { receiptId: string }).receiptId,
+    ).toBe(
+      "result" in packageInstalled
+        ? (packageInstalled.result as { receiptId: string }).receiptId
+        : "",
+    );
+    expect(workerRequests.map((entry) => entry.method)).toEqual([
+      "graph.get",
+      "task.message",
+      "package.inspect",
+      "package.install",
+    ]);
+    expect(workerRequests.at(-1)?.params).toEqual({
+      source: "registry:acme/quality",
+      scope: "project",
+      idempotencyKey: "idem_package-install",
+    });
 
     const cancelled = await daemon.dispatch(connectionId, {
       jsonrpc: "2.0",
