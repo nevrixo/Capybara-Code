@@ -49,6 +49,17 @@ Added strict integration trigger and action-result schemas. Raw provider payload
 remain outside the agent prompt; coordinators consume only the minimized envelope
 and validated receipt-backed result.
 
+## config · tools 1.0 — recursive durable AgentGraph
+
+The stable subagent depth default is now 2 with an absolute maximum of 3.
+AgentGraph defaults are bounded to 16 nodes, six concurrent nodes, one writer,
+240 tool calls, four dollars, and 30 minutes. Writer delegation defaults to
+worktree-lease and fails closed when an isolated runtime cannot be created.
+
+Added task.await and task.message to the native tool catalog. Nested agents receive
+only the subtree-scoped task facade while the coordinator persists mailbox and
+budget reservations with the graph snapshot.
+
 ## events 1.0 — Skills catalog revision
 
 Added the journaled, hidden `skills.changed` event. It records the active Agent

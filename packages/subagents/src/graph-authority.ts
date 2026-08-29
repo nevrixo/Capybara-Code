@@ -21,6 +21,7 @@ import {
   type GraphPersistSnapshot,
   type GraphSnapshotStore,
 } from "./graph-store.ts";
+import type { GraphBudgetSnapshot } from "./budget-ledger.ts";
 
 export interface GraphSpawnRecord {
   readonly id: string;
@@ -42,6 +43,7 @@ function iso(now: () => number): string {
 export class GraphAuthority {
   #state: GraphState | null = null;
   #mailbox: GraphMailboxMessage[] = [];
+  #budget: GraphBudgetSnapshot | undefined;
   readonly #now: () => number;
   readonly #sessionId: string;
   readonly #workspaceIdentityDigest: string;
@@ -72,6 +74,7 @@ export class GraphAuthority {
     if (loaded?.mailbox !== undefined) {
       this.#mailbox = [...loaded.mailbox];
     }
+    if (loaded?.budget !== undefined) this.#budget = loaded.budget;
   }
 
   snapshot(): GraphState | null {
@@ -83,6 +86,7 @@ export class GraphAuthority {
       schemaVersion: GRAPH_SNAPSHOT_SCHEMA_VERSION,
       state: this.#state,
       mailbox: [...this.#mailbox],
+      ...(this.#budget === undefined ? {} : { budget: this.#budget }),
     };
     this.#store?.save(snapshot);
     this.#store?.persistDurable?.(
@@ -95,6 +99,15 @@ export class GraphAuthority {
 
   mailbox(): readonly GraphMailboxMessage[] {
     return this.#mailbox;
+  }
+
+  budgetSnapshot(): GraphBudgetSnapshot | undefined {
+    return this.#budget;
+  }
+
+  setBudgetSnapshot(snapshot: GraphBudgetSnapshot): void {
+    this.#budget = snapshot;
+    this.persistSnapshot();
   }
 
   postMessage(input: {

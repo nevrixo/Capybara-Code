@@ -341,6 +341,12 @@ export class CapybaraDaemon {
         "session.detach",
         "turn.submit",
         "turn.cancel",
+        "graph.get",
+        "graph.listNodes",
+        "task.get",
+        "task.wait",
+        "task.message",
+        "task.cancel",
         "worktree.list",
         "approval.list",
         "approval.resolve",
@@ -430,6 +436,30 @@ export class CapybaraDaemon {
         return { ...daemon.health() };
       },
       async dispatch(input) {
+        if (
+          input.method === "graph.get"
+          || input.method === "graph.listNodes"
+          || input.method === "task.get"
+          || input.method === "task.wait"
+        ) {
+          const params = isRecord(input.params) ? input.params : {};
+          const sessionId = requireString(params.sessionId);
+          return await daemon.workers.request(sessionId, input.method, params);
+        }
+        if (input.method === "task.message" || input.method === "task.cancel") {
+          const command = appCommand(input.params);
+          return (await commands.execute(command, async () => {
+            const payload = requireRecord(command.payload);
+            const sessionId = requireString(command.sessionId ?? payload.sessionId);
+            const result = await daemon.workers.request(sessionId, input.method, payload);
+            return completedReceipt(
+              command,
+              daemon.#now(),
+              result,
+              input.method === "task.cancel" ? "cancelled" : "completed",
+            );
+          })).receipt;
+        }
         if (input.method === "session.create") {
           const command = appCommand(input.params);
           return (await commands.execute(command, async () => {

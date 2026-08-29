@@ -293,7 +293,13 @@ describe("AgentSession Context P0 production loop", () => {
     const session = new AgentSession({
       host: { now: () => ++now } as never,
       runtime: runtime as never,
-      config: loadConfig({ projectTrusted: true, env: {} }).config,
+      // This test isolates context-capsule projection. Keep the explicit
+      // compatibility writer mode so worktree preflight is covered separately.
+      config: loadConfig({
+        projectTrusted: true,
+        env: {},
+        userToml: "[subagents]\nwriter_policy = \"single-lease\"\n",
+      }).config,
       workspacePath: "/work",
       workspaceIdentityDigest: "8".repeat(64),
       trust: "trusted-always",

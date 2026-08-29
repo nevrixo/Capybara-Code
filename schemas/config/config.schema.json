@@ -658,15 +658,17 @@
           "default": 3
         },
         "maxDepth": {
-          "description": "15.7: one level in P0. A child may not spawn its own children.",
+          "description": "Stable default is two levels; experimental sessions are hard-capped at three.",
           "type": "integer",
           "minimum": 0,
-          "maximum": 1,
-          "default": 1
+          "maximum": 3,
+          "default": 2
         },
         "writerPolicy": {
-          "description": "P6 and 15.8: one writer at a time. No other value is supported.",
-          "const": "single-lease"
+          "description": "Writer authority remains lease-bound; worktree-lease also requires isolated runtime preflight.",
+          "type": "string",
+          "enum": ["single-lease", "worktree-lease"],
+          "default": "worktree-lease"
         }
       }
     },
@@ -1268,11 +1270,11 @@
       "properties": {
         "enabled": { "type": "boolean", "default": true },
         "maxDepth": { "type": "integer", "minimum": 0, "default": 3 },
-        "maxNodes": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 10000 },
-        "maxConcurrentNodes": { "type": "integer", "minimum": 1, "default": 8 },
-        "maxConcurrentReaders": { "type": "integer", "minimum": 1, "default": 8 },
-        "maxConcurrentWriters": { "type": "integer", "minimum": 1, "default": 4 },
-        "maxAttemptsPerNode": { "type": "integer", "minimum": 1, "default": 3 },
+        "maxNodes": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 16 },
+        "maxConcurrentNodes": { "type": "integer", "minimum": 1, "default": 6 },
+        "maxConcurrentReaders": { "type": "integer", "minimum": 1, "default": 6 },
+        "maxConcurrentWriters": { "type": "integer", "minimum": 1, "default": 1 },
+        "maxAttemptsPerNode": { "type": "integer", "minimum": 1, "default": 2 },
         "checkpointEvents": { "type": "integer", "minimum": 1, "default": 25 },
         "messageBytes": { "type": "integer", "minimum": 1024, "default": 65536 },
         "recoveryPolicy": { "type": "string", "enum": ["safe-retry", "manual"], "default": "safe-retry" },
@@ -1282,9 +1284,9 @@
           "required": ["mode", "maxCostUsd", "maxToolCalls", "maxWallClockMinutes"],
           "properties": {
             "mode": { "type": "string", "enum": ["hard", "advisory"], "default": "hard" },
-            "maxCostUsd": { "type": "number", "minimum": 0, "default": 20 },
-            "maxToolCalls": { "type": "integer", "minimum": 0, "default": 1000 },
-            "maxWallClockMinutes": { "type": "integer", "minimum": 1, "default": 120 }
+            "maxCostUsd": { "type": "number", "minimum": 0, "default": 4 },
+            "maxToolCalls": { "type": "integer", "minimum": 0, "default": 240 },
+            "maxWallClockMinutes": { "type": "integer", "minimum": 1, "default": 30 }
           }
         }
       }

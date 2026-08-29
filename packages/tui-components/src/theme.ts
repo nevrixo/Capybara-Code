@@ -616,6 +616,8 @@ const TOOL_ACTIONS: Readonly<Record<string, string>> = {
   "task.search": "Task",
   "task.spawn": "Task",
   "task.status": "Task",
+  "task.await": "Await",
+  "task.message": "Message",
   "task.cancel": "Task",
   "skill.search": "Skill",
   "skill.load": "Skill",

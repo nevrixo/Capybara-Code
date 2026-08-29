@@ -2012,6 +2012,8 @@ export class RuntimeToolExecutor implements ToolExecutor {
       case "task.search":
       case "task.spawn":
       case "task.status":
+      case "task.await":
+      case "task.message":
       case "task.cancel":
         return await this.#viaBridge("task", action, signal, "subagents are not available");
 

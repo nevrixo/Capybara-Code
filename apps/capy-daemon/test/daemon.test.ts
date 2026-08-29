@@ -489,6 +489,7 @@ describe("default App backend session receipts", () => {
     const dir = runtimeDir();
     const prompts: string[] = [];
     const cancellations: string[] = [];
+    const workerRequests: Array<{ method: string; params: unknown }> = [];
     const daemon = new CapybaraDaemon({
       runtimeDir: dir,
       listen: false,
@@ -505,6 +506,10 @@ describe("default App backend session receipts", () => {
         },
         async cancel(sessionId, turnId) {
           cancellations.push(sessionId + ":" + (turnId ?? ""));
+        },
+        async request(_sessionId, method, params) {
+          workerRequests.push({ method, params });
+          return { method, params };
         },
       },
     });
@@ -602,6 +607,29 @@ describe("default App backend session receipts", () => {
       params: { workspaceIdentityDigest: "ws_integration" },
     });
     expect("result" in listed && JSON.stringify(listed.result)).toContain(sessionId);
+
+    const graph = await daemon.dispatch(connectionId, {
+      jsonrpc: "2.0",
+      id: 71,
+      method: "graph.get",
+      params: { sessionId },
+    });
+    expect("result" in graph && (graph.result as { method: string }).method).toBe("graph.get");
+
+    const messaged = await daemon.dispatch(connectionId, {
+      jsonrpc: "2.0",
+      id: 72,
+      method: "task.message",
+      params: {
+        command: command("message", {
+          taskId: "agent_1",
+          kind: "instruction",
+          body: { text: "continue" },
+        }, sessionId),
+      },
+    });
+    expect("result" in messaged && (messaged.result as { status: string }).status).toBe("completed");
+    expect(workerRequests.map((entry) => entry.method)).toEqual(["graph.get", "task.message"]);
 
     const cancelled = await daemon.dispatch(connectionId, {
       jsonrpc: "2.0",

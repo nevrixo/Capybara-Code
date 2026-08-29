@@ -285,12 +285,15 @@ export function roleDefinition(role: SubagentRole): RoleDefinition {
 export const SUBAGENT_LIMITS = {
   /** Provider parallelism only. Additional registered children wait in FIFO order. */
   maxConcurrent: 8,
-  maxDepth: 1,
+  /** Absolute experimental ceiling. Stable config defaults to depth 2. */
+  maxDepth: 3,
   /** §15.7 / P6: exactly one writer. */
   maxWriterAgents: 1,
   /** Historical aggregate target used for context telemetry, not admission. */
   aggregateContextFraction: 0.5,
 } as const;
+
+export const DEFAULT_SUBAGENT_MAX_DEPTH = 2;
 
 /** Backward-compatible alias used by rollout and scheduler code. */
 export const SUBAGENT_HARD_LIMITS = SUBAGENT_LIMITS;

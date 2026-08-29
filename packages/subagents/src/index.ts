@@ -9,6 +9,8 @@
  */
 
 export * from "./roles.ts";
+export * from "./budget-ledger.ts";
+export * from "./delegation-coordinator.ts";
 export * from "./task.ts";
 export * from "./instance.ts";
 export * from "./synthesis.ts";

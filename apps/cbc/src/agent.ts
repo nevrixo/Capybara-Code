@@ -2728,9 +2728,41 @@ export class AgentSession {
     await this.#subagentBridge.cancelTask(taskId, reason);
   }
 
+  async cancelTaskResult(taskId: string, reason?: string) {
+    return await this.#subagentBridge.cancelTask(taskId, reason);
+  }
+
   /** Cancel all running subagents and abort their executions. */
   async cancelAllTasks(reason?: string): Promise<void> {
     await this.#subagentBridge.cancelAllTasks(reason);
+  }
+
+  taskGraphSnapshot() {
+    return this.#subagentBridge.coordinator.graph?.snapshot() ?? null;
+  }
+
+  taskInstances() {
+    return this.#subagentBridge.coordinator.list();
+  }
+
+  taskInstance(taskId: string) {
+    return this.#subagentBridge.coordinator.get(taskId);
+  }
+
+  async waitTask(taskId: string, signal?: AbortSignal) {
+    return await this.#subagentBridge.coordinator.wait("root", taskId, signal);
+  }
+
+  messageTask(taskId: string, kind: string, body?: unknown): void {
+    this.#subagentBridge.coordinator.send("root", taskId, { kind, body });
+  }
+
+  taskBudgetSnapshot() {
+    return this.#subagentBridge.coordinator.budgetSnapshot;
+  }
+
+  taskRecoveryReport() {
+    return this.#subagentBridge.coordinator.recoveryReport();
   }
 
   /** Apply an interactive effort choice to this session immediately. */

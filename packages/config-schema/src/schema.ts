@@ -214,7 +214,7 @@ export interface PerformanceConfig {
 export interface SubagentsConfig {
   maxConcurrent: number;
   maxDepth: number;
-  writerPolicy: "single-lease";
+  writerPolicy: "single-lease" | "worktree-lease";
 }
 
 export interface ToolsConfig {
@@ -588,8 +588,8 @@ export function defaultConfig(): CbcConfig {
     },
     subagents: {
       maxConcurrent: 3,
-      maxDepth: 1,
-      writerPolicy: "single-lease",
+      maxDepth: 2,
+      writerPolicy: "worktree-lease",
     },
     tools: {
       activationLimit: 10,
@@ -720,15 +720,15 @@ export function defaultConfig(): CbcConfig {
     agentGraph: {
       enabled: true,
       maxDepth: 3,
-      maxNodes: 10_000,
-      maxConcurrentNodes: 8,
-      maxConcurrentReaders: 8,
-      maxConcurrentWriters: 4,
-      maxAttemptsPerNode: 3,
+      maxNodes: 16,
+      maxConcurrentNodes: 6,
+      maxConcurrentReaders: 6,
+      maxConcurrentWriters: 1,
+      maxAttemptsPerNode: 2,
       checkpointEvents: 25,
       messageBytes: 65_536,
       recoveryPolicy: "safe-retry",
-      budget: { mode: "hard", maxCostUsd: 20, maxToolCalls: 1_000, maxWallClockMinutes: 120 },
+      budget: { mode: "hard", maxCostUsd: 4, maxToolCalls: 240, maxWallClockMinutes: 30 },
     },
     worktrees: {
       enabled: true,
@@ -941,7 +941,7 @@ const ENUMS: Record<string, readonly string[]> = {
   "agent.permissionMode": ["plan", "ask", "auto", "auto-review"],
   "agent.interactionMode": ["build", "plan"],
   "agent.reviewMode": ["off", "auto"],
-  "subagents.writerPolicy": ["single-lease"],
+  "subagents.writerPolicy": ["single-lease", "worktree-lease"],
   "permissions.projectWrite": ["plan", "ask", "auto"],
   "permissions.shell": ["deny", "ask", "safe-auto"],
   "permissions.network": ["deny", "ask", "allow"],
@@ -1473,7 +1473,7 @@ const INTEGER_CONSTRAINTS: Readonly<Record<string, IntegerConstraint>> = {
   "agent.toolGraph.maxParallelTests": { minimum: 1 },
   "agent.toolRecovery.maxAttempts": { minimum: 1, maximum: 5 },
   "subagents.maxConcurrent": { minimum: 1, maximum: 8 },
-  "subagents.maxDepth": { minimum: 0, maximum: 1 },
+  "subagents.maxDepth": { minimum: 0, maximum: 3 },
   "tools.activationLimit": { minimum: 1 },
   "tools.inlineOutputBytes": { minimum: 1_024 },
   "tools.inlineOutputLines": { minimum: 10 },
@@ -1699,12 +1699,12 @@ function validateSemantics(
       });
     }
   }
-  if (config.subagents.maxDepth > 1) {
+  if (config.subagents.maxDepth > 3) {
     issues.push({
       severity: "error",
       path: "subagents.maxDepth",
       source: sourceOf("subagents.maxDepth"),
-      message: "delegation depth is capped at 1",
+      message: "delegation depth is capped at the experimental hard maximum of 3",
     });
   }
   if (config.subagents.maxConcurrent < 1) {

@@ -274,6 +274,8 @@
         "task.search",
         "task.spawn",
         "task.status",
+        "task.await",
+        "task.message",
         "task.cancel",
         "plugin.invoke",
         "skill.search",

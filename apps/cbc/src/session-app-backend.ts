@@ -55,6 +55,7 @@ export class SessionAppBackend implements AppServerBackend {
   readonly #graph?: SessionAppBackendOptions["graph"];
   readonly #plugins?: SessionAppBackendOptions["plugins"];
   readonly #dedupe = new CommandDeduplicator<{ prompt?: string }, TurnResult["report"]>();
+  readonly #taskDedupe = new CommandDeduplicator<unknown, unknown>();
   readonly #subscriptions = new Map<string, AppServerSubscription>();
   readonly #clients = new Set<string>();
   #lastTurn: TurnResult | undefined;
@@ -83,6 +84,11 @@ export class SessionAppBackend implements AppServerBackend {
       ...(options.memory?.resolve === undefined ? [] : ["memory.resolveContest" as const]),
       "worktree.list",
       "graph.get",
+      "graph.listNodes",
+      "task.get",
+      "task.wait",
+      "task.message",
+      "task.cancel",
       "plugin.list",
     ] satisfies AppMethod[]);
   }
@@ -214,7 +220,52 @@ export class SessionAppBackend implements AppServerBackend {
       return this.#worktrees?.list() ?? { worktrees: [] };
     }
     if (input.method === "graph.get") {
-      return this.#graph?.snapshot() ?? { graph: null };
+      return {
+        graph: this.#graph?.snapshot() ?? this.#session.taskGraphSnapshot(),
+        budget: this.#session.taskBudgetSnapshot(),
+        recovery: this.#session.taskRecoveryReport(),
+      };
+    }
+    if (input.method === "graph.listNodes") {
+      return { nodes: this.#session.taskInstances() };
+    }
+    if (input.method === "task.get") {
+      const taskId = payloadString(input.params, "taskId");
+      if (taskId === undefined) throw new Error("task.get requires taskId");
+      const instance = this.#session.taskInstance(taskId);
+      if (instance === undefined) throw new Error("unknown task");
+      return { instance };
+    }
+    if (input.method === "task.wait") {
+      const taskId = payloadString(input.params, "taskId");
+      if (taskId === undefined) throw new Error("task.wait requires taskId");
+      const timeoutMs = payloadNumber(input.params, "timeoutMs");
+      const signal = timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs);
+      return {
+        taskId,
+        result: await this.#session.waitTask(taskId, signal),
+        instance: this.#session.taskInstance(taskId),
+      };
+    }
+    if (input.method === "task.message") {
+      const envelope = commandEnvelope<Record<string, unknown>>(input.params);
+      return (await this.#taskDedupe.execute(envelope, async () => {
+        const taskId = requiredPayloadString(envelope.payload, "taskId");
+        const kind = requiredPayloadString(envelope.payload, "kind");
+        this.#session.messageTask(taskId, kind, envelope.payload.body);
+        return operationReceipt(envelope, this.#now(), { taskId, kind, queued: true });
+      })).receipt;
+    }
+    if (input.method === "task.cancel") {
+      const envelope = commandEnvelope<Record<string, unknown>>(input.params);
+      return (await this.#taskDedupe.execute(envelope, async () => {
+        const taskId = requiredPayloadString(envelope.payload, "taskId");
+        const reason = typeof envelope.payload.reason === "string"
+          ? envelope.payload.reason
+          : "cancelled through App Protocol";
+        const result = await this.#session.cancelTaskResult(taskId, reason);
+        return operationReceipt(envelope, this.#now(), { taskId, result }, "cancelled");
+      })).receipt;
     }
     if (input.method === "plugin.list") {
       return this.#plugins?.list() ?? { plugins: [] };
@@ -272,17 +323,50 @@ export class SessionAppBackend implements AppServerBackend {
   }
 }
 
-function commandEnvelope(params: unknown): CommandEnvelope<{ prompt?: string }> {
+function commandEnvelope<T = { prompt?: string }>(params: unknown): CommandEnvelope<T> {
   if (typeof params !== "object" || params === null || !("command" in params)) {
     throw new Error("turn.submit requires a command envelope");
   }
-  return (params as { command: CommandEnvelope<{ prompt?: string }> }).command;
+  return (params as { command: CommandEnvelope<T> }).command;
 }
 
 function payloadString(params: unknown, key: string): string | undefined {
   if (typeof params !== "object" || params === null || !(key in params)) return undefined;
   const value = (params as Record<string, unknown>)[key];
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function payloadNumber(params: unknown, key: string): number | undefined {
+  if (typeof params !== "object" || params === null || !(key in params)) return undefined;
+  const value = (params as Record<string, unknown>)[key];
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function requiredPayloadString(payload: Record<string, unknown>, key: string): string {
+  const value = payload[key];
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(key + " must be a non-empty string");
+  }
+  return value;
+}
+
+function operationReceipt<T>(
+  envelope: CommandEnvelope<unknown>,
+  finishedAt: string,
+  result: T,
+  status: OperationReceipt["status"] = "completed",
+): OperationReceipt<T> {
+  return {
+    schemaVersion: APP_COMMAND_SCHEMA_VERSION,
+    receiptId: "rcp_" + envelope.commandId,
+    commandId: envelope.commandId,
+    idempotencyKey: envelope.idempotencyKey,
+    status,
+    startedAt: envelope.issuedAt,
+    finishedAt,
+    evidenceIds: [],
+    result,
+  };
 }
 
 function mapStatus(status: string): OperationReceipt["status"] {

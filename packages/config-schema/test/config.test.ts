@@ -195,7 +195,8 @@ describe("defaults (§21.4)", () => {
     expect(config.agent.permissionMode).toBe("ask");
 
     expect(config.subagents.maxConcurrent).toBe(3);
-    expect(config.subagents.maxDepth).toBe(1);
+    expect(config.subagents.maxDepth).toBe(2);
+    expect(config.subagents.writerPolicy).toBe("worktree-lease");
     expect("maxPerTurn" in config.subagents).toBe(false);
     expect(config.tools.activationLimit).toBe(10);
     // §23.5 / D-014: telemetry is off by default.
@@ -511,7 +512,7 @@ describe("monotonic project policy (P0-02)", () => {
 
   test("semantic issues are attributed to the layer that set the value", () => {
     const merged = mergeConfig([
-      { source: "project", values: { "subagents.maxDepth": 3 } },
+      { source: "project", values: { "subagents.maxDepth": 4 } },
     ]);
     const issue = merged.issues.find((i) => i.path === "subagents.maxDepth");
     expect(issue?.source).toBe("project");
@@ -570,8 +571,8 @@ describe("validation (§21.7)", () => {
     expect(merged.config.agent.permissionMode).toBe("ask");
   });
 
-  test("delegation depth above 1 is rejected (§15.7)", () => {
-    const merged = mergeConfig([{ source: "user", values: { "subagents.maxDepth": 3 } }]);
+  test("delegation depth above the hard maximum of 3 is rejected", () => {
+    const merged = mergeConfig([{ source: "user", values: { "subagents.maxDepth": 4 } }]);
     expect(
       merged.issues.some((i) => i.path === "subagents.maxDepth" && i.severity === "error"),
     ).toBe(true);

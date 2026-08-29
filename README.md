@@ -29,6 +29,8 @@ Capybara Code pairs GPT models with a purpose-built coding harness to improve re
 - Isolated Rust execution sidecar
 - Transactional file mutations
 - Sub-agent orchestration
+- Durable recursive AgentGraph orchestration (stable depth 2, hard maximum 3)
+- First-party VS Code, ACP v1, and GitHub Actions integration surfaces
 - Model Context Protocol (MCP) integrations
 
 ## Install
@@ -86,6 +88,10 @@ capy "Explain the structure of this project"
 | Start the interactive UI | `capy` |
 | Start with a prompt | `capy [prompt...]` |
 | Run non-interactively | `capy run [prompt...]` |
+| Serve ACP v1 over stdio | `capy acp` |
+| Inspect client/replay health | `capy clients doctor` |
+| Diagnose integrations | `capy integration doctor [vscode\|acp\|github]` |
+| Install or diagnose GitHub automation | `capy github install` · `capy github doctor` |
 | Sign in | `capy auth login [--device]` |
 | Authenticate with an API key | `capy auth api [--stdin]` |
 | Check or end a session | `capy auth status` · `capy auth logout [--all]` |
@@ -102,7 +108,14 @@ Use `/setting` in the TUI to update interactive settings, or use `capy config se
 
 - Capybara Code creates a single global `config.toml` on first use; it does not read project-local Capybara configuration files.
 - MCP and LSP service definitions stay visible in that file. Missing external executables are reported but never installed automatically.
-- Root agent turns run until completion or cancellation. Sub-agent budgets and process/protocol resource limits remain in place as safety boundaries.
+- Root agent turns run until completion or cancellation. Children may delegate
+  through a session-scoped facade to depth 2 by default (experimental maximum 3).
+  Node/fan-out/tool/time/cost budgets, monotonic child permissions, root-owned
+  approvals, subtree cancellation, and worktree-required writers remain hard
+  safety boundaries.
+- App Protocol initialization publishes a digest-bound capability snapshot.
+  Methods that exist in the schema but are not connected in the active backend
+  report `unsupported`; observer-only mutations report `read-only`.
 - Final responses are chat-first by default. Verified file changes and checks remain available as collapsed evidence; failures, permission blocks, and security-sensitive findings expand automatically.
 - `partial` is a machine status, not a failure label: the UI classifies it as success, attention, blocked, or failure based on the recorded evidence. Exit codes and `CompletionReport` remain compatible.
 - Local context compaction uses the next compiled request's projected pressure. It performs lossless output externalization before semantic compaction, preserves TODO/evidence capsules, and allows at most one recompile per provider sample. The original journal is never deleted.
