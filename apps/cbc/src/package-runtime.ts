@@ -135,7 +135,9 @@ export class PackageRuntime {
   readonly #scopeTails = new Map<PackageInstallScope, Promise<void>>();
   readonly #activePackageRoots = new Map<string, {
     readonly root: string;
+    readonly scope: PackageInstallScope;
     readonly skillPaths: readonly string[];
+    readonly agentPaths: readonly string[];
   }>();
 
   constructor(options: PackageRuntimeOptions) {
@@ -422,8 +424,12 @@ export class PackageRuntime {
         for (const activation of activations) {
           this.#activePackageRoots.set(activation.verified.manifest.id, {
             root: activation.stage.root,
+            scope: activation.scope,
             skillPaths: Object.freeze([
               ...(activation.verified.manifest.contents.skills ?? []),
+            ]),
+            agentPaths: Object.freeze([
+              ...(activation.verified.manifest.contents.agents ?? []),
             ]),
           });
         }
@@ -446,6 +452,33 @@ export class PackageRuntime {
       }
     }
     return Object.freeze([...roots].sort());
+  }
+
+  async agentFiles(): Promise<readonly {
+    readonly path: string;
+    readonly source: PackageInstallScope;
+    readonly text: string;
+  }[]> {
+    const files: Array<{
+      path: string;
+      source: PackageInstallScope;
+      text: string;
+    }> = [];
+    for (const active of this.#activePackageRoots.values()) {
+      for (const agentPath of active.agentPaths) {
+        const path = resolve(active.root, ...agentPath.split("/"));
+        const bytes = await readFile(path);
+        if (bytes.byteLength > 64 * 1024) {
+          throw new Error("package agent definition exceeds 64 KiB: " + agentPath);
+        }
+        files.push({
+          path,
+          source: active.scope,
+          text: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+        });
+      }
+    }
+    return Object.freeze(files.sort((left, right) => left.path.localeCompare(right.path)));
   }
 
   async list(scope: PackageListScope = "effective"): Promise<readonly InstalledPackageView[]> {

@@ -105,7 +105,11 @@ import {
   type SkillDefinition,
   type SkillFile,
 } from "@cbc/skills";
-import type { ChildRunContext, SubagentScheduler } from "@cbc/subagents";
+import type {
+  ChildRunContext,
+  CustomAgentDefinition,
+  SubagentScheduler,
+} from "@cbc/subagents";
 import { errorResult, nativeToolsForFeatures, okResult, ToolRegistry, globMatch, type ToolDefinition } from "@cbc/tool-registry";
 
 import type { GrantedRules } from "./approvals.ts";
@@ -171,6 +175,7 @@ export interface AgentSessionOptions {
   readonly mcpHint?: McpHintResolver;
   /** Isolated package plugin bridge shared by the root and every child executor. */
   readonly pluginInvoke?: ToolExecutorOptions["pluginInvoke"];
+  readonly customAgents?: readonly CustomAgentDefinition[];
   readonly inferencePolicy?: InferencePolicyPort;
   /** Whether the utility router may replace the configured model per turn. */
   readonly autoRoute?: boolean;
@@ -798,6 +803,7 @@ export class AgentSession {
       approvals: options.approvals,
       ...(options.mcpHint !== undefined ? { mcpHint: options.mcpHint } : {}),
       ...(options.pluginInvoke !== undefined ? { pluginInvoke: options.pluginInvoke } : {}),
+      ...(options.customAgents !== undefined ? { customAgents: options.customAgents } : {}),
       readCache,
       permissionContext: () => this.permissionContext(),
       promptInputs: () => this.promptInputs(),

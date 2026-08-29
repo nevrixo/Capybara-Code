@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { loadConfig } from "@cbc/config-schema";
 import { MockProvider } from "@cbc/provider-openai";
 import type { CbcEvent } from "@cbc/protocol";
+import type { CustomAgentDefinition } from "@cbc/subagents";
 
 import { AgentSession } from "../src/agent.ts";
 import { GrantedRules } from "../src/approvals.ts";
@@ -21,7 +22,12 @@ function runtimeStub() {
   };
 }
 
-function session(provider: MockProvider, events: CbcEvent[], id: string) {
+function session(
+  provider: MockProvider,
+  events: CbcEvent[],
+  id: string,
+  customAgents: readonly CustomAgentDefinition[] = [],
+) {
   let now = 10_000;
   return new AgentSession({
     host: { now: () => ++now } as never,
@@ -35,6 +41,7 @@ function session(provider: MockProvider, events: CbcEvent[], id: string) {
     approvals: { request: async () => ({ kind: "allow_once" as const }) },
     granted: new GrantedRules(),
     nonInteractive: false,
+    ...(customAgents.length === 0 ? {} : { customAgents }),
     now: () => ++now,
     onEvent: (event) => { events.push(event); },
   });
@@ -145,5 +152,75 @@ describe("recursive AgentGraph bridge", () => {
     );
     expect(terminal).toBeDefined();
     expect(JSON.stringify(terminal?.payload)).toContain("worktree isolation preflight failed");
+  });
+
+  test("discovers and spawns a package custom agent with narrowed hard limits", async () => {
+    const custom: CustomAgentDefinition = {
+      name: "package-reviewer",
+      description: "Review package-defined security boundaries.",
+      mode: "subagent",
+      baseRole: "reviewer",
+      modelProfile: "economy",
+      permissionClass: "read",
+      maxTools: 3,
+      instructions: "Inspect trust boundaries and return concise evidence.",
+      source: "project",
+      path: "/cache/agents/package-reviewer.md",
+    };
+    const provider = new MockProvider({
+      steps: [
+        {
+          toolCalls: [{
+            callId: "custom-search",
+            name: "task.search",
+            arguments: { query: "package security reviewer" },
+          }],
+        },
+        {
+          toolCalls: [{
+            callId: "custom-spawn",
+            name: "task.spawn",
+            arguments: {
+              role: "package-reviewer",
+              title: "Review package trust",
+              goal: "Review package trust boundaries and return exact security evidence.",
+              constraints: ["Read only."],
+              expectedOutput: ["Return concise security evidence."],
+              context: [],
+              allowedPaths: [],
+              forbiddenPaths: [],
+              verification: [],
+              dependencies: [],
+            },
+          }],
+        },
+        { text: "Package trust review complete." },
+        { text: "Root accepted the custom review." },
+      ],
+    });
+    const events: CbcEvent[] = [];
+    const agent = session(
+      provider,
+      events,
+      "session_custom_package_agent",
+      [custom],
+    );
+    agent.registry.activate(["task.search", "task.spawn"]);
+
+    const result = await agent.submit(
+      "Find and delegate to the package security reviewer.",
+      new AbortController().signal,
+    );
+
+    expect(result.answer).toContain("Root accepted");
+    expect(JSON.stringify(provider.requests[1])).toContain("package-reviewer");
+    expect(JSON.stringify(provider.requests[2])).toContain(custom.instructions);
+    const instance = agent.taskInstances()[0]!;
+    expect(instance.role).toBe("reviewer");
+    expect(instance.name).toBe("package-reviewer");
+    expect(instance.modelProfile).toBe("economy");
+    expect(instance.budget.maxToolCalls).toBe(3);
+    expect(instance.permissions.canWrite).toBe(false);
+    expect(instance.permissions.canRunProcess).toBe(false);
   });
 });

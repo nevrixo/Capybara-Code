@@ -55,6 +55,7 @@ import {
   type AgentInstance,
   type ChildAgentResult,
   type ChildRunContext,
+  type CustomAgentDefinition,
   type GraphPersistSnapshot,
   type GraphSnapshotStore,
   type SubagentRole,
@@ -107,6 +108,7 @@ export interface SubagentBridgeOptions {
   readonly bridges?: ToolBridges;
   readonly mcpHint?: McpHintResolver;
   readonly pluginInvoke?: ToolExecutorOptions["pluginInvoke"];
+  readonly customAgents?: readonly CustomAgentDefinition[];
   /**
    * The read cache shared with the root executor. Forwarded to every child
    * executor so a child's re-read of a file the parent just read is a cache
@@ -384,9 +386,16 @@ export class SubagentBridge {
 
   #search(input: Record<string, unknown>): Execution {
     const query = typeof input.query === "string" ? input.query : "";
-    const candidates = searchAgents(query, { limit: 3 });
+    const customAgents = (this.#options.customAgents ?? []).map((agent) => ({
+      name: agent.name,
+      description: agent.description,
+      permissionClass: agent.permissionClass,
+      capabilities: [agent.baseRole, "package-defined"],
+    }));
+    const candidates = searchAgents(query, { limit: 3, customAgents });
+    const total = SUBAGENT_ROLES.length + customAgents.length;
     const text = renderAgentCandidates(query, candidates, {
-      total: SUBAGENT_ROLES.length,
+      total,
       active: this.coordinator.activeCount(),
     }).join("\n");
     return {
@@ -394,7 +403,7 @@ export class SubagentBridge {
         query,
         candidates,
         activeCount: this.coordinator.activeCount(),
-        totalCount: SUBAGENT_ROLES.length,
+        totalCount: total,
       }),
       text,
     };
@@ -405,12 +414,24 @@ export class SubagentBridge {
     input: Record<string, unknown>,
     signal: AbortSignal,
   ): Promise<Execution> {
-    const roleValue = input.role;
-    if (!isSubagentRole(roleValue)) {
+    const requestedRole = typeof input.role === "string" ? input.role : "";
+    const customAgent = this.#options.customAgents?.find(
+      (candidate) => candidate.name === requestedRole,
+    );
+    const roleValue = isSubagentRole(requestedRole)
+      ? requestedRole
+      : customAgent === undefined
+        ? undefined
+        : effectiveCustomAgentRole(customAgent);
+    if (roleValue === undefined) {
+      const available = [
+        ...SUBAGENT_ROLES,
+        ...(this.#options.customAgents ?? []).map((agent) => agent.name),
+      ];
       return {
         result: errorResult(
           "INVALID_ARGUMENT",
-          "unknown subagent role; choose one of " + SUBAGENT_ROLES.join(", "),
+          "unknown subagent role; choose one of " + available.join(", "),
         ),
       };
     }
@@ -455,9 +476,17 @@ export class SubagentBridge {
     const name = stringValue(input.name);
     const task = buildTask(
       {
-        title: title ?? roleValue + " task",
+        title: title ?? (customAgent?.name ?? roleValue) + " task",
         goal: stringValue(input.goal) ?? "",
-        context: stringList(input.context),
+        context: [
+          ...stringList(input.context),
+          ...(customAgent === undefined
+            ? []
+            : [
+                "Custom agent profile " + customAgent.name + ":\n"
+                + customAgent.instructions,
+              ]),
+        ],
         constraints: stringList(input.constraints),
         expectedOutput: stringList(input.expectedOutput),
         allowedPaths: stringList(input.allowedPaths),
@@ -471,14 +500,21 @@ export class SubagentBridge {
     );
 
     try {
-      const profileName = stringValue(input.modelProfile);
+      const requestedProfile = stringValue(input.modelProfile);
+      const profileName = requestedProfile === undefined || requestedProfile === "auto"
+        ? customAgent?.modelProfile
+        : requestedProfile;
+      const effectiveName = name ?? customAgent?.name;
       const handle = this.coordinator.spawn(parentId, {
         role: roleValue,
         task,
         ...(profileName !== undefined && profileName !== "auto"
           ? { modelProfile: profileName }
           : {}),
-        ...(name !== undefined ? { name } : {}),
+        ...(effectiveName === undefined ? {} : { name: effectiveName }),
+        ...(customAgent === undefined
+          ? {}
+          : { budget: { maxToolCalls: customAgent.maxTools } }),
       });
 
       const detached = input.detached === true;
@@ -1297,6 +1333,15 @@ function isSubagentRole(value: unknown): value is SubagentRole {
     typeof value === "string" &&
     (SUBAGENT_ROLES as readonly string[]).includes(value)
   );
+}
+
+function effectiveCustomAgentRole(agent: CustomAgentDefinition): SubagentRole {
+  const base = roleDefinition(agent.baseRole);
+  if (base.permissionClass === agent.permissionClass) return agent.baseRole;
+  if (agent.permissionClass === "read") return "reviewer";
+  if (agent.permissionClass === "process") return "test";
+  // parseCustomAgent already prevents widening a non-writer base to write.
+  return agent.baseRole;
 }
 
 function stringValue(value: unknown): string | undefined {

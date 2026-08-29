@@ -45,6 +45,11 @@ import {
 import { APP_COMMAND_SCHEMA_VERSION } from "@cbc/app-protocol";
 import { AppServer } from "@cbc/app-server";
 import { CapybaraClient } from "@cbc/sdk";
+import {
+  parseCustomAgent,
+  resolveCustomAgents,
+  type CustomAgentDefinition,
+} from "@cbc/subagents";
 import type { SidebarService } from "@cbc/tui-components";
 
 import {
@@ -589,6 +594,36 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
   }
   const pluginRuntimeEnabled =
     effective.experimental.pluginRuntime && effective.plugins.enabled;
+  const parsedCustomAgents: CustomAgentDefinition[] = [];
+  try {
+    for (const file of await packageRuntime.agentFiles()) {
+      const parsed = parseCustomAgent(file.text, {
+        path: file.path,
+        source: file.source,
+        trusted: file.source === "user"
+          || trust === "trusted-always"
+          || trust === "trusted-once",
+      });
+      for (const issue of parsed.issues) {
+        warnings.push(
+          "package agent " + file.path + ": " + issue.field + ": " + issue.message,
+        );
+      }
+      if (parsed.definition !== undefined) parsedCustomAgents.push(parsed.definition);
+    }
+  } catch (error) {
+    warnings.push(
+      "package agent definitions could not be loaded: "
+      + (error instanceof Error ? error.message : String(error)),
+    );
+  }
+  const customAgentResolution = resolveCustomAgents(parsedCustomAgents);
+  for (const shadowed of customAgentResolution.shadowed) {
+    warnings.push(
+      "package agent " + shadowed.name + " from " + shadowed.path
+      + " was shadowed by a higher-precedence definition",
+    );
+  }
 
   const session = new AgentSession({
     host: context.host,
@@ -615,6 +650,9 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
     ...(pluginRuntimeEnabled
       ? { pluginInvoke: (input) => packageRuntime.invoke(input) }
       : {}),
+    ...(customAgentResolution.agents.length === 0
+      ? {}
+      : { customAgents: customAgentResolution.agents }),
     ...(mcpHost !== undefined
       ? {
           mcpBridge: mcpHost.bridge,

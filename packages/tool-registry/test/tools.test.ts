@@ -691,6 +691,22 @@ describe("argument validation (§12.4, AC-10)", () => {
     expect(result.errors.some((e) => e.message.includes("must be one of"))).toBe(true);
   });
 
+  test("accepts bounded custom agent names but rejects unsafe role text", () => {
+    const spawnSchema = findTool("task.spawn")!.parameters;
+    const valid = parseAndValidate(JSON.stringify({
+      role: "package-reviewer",
+      title: "Review package",
+      goal: "Review the package boundary with exact source evidence.",
+    }), spawnSchema);
+    expect(valid.ok).toBe(true);
+    const invalid = parseAndValidate(JSON.stringify({
+      role: "../../PACKAGE REVIEWER",
+      title: "Review package",
+      goal: "Review the package boundary with exact source evidence.",
+    }), spawnSchema);
+    expect(invalid.ok).toBe(false);
+  });
+
   test("validates array items and bounds", () => {
     const spawnSchema = findTool("task.spawn")!.parameters;
     const result = parseAndValidate(

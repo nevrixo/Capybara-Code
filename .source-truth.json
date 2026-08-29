@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-29T22:14:11.243Z",
+  "generatedAt": "2026-08-29T22:23:57.033Z",
   "git": {
-    "commit": "d2bb9f5eb2b3f71c012bef6cc6d525b92b4a7ef1",
+    "commit": "eeac2ee0dcdeb7594297a3cd33b24bfe780f38e4",
     "dirty": true,
-    "dirtyHash": "1dde0cc9ad4228056315a51ed99a1c91f62e126f7f3986134aef2d15d71714b9"
+    "dirtyHash": "faa48041246433e8bd7c2072c79376ac077c773b516f9613f5ec9d1fc845f0d0"
   },
   "roots": [
     "apps",
@@ -230,8 +230,8 @@
     },
     {
       "path": "apps/cbc/src/agent.ts",
-      "bytes": 194332,
-      "sha256": "99aa0f41afa8e1ddadfdc8b93cac98a02ad6a95f092f4b78ad1fdf781fef9d90"
+      "bytes": 194515,
+      "sha256": "8547801ce5c6199ddde3854ec56bb8c3f834890d42573cb35cbd65361ccac5dc"
     },
     {
       "path": "apps/cbc/src/approvals.ts",
@@ -250,8 +250,8 @@
     },
     {
       "path": "apps/cbc/src/bootstrap.ts",
-      "bytes": 60727,
-      "sha256": "9178893b9dfc63e7c3a832e1a83e70bd2dbe12f52fc1964bff9bd4de65ae78e7"
+      "bytes": 62033,
+      "sha256": "06e266e827fd8389b6c644f6e7136d0828de49a8a92ba4592d6bfa75c7ed4180"
     },
     {
       "path": "apps/cbc/src/bun-host.ts",
@@ -440,8 +440,8 @@
     },
     {
       "path": "apps/cbc/src/package-runtime.ts",
-      "bytes": 35548,
-      "sha256": "2c6f376df8bd03bbf53579649db39822d9accecdebfca9963bba5edb2b82a8d1"
+      "bytes": 36684,
+      "sha256": "6bb1480b7caed135ed5f40b42d134362c9e06a20dd545c8b8717733fe9d639e7"
     },
     {
       "path": "apps/cbc/src/path-mentions.ts",
@@ -520,8 +520,8 @@
     },
     {
       "path": "apps/cbc/src/subagent-bridge.ts",
-      "bytes": 57326,
-      "sha256": "cdf9d284765764d651ad224d7bde483a8c087b0521d94051ddc0af38e4c98d6d"
+      "bytes": 59203,
+      "sha256": "87b978734d6b6c360b7b470437b3025b65c3e0ad89b7530e5421148fdd3736e5"
     },
     {
       "path": "apps/cbc/src/terminal-writer.ts",
@@ -745,8 +745,8 @@
     },
     {
       "path": "apps/cbc/test/package-runtime.test.ts",
-      "bytes": 7331,
-      "sha256": "36e99b9c3f893023f91bac958d4360b4ee4328785c17615125f95a939bc2bee8"
+      "bytes": 7904,
+      "sha256": "012d8819a2808d6631934d187ccd0b572313629a338b12683189e6efcb2be41b"
     },
     {
       "path": "apps/cbc/test/path-mentions.test.ts",
@@ -775,8 +775,8 @@
     },
     {
       "path": "apps/cbc/test/recursive-agentgraph.test.ts",
-      "bytes": 5277,
-      "sha256": "e66f6dbb22fcf740df1da1be7dec2683697ea709198109fb58a5021db35ecc28"
+      "bytes": 7911,
+      "sha256": "f0661515e572a60633088e7d2ffedda3366f25464bfbaa1365824fcdcdbacf4c"
     },
     {
       "path": "apps/cbc/test/repository-map.test.ts",
@@ -3135,8 +3135,8 @@
     },
     {
       "path": "packages/tool-registry/src/catalog.ts",
-      "bytes": 65472,
-      "sha256": "1e941bac0586f736245b76c19b483b76b2b81da65211223c4f7ea7a4fd5d8c2a"
+      "bytes": 65655,
+      "sha256": "5ddcc744c8f0208a28759c4ee8b3ef4cdcc1303536d31f6b8f8bce137b3e9ad7"
     },
     {
       "path": "packages/tool-registry/src/discovery.ts",
@@ -3180,8 +3180,8 @@
     },
     {
       "path": "packages/tool-registry/test/tools.test.ts",
-      "bytes": 46231,
-      "sha256": "870765e27c65040de7f8a5421c70a33fcd5a4641d2fea996b1cad737e28e82ce"
+      "bytes": 46873,
+      "sha256": "e194ce6f4a40c7e3f76bbb9632a9748eb6046e2417050875d7f84d08fa1ed1b8"
     },
     {
       "path": "packages/tool-registry/test/worktree-tools.test.ts",
@@ -3579,5 +3579,5 @@
       "sha256": "8391ee841757695b95ddefc5dfd0ac274ecc32a76d733f2193b0a02a605a83df"
     }
   ],
-  "digest": "a531613740500aab891818f86d3b07e5899fc63415b29b68f386aa17ae7a262d"
+  "digest": "d31d7795b19a045d72c420dffb0ac81b7ac33f7a30be760ac8cb1b28c02b9153"
 }

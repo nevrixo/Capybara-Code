@@ -1359,7 +1359,14 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
     ],
     parameters: objectSchema(
       {
-        role: { type: "string", enum: ["explore", "planner", "architect", "executor", "refactorer", "reviewer", "test"] },
+        // Runtime discovery owns the allowlist so trusted package-defined agent
+        // names can participate without weakening bridge-side role validation.
+        role: {
+          type: "string",
+          minLength: 1,
+          maxLength: 80,
+          pattern: "^[a-z0-9][a-z0-9-]*$",
+        },
         name: { type: "string", minLength: 1, maxLength: 80 },
         // §15.4: goal, constraints, and contract are mandatory (SUB-002).
         title: { type: "string", minLength: 1, maxLength: 80 },

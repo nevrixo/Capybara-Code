@@ -58,9 +58,22 @@ function writeFixture(workspace: string): string {
     },
   };
   const pluginManifestBytes = encoder.encode(JSON.stringify(pluginManifest));
+  const agentBytes = encoder.encode([
+    "---",
+    "name: package-reviewer",
+    "description: Review package-defined security boundaries.",
+    "mode: subagent",
+    "base_role: reviewer",
+    "permissions: read",
+    "max_tools: 3",
+    "---",
+    "Inspect trust boundaries and return concise evidence.",
+    "",
+  ].join("\n"));
   const files = {
     "plugins/quality/plugin.json": pluginManifestBytes,
     "plugins/quality/plugin.wasm": runtimeBytes,
+    "agents/package-reviewer.md": agentBytes,
   };
   const fileDigests = Object.fromEntries(
     Object.entries(files).map(([path, bytes]) => [path, digest(bytes)]),
@@ -70,7 +83,10 @@ function writeFixture(workspace: string): string {
     id: "acme/typescript-quality",
     version: "1.0.0",
     capybara: ">=0.1.0",
-    contents: { plugins: ["plugins/quality/plugin.json"] },
+    contents: {
+      plugins: ["plugins/quality/plugin.json"],
+      agents: ["agents/package-reviewer.md"],
+    },
     permissions: { tools: ["fs.read"], workspaceRead: ["src/**"] },
     integrity: {
       files: fileDigests,
@@ -154,6 +170,8 @@ describe("PackageRuntime", () => {
     const restored = runtime(root);
     expect(await restored.restoreAll()).toEqual([]);
     expect(restored.inspectPlugin("acme/quality-plugin")?.enabled).toBe(false);
+    expect((await restored.agentFiles()).map((file) => file.text))
+      .toEqual([expect.stringContaining("name: package-reviewer")]);
     expect(readFileSync(
       join(workspace, ".capybara", "packages.lock.json"),
       "utf8",
