@@ -268,6 +268,15 @@ describe("plugin authority", () => {
       manifest: pluginManifest(),
       command: "true",
     });
+    expect(supervisor.inspect("acme/narrow-only")?.enabled).toBe(true);
+    supervisor.setEnabled("acme/narrow-only", false);
+    expect(supervisor.health("acme/narrow-only").status).toBe("disabled");
+    await expect(supervisor.invoke({
+      pluginId: "acme/narrow-only",
+      method: "hooks.before.tool",
+    })).rejects.toMatchObject({ code: "PLUGIN_DISABLED" });
+    supervisor.setEnabled("acme/narrow-only", true);
+    expect(supervisor.health("acme/narrow-only").status).toBe("ready");
     await expect(supervisor.invoke({
       pluginId: "acme/narrow-only",
       method: "hooks.before.tool",

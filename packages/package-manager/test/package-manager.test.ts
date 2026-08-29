@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -15,6 +17,7 @@ import {
 } from "@cbc/plugin-sdk";
 
 import {
+  FileSystemPackageInstallStore,
   InMemoryPackageInstallStore,
   LocalPathPackageResolver,
   MemoryPackageResolver,
@@ -23,6 +26,7 @@ import {
   PackageVerificationError,
   verifyResolvedPackage,
   type CapybaraPackageManifest,
+  type PackageActivationHost,
   type PackageFile,
   type ResolvedPackage,
 } from "../src/index.ts";
@@ -289,6 +293,110 @@ describe("PackageInstallerService", () => {
       frozen: true,
       idempotencyKey: "drift",
     })).rejects.toThrow(/frozen lock entry/);
+  });
+});
+
+describe("FileSystemPackageInstallStore", () => {
+  test("persists an immutable cache and atomically records the lockfile", async () => {
+    const root = mkdtempSync(join(tmpdir(), "capy-package-store-"));
+    temporaryDirectories.push(root);
+    const resolved = fixture({ sourceKind: "local-path", signed: false });
+    const verified = verifyResolvedPackage(resolved, { allowUnsignedLocal: true });
+    const activated: string[] = [];
+    const activationHost: PackageActivationHost = {
+      activate: async (input) => { activated.push(input.verified.manifest.id); },
+      healthCheck: async () => true,
+      rollback: async () => undefined,
+    };
+    const lockfilePath = join(root, ".capybara", "packages.lock.json");
+    const cacheRoot = join(root, "cache");
+    const store = new FileSystemPackageInstallStore({
+      lockfilePath,
+      cacheRoot,
+      activationHost,
+    });
+    const service = new PackageInstallerService({
+      resolver: new MemoryPackageResolver(new Map([[resolved.source, resolved]])),
+      store,
+      now: () => "2026-08-30T00:00:00.000Z",
+      newId: (prefix) => prefix + "filesystem",
+    });
+
+    const receipt = await service.install({
+      source: resolved.source,
+      scope: "project",
+      idempotencyKey: "filesystem-install",
+      allowUnsignedLocal: true,
+    });
+
+    expect(receipt.status).toBe("completed");
+    expect(activated).toEqual(["acme/typescript-quality"]);
+    const lockfile = JSON.parse(readFileSync(lockfilePath, "utf8"));
+    expect(lockfile.packages["acme/typescript-quality"].packageDigest)
+      .toBe(verified.packageDigest);
+    const cachedRuntime = join(
+      cacheRoot,
+      "packages",
+      "acme__typescript-quality",
+      "1.0.0",
+      verified.packageDigest.slice("sha256:".length),
+      "plugins",
+      "quality",
+      "plugin.wasm",
+    );
+    expect(readFileSync(cachedRuntime, "utf8")).toBe("plugin runtime 1.0.0");
+    expect(existsSync(lockfilePath + ".tmp")).toBe(false);
+
+    writeFileSync(cachedRuntime, "tampered cache");
+    await expect(service.install({
+      source: resolved.source,
+      scope: "project",
+      idempotencyKey: "filesystem-tamper",
+      allowUnsignedLocal: true,
+    })).rejects.toThrow(/cached package digest mismatch/);
+  });
+
+  test("restores the lockfile and removes a new cache entry after failed health", async () => {
+    const root = mkdtempSync(join(tmpdir(), "capy-package-rollback-"));
+    temporaryDirectories.push(root);
+    const resolved = fixture({ sourceKind: "local-path", signed: false });
+    const verified = verifyResolvedPackage(resolved, { allowUnsignedLocal: true });
+    let rollbackPackage: string | undefined;
+    const activationHost: PackageActivationHost = {
+      activate: async () => undefined,
+      healthCheck: async () => false,
+      rollback: async (packageId) => { rollbackPackage = packageId; },
+    };
+    const lockfilePath = join(root, ".capybara", "packages.lock.json");
+    const cacheRoot = join(root, "cache");
+    const service = new PackageInstallerService({
+      resolver: new MemoryPackageResolver(new Map([[resolved.source, resolved]])),
+      store: new FileSystemPackageInstallStore({
+        lockfilePath,
+        cacheRoot,
+        activationHost,
+      }),
+      now: () => "2026-08-30T00:00:00.000Z",
+      newId: (prefix) => prefix + "rollback",
+    });
+
+    await expect(service.install({
+      source: resolved.source,
+      scope: "project",
+      idempotencyKey: "filesystem-health-failure",
+      allowUnsignedLocal: true,
+    })).rejects.toMatchObject({ code: "PACKAGE_INSTALL_FAILED" });
+
+    expect(rollbackPackage).toBe("acme/typescript-quality");
+    expect(JSON.parse(readFileSync(lockfilePath, "utf8")).packages).toEqual({});
+    const cacheEntry = join(
+      cacheRoot,
+      "packages",
+      "acme__typescript-quality",
+      "1.0.0",
+      verified.packageDigest.slice("sha256:".length),
+    );
+    expect(existsSync(cacheEntry)).toBe(false);
   });
 });
 

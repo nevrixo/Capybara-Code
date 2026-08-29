@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-29T21:03:32.747Z",
+  "generatedAt": "2026-08-29T21:13:56.539Z",
   "git": {
-    "commit": "33e75bdad243c7efa1dd880fbae1d1d3d1f51dd8",
+    "commit": "58ddba44ba760e844a320c0bb8f2d299f496e6c7",
     "dirty": true,
-    "dirtyHash": "c60b96dffdab0136a5d4f91997f710179d7c594102e44e1bee5085b887f9d098"
+    "dirtyHash": "45352997b17bcac0e1385bdd322ac79efcf6ec0fd37e9064bfb66cf64e2a496e"
   },
   "roots": [
     "apps",
@@ -55,7 +55,7 @@
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
     "typescript": "5.9.3"
   },
-  "fileCount": 694,
+  "fileCount": 696,
   "historicalArtifacts": [],
   "files": [
     {
@@ -75,8 +75,8 @@
     },
     {
       "path": "apps/capy-daemon/package.json",
-      "bytes": 321,
-      "sha256": "e91e20a83aea161467f3107398b59a1cb7734ffdffd0b520902d17660283f9b2"
+      "bytes": 364,
+      "sha256": "64b171bb6bd07d4c6a797704b7f2c69a76904e715c9529b45e55a9b8cd8079c8"
     },
     {
       "path": "apps/capy-daemon/src/approval-manager.ts",
@@ -119,9 +119,14 @@
       "sha256": "7222ba92294f0153c7b3d1dad7fc59396b8f41a0ef80e3b1973ff853fdb75be2"
     },
     {
+      "path": "apps/capy-daemon/src/package-activation.ts",
+      "bytes": 4500,
+      "sha256": "e19d180440704ab555c04cedbfcf691ce0cea2db4ca30fb8a48e7b1209cc517f"
+    },
+    {
       "path": "apps/capy-daemon/src/plugin-supervisor.ts",
-      "bytes": 10069,
-      "sha256": "5b4cbfc0471b016990440b0d2dd4e7e647e27576e6491be345d27d051cbcb627"
+      "bytes": 11687,
+      "sha256": "8d80f14b7ffec8529d78b7a24e9cb65a07511a785f6d3e706f1be73ad7e505d0"
     },
     {
       "path": "apps/capy-daemon/src/recovery.ts",
@@ -155,8 +160,8 @@
     },
     {
       "path": "apps/capy-daemon/test/daemon.test.ts",
-      "bytes": 20118,
-      "sha256": "48fdc0cebfa26b933bd80b972b8e9d42fac6fce92dce2f122c1372dabb646696"
+      "bytes": 20612,
+      "sha256": "b1f95ec8373380035348d970e836bb9dc27b7abbf4bd7ec524a43126bdc63e68"
     },
     {
       "path": "apps/capy-daemon/test/fixtures/session-worker-echo.mjs",
@@ -2474,14 +2479,19 @@
       "sha256": "6a8cf38b18aebed01eddaf9b5e1d6daa171674d7ad62752cddc207e1793d413d"
     },
     {
+      "path": "packages/package-manager/src/filesystem-store.ts",
+      "bytes": 8738,
+      "sha256": "e3fe7ac90d200d4784525a7f2fa35a0a3441daa7736f2e6c4ac6037c37edfc24"
+    },
+    {
       "path": "packages/package-manager/src/index.ts",
-      "bytes": 124,
-      "sha256": "7522173f6ef4b933e9a86205dd9a7624c284bacc06a59f0540f61788c2b48c8b"
+      "bytes": 163,
+      "sha256": "b33f5f6fbeca4de60eb911ef2089bf03f498fb144cab1f3c849fe72e32c90008"
     },
     {
       "path": "packages/package-manager/src/installer.ts",
-      "bytes": 17991,
-      "sha256": "cc9271d793eebee9b1006056299f743b2da7d6e066ae359dfc8be4eb5701e8bf"
+      "bytes": 18021,
+      "sha256": "1e484ad17472696a68a4d2439e755aa4b507f79cc68a2476578a04435d8b94ae"
     },
     {
       "path": "packages/package-manager/src/resolver.ts",
@@ -2495,8 +2505,8 @@
     },
     {
       "path": "packages/package-manager/test/package-manager.test.ts",
-      "bytes": 11360,
-      "sha256": "5127305bba3bfac07b58a8e11a6c2b5d84d67b678a5ad1a6d8ace5f11e9612cd"
+      "bytes": 15417,
+      "sha256": "f6eabcccc6b2b0c55bd9a10f46fd98c2875a7078027bd1cb2d6c54fcfbc3525d"
     },
     {
       "path": "packages/permissions/package.json",
@@ -3529,5 +3539,5 @@
       "sha256": "8391ee841757695b95ddefc5dfd0ac274ecc32a76d733f2193b0a02a605a83df"
     }
   ],
-  "digest": "81ebf3b54742ee8aecb1cac0b4e1403060a41e0cbab0e541760558417e44cdaa"
+  "digest": "269c24ec0feef2745638a1af764a42aa58d48de625acad543d86cfad409a78ff"
 }

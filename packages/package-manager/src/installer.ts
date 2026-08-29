@@ -32,6 +32,7 @@ export interface StagedPackage {
   readonly operationId: string;
   readonly packageId: string;
   readonly root: string;
+  readonly created?: boolean;
 }
 
 export interface PackageActivation {
