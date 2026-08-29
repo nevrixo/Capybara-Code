@@ -31,6 +31,7 @@ Capybara Code pairs GPT models with a purpose-built coding harness to improve re
 - Sub-agent orchestration
 - Durable recursive AgentGraph orchestration (stable depth 2, hard maximum 3)
 - First-party VS Code, ACP v1, and GitHub Actions integration surfaces
+- Trust-bound project configuration and reproducible signed packages
 - Model Context Protocol (MCP) integrations
 
 ## Install
@@ -139,6 +140,29 @@ emergency_ratio = 0.90
 ```
 
 Use `/compact` for an explicit compaction. It reports before/after usage and the preserved TODO/evidence counts.
+
+## Packages and plugins
+
+Project requests live in <code>.capybara/packages.json</code>; exact versions,
+digests, signatures, contents, and grants live in
+<code>.capybara/packages.lock.json</code>. A frozen bootstrap refuses drift and
+re-verifies immutable cached bytes before activation.
+
+~~~bash
+capy package init packages/example
+capy package add path:packages/example --project --allow-unsigned-local
+capy package doctor
+capy bootstrap --frozen --offline
+~~~
+
+Unsigned local packages require an explicit flag. Package authority is empty by
+default; <code>--grant-requested</code> is explicit consent after reviewing the
+requested-versus-granted preview. In the TUI, <code>/plugins</code> supports
+search, install, update, remove, inspect, enable, disable, grants, and list.
+
+See [Package ecosystem and registry operations](docs/package-ecosystem.md) for
+the trust model, signed registry configuration, CI behavior, App methods, and
+key rotation/revocation procedure.
 
 ## Verification
 

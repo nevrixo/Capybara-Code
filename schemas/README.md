@@ -10,7 +10,7 @@ schemas/
 ├─ config/     the configuration surface                          (§21.4)
 ├─ tools/      tool definitions and the result envelope          (§12.2, §12.4)
 ├─ integration/ client capability, trigger, and action contracts
-├─ package/     package manifests, requests, and deterministic lockfiles
+├─ package/     package, lock, signed registry, artifact, and pinned-key contracts
 └─ CHANGELOG.md
 ```
 

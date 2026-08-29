@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-29T22:09:40.954Z",
+  "generatedAt": "2026-08-29T22:14:11.243Z",
   "git": {
-    "commit": "ba943feff90b1738f073faa2f4c3474f8c15c59d",
+    "commit": "d2bb9f5eb2b3f71c012bef6cc6d525b92b4a7ef1",
     "dirty": true,
-    "dirtyHash": "6b0a5d1ce83d3783debe2170a20f59d8f4cffe619ddf4e1c612deba2f3ce0c56"
+    "dirtyHash": "1dde0cc9ad4228056315a51ed99a1c91f62e126f7f3986134aef2d15d71714b9"
   },
   "roots": [
     "apps",
@@ -55,7 +55,7 @@
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
     "typescript": "5.9.3"
   },
-  "fileCount": 701,
+  "fileCount": 704,
   "historicalArtifacts": [],
   "files": [
     {
@@ -70,8 +70,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 7210,
-      "sha256": "bd084ec7e10a6cb8aab8033ee750a2c4d01da9aa93a927de8c6baeb364f3aa29"
+      "bytes": 8250,
+      "sha256": "ee5567293dcb75f9a4ac590bd6e068f3af0719f1e79ca492a7e01a8cad05e022"
     },
     {
       "path": "apps/capy-daemon/package.json",
@@ -3345,13 +3345,13 @@
     },
     {
       "path": "schemas/CHANGELOG.md",
-      "bytes": 12778,
-      "sha256": "6fc4d187b268a25fc260ca519f1963666f27616a13904f442ba545e07e42b278"
+      "bytes": 13223,
+      "sha256": "4f8db205072fb141032d78ba11f900da48e670901871e35cc615c6eae137216a"
     },
     {
       "path": "schemas/README.md",
-      "bytes": 3269,
-      "sha256": "f4b04fa6d2186fb37b7ca3f4753641ec0d43c875f7161f3af1b343b162585475"
+      "bytes": 3279,
+      "sha256": "9c06834bd8b6e136c24a2fb3f604141e1498a354ce53fc8db88232c85a3fdf53"
     },
     {
       "path": "schemas/agent-graph/command.schema.json",
@@ -3442,6 +3442,21 @@
       "path": "schemas/package/manifest.schema.json",
       "bytes": 3472,
       "sha256": "8c43051d3a2041a6fea8050ccfb93f2d07aa534c9eb30de7ddf86d20629bbc3a"
+    },
+    {
+      "path": "schemas/package/registry-artifact.schema.json",
+      "bytes": 1046,
+      "sha256": "03388dc6e047fce31a61fbeec98798b13265b1e5aa5808d32190f5be7f49bbac"
+    },
+    {
+      "path": "schemas/package/registry-index.schema.json",
+      "bytes": 3062,
+      "sha256": "71fd56dca92d8036b428538c839854d2eebd84df08d4490c97b0f85089061aec"
+    },
+    {
+      "path": "schemas/package/registry-root-keys.schema.json",
+      "bytes": 583,
+      "sha256": "e5e1866b55db45c0fd6cd3e79010acfa1566b589bf0232514563c7701d6d8f1f"
     },
     {
       "path": "schemas/plugin/hook.schema.json",
@@ -3564,5 +3579,5 @@
       "sha256": "8391ee841757695b95ddefc5dfd0ac274ecc32a76d733f2193b0a02a605a83df"
     }
   ],
-  "digest": "d631f203dede97be896e4adc0f9a4ce36e06e0dadac4595312eeb747e56b798e"
+  "digest": "a531613740500aab891818f86d3b07e5899fc63415b29b68f386aa17ae7a262d"
 }

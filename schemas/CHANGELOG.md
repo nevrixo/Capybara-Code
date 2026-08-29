@@ -77,6 +77,13 @@ verified Ed25519 metadata; local unsigned sources require an explicit developmen
 opt-in. Every content path is digest-covered, grants only narrow, and postinstall
 or unknown fields fail closed.
 
+Added signed static registry index, artifact, and pinned-root-key schemas. The
+registry transport verifies canonical Ed25519 signatures, expiry, revocation,
+withdrawal, HTTPS confinement, exact artifact identity, and decompressed bounds.
+App Protocol now includes package search, inspect, install, remove, update,
+verify, and frozen bootstrap methods; generated TypeScript and Python method
+unions were updated. This is an additive 1.x change.
+
 ## events 1.0 — Skills catalog revision
 
 Added the journaled, hidden `skills.changed` event. It records the active Agent
