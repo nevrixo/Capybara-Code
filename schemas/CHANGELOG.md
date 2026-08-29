@@ -69,6 +69,14 @@ supply-chain policy changes, allow rules, and user MCP overrides. Trust records 
 the config, package, executable declaration, and requested-capability digests;
 digest changes fail closed and require a new trust decision.
 
+## package schema 1.0 — signed packages and frozen locks
+
+Added strict package manifest, request, and lock contracts for plugins, Skills,
+agents, prompts, themes, hooks, schemas, and assets. Registry entries require
+verified Ed25519 metadata; local unsigned sources require an explicit development
+opt-in. Every content path is digest-covered, grants only narrow, and postinstall
+or unknown fields fail closed.
+
 ## events 1.0 — Skills catalog revision
 
 Added the journaled, hidden `skills.changed` event. It records the active Agent

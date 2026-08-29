@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-29T20:56:28.398Z",
+  "generatedAt": "2026-08-29T21:03:32.747Z",
   "git": {
-    "commit": "7af497fe678e0554c2b219175ad3ace9d7c254d7",
+    "commit": "33e75bdad243c7efa1dd880fbae1d1d3d1f51dd8",
     "dirty": true,
-    "dirtyHash": "96346468f74e5adcbd4a7b4a2233fae4aac2f3ddfa539a97024c9dd9b5b0ed75"
+    "dirtyHash": "c60b96dffdab0136a5d4f91997f710179d7c594102e44e1bee5085b887f9d098"
   },
   "roots": [
     "apps",
@@ -55,7 +55,7 @@
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
     "typescript": "5.9.3"
   },
-  "fileCount": 685,
+  "fileCount": 694,
   "historicalArtifacts": [],
   "files": [
     {
@@ -2464,6 +2464,41 @@
       "sha256": "6fcd0fa9c8cfe64f86ab71880ef135d507e35b3a72200bdaf360fbc5ee130c70"
     },
     {
+      "path": "packages/package-manager/package.json",
+      "bytes": 409,
+      "sha256": "d51d8dcfc696d7dc844b6bb3818d956406c5f6e78cb7c0f6f69f79017bb99e31"
+    },
+    {
+      "path": "packages/package-manager/src/contracts.ts",
+      "bytes": 3546,
+      "sha256": "6a8cf38b18aebed01eddaf9b5e1d6daa171674d7ad62752cddc207e1793d413d"
+    },
+    {
+      "path": "packages/package-manager/src/index.ts",
+      "bytes": 124,
+      "sha256": "7522173f6ef4b933e9a86205dd9a7624c284bacc06a59f0540f61788c2b48c8b"
+    },
+    {
+      "path": "packages/package-manager/src/installer.ts",
+      "bytes": 17991,
+      "sha256": "cc9271d793eebee9b1006056299f743b2da7d6e066ae359dfc8be4eb5701e8bf"
+    },
+    {
+      "path": "packages/package-manager/src/resolver.ts",
+      "bytes": 6238,
+      "sha256": "a5456ab90c9cdb3b8f8fc920cf9eac3a56ef7501d4d418a57561564376df4daa"
+    },
+    {
+      "path": "packages/package-manager/src/verify.ts",
+      "bytes": 16528,
+      "sha256": "85f5e7512e6eba6f6245fd563acf9f02e56ef8aea14ceaae52355d7c69a08969"
+    },
+    {
+      "path": "packages/package-manager/test/package-manager.test.ts",
+      "bytes": 11360,
+      "sha256": "5127305bba3bfac07b58a8e11a6c2b5d84d67b678a5ad1a6d8ace5f11e9612cd"
+    },
+    {
       "path": "packages/permissions/package.json",
       "bytes": 276,
       "sha256": "4ec48bac18e2af7df3e55c0173cb583f1bacacd83dce6cde89d5e4e6ca3e7df6"
@@ -3275,13 +3310,13 @@
     },
     {
       "path": "schemas/CHANGELOG.md",
-      "bytes": 12364,
-      "sha256": "005920948450ae17452fb638280c71a0fc4f5bdd50c310c8e4379fee317de0ee"
+      "bytes": 12778,
+      "sha256": "6fc4d187b268a25fc260ca519f1963666f27616a13904f442ba545e07e42b278"
     },
     {
       "path": "schemas/README.md",
-      "bytes": 3192,
-      "sha256": "85093fafd727ba7baa35c9a87b9e46389ccfecc0d42f5af72674618c1929c29c"
+      "bytes": 3269,
+      "sha256": "f4b04fa6d2186fb37b7ca3f4753641ec0d43c875f7161f3af1b343b162585475"
     },
     {
       "path": "schemas/agent-graph/command.schema.json",
@@ -3362,6 +3397,16 @@
       "path": "schemas/memory/transition.schema.json",
       "bytes": 763,
       "sha256": "e1f059255ba5b0adddaa1741872f88e26f12023bfdd4673c2e661a487efc3d75"
+    },
+    {
+      "path": "schemas/package/lock.schema.json",
+      "bytes": 2437,
+      "sha256": "c6b0f1d95e6db3fc01898f0a816edd0f3cb19d5b793b2f920db32326ab33bb99"
+    },
+    {
+      "path": "schemas/package/manifest.schema.json",
+      "bytes": 3472,
+      "sha256": "8c43051d3a2041a6fea8050ccfb93f2d07aa534c9eb30de7ddf86d20629bbc3a"
     },
     {
       "path": "schemas/plugin/hook.schema.json",
@@ -3480,9 +3525,9 @@
     },
     {
       "path": "tsconfig.json",
-      "bytes": 2639,
-      "sha256": "fba54a634aa21796b6218a784a4366dce000ce79e0af47b44537395389cff430"
+      "bytes": 2712,
+      "sha256": "8391ee841757695b95ddefc5dfd0ac274ecc32a76d733f2193b0a02a605a83df"
     }
   ],
-  "digest": "94360225734eb30e39a31274d8f2a34a6fdde1db445ea1dcc5d7cb57bc0fa6b3"
+  "digest": "81ebf3b54742ee8aecb1cac0b4e1403060a41e0cbab0e541760558417e44cdaa"
 }
