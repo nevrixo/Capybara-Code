@@ -2,6 +2,9 @@
 
 export const SDK_PROTOCOL_VERSION = "1.0" as const;
 export const SDK_EVENT_SCHEMA_VERSION = "1.0" as const;
+export const SDK_CAPABILITY_SCHEMA_REVISION = "2.0" as const;
+export const SDK_METHOD_CAPABILITY_STATES = ["available","read-only","disabled","unsupported"] as const;
+export type SdkMethodCapabilityState = (typeof SDK_METHOD_CAPABILITY_STATES)[number];
 
 export const SDK_APP_METHODS = [
   "server.initialize",

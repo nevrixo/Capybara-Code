@@ -1,0 +1,49 @@
+{
+  "x-dialect": "json-schema-draft-2020-12",
+  "$id": "cbc:integration/trigger-envelope",
+  "title": "Integration Trigger Envelope",
+  "description": "Validated and minimized event input passed to a headless Capybara turn.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "source",
+    "eventId",
+    "repository",
+    "actor",
+    "event",
+    "ref",
+    "headSha",
+    "trusted",
+    "promptText",
+    "evidenceRefs",
+    "idempotencyKey"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "source": { "type": "string", "enum": ["github", "local"] },
+    "eventId": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "deliveryId": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "repository": {
+      "type": "string",
+      "pattern": "^[^/\\s]+/[^/\\s]+$",
+      "maxLength": 512
+    },
+    "actor": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "actorAssociation": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "event": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "ref": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "headSha": { "type": "string", "pattern": "^[a-f0-9]{40,64}$" },
+    "trusted": { "type": "boolean" },
+    "promptText": { "type": "string", "minLength": 1, "maxLength": 65536 },
+    "evidenceRefs": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 4096 }
+    },
+    "idempotencyKey": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    }
+  }
+}

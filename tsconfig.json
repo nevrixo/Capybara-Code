@@ -30,6 +30,7 @@
       "@cbc/protocol": ["packages/protocol-ts/src/index.ts"],
       "@cbc/app-protocol": ["packages/app-protocol/src/index.ts"],
       "@cbc/app-server": ["packages/app-server/src/index.ts"],
+      "@cbc/integration-core": ["packages/integration-core/src/index.ts"],
       "@cbc/edit-domain": ["packages/edit-domain/src/index.ts"],
       "@cbc/plugin-sdk": ["packages/plugin-sdk/src/index.ts"],
       "@cbc/plugin-sdk/testing": ["packages/plugin-sdk/src/testing.ts"],

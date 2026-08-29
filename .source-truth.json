@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-29T19:13:26.145Z",
+  "generatedAt": "2026-08-29T19:19:16.398Z",
   "git": {
-    "commit": "ed439b4f1c076e68179d4b2f496fd7b5bdaeb4a7",
+    "commit": "68e5b866624401cb9221e3ef3400ebe93a1d67fa",
     "dirty": true,
-    "dirtyHash": "c7f1da2c45ab204791408695c7099db87b39b41758ef3f12a8f71d0c1ff3d425"
+    "dirtyHash": "73c4745ea8862b9bf672dfe5876fd9b60c149b17e1f7060ab49ce68d159121e6"
   },
   "roots": [
     "apps",
@@ -55,7 +55,7 @@
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
     "typescript": "5.9.3"
   },
-  "fileCount": 636,
+  "fileCount": 651,
   "historicalArtifacts": [],
   "files": [
     {
@@ -1690,8 +1690,8 @@
     },
     {
       "path": "packages/app-protocol/src/capabilities.ts",
-      "bytes": 2406,
-      "sha256": "69fbe3155d43e8eb51efe7b8ab3fdcc76fa1587c9fc99070073ddf51df349511"
+      "bytes": 2516,
+      "sha256": "220994a34b4d4e5e6475038afdcf93e7c23268476d3bcdb6be16a5d1c409ace9"
     },
     {
       "path": "packages/app-protocol/src/commands.ts",
@@ -2097,6 +2097,71 @@
       "path": "packages/inference-domain/test/domain.test.ts",
       "bytes": 2648,
       "sha256": "f5cba51cd8a059a3321b836ff7ab679c24a0cf8f0487ecbd6933bebb071393a6"
+    },
+    {
+      "path": "packages/integration-conformance/fixtures/canonical-transcript.json",
+      "bytes": 4385,
+      "sha256": "4e2175afa9ce30eb38c9fbc4b24a3aedbaf48e157d01b4af291ee38f27a6acaa"
+    },
+    {
+      "path": "packages/integration-conformance/package.json",
+      "bytes": 404,
+      "sha256": "42d6242d6c13e6a7db5b85f4af66fba6246537ce465037ea9509b202cb61bde2"
+    },
+    {
+      "path": "packages/integration-conformance/src/index.ts",
+      "bytes": 284,
+      "sha256": "f60af9a6463249b41ed56d78501b732e6364a2dbb14e39d8477211532a214fc6"
+    },
+    {
+      "path": "packages/integration-conformance/test/conformance.test.ts",
+      "bytes": 2168,
+      "sha256": "6ab9092b39dc9d93726dabf1ff71e9ccfa2d39fb880a6751c295c7a591acd7df"
+    },
+    {
+      "path": "packages/integration-core/package.json",
+      "bytes": 384,
+      "sha256": "20012b37b55fc03011bbf02d1f833800ee527b0788d21ed7f8321bfcfc9a3448"
+    },
+    {
+      "path": "packages/integration-core/src/context.ts",
+      "bytes": 5946,
+      "sha256": "2736f21a95f101f969d1833bc0422a07190a9c06cb64dc9850de20299857f196"
+    },
+    {
+      "path": "packages/integration-core/src/errors.ts",
+      "bytes": 517,
+      "sha256": "5c0fec6b09e23e37fccee6dcc56dc734cfcd944f51a6d7b725d6e3c00aba075e"
+    },
+    {
+      "path": "packages/integration-core/src/index.ts",
+      "bytes": 183,
+      "sha256": "8241544b65d96b427cfccd78434c1879e9ad2a6c4470f82ce58a6566dd85d98a"
+    },
+    {
+      "path": "packages/integration-core/src/projection.ts",
+      "bytes": 5480,
+      "sha256": "561daf2303c78a139315df3593159439a7034d4b8b624e9fab6d7f0d5ce2e97a"
+    },
+    {
+      "path": "packages/integration-core/src/reconnect.ts",
+      "bytes": 5622,
+      "sha256": "3ebb4d5a672966c91a422a11950ef26ac1869226062daf51f9fb784fc22a10cf"
+    },
+    {
+      "path": "packages/integration-core/src/review.ts",
+      "bytes": 6200,
+      "sha256": "ea87d61736f9eb8b6aa2695df3c6f6a838e9cc86ff79419dbd66715e77deb460"
+    },
+    {
+      "path": "packages/integration-core/src/trigger.ts",
+      "bytes": 5570,
+      "sha256": "c7467b71b2966fba51dd04061bab79a73c346d4b685a95581f5182acb19c0816"
+    },
+    {
+      "path": "packages/integration-core/test/integration-core.test.ts",
+      "bytes": 7277,
+      "sha256": "b0b6db9fa45f733b3cade96f866c51808af797a277ffc16afc4d7acfffa085ed"
     },
     {
       "path": "packages/lsp-domain/package.json",
@@ -2525,8 +2590,8 @@
     },
     {
       "path": "packages/sdk-python/capybara_code/__init__.py",
-      "bytes": 609,
-      "sha256": "9b6273583e7682a01e272caa115d69f82fb89c8cb54158ea384c2077748c4c5e"
+      "bytes": 758,
+      "sha256": "153342cedfc1d623c121268b84c7eb6838e163b22f558174439fa625cf96a68b"
     },
     {
       "path": "packages/sdk-python/capybara_code/approvals.py",
@@ -2545,8 +2610,8 @@
     },
     {
       "path": "packages/sdk-python/capybara_code/generated.py",
-      "bytes": 9312,
-      "sha256": "84da3438846d4aa161e2b91aefd12106b1762ce4e01a3136c7c28e144ba8efd9"
+      "bytes": 9447,
+      "sha256": "1cd44d63e9ec220f19e618a55f546e29bb1635f7852648f2c2d4ec7f469899a2"
     },
     {
       "path": "packages/sdk-python/capybara_code/session.py",
@@ -2590,8 +2655,8 @@
     },
     {
       "path": "packages/sdk-typescript/src/generated.ts",
-      "bytes": 8831,
-      "sha256": "30dc7ce4898eb39a661826860327dbb6091b9f9b7dff05869012c9ffb8554b2e"
+      "bytes": 9084,
+      "sha256": "edc061002d070606c89202e146232e51febe97fb963e11bf7c84e9404d256250"
     },
     {
       "path": "packages/sdk-typescript/src/index.ts",
@@ -3040,8 +3105,8 @@
     },
     {
       "path": "schemas/CHANGELOG.md",
-      "bytes": 11094,
-      "sha256": "bd2d7942db9932c21323cb575531ca85b986780cacaecddd86a94d0e59db2475"
+      "bytes": 11296,
+      "sha256": "7dba05801df35693b13686a3a0c529433b454aad5857726759a9d3df519f1ef7"
     },
     {
       "path": "schemas/README.md",
@@ -3094,9 +3159,19 @@
       "sha256": "76faecd498fddc9fe29ded5b6778b96a46ce600e57c967d5079545abe327f9e2"
     },
     {
+      "path": "schemas/integration/action-result.schema.json",
+      "bytes": 1627,
+      "sha256": "dfa6235e4435af935f3b009575aca9b5e785c6bd06fb5445b91ea3b7c436bddb"
+    },
+    {
       "path": "schemas/integration/client-capabilities.schema.json",
       "bytes": 2319,
       "sha256": "30073fad0a1e53d3e8fec47eeda7506cff764496c3ee17b792cbfe5d0e88ba09"
+    },
+    {
+      "path": "schemas/integration/trigger-envelope.schema.json",
+      "bytes": 1596,
+      "sha256": "571d19a23675d4baa74320a6527e43b4ff6e2c790210bcaf41c49c765601c2ba"
     },
     {
       "path": "schemas/lsp/result.schema.json",
@@ -3195,8 +3270,8 @@
     },
     {
       "path": "scripts/generate-sdk-types.ts",
-      "bytes": 2954,
-      "sha256": "9656b850cd4c2d9c4a19fc7e2e68417cc101a4cbf396259914de29c685407604"
+      "bytes": 3530,
+      "sha256": "74e6cc841bdf990dc47ff1c8380a343e8730d11e12b688eaed501c53ba624b29"
     },
     {
       "path": "scripts/package-npm.ts",
@@ -3235,9 +3310,9 @@
     },
     {
       "path": "tsconfig.json",
-      "bytes": 2364,
-      "sha256": "3af6b7d3ec7041c90b18206fe898b904d8781a97c25369189f2733173c6d23a5"
+      "bytes": 2439,
+      "sha256": "1d15a2dba94b670db250ac46cca5370c448eefc70f87e48b04597164fcb8ec22"
     }
   ],
-  "digest": "752df585d5310bbc3fb19d27fcfd3a662353a2f138cab8b991d6f94994f5e179"
+  "digest": "3c5deafb49881359a6925e350dba9ab1bf412483620230cfe6e3de56cd3d9b7d"
 }

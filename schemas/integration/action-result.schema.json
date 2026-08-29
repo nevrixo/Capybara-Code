@@ -1,0 +1,59 @@
+{
+  "x-dialect": "json-schema-draft-2020-12",
+  "$id": "cbc:integration/action-result",
+  "title": "Integration Action Result",
+  "description": "Canonical headless result consumed by external side-effect coordinators.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "status",
+    "exitCode",
+    "sessionId",
+    "turnId",
+    "summary",
+    "changedFiles",
+    "commitSha",
+    "evidenceIds",
+    "verification",
+    "annotations",
+    "artifacts"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "status": {
+      "type": "string",
+      "enum": ["completed", "partial", "failed", "cancelled", "blocked"]
+    },
+    "exitCode": { "type": "integer", "minimum": 0, "maximum": 255 },
+    "sessionId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "turnId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 65536 },
+    "changedFiles": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 4096 }
+    },
+    "commitSha": {
+      "type": ["string", "null"],
+      "pattern": "^[a-f0-9]{40,64}$"
+    },
+    "evidenceIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 512 }
+    },
+    "verification": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "annotations": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": { "type": "object" }
+    }
+  }
+}

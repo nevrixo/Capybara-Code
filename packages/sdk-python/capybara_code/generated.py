@@ -2,6 +2,13 @@
 
 PROTOCOL_VERSION = "1.0"
 EVENT_SCHEMA_VERSION = "1.0"
+CAPABILITY_SCHEMA_REVISION = "2.0"
+METHOD_CAPABILITY_STATES = (
+    "available",
+    "read-only",
+    "disabled",
+    "unsupported",
+)
 
 APP_METHODS = (
     "server.initialize",

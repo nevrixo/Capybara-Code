@@ -6,7 +6,13 @@ import type { AppMethod } from "./methods.ts";
 export const APP_CAPABILITY_SCHEMA_REVISION = "2.0" as const;
 
 export type AppTransportKind = "local-socket" | "named-pipe" | "stdio";
-export type AppMethodCapabilityState = "available" | "read-only" | "disabled" | "unsupported";
+export const APP_METHOD_CAPABILITY_STATES = [
+  "available",
+  "read-only",
+  "disabled",
+  "unsupported",
+] as const;
+export type AppMethodCapabilityState = (typeof APP_METHOD_CAPABILITY_STATES)[number];
 
 export interface AppMethodCapability {
   readonly state: AppMethodCapabilityState;

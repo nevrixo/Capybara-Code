@@ -45,6 +45,10 @@ capability snapshot. It distinguishes implemented, role-limited, policy-disabled
 and unsupported methods and negotiates event and presentation features with the
 client. The previous flat capability map remains available for 1.x clients.
 
+Added strict integration trigger and action-result schemas. Raw provider payloads
+remain outside the agent prompt; coordinators consume only the minimized envelope
+and validated receipt-backed result.
+
 ## events 1.0 — Skills catalog revision
 
 Added the journaled, hidden `skills.changed` event. It records the active Agent
