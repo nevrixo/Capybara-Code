@@ -53,6 +53,7 @@ describe("catalog completeness (§12.2)", () => {
       "git.show",
       "git.checkpoint",
       "user.ask",
+      "user.ask_batch",
       "task.search",
       "task.spawn",
       "task.status",
@@ -1136,14 +1137,71 @@ describe("scheduler (§12.9)", () => {
   });
 
   test("user.ask is its own serialized batch", () => {
-    const plan = schedule([call("1", "user.ask"), call("2", "fs.read")], {
+    const plan = schedule([
+      call("1", "user.ask"),
+      call("2", "fs.read"),
+      call("3", "user.ask_batch"),
+    ], {
       catalog,
       agentId: "root",
       callsUsed: 0,
     });
     const interactive = plan.batches.filter((b) => b.kind === "interactive");
-    expect(interactive).toHaveLength(1);
-    expect(interactive[0]?.calls).toHaveLength(1);
+    expect(interactive).toHaveLength(2);
+    expect(interactive.every((batch) => batch.calls.length === 1)).toBe(true);
+  });
+});
+
+describe("user.ask_batch contract", () => {
+  const registry = new ToolRegistry();
+  const valid = {
+    questionnaireId: "cache-1",
+    reason: "Choose cache behavior",
+    questions: [{
+      id: "layer",
+      decisionKey: "cache.layer",
+      tab: "Layer",
+      question: "Where should it live?",
+      kind: "single_select",
+      required: true,
+      options: [
+        { id: "memory", label: "Memory", recommended: true },
+        { id: "redis", label: "Redis", description: "Shared cache" },
+      ],
+      allowCustom: true,
+    }],
+  };
+
+  test("accepts a strict 1–4 question payload and supplies the draft default", () => {
+    const result = registry.validateCall("user.ask_batch", JSON.stringify(valid));
+    expect(result.ok).toBe(true);
+    expect(result.value?.allowDraftNow).toBe(true);
+  });
+
+  test("rejects empty or oversized batches and nested extra properties", () => {
+    const empty = registry.validateCall(
+      "user.ask_batch",
+      JSON.stringify({ ...valid, questions: [] }),
+    );
+    expect(empty.ok).toBe(false);
+    const oversized = registry.validateCall(
+      "user.ask_batch",
+      JSON.stringify({ ...valid, questions: Array.from({ length: 5 }, (_, index) => ({
+        ...valid.questions[0],
+        id: `q${index}`,
+        decisionKey: `cache.key_${index}`,
+      })) }),
+    );
+    expect(oversized.ok).toBe(false);
+    const extra = registry.validateCall(
+      "user.ask_batch",
+      JSON.stringify({
+        ...valid,
+        questions: [{ ...valid.questions[0], unexpected: true }],
+      }),
+    );
+    expect(extra.ok).toBe(false);
+    expect(extra.errors.some((error) => error.path.endsWith("unexpected"))).toBe(true);
   });
 });
 

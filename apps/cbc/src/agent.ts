@@ -895,6 +895,7 @@ export class AgentSession {
       task: options.bridges?.task ?? this.#subagentBridge.execute,
       skill: options.bridges?.skill ?? extensions.bridges.skill,
       ask: options.bridges?.ask ?? extensions.bridges.ask,
+      askBatch: options.bridges?.askBatch ?? extensions.bridges.askBatch,
       mcp: options.bridges?.mcp ?? options.mcpBridge ?? extensions.bridges.mcp,
       ...(options.bridges?.lsp !== undefined ? { lsp: options.bridges.lsp } : {}),
       todo: async (action) => this.#executeTodoWrite(action),

@@ -5503,6 +5503,86 @@ describe("extension bridges (P0-15)", () => {
     expect(answer).toBe("alpha");
   });
 
+  test("user.ask_batch returns unavailable in headless mode without prompting", async () => {
+    const { buildUserAskBatchBridge } = await import("../src/extensions.ts");
+    const host = createFakeHost({ isTty: false });
+    const askBatch = buildUserAskBatchBridge({ host, nonInteractive: true });
+    const result = await askBatch({
+      questionnaireId: "cache-1",
+      reason: "Choose a cache",
+      questions: [{
+        id: "layer",
+        decisionKey: "cache.layer",
+        tab: "Layer",
+        question: "Where?",
+        kind: "single_select",
+        required: true,
+        options: [{ id: "memory", label: "Memory" }, { id: "redis", label: "Redis" }],
+      }],
+    }, new AbortController().signal);
+    expect(result).toEqual({
+      questionnaireId: "cache-1",
+      status: "unavailable",
+      answers: [],
+    });
+    expect(host.prompts).toHaveLength(0);
+  });
+
+  test("user.ask_batch uses serialized plain input and returns structured answers", async () => {
+    const { buildUserAskBatchBridge } = await import("../src/extensions.ts");
+    const host = createFakeHost({ isTty: true });
+    host.selections.push(0, 0);
+    const askBatch = buildUserAskBatchBridge({ host, nonInteractive: false });
+    const result = await askBatch({
+      questionnaireId: "cache-1",
+      reason: "Choose a cache",
+      questions: [{
+        id: "layer",
+        decisionKey: "cache.layer",
+        tab: "Layer",
+        question: "Where?",
+        kind: "single_select",
+        required: true,
+        options: [{ id: "memory", label: "Memory" }, { id: "redis", label: "Redis" }],
+      }],
+    }, new AbortController().signal);
+    expect(result).toEqual({
+      questionnaireId: "cache-1",
+      status: "submitted",
+      answers: [{
+        questionId: "layer",
+        decisionKey: "cache.layer",
+        selectedOptionIds: ["memory"],
+      }],
+    });
+  });
+
+  test("user.ask_batch executor emits authoritative structured JSON", async () => {
+    const host = createFakeHost();
+    const executor = new RuntimeToolExecutor({
+      runtime: { workspace: "/work/project" } as never,
+      host,
+      bridges: {
+        askBatch: async (input) => ({
+          questionnaireId: input.questionnaireId,
+          status: "draft_now",
+          answers: [],
+        }),
+      },
+    });
+    const execution = await executor.execute(
+      actionFor("user.ask_batch", {
+        questionnaireId: "cache-1",
+        reason: "Choose a cache",
+        questions: [],
+      }),
+      new AbortController().signal,
+    );
+    expect(execution.result.ok).toBe(true);
+    expect(execution.result.summary).toBe("user questionnaire draft_now");
+    expect(execution.text).toContain('"status":"draft_now"');
+  });
+
   test("an MCP call without a connected server reports MCP_UNAVAILABLE, never fakes success", async () => {
     const { buildMcpBridge } = await import("../src/extensions.ts");
     const bridge = buildMcpBridge({});

@@ -613,6 +613,7 @@ const TOOL_ACTIONS: Readonly<Record<string, string>> = {
   "merge.apply": "Merge",
   "merge.resolve": "Merge",
   "user.ask": "Ask",
+  "user.ask_batch": "Ask",
   "task.search": "Task",
   "task.spawn": "Task",
   "task.status": "Task",

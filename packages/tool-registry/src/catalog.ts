@@ -1297,6 +1297,70 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
     ),
   },
   {
+    id: "user.ask_batch",
+    title: "AskBatch",
+    description:
+      "Ask the user 1–4 related planning questions as one structured questionnaire. " +
+      "Use a stable questionnaireId for retry safety and a stable decisionKey for each product decision.",
+    source: "native",
+    defaultRisk: "R0",
+    maxRisk: "R0",
+    alwaysActive: true,
+    mutates: false,
+    network: false,
+    authority: "session_state",
+    idempotency: "reconcilable",
+    conflictKeys: (value) => {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
+      const id = (value as Record<string, unknown>).questionnaireId;
+      return typeof id === "string" ? [`questionnaire:${id}`] : [];
+    },
+    keywords: ["ask", "batch", "questionnaire", "clarify", "decision", "plan", "user"],
+    parameters: objectSchema(
+      {
+        questionnaireId: { type: "string", minLength: 1, maxLength: 200 },
+        reason: { type: "string", minLength: 1, maxLength: 1_200 },
+        questions: {
+          type: "array",
+          minItems: 1,
+          maxItems: 4,
+          items: objectSchema(
+            {
+              id: { type: "string", minLength: 1, maxLength: 120 },
+              decisionKey: { type: "string", minLength: 1, maxLength: 160 },
+              tab: { type: "string", minLength: 1, maxLength: 24 },
+              question: { type: "string", minLength: 1, maxLength: 1_200 },
+              kind: {
+                type: "string",
+                enum: ["single_select", "multi_select", "text"],
+              },
+              required: { type: "boolean" },
+              options: {
+                type: "array",
+                minItems: 2,
+                maxItems: 6,
+                items: objectSchema(
+                  {
+                    id: { type: "string", minLength: 1, maxLength: 120 },
+                    label: { type: "string", minLength: 1, maxLength: 120 },
+                    description: { type: "string", maxLength: 300 },
+                    recommended: { type: "boolean" },
+                  },
+                  ["id", "label"],
+                ),
+              },
+              allowCustom: { type: "boolean" },
+              revisitReason: { type: "string", minLength: 1, maxLength: 1_200 },
+            },
+            ["id", "decisionKey", "tab", "question", "kind", "required"],
+          ),
+        },
+        allowDraftNow: { type: "boolean", default: true },
+      },
+      ["questionnaireId", "reason", "questions"],
+    ),
+  },
+  {
     id: "task.search",
     title: "TaskSearch",
     description: "Discover subagent roles suited to a piece of work.",

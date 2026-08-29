@@ -14,6 +14,12 @@
  */
 
 import type { ProposedAction } from "@cbc/permissions";
+import type {
+  DeepPlanAnswer,
+  DeepPlanQuestion,
+  UserAskBatchInput,
+  UserAskBatchResult,
+} from "@cbc/session-domain";
 import { SkillRegistry, scanForInjection, type SkillCatalogEntry } from "@cbc/skills";
 import { errorResult, okResult, type ToolResult } from "@cbc/tool-registry";
 
@@ -23,6 +29,7 @@ import type { Execution, ToolBridges } from "./tools.ts";
 type SkillBridge = NonNullable<ToolBridges["skill"]>;
 type McpBridge = NonNullable<ToolBridges["mcp"]>;
 type AskBridge = NonNullable<ToolBridges["ask"]>;
+type AskBatchBridge = NonNullable<ToolBridges["askBatch"]>;
 
 export interface SkillBridgeOptions {
   readonly registry: SkillRegistry;
@@ -118,6 +125,129 @@ export function buildUserAskBridge(options: UserAskBridgeOptions): AskBridge {
   };
 }
 
+function hasAnswer(answer: DeepPlanAnswer | undefined): boolean {
+  return answer !== undefined && (
+    (answer.selectedOptionIds?.length ?? 0) > 0 ||
+    (answer.customText?.trim().length ?? 0) > 0
+  );
+}
+
+function optionLabel(question: DeepPlanQuestion, index: number): string {
+  const option = question.options?.[index];
+  if (option === undefined) return "";
+  return [
+    option.label,
+    ...(option.recommended === true ? ["(recommended)"] : []),
+    ...(option.description === undefined ? [] : [`— ${option.description}`]),
+  ].join(" ");
+}
+
+/** Plain-mode questionnaire fallback over serialized host input primitives. */
+export function buildUserAskBatchBridge(options: UserAskBridgeOptions): AskBatchBridge {
+  const { host, nonInteractive } = options;
+  return async (
+    input: UserAskBatchInput,
+    signal: AbortSignal,
+  ): Promise<UserAskBatchResult> => {
+    const answers: DeepPlanAnswer[] = [];
+    const result = (status: UserAskBatchResult["status"]): UserAskBatchResult => ({
+      questionnaireId: input.questionnaireId,
+      status,
+      answers,
+    });
+    if (signal.aborted) return result("cancelled");
+    if (nonInteractive) return result("unavailable");
+
+    for (const question of input.questions) {
+      if (signal.aborted) return result("cancelled");
+      if (question.kind === "text") {
+        const customText = await host.io.prompt(question.question);
+        if (signal.aborted) return result("cancelled");
+        const answer: DeepPlanAnswer = {
+          questionId: question.id,
+          decisionKey: question.decisionKey,
+          ...(customText.trim().length === 0 ? {} : { customText }),
+        };
+        if (question.required && !hasAnswer(answer)) return result("paused");
+        if (hasAnswer(answer)) answers.push(answer);
+        continue;
+      }
+
+      if (question.kind === "single_select") {
+        const options = question.options ?? [];
+        const labels = options.map((_option, index) => optionLabel(question, index));
+        if (question.allowCustom === true) labels.push("Other — type a custom answer");
+        const selected = await host.io.select(question.question, labels);
+        if (signal.aborted) return result("cancelled");
+        if (selected < 0 || selected >= labels.length) return result("paused");
+        if (selected < options.length) {
+          const option = options[selected];
+          if (option !== undefined) {
+            answers.push({
+              questionId: question.id,
+              decisionKey: question.decisionKey,
+              selectedOptionIds: [option.id],
+            });
+          }
+        } else {
+          const customText = await host.io.prompt("Type your answer");
+          if (signal.aborted) return result("cancelled");
+          if (customText.trim().length === 0) return result("paused");
+          answers.push({
+            questionId: question.id,
+            decisionKey: question.decisionKey,
+            customText,
+          });
+        }
+        continue;
+      }
+
+      const selectedOptionIds: string[] = [];
+      for (const [index, option] of (question.options ?? []).entries()) {
+        const selected = await host.io.select(
+          `${question.question}\nInclude ${optionLabel(question, index)}?`,
+          ["No", "Yes"],
+        );
+        if (signal.aborted) return result("cancelled");
+        if (selected < 0) return result("paused");
+        if (selected === 1) selectedOptionIds.push(option.id);
+      }
+      let customText: string | undefined;
+      if (question.allowCustom === true) {
+        const custom = await host.io.select("Add a custom answer?", ["No", "Yes"]);
+        if (signal.aborted) return result("cancelled");
+        if (custom < 0) return result("paused");
+        if (custom === 1) {
+          const typed = await host.io.prompt("Type your answer");
+          if (signal.aborted) return result("cancelled");
+          if (typed.trim().length > 0) customText = typed;
+        }
+      }
+      const answer: DeepPlanAnswer = {
+        questionId: question.id,
+        decisionKey: question.decisionKey,
+        ...(selectedOptionIds.length === 0 ? {} : { selectedOptionIds }),
+        ...(customText === undefined ? {} : { customText }),
+      };
+      if (question.required && !hasAnswer(answer)) return result("paused");
+      if (hasAnswer(answer)) answers.push(answer);
+    }
+
+    if (input.allowDraftNow === false) return result("submitted");
+    const finalAction = await host.io.select("Deep Plan", [
+      "Submit answers",
+      "Write the plan now with current answers",
+      "Pause Deep Plan",
+      "Cancel this Deep Plan",
+    ]);
+    if (signal.aborted) return result("cancelled");
+    if (finalAction === 1) return result("draft_now");
+    if (finalAction === 2 || finalAction < 0) return result("paused");
+    if (finalAction === 3) return result("cancelled");
+    return result("submitted");
+  };
+}
+
 export interface McpBridgeOptions {
   /**
    * A live MCP handler, supplied by the host when MCP servers are configured and
@@ -181,12 +311,16 @@ export interface ExtensionManagerOptions {
  * when the host supplies one and degrades loudly otherwise.
  */
 export class ExtensionManager {
-  readonly bridges: Required<Pick<ToolBridges, "skill" | "ask" | "mcp">>;
+  readonly bridges: Required<Pick<ToolBridges, "skill" | "ask" | "askBatch" | "mcp">>;
 
   constructor(options: ExtensionManagerOptions) {
     this.bridges = {
       skill: buildSkillBridge({ registry: options.registry }),
       ask: buildUserAskBridge({ host: options.host, nonInteractive: options.nonInteractive }),
+      askBatch: buildUserAskBatchBridge({
+        host: options.host,
+        nonInteractive: options.nonInteractive,
+      }),
       mcp: buildMcpBridge(options.mcp ?? {}),
     };
   }

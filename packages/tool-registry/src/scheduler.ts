@@ -197,7 +197,7 @@ export function schedule(calls: readonly ProposedCall[], context: ScheduleContex
 function classify(call: ProposedCall, catalog: readonly ToolDefinition[]): BatchKind {
   const tool = catalog.find((t) => t.id === call.toolId);
   if (!tool) return "read";
-  if (tool.id === "user.ask") return "interactive";
+  if (tool.id === "user.ask" || tool.id === "user.ask_batch") return "interactive";
   if (tool.mutates) return "write";
   if (tool.id.startsWith("process.") || tool.id === "shell.run") return "process";
   if (tool.id.startsWith("mcp.")) return "external";

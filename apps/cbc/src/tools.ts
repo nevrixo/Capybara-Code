@@ -18,6 +18,7 @@ import { isSensitivePath } from "@cbc/context-engine";
 import { actionHash, classifyCommand, type ProposedAction } from "@cbc/permissions";
 import type { GeneratedImageOutput } from "@cbc/provider-openai";
 import { RuntimeRpcError, type CapabilityReceipt, type StructuredEditResponse, type ToolErrorCode } from "@cbc/protocol";
+import type { UserAskBatchInput, UserAskBatchResult } from "@cbc/session-domain";
 import { errorResult, okResult, type ArtifactRef, type ToolResult } from "@cbc/tool-registry";
 
 import { MergeCoordinator, containsConflictMarkers } from "../../capy-daemon/src/merge-coordinator.ts";
@@ -93,9 +94,14 @@ export interface ToolBridges {
   /** `mcp.*` — supplied by the MCP manager. */
   readonly mcp?: (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
   /** `user.ask` — supplied by the TUI or headless policy. */
-  /** `lsp.diagnostics`+�u���T supplied by the supervised local LSP host. */
-  readonly lsp?: (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
   readonly ask?: (question: string, choices: readonly string[], signal: AbortSignal) => Promise<string>;
+  /** `user.ask_batch` — one structured questionnaire, never parallelized. */
+  readonly askBatch?: (
+    input: UserAskBatchInput,
+    signal: AbortSignal,
+  ) => Promise<UserAskBatchResult>;
+  /** `lsp.*` — supplied by the supervised local LSP host. */
+  readonly lsp?: (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
   /** `todo.write` — root session state, never a workspace side effect. */
   readonly todo?: (action: ProposedAction, signal: AbortSignal) => Promise<Execution>;
 }
@@ -2006,6 +2012,26 @@ export class RuntimeToolExecutor implements ToolExecutor {
         return {
           result: okResult("the user answered", { question, answer }),
           text: `User answered: ${answer}`,
+        };
+      }
+
+      case "user.ask_batch": {
+        const bridge = this.#options.bridges?.askBatch;
+        if (bridge === undefined) {
+          return {
+            result: errorResult(
+              "PERMISSION_DENIED",
+              "user.ask_batch is unavailable in this mode; no questionnaire bridge is attached",
+              { summary: "cannot open a questionnaire without an attached user" },
+            ),
+            text: "No questionnaire UI is attached. Use available evidence or report the unresolved decision.",
+          };
+        }
+        const input = args(action) as unknown as UserAskBatchInput;
+        const result = await bridge(input, signal);
+        return {
+          result: okResult(`user questionnaire ${result.status}`, result),
+          text: `User questionnaire ${result.status}.\n${JSON.stringify(result)}`,
         };
       }
 
