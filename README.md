@@ -92,6 +92,7 @@ capy "Explain the structure of this project"
 | Inspect client/replay health | `capy clients doctor` |
 | Diagnose integrations | `capy integration doctor [vscode\|acp\|github]` |
 | Install or diagnose GitHub automation | `capy github install` · `capy github doctor` |
+| Inspect or approve project trust | `capy trust --show-diff` · `capy trust` |
 | Sign in | `capy auth login [--device]` |
 | Authenticate with an API key | `capy auth api [--stdin]` |
 | Check or end a session | `capy auth status` · `capy auth logout [--all]` |
@@ -106,7 +107,10 @@ Use `/setting` in the TUI to update interactive settings, or use `capy config se
 - `Fast mode` toggles OpenAI Fast mode (`provider.openai.serviceTier`): priority processing at up to ~2.5x speed for a per-token premium. It is only honored by the API backend and stays off by default.
 - `1M context` toggles the premium context-band policy (`model.context.premiumBandPolicy`): off keeps bands utility-gated at the 272k pricing boundary; on admits bands up to the model's 1M window. Input above 272K is billed at premium rates for the whole request.
 
-- Capybara Code creates a single global `config.toml` on first use; it does not read project-local Capybara configuration files.
+- Capybara Code creates a global `config.toml` on first use. A trusted workspace
+  may add `.capybara/config.toml` and a git-ignored
+  `.capybara/config.local.toml`; project values remain below environment/CLI
+  precedence and cannot weaken user security or supply-chain policy.
 - MCP and LSP service definitions stay visible in that file. Missing external executables are reported but never installed automatically.
 - Root agent turns run until completion or cancellation. Children may delegate
   through a session-scoped facade to depth 2 by default (experimental maximum 3).

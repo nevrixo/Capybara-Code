@@ -1,7 +1,7 @@
 /**
  * Host-side persistent state — PRD §13.6, §18.6, §21.2, PERM-001.
  *
- * Three stores live here: the global configuration, the project trust record, and
+ * Three stores live here: layered configuration, the project trust record, and
  * the session index. Configuration is user-global and does not depend on workspace
  * trust; trust still gates executable workspace features such as LSP and Skills.
  */
@@ -22,6 +22,10 @@ import type { TrustState } from "@cbc/permissions";
 import { GLOBAL_CONFIG_TEMPLATE } from "./config-template.ts";
 import { join, type Host } from "./host.ts";
 import { resolvePaths, type CbcPaths } from "./host.ts";
+import {
+  projectTrustMatches,
+  type ProjectTrustSnapshot,
+} from "./project-trust.ts";
 
 // ---------------------------------------------------------------------------
 // §13.6 trust
@@ -175,12 +179,108 @@ export function withoutTrust(store: TrustStore, workspacePath: string): TrustSto
   return { version: 1, records };
 }
 
+export interface ProjectControlTrustRecord {
+  readonly path: string;
+  readonly fingerprint: string;
+  readonly decidedAt: string;
+  readonly project: ProjectTrustSnapshot;
+}
+
+export interface ProjectControlTrustStore {
+  readonly version: 2;
+  readonly records: Readonly<Record<string, ProjectControlTrustRecord>>;
+}
+
+export function emptyProjectControlTrustStore(): ProjectControlTrustStore {
+  return { version: 2, records: {} };
+}
+
+export async function readProjectControlTrustStore(
+  host: Host,
+  paths: CbcPaths,
+): Promise<ProjectControlTrustStore> {
+  const path = paths.projectTrustStore ?? join(paths.data, "project-trust.json");
+  const raw = await host.fs.read(path);
+  if (raw === undefined) return emptyProjectControlTrustStore();
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return emptyProjectControlTrustStore();
+    }
+    const root = parsed as Record<string, unknown>;
+    if (root.version !== 2 || typeof root.records !== "object" || root.records === null) {
+      return emptyProjectControlTrustStore();
+    }
+    const records: Record<string, ProjectControlTrustRecord> = {};
+    for (const [key, value] of Object.entries(root.records as Record<string, unknown>)) {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) continue;
+      const record = value as Record<string, unknown>;
+      if (
+        typeof record.path !== "string"
+        || typeof record.fingerprint !== "string"
+        || typeof record.decidedAt !== "string"
+        || !isProjectTrustSnapshot(record.project)
+      ) {
+        continue;
+      }
+      records[key] = {
+        path: record.path,
+        fingerprint: record.fingerprint,
+        decidedAt: record.decidedAt,
+        project: record.project,
+      };
+    }
+    return { version: 2, records };
+  } catch {
+    return emptyProjectControlTrustStore();
+  }
+}
+
+export async function writeProjectControlTrustStore(
+  host: Host,
+  paths: CbcPaths,
+  store: ProjectControlTrustStore,
+): Promise<void> {
+  await host.fs.mkdirp(paths.data);
+  await host.fs.atomicWrite(
+    paths.projectTrustStore ?? join(paths.data, "project-trust.json"),
+    JSON.stringify(store, null, 2) + "\n",
+  );
+}
+
+export function withProjectControlTrust(
+  store: ProjectControlTrustStore,
+  record: ProjectControlTrustRecord,
+): ProjectControlTrustStore {
+  return {
+    version: 2,
+    records: { ...store.records, [trustKey(record.path)]: record },
+  };
+}
+
+export function projectControlTrustMatches(
+  store: ProjectControlTrustStore,
+  workspacePath: string,
+  filesystemIdentity: string | undefined,
+  project: ProjectTrustSnapshot,
+): boolean {
+  if (!project.hasProjectControlFiles) return true;
+  if (filesystemIdentity === undefined || filesystemIdentity.length === 0) return false;
+  const record = store.records[trustKey(workspacePath)];
+  return record !== undefined
+    && record.fingerprint === filesystemIdentity
+    && projectTrustMatches(record.project, project);
+}
+
 // ---------------------------------------------------------------------------
 // §21.2 configuration
 // ---------------------------------------------------------------------------
 
 export interface LoadedConfig extends LoadConfigResult {
   readonly userConfigPath: string;
+  readonly projectConfigPath: string;
+  readonly projectLocalConfigPath: string;
+  readonly projectConfigApplied: boolean;
 }
 
 /**
@@ -206,14 +306,24 @@ export async function loadEffectiveConfig(
   options: {
     readonly cliOverrides?: Record<string, unknown>;
     readonly sessionOverrides?: Record<string, unknown>;
+    readonly projectTrusted?: boolean;
+    readonly workspacePath?: string;
   } = {},
 ): Promise<LoadedConfig> {
   const paths = resolvePaths(host);
   await ensureGlobalConfig(host);
   const userToml = await host.fs.read(paths.configFile);
+  const workspacePath = options.workspacePath ?? host.cwd;
+  const projectConfigPath = join(workspacePath, ".capybara", "config.toml");
+  const projectLocalConfigPath = join(workspacePath, ".capybara", "config.local.toml");
+  const projectToml = await host.fs.read(projectConfigPath);
+  const projectLocalToml = await host.fs.read(projectLocalConfigPath);
 
   const result = loadConfig({
     ...(userToml !== undefined ? { userToml } : {}),
+    ...(projectToml !== undefined ? { projectToml } : {}),
+    ...(projectLocalToml !== undefined ? { projectLocalToml } : {}),
+    projectTrusted: options.projectTrusted === true,
     env: host.env,
     ...(options.cliOverrides !== undefined ? { cliOverrides: options.cliOverrides } : {}),
     ...(options.sessionOverrides !== undefined
@@ -221,7 +331,30 @@ export async function loadEffectiveConfig(
       : {}),
   });
 
-  return { ...result, userConfigPath: paths.configFile };
+  return {
+    ...result,
+    userConfigPath: paths.configFile,
+    projectConfigPath,
+    projectLocalConfigPath,
+    projectConfigApplied:
+      options.projectTrusted === true
+      && (projectToml !== undefined || projectLocalToml !== undefined),
+  };
+}
+
+function isProjectTrustSnapshot(value: unknown): value is ProjectTrustSnapshot {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return record.schemaVersion === "2.0"
+    && typeof record.projectDigest === "string"
+    && typeof record.configDigest === "string"
+    && typeof record.packageManifestDigest === "string"
+    && typeof record.packageLockDigest === "string"
+    && typeof record.executableDigest === "string"
+    && typeof record.capabilityDigest === "string"
+    && Array.isArray(record.requestedCapabilities)
+    && record.requestedCapabilities.every((entry) => typeof entry === "string")
+    && typeof record.hasProjectControlFiles === "boolean";
 }
 
 /** Read one dotted config path from the effective config. */

@@ -60,6 +60,15 @@ Added task.await and task.message to the native tool catalog. Nested agents rece
 only the subtree-scoped task facade while the coordinator persists mailbox and
 budget reservations with the graph snapshot.
 
+## config — trust-gated project layers
+
+Trusted workspaces may now contribute `.capybara/config.toml` and
+`.capybara/config.local.toml` between user and environment precedence. The existing
+monotonic project validator continues to reject credentials, yolo, user-owned
+supply-chain policy changes, allow rules, and user MCP overrides. Trust records bind
+the config, package, executable declaration, and requested-capability digests;
+digest changes fail closed and require a new trust decision.
+
 ## events 1.0 — Skills catalog revision
 
 Added the journaled, hidden `skills.changed` event. It records the active Agent

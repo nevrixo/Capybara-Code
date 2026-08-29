@@ -362,17 +362,29 @@ describe("precedence (§21.2)", () => {
   });
 });
 
-describe("legacy project config compatibility", () => {
-  test("project TOML inputs are ignored regardless of trust", () => {
-    for (const projectTrusted of [false, true]) {
-      const result = loadConfig({
-        projectToml: '[agent]\npermission_mode = "auto"\n',
-        projectTrusted,
-        env: {},
-      });
-      expect(result.config.agent.permissionMode).toBe("ask");
-      expect(result.provenance["agent.permissionMode"]).toBeUndefined();
-    }
+describe("trust-gated project config", () => {
+  test("project TOML is ignored while untrusted and applied with provenance after trust", () => {
+    const projectToml = "[agent.tool_graph]\nmax_parallel_reads = 2\n";
+    const untrusted = loadConfig({ projectToml, projectTrusted: false, env: {} });
+    expect(untrusted.config.agent.toolGraph.maxParallelReads).not.toBe(2);
+    expect(untrusted.provenance["agent.toolGraph.maxParallelReads"]).toBeUndefined();
+    expect(untrusted.issues.some((issue) => issue.source === "project" && issue.path === "project"))
+      .toBe(true);
+
+    const trusted = loadConfig({ projectToml, projectTrusted: true, env: {} });
+    expect(trusted.config.agent.toolGraph.maxParallelReads).toBe(2);
+    expect(trusted.provenance["agent.toolGraph.maxParallelReads"]).toBe("project");
+  });
+
+  test("project-local values override shared project values only after trust", () => {
+    const result = loadConfig({
+      projectToml: "[agent.tool_graph]\nmax_parallel_reads = 2\n",
+      projectLocalToml: "[agent.tool_graph]\nmax_parallel_reads = 3\n",
+      projectTrusted: true,
+      env: {},
+    });
+    expect(result.config.agent.toolGraph.maxParallelReads).toBe(3);
+    expect(result.provenance["agent.toolGraph.maxParallelReads"]).toBe("project-local");
   });
 
   test("project config may not set a credential field", () => {
@@ -401,6 +413,32 @@ describe("legacy project config compatibility", () => {
         (issue) => issue.path === "mcpServers.local.env" && issue.severity === "error",
       )).toBe(true);
     }
+  });
+
+  test("project config cannot replace personal model choices or user LSP servers", () => {
+    const merged = mergeConfig([
+      {
+        source: "user",
+        values: {
+          "model.default": "gpt-5.6-sol",
+          "model.reasoningEffort": "high",
+          "lspServers.typescript.command": "user-tsserver",
+        },
+      },
+      {
+        source: "project",
+        values: {
+          "model.default": "gpt-5.6-luna",
+          "model.reasoningEffort": "low",
+          "lspServers.typescript.command": "project-tsserver",
+        },
+      },
+    ]);
+    expect(merged.config.model.default).toBe("gpt-5.6-sol");
+    expect(merged.config.model.reasoningEffort).toBe("high");
+    expect(merged.config.lspServers.typescript?.command).toBe("user-tsserver");
+    expect(merged.issues.filter((issue) => issue.source === "project" && issue.severity === "error"))
+      .toHaveLength(3);
   });
 
   test("user MCP config may bind host environment variable names", () => {
@@ -885,7 +923,7 @@ describe("full load", () => {
     expect(result.config.permissions.rules[1]).toMatchObject({ decision: "deny" });
   });
 
-  test("legacy project permission rules are ignored", () => {
+  test("project allow rules are rejected rather than activated", () => {
     const result = loadConfig({
       projectToml: [
         "[[permissions.rules]]",
@@ -897,7 +935,11 @@ describe("full load", () => {
       env: {},
     });
     expect(result.config.permissions.rules).toEqual([]);
-    expect(result.issues).toEqual([]);
+    expect(result.issues.some((issue) =>
+      issue.path === "permissions.rules"
+      && issue.source === "project"
+      && issue.severity === "error"
+    )).toBe(true);
   });
 
   test("P0-02: projectWrite cannot weaken a user plan", () => {

@@ -23,6 +23,7 @@ export type Command =
   | { readonly kind: "clients"; readonly sub: "list" | "doctor" }
   | { readonly kind: "integration"; readonly sub: "doctor"; readonly target?: "vscode" | "acp" | "github" }
   | { readonly kind: "github"; readonly sub: "install" | "doctor" }
+  | { readonly kind: "trust"; readonly showDiff: boolean }
   | { readonly kind: "auth"; readonly sub: "login"; readonly device: boolean }
   | { readonly kind: "auth"; readonly sub: "api"; readonly fromStdin: boolean }
   | { readonly kind: "auth"; readonly sub: "status" }
@@ -222,6 +223,8 @@ export function parseArgs(argv: readonly string[]): ParseResult {
     }
     case "acp":
       return { command: { kind: "acp" } };
+    case "trust":
+      return { command: { kind: "trust", showDiff: flags.has("--show-diff") } };
     case "session-worker": {
       const sessionId = flags.get("--session-id")?.value;
       return {
@@ -347,6 +350,7 @@ export const HELP_TEXT = [
   "  clients list|doctor              inspect App Protocol clients",
   "  integration doctor [target]      diagnose vscode, acp, or github",
   "  github install|doctor            manage GitHub Action integration",
+  "  trust [--show-diff]              inspect or approve project trust",
   "  daemon start                     start the local daemon",
   "  daemon stop                      stop the local daemon",
   "  daemon status                    show daemon health",

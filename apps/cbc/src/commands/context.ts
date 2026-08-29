@@ -20,10 +20,17 @@ import { expandHome, join, resolvePaths, type CbcPaths, type Host } from "../hos
 import { LineWriter, decideRenderMode, type RenderDecision } from "../output.ts";
 import { Runtime } from "../runtime.ts";
 import {
+  captureProjectTrustSnapshot,
+  type ProjectTrustSnapshot,
+} from "../project-trust.ts";
+import {
   loadEffectiveConfig,
+  projectControlTrustMatches,
+  readProjectControlTrustStore,
   readTrustStore,
   trustStateFor,
   type LoadedConfig,
+  type ProjectControlTrustStore,
   type TrustStore,
 } from "../state.ts";
 
@@ -49,6 +56,8 @@ export class CommandContext {
   #config: LoadedConfig | undefined;
   #trust: TrustState | undefined;
   #trustStore: TrustStore | undefined;
+  #projectControlTrustStore: ProjectControlTrustStore | undefined;
+  #projectTrustSnapshot: ProjectTrustSnapshot | undefined;
   #runtimeNotificationListeners = new Set<(method: string, params: unknown) => void>();
   #diagnosticSink: ((text: string) => void) | undefined;
 
@@ -109,8 +118,30 @@ export class CommandContext {
     if (this.#trust !== undefined) return this.#trust;
     const store = await this.trustStore();
     const identity = await this.host.fs.statIdentity?.(this.workspacePath);
-    this.#trust = trustStateFor(store, this.workspacePath, identity);
+    const projectSnapshot = await this.projectTrustSnapshot();
+    const base = trustStateFor(store, this.workspacePath, identity);
+    if (
+      base === "trusted-always"
+      && !projectControlTrustMatches(
+        await this.projectControlTrustStore(),
+        this.workspacePath,
+        identity,
+        projectSnapshot,
+      )
+    ) {
+      this.#trust = "untrusted";
+    } else {
+      this.#trust = base;
+    }
     return this.#trust;
+  }
+
+  async projectTrustSnapshot(): Promise<ProjectTrustSnapshot> {
+    this.#projectTrustSnapshot ??= await captureProjectTrustSnapshot(
+      this.host,
+      this.workspacePath,
+    );
+    return this.#projectTrustSnapshot;
   }
 
   async trustStore(): Promise<TrustStore> {
@@ -120,16 +151,31 @@ export class CommandContext {
     return this.#trustStore;
   }
 
+  async projectControlTrustStore(): Promise<ProjectControlTrustStore> {
+    this.#projectControlTrustStore ??= await readProjectControlTrustStore(this.host, this.paths);
+    return this.#projectControlTrustStore;
+  }
+
   /** Override the cached trust state after the user decides (§7.1). */
   setTrust(state: TrustState, store?: TrustStore): void {
     this.#trust = state;
     if (store !== undefined) this.#trustStore = store;
+    // A new trust decision changes whether project config can participate.
+    this.#config = undefined;
 
+  }
+
+  setProjectControlTrustStore(store: ProjectControlTrustStore): void {
+    this.#projectControlTrustStore = store;
   }
 
   async config(): Promise<LoadedConfig> {
     if (this.#config !== undefined) return this.#config;
-    this.#config = await loadEffectiveConfig(this.host);
+    const trust = await this.trust();
+    this.#config = await loadEffectiveConfig(this.host, {
+      projectTrusted: trust === "trusted-once" || trust === "trusted-always",
+      workspacePath: this.workspacePath,
+    });
     return this.#config;
   }
 

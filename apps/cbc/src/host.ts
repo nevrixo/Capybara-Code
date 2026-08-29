@@ -109,6 +109,8 @@ export interface CbcPaths {
   readonly agents: string;
   readonly skills: string;
   readonly trustStore: string;
+  /** Host-local project-control digest overlay; it can only narrow runtime trust. */
+  readonly projectTrustStore?: string;
   readonly approvalStore: string;
 }
 
@@ -185,6 +187,7 @@ export function resolvePaths(host: Pick<Host, "env" | "homeDir" | "platform" | "
     agents: join(configRoot, "agents"),
     skills: join(configRoot, "skills"),
     trustStore: join(dataRoot, "trust.json"),
+    projectTrustStore: join(dataRoot, "project-trust.json"),
     approvalStore: join(dataRoot, "approvals.json"),
   };
 }

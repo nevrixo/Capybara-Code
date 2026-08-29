@@ -122,6 +122,13 @@ export const COMMAND_REGISTRY: readonly CommandSpec[] = [
     ],
   },
   {
+    name: "trust",
+    summary: "inspect or approve the workspace project-control digest",
+    flags: [
+      { name: "--show-diff", kind: "boolean", summary: "print digest and capability changes without prompting" },
+    ],
+  },
+  {
     name: "skills",
     summary: "inspect and validate Agent Skills discovery",
     subcommands: [

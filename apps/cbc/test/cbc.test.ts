@@ -441,6 +441,10 @@ describe("parseArgs", () => {
       target: "vscode",
     });
     expect(parseArgs(["github", "install"]).command).toEqual({ kind: "github", sub: "install" });
+    expect(parseArgs(["trust", "--show-diff"]).command).toEqual({
+      kind: "trust",
+      showDiff: true,
+    });
     expect(() => parseArgs(["integration", "doctor", "unknown"])).toThrow(/vscode, acp, or github/);
     expect(() => parseArgs(["--version"])).toThrow(/unknown flag --version/);
     expect(() => parseArgs(["--help"])).toThrow(/unknown flag --help/);
@@ -456,6 +460,7 @@ describe("parseArgs", () => {
       "clients",
       "integration",
       "github",
+      "trust",
       "skills",
       "daemon",
       "update",
@@ -488,7 +493,6 @@ describe("parseArgs", () => {
       "mcp",
       "lsp",
       "init",
-      "trust",
       "completion",
       "permission",
       "--jsonl",

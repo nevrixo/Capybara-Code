@@ -7,6 +7,7 @@ import { authApi, authLogin, authLogout, authStatus } from "./commands/auth.ts";
 import { configSet } from "./commands/config.ts";
 import { skillsCommand } from "./commands/skills.ts";
 import { clientsCommand, githubCommand, integrationDoctor } from "./commands/integrations.ts";
+import { trustCommand } from "./commands/trust.ts";
 import { CommandContext, type CommandResult } from "./commands/context.ts";
 import { interactive } from "./commands/interactive.ts";
 import { daemonCommand } from "./commands/daemon.ts";
@@ -68,6 +69,9 @@ async function dispatch(context: CommandContext, command: Command): Promise<Comm
 
     case "github":
       return await githubCommand(context, command.sub);
+
+    case "trust":
+      return await trustCommand(context, { showDiff: command.showDiff });
 
     case "auth":
       switch (command.sub) {

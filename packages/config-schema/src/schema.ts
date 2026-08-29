@@ -3,13 +3,15 @@
  *
  * Product precedence, lowest to highest:
  *   1. built-in defaults
- *   2. the single global user config
- *   3. environment variables
- *   4. CLI flags
- *   5. interactive session override
+ *   2. global user config
+ *   3. trusted project shared config
+ *   4. trusted project-local config
+ *   5. environment variables
+ *   6. CLI flags
+ *   7. interactive session override
  *
- * Deprecated project source labels remain in `mergeConfig` only for source
- * compatibility. `loadConfig` never reads or applies a project configuration.
+ * Project layers are admitted by `loadConfig` only after workspace trust and are
+ * still constrained here by monotonic user-owned security ceilings.
  */
 
 import { configKeyInfo } from "./key-status.ts";
@@ -856,6 +858,12 @@ const USER_ONLY_PROJECT_PREFIXES = [
   "memory.privacy.",
 ] as const;
 
+const USER_ONLY_PROJECT_PATHS = new Set([
+  "model.default",
+  "model.reasoningMode",
+  "model.reasoningEffort",
+]);
+
 /**
  * Monotonic policy keys. The array runs strictest → most permissive; a project
  * layer may move the value left (stricter) but never right. A user who sets
@@ -1021,11 +1029,15 @@ export function mergeConfig(
   // not rewrite a user-defined one — an overridden command/env would run the
   // user's credentials against a server the user never chose (§17).
   const userMcpServers = new Set<string>();
+  const userLspServers = new Set<string>();
   for (const layer of layers) {
     if (layer.source !== "user") continue;
     for (const key of Object.keys(layer.values)) {
       if (!hasUnsafePathSegment(key) && key.startsWith("mcpServers.")) {
         userMcpServers.add(key.split(".")[1] as string);
+      }
+      if (!hasUnsafePathSegment(key) && key.startsWith("lspServers.")) {
+        userLspServers.add(key.split(".")[1] as string);
       }
     }
   }
@@ -1132,7 +1144,10 @@ export function mergeConfig(
           }
           value = restrictiveRules;
         }
-        if (USER_ONLY_PROJECT_PREFIXES.some((prefix) => target.startsWith(prefix))) {
+        if (
+          USER_ONLY_PROJECT_PATHS.has(target)
+          || USER_ONLY_PROJECT_PREFIXES.some((prefix) => target.startsWith(prefix))
+        ) {
           issues.push({
             severity: "error",
             path: target,
@@ -1149,6 +1164,18 @@ export function mergeConfig(
               path: target,
               source: layer.source,
               message: `project config may not override the user-defined MCP server '${serverName}'`,
+            });
+            continue;
+          }
+        }
+        if (target.startsWith("lspServers.")) {
+          const serverName = target.split(".")[1] as string;
+          if (userLspServers.has(serverName)) {
+            issues.push({
+              severity: "error",
+              path: target,
+              source: layer.source,
+              message: "project config may not override the user-defined LSP server '" + serverName + "'",
             });
             continue;
           }
