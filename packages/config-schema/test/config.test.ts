@@ -1031,3 +1031,45 @@ describe("token saving (§token-saving)", () => {
     expect(info?.consumer).toContain("saving controller");
   });
 });
+
+describe("Deep Plan", () => {
+  test("defaults to off and accepts the user-owned enum", () => {
+    expect(loadConfig({ projectTrusted: true, env: {} }).config.agent.deepPlan).toBe("off");
+    for (const mode of ["off", "on"] as const) {
+      const loaded = loadConfig({
+        projectTrusted: true,
+        env: {},
+        userToml: `[agent]\ndeep_plan = "${mode}"\n`,
+      });
+      expect(loaded.config.agent.deepPlan).toBe(mode);
+      expect(loaded.provenance["agent.deepPlan"]).toBe("user");
+      expect(loaded.issues.filter((issue) => issue.severity === "error")).toHaveLength(0);
+    }
+  });
+
+  test("rejects invalid values and project overrides", () => {
+    const invalid = loadConfig({
+      projectTrusted: true,
+      env: {},
+      userToml: `[agent]\ndeep_plan = "always"\n`,
+    });
+    expect(invalid.config.agent.deepPlan).toBe("off");
+    expect(invalid.issues.some((issue) =>
+      issue.path === "agent.deepPlan" && issue.severity === "error"
+    )).toBe(true);
+
+    const project = mergeConfig([
+      { source: "project", values: { "agent.deepPlan": "on" } },
+    ]);
+    expect(project.config.agent.deepPlan).toBe("off");
+    expect(project.issues.some((issue) =>
+      issue.path === "agent.deepPlan" && issue.message.includes("user-only")
+    )).toBe(true);
+  });
+
+  test("is registered as a wired config key", () => {
+    const info = configKeyInfo("agent.deepPlan");
+    expect(info?.status).toBe("wired");
+    expect(info?.consumer).toContain("Deep Plan");
+  });
+});

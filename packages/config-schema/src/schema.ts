@@ -169,6 +169,7 @@ export interface ModelProfileConfig {
 }
 
 export type SavingLevel = "off" | "light" | "balanced" | "strong";
+export type DeepPlanMode = "off" | "on";
 export type ToolRecoveryMode = "off" | "safe" | "full";
 
 export interface ToolRecoveryConfig {
@@ -189,6 +190,8 @@ export interface AgentConfig {
   reviewMode?: ReviewMode;
   visibleCommentary: boolean;
   tokenSaving: SavingLevel;
+  /** User-owned conversational planning policy layered over Plan mode. */
+  deepPlan: DeepPlanMode;
   promptCompiler: "v1" | "v2";
   compoundTools: boolean;
   toolRecovery: ToolRecoveryConfig;
@@ -569,6 +572,7 @@ export function defaultConfig(): CbcConfig {
       reviewMode: "auto",
       visibleCommentary: true,
       tokenSaving: "off",
+      deepPlan: "off",
       promptCompiler: "v2",
       compoundTools: true,
       toolRecovery: { mode: "safe", maxAttempts: 3 },
@@ -862,6 +866,7 @@ const USER_ONLY_PROJECT_PATHS = new Set([
   "model.default",
   "model.reasoningMode",
   "model.reasoningEffort",
+  "agent.deepPlan",
 ]);
 
 /**
@@ -935,6 +940,7 @@ const ENUMS: Record<string, readonly string[]> = {
   "provider.openai.transport": ["http_full", "http_previous", "websocket"],
   "provider.openai.serviceTier": ["standard", "fast"],
   "agent.tokenSaving": ["off", "light", "balanced", "strong"],
+  "agent.deepPlan": ["off", "on"],
   "agent.toolRecovery.mode": ["off", "safe", "full"],
   "perf.budgetEnforcement": ["shadow", "advisory", "hard"],
   "agent.promptCompiler": ["v1", "v2"],

@@ -1010,6 +1010,18 @@ describe("prompt assembly (§10.9, §11.4, §18.1)", () => {
     expect(stablePrefixText).toContain("Supply the checksum you read");
   });
 
+  test("injects Deep Plan only for a Plan turn and separates the stable cache", () => {
+    const build = assemblePrompt({ ...base, interactionMode: "build", deepPlanMode: "on" });
+    const ordinaryPlan = assemblePrompt({ ...base, interactionMode: "plan", deepPlanMode: "off" });
+    const deepPlan = assemblePrompt({ ...base, interactionMode: "plan", deepPlanMode: "on" });
+
+    expect(build.stablePrefixText).not.toContain("You are in Deep Plan mode");
+    expect(ordinaryPlan.stablePrefixText).not.toContain("You are in Deep Plan mode");
+    expect(deepPlan.stablePrefixText).toContain("You are in Deep Plan mode");
+    expect(deepPlan.stablePrefixText).toContain("user.ask_batch");
+    expect(deepPlan.stablePrefixDigest).not.toBe(ordinaryPlan.stablePrefixDigest);
+  });
+
 
   test("adds a Korean response-language instruction for Korean input", () => {
     const assembled = assemblePrompt({

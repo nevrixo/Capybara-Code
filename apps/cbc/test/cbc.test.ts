@@ -4785,6 +4785,11 @@ describe("slash router", () => {
       setting: "todo",
       value: "clear",
     });
+    expect(parseSlash("/setting deepplan on")).toEqual({
+      kind: "setting",
+      setting: "deepplan",
+      value: "on",
+    });
   });
 
   test("/permissions yolo applies as a saved preference without changing other preset defaults", () => {

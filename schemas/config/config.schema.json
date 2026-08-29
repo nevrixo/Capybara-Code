@@ -463,6 +463,7 @@
         "reviewMode",
         "visibleCommentary",
         "tokenSaving",
+        "deepPlan",
         "promptCompiler",
         "compoundTools",
         "toolRecovery",
@@ -496,6 +497,15 @@
             "light",
             "balanced",
             "strong"
+          ],
+          "default": "off"
+        },
+        "deepPlan": {
+          "description": "User-only interactive requirements policy layered over Plan mode.",
+          "type": "string",
+          "enum": [
+            "off",
+            "on"
           ],
           "default": "off"
         },

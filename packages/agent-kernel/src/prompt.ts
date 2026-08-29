@@ -86,6 +86,19 @@ export const PLAN_POLICY = `You are in Plan mode.
   blocker: record it as an assumption or risk and leave the future step pending.
 - Do not claim that code was changed or tests were run.`;
 
+export const DEEP_PLAN_POLICY = `You are in Deep Plan mode.
+
+- Inspect available repository and conversation evidence before asking.
+- Ask only questions whose answers materially change scope, behavior, data, architecture, constraints, acceptance criteria, rollout, or risk.
+- Never ask for information already present in history, repository evidence, the current Plan Contract, or the Deep Plan decision ledger.
+- Group 1–4 related decisions in user.ask_batch.
+- Give concrete options and mark at most one recommendation when evidence supports it.
+- Continue the same turn after every submitted batch.
+- Do not produce a final answer while required decisions are unresolved.
+- When sufficient information exists, write the structured Plan Contract with todo.write.
+- If the user chooses draft-now, convert unresolved choices into explicit assumptions or open decisions; never silently invent them.
+- Deep Plan is planning only. Never modify files, run processes, approve, or execute.`;
+
 export const TODO_POLICY = `TODO policy:
 - Use the TODO list only for work with at least three independently verifiable steps, or when the user explicitly requests planning/tracking.
 - In Build mode, use ordinary TODO items only. Do not attach a structured Plan Contract (the \`document\` field); that contract is drafted only after the user explicitly enters Plan mode.
@@ -200,6 +213,8 @@ export interface PromptInputs {
   readonly roleInstructions?: string;
   /** Work intent is independent from permission approval policy. */
   readonly interactionMode?: "build" | "plan";
+  /** User-owned conversational policy captured immutably at turn start. */
+  readonly deepPlanMode?: "off" | "on";
   /**
    * Short host token-saving directive. It lives in the variable suffix, never
    * in the stable prefix, so a level change does not break the prefix cache.
@@ -464,6 +479,7 @@ function stablePromptVersion(inputs: PromptInputs, toolVersions: readonly string
   return fingerprint(JSON.stringify({
     roleInstructions: inputs.roleInstructions ?? "",
     interactionMode: inputs.interactionMode ?? "build",
+    deepPlanMode: inputs.deepPlanMode ?? "off",
     projectInstructions: inputs.projectInstructions,
     skillCatalog: inputs.skillCatalog,
     loadedSkills: inputs.loadedSkills,
@@ -492,6 +508,10 @@ function materializeStablePrompt(inputs: PromptInputs, useCache: boolean): Stabl
   if (inputs.interactionMode === "plan") {
     stableSections.push(PLAN_POLICY);
     l0.push(PLAN_POLICY);
+  }
+  if (inputs.interactionMode === "plan" && inputs.deepPlanMode === "on") {
+    stableSections.push(DEEP_PLAN_POLICY);
+    l0.push(DEEP_PLAN_POLICY);
   }
   stableSections.push(TODO_POLICY);
   l0.push(TODO_POLICY);

@@ -1332,6 +1332,28 @@ function settingDescriptors(ui: InteractiveUi, session: ActiveSession): SettingD
       },
     },
     {
+      key: "deepplan",
+      label: "Deep Plan",
+      value: session.deepPlanMode,
+      configPath: "agent.deepPlan",
+      values: [
+        { value: "off", label: "Off" },
+        { value: "on", label: "On — ask until the Plan is ready" },
+      ],
+      apply: (active, value) => {
+        if (value !== "off" && value !== "on") {
+          return { message: "Use Off or On for Deep Plan." };
+        }
+        active.setDeepPlan(value);
+        return {
+          value,
+          message: value === "on"
+            ? "Deep Plan ON; active for the next Plan message."
+            : "Deep Plan OFF; active for the next message.",
+        };
+      },
+    },
+    {
       key: "fast-mode",
       label: "Fast mode",
       value: session.liveServiceTier,

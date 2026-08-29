@@ -1152,6 +1152,7 @@ export class AgentSession {
       permissionContext: () => this.permissionContext(),
       promptInputs: () => this.promptInputs(),
       interactionMode: () => this.recorder.model.modeState.selected,
+      deepPlanMode: () => this.#options.config.agent.deepPlan,
       todoState: () => {
         const items = [...this.#todoController.completionItems()];
         // An approved Plan is a digest-bound execution capability. If the model
@@ -2810,6 +2811,19 @@ export class AgentSession {
       requestedLevel: this.#tokenSaving.requestedLevel,
       plan: this.#tokenSavingLastPlan,
     };
+  }
+
+  /** Deep Plan preference advertised by settings and captured by the next turn. */
+  get deepPlanMode(): "off" | "on" {
+    return this.#options.config.agent.deepPlan;
+  }
+
+  /** Apply a live Deep Plan preference; persistence remains the caller's job. */
+  setDeepPlan(mode: "off" | "on"): { from: "off" | "on"; to: "off" | "on" } | undefined {
+    const from = this.#options.config.agent.deepPlan;
+    if (from === mode) return undefined;
+    this.#options.config.agent.deepPlan = mode;
+    return { from, to: mode };
   }
 
   /**

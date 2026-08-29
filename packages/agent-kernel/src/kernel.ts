@@ -627,6 +627,8 @@ export interface KernelOptions {
   readonly verificationCoverage?: () => { readonly changedSymbols?: number; readonly staleEvidence?: number; readonly unresolvedOperations?: number; readonly highRiskFindings?: number };
   /** Immutable work intent captured at turn start. */
   readonly interactionMode?: () => "build" | "plan";
+  /** Immutable Deep Plan policy captured at the same turn boundary. */
+  readonly deepPlanMode?: () => "off" | "on";
   /** Root TODO projection used to prevent false completed reports. */
   readonly todoState?: () => readonly { readonly status: string; readonly text: string }[];
   /**
@@ -803,6 +805,7 @@ export class AgentKernel {
    */
   #budgetNudged = false;
   #activeInteractionMode: "build" | "plan" = "build";
+  #activeDeepPlanMode: "off" | "on" = "off";
 
   constructor(options: KernelOptions) {
     this.#options = options;
@@ -844,6 +847,8 @@ export class AgentKernel {
   async prewarm(signal: AbortSignal = new AbortController().signal): Promise<void> {
     if (!this.#providerSession.capabilities.websocket) return;
     const interactionMode = this.#options.interactionMode?.() ?? "build";
+    const deepPlanMode =
+      interactionMode === "plan" ? this.#options.deepPlanMode?.() ?? "off" : "off";
     // A warm-up is not a work sample: it must not consume or carry the
     // token-saving directive, which belongs to the first real request.
     const { tokenSavingDirective: _tokenSavingDirective, ...warmupInputs } =
@@ -852,6 +857,7 @@ export class AgentKernel {
       ...warmupInputs,
       activeTools: this.#options.registry.activeToolsFor(interactionMode),
       interactionMode,
+      deepPlanMode,
       history: [],
     }, { version: this.#options.promptCompiler ?? "v2" });
     await this.#providerSession.prewarm({
@@ -1018,6 +1024,10 @@ export class AgentKernel {
     this.#turnCounter += 1;
     const turnId = `turn_${this.#turnCounter}`;
     this.#activeInteractionMode = this.#options.interactionMode?.() ?? "build";
+    this.#activeDeepPlanMode =
+      this.#activeInteractionMode === "plan"
+        ? this.#options.deepPlanMode?.() ?? "off"
+        : "off";
     const machine = new TurnStateMachine("idle");
     const budget = newBudget(this.#now());
     const traceStartedAt = this.#now();
@@ -1840,6 +1850,7 @@ export class AgentKernel {
       ...inputs,
       activeTools: this.#options.registry.activeToolsFor(this.#activeInteractionMode),
       interactionMode: this.#activeInteractionMode,
+      deepPlanMode: this.#activeDeepPlanMode,
       history,
       ...(userInput !== undefined ? { userInput } : {}),
     }, { version: this.#options.promptCompiler ?? "v2" });
