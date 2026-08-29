@@ -75,6 +75,82 @@ export function createTriggerEnvelope(input: TriggerEnvelopeInput): TriggerEnvel
   });
 }
 
+export function validateTriggerEnvelope(value: unknown): TriggerEnvelope {
+  const input = isRecord(value);
+  if (input === undefined) {
+    throw new IntegrationContractError(
+      "INTEGRATION_TRIGGER_INVALID",
+      "trigger envelope must be an object",
+    );
+  }
+  const allowed = new Set([
+    "schemaVersion",
+    "source",
+    "eventId",
+    "deliveryId",
+    "repository",
+    "actor",
+    "actorAssociation",
+    "event",
+    "ref",
+    "headSha",
+    "trusted",
+    "promptText",
+    "evidenceRefs",
+    "idempotencyKey",
+  ]);
+  const unknown = Object.keys(input).filter((key) => !allowed.has(key));
+  if (unknown.length > 0) {
+    throw new IntegrationContractError(
+      "INTEGRATION_TRIGGER_INVALID",
+      "trigger envelope contains unknown fields",
+    );
+  }
+  if (
+    input.schemaVersion !== "1.0"
+    || (input.source !== "github" && input.source !== "local")
+    || typeof input.eventId !== "string"
+    || typeof input.repository !== "string"
+    || typeof input.actor !== "string"
+    || typeof input.event !== "string"
+    || typeof input.ref !== "string"
+    || typeof input.headSha !== "string"
+    || typeof input.trusted !== "boolean"
+    || typeof input.promptText !== "string"
+    || !Array.isArray(input.evidenceRefs)
+    || input.evidenceRefs.some((entry) => typeof entry !== "string")
+    || typeof input.idempotencyKey !== "string"
+  ) {
+    throw new IntegrationContractError(
+      "INTEGRATION_TRIGGER_INVALID",
+      "trigger envelope has invalid or missing fields",
+    );
+  }
+  const rebuilt = createTriggerEnvelope({
+    source: input.source,
+    eventId: input.eventId,
+    ...(typeof input.deliveryId === "string" ? { deliveryId: input.deliveryId } : {}),
+    repository: input.repository,
+    actor: input.actor,
+    ...(typeof input.actorAssociation === "string"
+      ? { actorAssociation: input.actorAssociation }
+      : {}),
+    event: input.event,
+    ref: input.ref,
+    headSha: input.headSha,
+    trusted: input.trusted,
+    promptText: input.promptText,
+    evidenceRefs: input.evidenceRefs as string[],
+  });
+  if (rebuilt.idempotencyKey !== input.idempotencyKey) {
+    throw new IntegrationContractError(
+      "INTEGRATION_TRIGGER_INVALID",
+      "trigger idempotency key does not match the canonical envelope",
+    );
+  }
+  return rebuilt;
+}
+
 export type HeadlessPermissionPolicy = "deny-on-ask" | "allow-listed" | "fail-on-ask";
 
 export type HeadlessApprovalDecision =
@@ -156,4 +232,10 @@ function requireBoundedText(name: string, value: string, maxLength: number): voi
       name + " must be non-empty, trimmed, and bounded",
     );
   }
+}
+
+function isRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
 }

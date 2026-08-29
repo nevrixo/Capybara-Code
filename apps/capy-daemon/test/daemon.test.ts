@@ -483,3 +483,136 @@ describe("approval manager detach survival", () => {
     expect(approvals.get("appr_detach")?.state).toBe("pending");
   });
 });
+
+describe("default App backend session receipts", () => {
+  test("creates, lists, submits, retries, and cancels through one durable command contract", async () => {
+    const dir = runtimeDir();
+    const prompts: string[] = [];
+    const cancellations: string[] = [];
+    const daemon = new CapybaraDaemon({
+      runtimeDir: dir,
+      listen: false,
+      executableDigest: DIGEST,
+      sessionExecutor: {
+        async submit(request) {
+          prompts.push(request.prompt);
+          return {
+            turnId: request.turnId,
+            status: "completed",
+            answer: "done",
+            report: { summary: "done", changedFiles: [], verification: [] },
+          };
+        },
+        async cancel(sessionId, turnId) {
+          cancellations.push(sessionId + ":" + (turnId ?? ""));
+        },
+      },
+    });
+    await daemon.start();
+    const initialized = await daemon.dispatch(undefined, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "server.initialize",
+      params: {
+        protocolVersion: "1.0",
+        client: {
+          id: "client_integration",
+          name: "integration test",
+          version: "1.0.0",
+          kind: "ide",
+        },
+        capabilities: {
+          eventStreaming: true,
+          eventAck: true,
+          approvals: true,
+          interactivePrompts: true,
+          artifactStreaming: true,
+          richDiff: true,
+          taskTree: true,
+          planReview: true,
+        },
+      },
+    });
+    if (!("result" in initialized)) throw new Error(initialized.error.message);
+    const connectionId = (initialized.result as { connectionId: string }).connectionId;
+    const command = (
+      commandId: string,
+      payload: unknown,
+      sessionId?: string,
+    ) => ({
+      schemaVersion: "1.0",
+      commandId,
+      idempotencyKey: "idem_" + commandId,
+      correlationId: "cor_" + commandId,
+      clientId: "client_integration",
+      ...(sessionId === undefined ? {} : { sessionId }),
+      issuedAt: "2026-08-30T00:00:00.000Z",
+      payload,
+    });
+    const createRequest = {
+      jsonrpc: "2.0" as const,
+      id: 2,
+      method: "session.create",
+      params: {
+        command: command("create", {
+          workspaceIdentityDigest: "ws_integration",
+          cwd: "C:/workspace",
+        }),
+      },
+    };
+    const created = await daemon.dispatch(connectionId, createRequest);
+    const replayedCreate = await daemon.dispatch(connectionId, { ...createRequest, id: 3 });
+    if (!("result" in created) || !("result" in replayedCreate)) throw new Error("session create failed");
+    const createReceipt = created.result as { receiptId: string; result: { sessionId: string } };
+    const replayReceipt = replayedCreate.result as { receiptId: string };
+    expect(replayReceipt.receiptId).toBe(createReceipt.receiptId);
+    const sessionId = createReceipt.result.sessionId;
+
+    const attached = await daemon.dispatch(connectionId, {
+      jsonrpc: "2.0",
+      id: 4,
+      method: "session.attach",
+      params: {
+        sessionId,
+        workspaceIdentityDigest: "ws_integration",
+        mode: "controller",
+      },
+    });
+    expect("result" in attached).toBe(true);
+
+    const turnRequest = {
+      jsonrpc: "2.0" as const,
+      id: 5,
+      method: "turn.submit",
+      params: {
+        command: command("turn", { prompt: "fix parser", turnId: "turn_1" }, sessionId),
+      },
+    };
+    const submitted = await daemon.dispatch(connectionId, turnRequest);
+    const retried = await daemon.dispatch(connectionId, { ...turnRequest, id: 6 });
+    expect("result" in submitted && (submitted.result as { status: string }).status).toBe("completed");
+    expect("result" in retried && (retried.result as { receiptId: string }).receiptId)
+      .toBe("result" in submitted ? (submitted.result as { receiptId: string }).receiptId : "");
+    expect(prompts).toEqual(["fix parser"]);
+
+    const listed = await daemon.dispatch(connectionId, {
+      jsonrpc: "2.0",
+      id: 7,
+      method: "session.list",
+      params: { workspaceIdentityDigest: "ws_integration" },
+    });
+    expect("result" in listed && JSON.stringify(listed.result)).toContain(sessionId);
+
+    const cancelled = await daemon.dispatch(connectionId, {
+      jsonrpc: "2.0",
+      id: 8,
+      method: "turn.cancel",
+      params: {
+        command: command("cancel", { turnId: "turn_1" }, sessionId),
+      },
+    });
+    expect("result" in cancelled && (cancelled.result as { status: string }).status).toBe("cancelled");
+    expect(cancellations).toEqual([sessionId + ":turn_1"]);
+    await daemon.stop();
+  });
+});

@@ -19,6 +19,7 @@ import {
   projectApproval,
   projectEditReceipt,
   resolveHeadlessApproval,
+  validateTriggerEnvelope,
 } from "../src/index.ts";
 
 function capabilitySnapshot() {
@@ -226,5 +227,30 @@ describe("trigger and headless policy", () => {
       policy: "deny-on-ask",
       actionKey: "network:example.com",
     }).decision).toBe("deny");
+  });
+
+  test("rejects raw or tampered event files instead of treating them as trigger envelopes", () => {
+    const trigger = createTriggerEnvelope({
+      source: "github",
+      eventId: "event_1",
+      deliveryId: "delivery_1",
+      repository: "nevrixo/capybara-code",
+      actor: "maintainer",
+      event: "issue_comment",
+      ref: "refs/heads/develop",
+      headSha: "a".repeat(40),
+      trusted: true,
+      promptText: "fix parser",
+      evidenceRefs: [],
+    });
+    expect(validateTriggerEnvelope(trigger)).toEqual(trigger);
+    expect(() => validateTriggerEnvelope({
+      ...trigger,
+      idempotencyKey: "sha256:" + "b".repeat(64),
+    })).toThrow(IntegrationContractError);
+    expect(() => validateTriggerEnvelope({
+      ...trigger,
+      rawPayload: { token: "secret" },
+    })).toThrow(IntegrationContractError);
   });
 });

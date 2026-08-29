@@ -709,6 +709,20 @@ class NodeHostIo implements HostIo {
     return Buffer.concat(chunks).toString("utf8");
   }
 
+  async *readLines(): AsyncIterable<string> {
+    let buffer = "";
+    for await (const chunk of process.stdin) {
+      buffer += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+      while (true) {
+        const newline = buffer.indexOf("\n");
+        if (newline === -1) break;
+        yield buffer.slice(0, newline).replace(/\r$/u, "");
+        buffer = buffer.slice(newline + 1);
+      }
+    }
+    if (buffer.length > 0) yield buffer.replace(/\r$/u, "");
+  }
+
   async prompt(question: string, options: { masked?: boolean } = {}): Promise<string> {
     const masked = options.masked === true;
     this.#err.write(question);

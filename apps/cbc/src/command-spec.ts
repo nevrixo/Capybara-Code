@@ -39,7 +39,11 @@ export const COMMAND_REGISTRY: readonly CommandSpec[] = [
   {
     name: "run",
     summary: "run headlessly",
-    flags: [{ name: "--result-file", kind: "value", summary: "write a machine-readable integration result" }],
+    flags: [
+      { name: "--result-file", kind: "value", summary: "write a machine-readable integration result" },
+      { name: "--event-file", kind: "value", summary: "read a validated integration trigger envelope" },
+      { name: "--permission-policy", kind: "value", summary: "deny-on-ask, allow-listed, or fail-on-ask" },
+    ],
     positionals: [{ label: "[prompt...]", required: false, variadic: true }],
   },
   {
@@ -84,6 +88,37 @@ export const COMMAND_REGISTRY: readonly CommandSpec[] = [
           { label: "<value>", required: true },
         ],
       },
+    ],
+  },
+  {
+    name: "acp",
+    summary: "serve ACP v1 over stdio and attach it to the local daemon",
+  },
+  {
+    name: "clients",
+    summary: "inspect App Protocol clients and transport health",
+    subcommands: [
+      { name: "list", summary: "show the current client and inventory support" },
+      { name: "doctor", summary: "diagnose client roles, replay, and transport" },
+    ],
+  },
+  {
+    name: "integration",
+    summary: "diagnose first-party integration compatibility",
+    subcommands: [
+      {
+        name: "doctor",
+        summary: "diagnose VS Code, ACP, or GitHub integration",
+        positionals: [{ label: "[vscode|acp|github]", required: false }],
+      },
+    ],
+  },
+  {
+    name: "github",
+    summary: "install or diagnose GitHub automation",
+    subcommands: [
+      { name: "install", summary: "create a safe default GitHub Actions workflow" },
+      { name: "doctor", summary: "validate the repository GitHub workflow" },
     ],
   },
   {

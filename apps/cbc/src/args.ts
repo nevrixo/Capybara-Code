@@ -11,7 +11,18 @@ import { usageError } from "./exit.ts";
 
 export type Command =
   | { readonly kind: "interactive"; readonly prompt?: string; readonly noDaemon?: boolean }
-  | { readonly kind: "run"; readonly prompt?: string; readonly resultFile?: string; readonly noDaemon?: boolean }
+  | {
+      readonly kind: "run";
+      readonly prompt?: string;
+      readonly resultFile?: string;
+      readonly eventFile?: string;
+      readonly permissionPolicy?: "deny-on-ask" | "allow-listed" | "fail-on-ask";
+      readonly noDaemon?: boolean;
+    }
+  | { readonly kind: "acp" }
+  | { readonly kind: "clients"; readonly sub: "list" | "doctor" }
+  | { readonly kind: "integration"; readonly sub: "doctor"; readonly target?: "vscode" | "acp" | "github" }
+  | { readonly kind: "github"; readonly sub: "install" | "doctor" }
   | { readonly kind: "auth"; readonly sub: "login"; readonly device: boolean }
   | { readonly kind: "auth"; readonly sub: "api"; readonly fromStdin: boolean }
   | { readonly kind: "auth"; readonly sub: "status" }
@@ -188,15 +199,29 @@ export function parseArgs(argv: readonly string[]): ParseResult {
     case "run": {
       const prompt = rest.join(" ").trim();
       const resultFile = flags.get("--result-file")?.value;
+      const eventFile = flags.get("--event-file")?.value;
+      const permissionPolicy = flags.get("--permission-policy")?.value;
+      if (
+        permissionPolicy !== undefined
+        && permissionPolicy !== "deny-on-ask"
+        && permissionPolicy !== "allow-listed"
+        && permissionPolicy !== "fail-on-ask"
+      ) {
+        throw usageError("--permission-policy must be deny-on-ask, allow-listed, or fail-on-ask");
+      }
       return {
         command: {
           kind: "run",
           ...(prompt.length > 0 ? { prompt } : {}),
           ...(typeof resultFile === "string" && resultFile.trim().length > 0 ? { resultFile } : {}),
+          ...(typeof eventFile === "string" && eventFile.trim().length > 0 ? { eventFile } : {}),
+          ...(permissionPolicy === undefined ? {} : { permissionPolicy }),
           ...(flags.has("--no-daemon") ? { noDaemon: true } : {}),
         },
       };
     }
+    case "acp":
+      return { command: { kind: "acp" } };
     case "session-worker": {
       const sessionId = flags.get("--session-id")?.value;
       return {
@@ -252,6 +277,23 @@ function buildSubcommand(
   if (commandName === "model" && subName === "refresh") {
     return { kind: "model", sub: "refresh" };
   }
+  if (commandName === "clients" && (subName === "list" || subName === "doctor")) {
+    return { kind: "clients", sub: subName };
+  }
+  if (commandName === "integration" && subName === "doctor") {
+    const target = operands[0];
+    if (target !== undefined && target !== "vscode" && target !== "acp" && target !== "github") {
+      throw usageError("capy integration doctor target must be vscode, acp, or github");
+    }
+    return {
+      kind: "integration",
+      sub: "doctor",
+      ...(target === undefined ? {} : { target }),
+    };
+  }
+  if (commandName === "github" && (subName === "install" || subName === "doctor")) {
+    return { kind: "github", sub: subName };
+  }
   if (commandName === "config" && subName === "set") {
     return {
       kind: "config",
@@ -298,9 +340,13 @@ export const HELP_TEXT = [
   "Usage",
   "  capy [prompt...]                 open the interactive TUI",
   "  capy run [prompt...]             run headlessly",
+  "  capy acp                         serve ACP v1 over stdio",
   "  capy --no-daemon [prompt...]     keep execution inside this process",
   "",
   "Commands",
+  "  clients list|doctor              inspect App Protocol clients",
+  "  integration doctor [target]      diagnose vscode, acp, or github",
+  "  github install|doctor            manage GitHub Action integration",
   "  daemon start                     start the local daemon",
   "  daemon stop                      stop the local daemon",
   "  daemon status                    show daemon health",

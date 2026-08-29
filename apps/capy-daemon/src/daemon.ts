@@ -6,10 +6,14 @@
  */
 
 import {
+  APP_COMMAND_SCHEMA_VERSION,
   APP_PROTOCOL_VERSION,
+  CommandDeduplicator,
   type AppClientRole,
   type AppInitializeParams,
+  type CommandEnvelope,
   type EventReplayResult,
+  type OperationReceipt,
 } from "@cbc/app-protocol";
 import {
   AppServer,
@@ -18,6 +22,7 @@ import {
   type AppServerSubscription,
 } from "@cbc/app-server";
 
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 import { ApprovalManager } from "./approval-manager.ts";
@@ -324,13 +329,18 @@ export class CapybaraDaemon {
     }>();
     const hub = this.eventHub;
     const daemon = this;
+    const commands = new CommandDeduplicator<unknown, unknown>();
 
     return {
       supportedMethods: [
+        "session.create",
+        "session.list",
+        "session.get",
         "session.ensure",
         "session.attach",
         "session.detach",
         "turn.submit",
+        "turn.cancel",
         "worktree.list",
         "approval.list",
         "approval.resolve",
@@ -420,19 +430,74 @@ export class CapybaraDaemon {
         return { ...daemon.health() };
       },
       async dispatch(input) {
-        if (input.method === "turn.submit") {
-          const params = requireRecord(input.params);
-          const command = isRecord(params.command) ? params.command : params;
-          const payload = isRecord(command.payload) ? command.payload : command;
-          const sessionId = requireString(
-            params.sessionId ?? payload.sessionId ?? "ses_daemon",
-          );
-          const workspaceIdentityDigest = typeof params.workspaceIdentityDigest === "string"
+        if (input.method === "session.create") {
+          const command = appCommand(input.params);
+          return (await commands.execute(command, async () => {
+            const payload = requireRecord(command.payload);
+            const sessionId = typeof payload.sessionId === "string"
+              ? requireString(payload.sessionId)
+              : "ses_" + crypto.randomUUID().replaceAll("-", "");
+            const workspaceIdentityDigest = typeof payload.workspaceIdentityDigest === "string"
+              ? requireString(payload.workspaceIdentityDigest)
+              : workspaceDigest(requireString(payload.cwd));
+            daemon.workspaces.getOrCreate(workspaceIdentityDigest).getOrCreateSession(sessionId);
+            daemon.workers.ensure(sessionId);
+            return completedReceipt(command, daemon.#now(), {
+              sessionId,
+              workspaceIdentityDigest,
+              status: "active",
+            });
+          })).receipt;
+        }
+        if (input.method === "session.list") {
+          const params = isRecord(input.params) ? input.params : {};
+          const requestedWorkspace = typeof params.workspaceIdentityDigest === "string"
             ? params.workspaceIdentityDigest
-            : sessionId;
-          const actor = daemon.workspaces.getOrCreate(workspaceIdentityDigest).getOrCreateSession(sessionId);
-          const turnId = typeof params.turnId === "string"
-            ? params.turnId
+            : undefined;
+          const sessions = daemon.workspaces.list().flatMap((workspace) => {
+            if (
+              requestedWorkspace !== undefined
+              && workspace.workspaceIdentityDigest !== requestedWorkspace
+            ) {
+              return [];
+            }
+            return workspace.sessionIds.map((sessionId) => {
+              const actor = daemon.workspaces.get(workspace.workspaceIdentityDigest)?.getSession(sessionId);
+              return {
+                sessionId,
+                workspaceIdentityDigest: workspace.workspaceIdentityDigest,
+                status: actor?.state.lifecycle ?? "idle",
+                revision: actor?.state.revision ?? 0,
+              };
+            });
+          });
+          return { sessions };
+        }
+        if (input.method === "session.get") {
+          const params = requireRecord(input.params);
+          const sessionId = requireString(params.sessionId);
+          const located = findDaemonSession(daemon, sessionId);
+          if (located === undefined) throw new Error("unknown session");
+          return { ...located.actor.state };
+        }
+        if (input.method === "turn.submit") {
+          const command = appCommand(input.params);
+          return (await commands.execute(command, async () => {
+          const payload = requireRecord(command.payload);
+          const sessionId = requireString(
+            command.sessionId ?? payload.sessionId ?? "ses_daemon",
+          );
+          const existingSession = findDaemonSession(daemon, sessionId);
+          const workspaceIdentityDigest = existingSession?.workspaceIdentityDigest
+            ?? (typeof command.workspaceIdentityDigest === "string"
+            ? command.workspaceIdentityDigest
+            : typeof payload.workspaceIdentityDigest === "string"
+              ? payload.workspaceIdentityDigest
+              : sessionId);
+          const actor = existingSession?.actor
+            ?? daemon.workspaces.getOrCreate(workspaceIdentityDigest).getOrCreateSession(sessionId);
+          const turnId = typeof payload.turnId === "string"
+            ? payload.turnId
             : "turn_" + crypto.randomUUID().replaceAll("-", "");
           const prompt = typeof payload.prompt === "string" ? payload.prompt : "";
           const actorState = await actor.dispatch({
@@ -447,7 +512,48 @@ export class CapybaraDaemon {
             prompt,
             clientId: input.clientId,
           });
-          return { ...actorState, turn: executed };
+          return {
+            schemaVersion: APP_COMMAND_SCHEMA_VERSION,
+            receiptId: "rcp_" + command.commandId,
+            commandId: command.commandId,
+            idempotencyKey: command.idempotencyKey,
+            status: operationStatus(executed.status),
+            startedAt: command.issuedAt,
+            finishedAt: daemon.#now(),
+            revisionBefore: Math.max(0, actorState.revision - 1),
+            revisionAfter: actorState.revision,
+            evidenceIds: [],
+            result: {
+              turnId,
+              status: executed.status,
+              answer: executed.answer ?? "",
+              report: executed.report,
+              actor: actorState,
+            },
+          } satisfies OperationReceipt<unknown>;
+          })).receipt;
+        }
+        if (input.method === "turn.cancel") {
+          const command = appCommand(input.params);
+          return (await commands.execute(command, async () => {
+            const payload = requireRecord(command.payload);
+            const sessionId = requireString(command.sessionId ?? payload.sessionId);
+            const turnId = typeof payload.turnId === "string" ? payload.turnId : undefined;
+            const located = findDaemonSession(daemon, sessionId);
+            if (located !== undefined) {
+              await located.actor.dispatch({
+                kind: "cancel_turn",
+                clientId: input.clientId,
+                ...(turnId === undefined ? {} : { turnId }),
+              });
+            }
+            await daemon.workers.cancel(sessionId, turnId);
+            return completedReceipt(command, daemon.#now(), {
+              sessionId,
+              ...(turnId === undefined ? {} : { turnId }),
+              cancelled: true,
+            }, "cancelled");
+          })).receipt;
         }
         if (input.method === "session.ensure") {
           const params = requireRecord(input.params);
@@ -489,17 +595,19 @@ export class CapybaraDaemon {
           return { approvals: daemon.approvals.list(sessionId) };
         }
         if (input.method === "approval.resolve") {
-          const params = requireRecord(input.params);
-          const command = requireRecord(params.command);
+          const command = appCommand(input.params);
+          return (await commands.execute(command, async () => {
           const payload = requireRecord(command.payload);
-          return daemon.approvals.resolve({
+          const resolved = daemon.approvals.resolve({
             approvalId: requireString(payload.approvalId),
             clientId: input.clientId,
             actionHash: requireString(payload.actionHash),
             decision: payload.decision as never,
           });
+          return completedReceipt(command, daemon.#now(), resolved);
+          })).receipt;
         }
-        return { ok: true, method: input.method };
+        throw new Error(input.method + " is not implemented by the daemon backend");
       },
     };
   }
@@ -527,6 +635,61 @@ function requireRecord(value: unknown): Record<string, unknown> {
 function requireString(value: unknown): string {
   if (typeof value !== "string" || value.trim().length === 0) throw new Error("expected string");
   return value;
+}
+
+function appCommand(params: unknown): CommandEnvelope<unknown> {
+  const input = requireRecord(params);
+  return requireRecord(input.command) as unknown as CommandEnvelope<unknown>;
+}
+
+function completedReceipt<T>(
+  command: CommandEnvelope<unknown>,
+  finishedAt: string,
+  result: T,
+  status: OperationReceipt["status"] = "completed",
+): OperationReceipt<T> {
+  return {
+    schemaVersion: APP_COMMAND_SCHEMA_VERSION,
+    receiptId: "rcp_" + command.commandId,
+    commandId: command.commandId,
+    idempotencyKey: command.idempotencyKey,
+    status,
+    startedAt: command.issuedAt,
+    finishedAt,
+    evidenceIds: [],
+    result,
+  };
+}
+
+function operationStatus(status: string): OperationReceipt["status"] {
+  if (
+    status === "completed"
+    || status === "partial"
+    || status === "failed"
+    || status === "cancelled"
+  ) {
+    return status;
+  }
+  return "accepted";
+}
+
+function workspaceDigest(cwd: string): string {
+  const normalized = cwd.replaceAll("\\", "/").replace(/\/+$/u, "").toLowerCase();
+  return "sha256:" + createHash("sha256").update(normalized, "utf8").digest("hex");
+}
+
+function findDaemonSession(
+  daemon: CapybaraDaemon,
+  sessionId: string,
+): { readonly workspaceIdentityDigest: string; readonly actor: import("./session-actor.ts").SessionActor } | undefined {
+  for (const workspace of daemon.workspaces.list()) {
+    if (!workspace.sessionIds.includes(sessionId)) continue;
+    const actor = daemon.workspaces.get(workspace.workspaceIdentityDigest)?.getSession(sessionId);
+    if (actor !== undefined) {
+      return { workspaceIdentityDigest: workspace.workspaceIdentityDigest, actor };
+    }
+  }
+  return undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

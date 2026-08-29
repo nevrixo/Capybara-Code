@@ -2,9 +2,11 @@
 
 import { HELP_TEXT, type Command } from "./args.ts";
 import { CliError, EXIT, type ExitCode } from "./exit.ts";
+import { acpCommand } from "./commands/acp.ts";
 import { authApi, authLogin, authLogout, authStatus } from "./commands/auth.ts";
 import { configSet } from "./commands/config.ts";
 import { skillsCommand } from "./commands/skills.ts";
+import { clientsCommand, githubCommand, integrationDoctor } from "./commands/integrations.ts";
 import { CommandContext, type CommandResult } from "./commands/context.ts";
 import { interactive } from "./commands/interactive.ts";
 import { daemonCommand } from "./commands/daemon.ts";
@@ -50,8 +52,22 @@ async function dispatch(context: CommandContext, command: Command): Promise<Comm
       return await run(context, {
         ...(command.prompt !== undefined ? { prompt: command.prompt } : {}),
         ...(command.resultFile !== undefined ? { resultFile: command.resultFile } : {}),
+        ...(command.eventFile !== undefined ? { eventFile: command.eventFile } : {}),
+        ...(command.permissionPolicy !== undefined ? { permissionPolicy: command.permissionPolicy } : {}),
         ...(command.noDaemon === true ? { noDaemon: true } : {}),
       });
+
+    case "acp":
+      return await acpCommand(context);
+
+    case "clients":
+      return await clientsCommand(context, command.sub);
+
+    case "integration":
+      return await integrationDoctor(context, command.target);
+
+    case "github":
+      return await githubCommand(context, command.sub);
 
     case "auth":
       switch (command.sub) {

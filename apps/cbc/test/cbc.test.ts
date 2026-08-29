@@ -397,6 +397,22 @@ describe("parseArgs", () => {
       sub: "list",
       json: true,
     });
+    expect(parseArgs([
+      "run",
+      "--event-file",
+      "/events/trigger.json",
+      "--result-file",
+      "/results/capy.json",
+      "--permission-policy",
+      "allow-listed",
+    ]).command).toEqual({
+      kind: "run",
+      eventFile: "/events/trigger.json",
+      resultFile: "/results/capy.json",
+      permissionPolicy: "allow-listed",
+    });
+    expect(() => parseArgs(["run", "--permission-policy", "yolo", "fix"]))
+      .toThrow(/deny-on-ask, allow-listed, or fail-on-ask/);
     expect(parseArgs(["skills", "doctor"]).command).toEqual({
       kind: "skills",
       sub: "doctor",
@@ -416,12 +432,36 @@ describe("parseArgs", () => {
   test("version and help are commands rather than flags", () => {
     expect(parseArgs(["version"]).command).toEqual({ kind: "version" });
     expect(parseArgs(["help", "auth"]).command).toEqual({ kind: "help", topic: "auth" });
+    expect(parseArgs(["acp"]).command).toEqual({ kind: "acp" });
+    expect(parseArgs(["clients", "list"]).command).toEqual({ kind: "clients", sub: "list" });
+    expect(parseArgs(["clients", "doctor"]).command).toEqual({ kind: "clients", sub: "doctor" });
+    expect(parseArgs(["integration", "doctor", "vscode"]).command).toEqual({
+      kind: "integration",
+      sub: "doctor",
+      target: "vscode",
+    });
+    expect(parseArgs(["github", "install"]).command).toEqual({ kind: "github", sub: "install" });
+    expect(() => parseArgs(["integration", "doctor", "unknown"])).toThrow(/vscode, acp, or github/);
     expect(() => parseArgs(["--version"])).toThrow(/unknown flag --version/);
     expect(() => parseArgs(["--help"])).toThrow(/unknown flag --help/);
   });
 
   test("the registry and help expose only the minimal public surface", () => {
-    expect(commandNames()).toEqual(["run", "auth", "model", "config", "skills", "daemon", "update", "version", "help"]);
+    expect(commandNames()).toEqual([
+      "run",
+      "auth",
+      "model",
+      "config",
+      "acp",
+      "clients",
+      "integration",
+      "github",
+      "skills",
+      "daemon",
+      "update",
+      "version",
+      "help",
+    ]);
     for (const text of [
       "auth login",
       "auth api",
