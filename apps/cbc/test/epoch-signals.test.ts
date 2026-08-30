@@ -85,4 +85,19 @@ describe("epoch invalidation signals", () => {
     expect(epoch.modelCapabilityDigest).toBe(liveDigest as string);
     expect(resetReasons(events)).not.toContain("capability_changed");
   });
+
+  test("narrowing the active catalog to plan-safe tools resets the epoch", async () => {
+    const provider = new MockProvider({ steps: [{ text: "first" }, { text: "second" }] });
+    const { session, events } = harness("epoch-toolset-changed", provider);
+    await session.submit("Fix the parser", new AbortController().signal);
+    const before = session.taskEpoch.requireCurrent();
+
+    const result = await session.requestInteractionMode("plan", "slash");
+    expect(result.kind).toBe("applied");
+
+    const after = session.taskEpoch.requireCurrent();
+    expect(after.id).not.toBe(before.id);
+    expect(after.toolsetDigest).not.toBe(before.toolsetDigest);
+    expect(resetReasons(events)).toContain("toolset_changed");
+  });
 });

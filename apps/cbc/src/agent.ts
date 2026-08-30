@@ -692,7 +692,7 @@ export class AgentSession {
           compoundTools: options.config.agent.compoundTools,
         }),
         workspaceIdentityDigest: options.workspaceIdentityDigest ?? stableDigest(options.workspacePath),
-        toolsetDigest: stableDigest(sessionTools.map((tool) => tool.id)),
+        toolsetDigest: toolsetDigest(sessionTools),
         modelId: options.config.model.default,
       },
     });
@@ -2713,6 +2713,7 @@ export class AgentSession {
       // Moving back to Plan is an explicit return to review. Do not let a
       // cancelled Build turn's execution capability survive that choice.
       if (target === "plan") this.#planExecution = undefined;
+      this.#refreshToolsetEpoch();
     }
     return result;
   }
@@ -4227,6 +4228,19 @@ export class AgentSession {
     return result;
   }
 
+  /**
+   * §5.11: recompute the toolset digest against the catalog that is actually
+   * active now. The digest was computed once at construction, so every later
+   * change to the offer — a mode switch narrowing it to plan-safe tools, a
+   * skill or MCP catalog arriving — left the epoch describing a toolset the
+   * model is no longer being given.
+   */
+  #refreshToolsetEpoch(): void {
+    this.#announceEpochTransition(this.taskEpoch.transition({
+      toolsetDigest: toolsetDigest(this.registry.activeTools()),
+    }));
+  }
+
   /** Journal only real epoch boundaries; unchanged follow-ups stay silent. */
   #announceEpochTransition(transition: EpochTransition): void {
     if (this.#epochAnnounced && !transition.reset) return;
@@ -4644,6 +4658,26 @@ export function testCommandFor(
 /** Native tools plus anything Skills or MCP contributed, for `--help` style output. */
 export function catalogSnapshot(registry: ToolRegistry): ToolDefinition[] {
   return registry.all();
+}
+
+/**
+ * §5.11's toolset signal is about what the model can *do*, not how many tools
+ * were registered. The mode-specific view matters: Build mode hides
+ * `todo.write`'s `document` property, so the same id set can still be a
+ * different offer, and reasoning written against the wider schema no longer
+ * holds.
+ */
+function toolsetDigest(tools: readonly ToolDefinition[]): string {
+  return stableDigest(
+    [...tools]
+      .map((tool) => ({
+        id: tool.id,
+        mutates: tool.mutates,
+        network: tool.network,
+        parameters: tool.parameters,
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id)),
+  );
 }
 
 function stableDigest(value: unknown): string {
