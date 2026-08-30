@@ -146,6 +146,24 @@ export interface CapsuleInvalidationResult {
   readonly contested: readonly StrategyCapsule[];
 }
 
+export interface CapsuleAmendment {
+  readonly confidence?: number;
+  readonly invalidators?: readonly string[];
+  readonly expiresAt?: string;
+  readonly reason?: string;
+}
+
+export interface CapsuleAuditView {
+  readonly policy: CapsuleLearningPolicy;
+  readonly minVerifiedObservations: number;
+  readonly capsules: readonly StrategyCapsule[];
+  readonly proposedIds: readonly `capsule-${string}`[];
+  readonly activeIds: readonly `capsule-${string}`[];
+  readonly contestedIds: readonly `capsule-${string}`[];
+  readonly forgottenIds: readonly `capsule-${string}`[];
+  readonly transitions: readonly CapsuleTransition[];
+}
+
 export interface CapsuleRecallOptions {
   readonly scopes?: readonly CapsuleScope[];
   readonly kinds?: readonly CapsuleKind[];
@@ -386,6 +404,93 @@ export class CapsuleStore {
       contested.push(demoted);
     }
     return Object.freeze({ trigger, contested: Object.freeze(contested) });
+  }
+
+  /**
+   * §6.4's "사용자가 모든 active memory를 감사·수정·삭제 가능" — the modify half.
+   * Only the fields a user can reasonably correct are editable; kind, statement,
+   * and scope are identity, so changing them would be a different capsule. An
+   * edit re-enters the approval gate by design: a capsule whose invalidators the
+   * user just rewrote is not the capsule they approved.
+   */
+  amend(id: `capsule-${string}`, patch: CapsuleAmendment): StrategyCapsule {
+    const capsule = this.#capsules.get(id);
+    if (capsule === undefined) throw new Error(`unknown strategy capsule: ${id}`);
+    if (patch.confidence !== undefined && !isConfidence(patch.confidence)) {
+      throw new RangeError("capsule confidence must be between 0 and 1");
+    }
+    const amended = freezeCapsule({
+      ...capsule,
+      ...(patch.confidence !== undefined ? { confidence: patch.confidence } : {}),
+      ...(patch.invalidators !== undefined ? { invalidators: sortedUnique([...patch.invalidators]) } : {}),
+      ...(patch.expiresAt !== undefined ? { expiresAt: patch.expiresAt } : {}),
+      status: capsule.status === "active" ? "proposed" : capsule.status,
+      updatedAt: this.#now(),
+      revision: capsule.revision + 1,
+    });
+    this.#capsules.set(id, amended);
+    this.#record(capsule.status, amended, patch.reason ?? "capsule amended by the user");
+    return amended;
+  }
+
+  /** §6.4 delete: logical, so the audit history the user is auditing survives. */
+  forget(id: `capsule-${string}`, reason = "capsule forgotten by the user"): StrategyCapsule {
+    const capsule = this.#capsules.get(id);
+    if (capsule === undefined) throw new Error(`unknown strategy capsule: ${id}`);
+    if (capsule.status === "forgotten") return capsule;
+    const forgotten = freezeCapsule({
+      ...capsule,
+      status: "forgotten",
+      updatedAt: this.#now(),
+      revision: capsule.revision + 1,
+    });
+    this.#capsules.set(id, forgotten);
+    this.#record(capsule.status, forgotten, reason);
+    return forgotten;
+  }
+
+  /**
+   * §6.3 `/learn rollback`: restore the capsule body as of a prior revision from
+   * the append-only log. The restored body always lands non-active, because a
+   * rollback undoes a decision and must not silently re-assert the one it undid.
+   */
+  rollback(id: `capsule-${string}`, toRevision?: number): StrategyCapsule {
+    const capsule = this.#capsules.get(id);
+    if (capsule === undefined) throw new Error(`unknown strategy capsule: ${id}`);
+    const history = this.#transitions
+      .filter((transition) => transition.capsuleId === id)
+      .map((transition) => transition.snapshot)
+      .filter((snapshot) => snapshot.revision < capsule.revision);
+    const target = toRevision === undefined
+      ? history.at(-1)
+      : history.filter((snapshot) => snapshot.revision === toRevision).at(-1);
+    if (target === undefined) {
+      throw new Error(`no earlier revision to roll ${id} back to`);
+    }
+    const restored = freezeCapsule({
+      ...target,
+      status: target.status === "active" ? "proposed" : target.status,
+      updatedAt: this.#now(),
+      revision: capsule.revision + 1,
+    });
+    this.#capsules.set(id, restored);
+    this.#record(capsule.status, restored, `rolled back to revision ${target.revision}`);
+    return restored;
+  }
+
+  /** §6.4 audit: every capsule, why it is active, and what would retire it. */
+  audit(): CapsuleAuditView {
+    const capsules = this.all();
+    return Object.freeze({
+      policy: this.#policy,
+      minVerifiedObservations: this.#minVerifiedObservations,
+      capsules,
+      proposedIds: Object.freeze(capsules.filter((c) => c.status === "proposed").map((c) => c.id)),
+      activeIds: Object.freeze(capsules.filter((c) => c.status === "active").map((c) => c.id)),
+      contestedIds: Object.freeze(capsules.filter((c) => c.status === "contested").map((c) => c.id)),
+      forgottenIds: Object.freeze(capsules.filter((c) => c.status === "forgotten").map((c) => c.id)),
+      transitions: this.transitionLog(),
+    });
   }
 
   snapshot(): CapsuleStoreSnapshot {

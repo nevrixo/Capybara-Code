@@ -29,6 +29,8 @@ export {
   type CapsuleActivationOptions,
   type CapsuleActivationRefused,
   type CapsuleActivationResult,
+  type CapsuleAmendment,
+  type CapsuleAuditView,
   type CapsuleInvalidationResult,
   type CapsuleInvalidationTrigger,
   type CapsuleKind,

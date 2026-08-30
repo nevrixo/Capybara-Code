@@ -5,7 +5,14 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { CapsuleStore, capsuleId, type CapsuleProposalInput } from "../src/index.ts";
+import type { MemoryEvidence } from "@cbc/context-engine";
+
+import {
+  CapsuleStore,
+  MemoryService,
+  capsuleId,
+  type CapsuleProposalInput,
+} from "../src/index.ts";
 
 function storeFixture() {
   let now = "2026-01-01T00:00:00.000Z";
@@ -354,5 +361,146 @@ describe("CapsuleStore invalidators (§6.3, §6.4)", () => {
     const last = store.transitionLog().at(-1);
     expect(last?.toStatus).toBe("contested");
     expect(last?.reason).toContain("toolset");
+  });
+});
+
+describe("CapsuleStore audit and lifecycle (§6.4)", () => {
+  function readyCapsule() {
+    const store = new CapsuleStore({
+      minVerifiedObservations: 2,
+      now: () => "2026-01-01T00:00:00.000Z",
+    });
+    store.propose(proposal({ routeIds: ["route-1"], invalidators: ["toolset changed"] }));
+    const second = store.propose(proposal({ routeIds: ["route-2"], evidenceIds: ["ev-2"] }));
+    if (!second.accepted) throw new Error("fixture proposal was rejected");
+    return { store, id: second.capsule.id };
+  }
+
+  test("audit reports every capsule with its status buckets and provenance", () => {
+    const { store, id } = readyCapsule();
+    store.activate(id, { approved: true });
+
+    const view = store.audit();
+    expect(view.policy).toBe("suggest");
+    expect(view.minVerifiedObservations).toBe(2);
+    expect(view.activeIds).toEqual([id]);
+    expect(view.proposedIds).toEqual([]);
+    expect(view.capsules[0]?.evidenceIds).toEqual(["ev-1", "ev-2"]);
+    expect(view.capsules[0]?.invalidators).toEqual(["toolset changed"]);
+    expect(view.transitions.length).toBeGreaterThanOrEqual(3);
+  });
+
+  test("an amendment returns an active capsule to proposed", () => {
+    const { store, id } = readyCapsule();
+    store.activate(id, { approved: true });
+    expect(store.recall()).toHaveLength(1);
+
+    const amended = store.amend(id, { invalidators: ["Cargo.lock changed"], confidence: 0.5 });
+    expect(amended.status).toBe("proposed");
+    expect(amended.invalidators).toEqual(["Cargo.lock changed"]);
+    expect(amended.confidence).toBe(0.5);
+    expect(store.recall()).toEqual([]);
+  });
+
+  test("forget is logical, so the audit history survives the delete", () => {
+    const { store, id } = readyCapsule();
+    store.activate(id, { approved: true });
+    const forgotten = store.forget(id);
+
+    expect(forgotten.status).toBe("forgotten");
+    expect(store.recall()).toEqual([]);
+    expect(store.audit().forgottenIds).toEqual([id]);
+    expect(store.get(id)?.evidenceIds).toEqual(["ev-1", "ev-2"]);
+    expect(store.transitionLog().at(-1)?.toStatus).toBe("forgotten");
+  });
+
+  test("rollback restores an earlier body and never re-asserts active", () => {
+    const { store, id } = readyCapsule();
+    store.activate(id, { approved: true });
+    store.amend(id, { invalidators: ["Cargo.lock changed"] });
+
+    const rolledBack = store.rollback(id);
+    expect(rolledBack.invalidators).toEqual(["toolset changed"]);
+    expect(rolledBack.status).toBe("proposed");
+    expect(store.recall()).toEqual([]);
+  });
+
+  test("rollback to a named revision is refused when no such revision exists", () => {
+    const { store, id } = readyCapsule();
+    expect(() => store.rollback(id, 99)).toThrow(/no earlier revision/);
+  });
+});
+
+describe("MemoryService capsule facade (§6.4)", () => {
+  function serviceWithCapsules(policy: "off" | "suggest" | "on" = "suggest") {
+    const evidence = new Map<string, MemoryEvidence>();
+    const service = new MemoryService({
+      resolveEvidence: (id) => evidence.get(id),
+      workspaceIdentity: "workspace-a",
+      minVerifiedObservations: 2,
+      capsulePolicy: policy,
+      now: () => "2026-01-01T00:00:00.000Z",
+    });
+    return { service, evidence };
+  }
+
+  test("the service exposes the capsule lifecycle and folds it into inspect", () => {
+    const { service } = serviceWithCapsules();
+    service.proposeCapsule(proposal({ routeIds: ["route-1"] }));
+    const second = service.proposeCapsule(proposal({ routeIds: ["route-2"], evidenceIds: ["ev-2"] }));
+    expect(second.accepted).toBe(true);
+    if (!second.accepted) return;
+
+    expect(service.activateCapsule(second.capsule.id).activated).toBe(false);
+    expect(service.activateCapsule(second.capsule.id, { approved: true }).activated).toBe(true);
+    expect(service.recallCapsules()).toHaveLength(1);
+    expect(service.inspect().capsules.activeIds).toEqual([second.capsule.id]);
+    expect(service.capsule(second.capsule.id)?.status).toBe("active");
+  });
+
+  test("capsules survive a snapshot round trip and never widen a permission", () => {
+    const { service } = serviceWithCapsules();
+    service.proposeCapsule(proposal({ routeIds: ["route-1"] }));
+    const second = service.proposeCapsule(proposal({ routeIds: ["route-2"], evidenceIds: ["ev-2"] }));
+    expect(second.accepted).toBe(true);
+    if (!second.accepted) return;
+    service.activateCapsule(second.capsule.id, { approved: true });
+
+    const snapshot = service.snapshot();
+    expect(snapshot.schemaVersion).toBe("2");
+    const restored = MemoryService.fromSnapshot(snapshot, {
+      resolveEvidence: () => undefined,
+      minVerifiedObservations: 2,
+      now: () => "2026-01-02T00:00:00.000Z",
+    });
+    expect(restored.recallCapsules().map((capsule) => capsule.id)).toEqual([second.capsule.id]);
+
+    // A capsule is a statement and a scope; it carries no tool, risk, or rule,
+    // so there is no field through which recall could reach the policy engine.
+    const recalled = restored.recallCapsules()[0];
+    expect(Object.keys(recalled ?? {}).some((key) => /permission|risk|tool|allow/i.test(key))).toBe(false);
+  });
+
+  test("a pre-capsule schema \"1\" snapshot still restores", () => {
+    const { service } = serviceWithCapsules();
+    const { capsules: _capsules, ...rest } = service.snapshot();
+    const legacy = { ...rest, schemaVersion: "1" as const };
+    const restored = MemoryService.fromSnapshot(legacy, { resolveEvidence: () => undefined });
+    expect(restored.recallCapsules()).toEqual([]);
+    expect(restored.inspect().capsules.capsules).toEqual([]);
+  });
+
+  test("an invalidated capsule drops out of the service recall", () => {
+    const { service } = serviceWithCapsules();
+    service.proposeCapsule(proposal({ routeIds: ["route-1"], invalidators: ["toolset changed"] }));
+    const second = service.proposeCapsule(proposal({ routeIds: ["route-2"], evidenceIds: ["ev-2"] }));
+    expect(second.accepted).toBe(true);
+    if (!second.accepted) return;
+    service.activateCapsule(second.capsule.id, { approved: true });
+
+    const result = service.evaluateCapsuleInvalidators({ kind: "toolset" });
+    expect(result.contested).toHaveLength(1);
+    expect(service.recallCapsules()).toEqual([]);
+    expect(service.inspect().capsules.contestedIds).toEqual([second.capsule.id]);
   });
 });
