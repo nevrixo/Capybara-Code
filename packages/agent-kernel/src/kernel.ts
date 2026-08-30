@@ -5327,8 +5327,33 @@ export class AgentKernel {
       riskReasons: risk.reasons,
     });
 
+    // §5.20 puts the contract before the turn's checks, not after them. Built
+    // below the review dispatch it could only record a decision already made;
+    // built here its reviewRequired is an *input* to that decision, so a route
+    // that planned an independent review or a moved public surface can pull in a
+    // reviewer the change-risk score alone would have skipped.
+    this.#verificationContract = buildTurnVerificationContract({
+      changedPaths,
+      workspaceGeneration: this.#options.workspaceGeneration?.() ?? 0,
+      riskLevel: risk.level,
+      // §5.21: the paths a prior reflection blamed are an impact input, so a
+      // failure that already named a file cannot be verified by a check that
+      // never looks at it.
+      ...(this.#reflectionImplicatedPaths().length > 0
+        ? { reflectionPaths: this.#reflectionImplicatedPaths() }
+        : {}),
+      // §5.15: the route already decided how wide this turn's verification has to
+      // be. Passing it as a floor is what closes the mapping — until now the
+      // contract's only risk input was the change itself, so a route that planned
+      // an integration check could be satisfied by a focused one.
+      ...(this.#turnRoute?.verificationLevel !== undefined
+        ? { verificationLevel: this.#turnRoute.verificationLevel }
+        : {}),
+    });
     const shouldReview = this.#options.autoReview === true &&
-      ((this.#options.reviewPolicy ?? "always") === "always" || risk.reviewRequired);
+      ((this.#options.reviewPolicy ?? "always") === "always" ||
+        risk.reviewRequired ||
+        this.#verificationContract.reviewRequired);
     type ReviewRun =
       | { readonly review: ReviewOutcome; readonly inputBytes: number; readonly durationMs: number }
       | { readonly error: string; readonly inputBytes: number; readonly durationMs: number };
@@ -5401,26 +5426,6 @@ export class AgentKernel {
       });
     }
 
-
-    this.#verificationContract = buildTurnVerificationContract({
-      changedPaths,
-      workspaceGeneration: this.#options.workspaceGeneration?.() ?? 0,
-      riskLevel: risk.level,
-      reviewRequired: shouldReview,
-      // §5.21: the paths a prior reflection blamed are an impact input, so a
-      // failure that already named a file cannot be verified by a check that
-      // never looks at it.
-      ...(this.#reflectionImplicatedPaths().length > 0
-        ? { reflectionPaths: this.#reflectionImplicatedPaths() }
-        : {}),
-      // §5.15: the route already decided how wide this turn's verification has to
-      // be. Passing it as a floor is what closes the mapping — until now the
-      // contract's only risk input was the change itself, so a route that planned
-      // an integration check could be satisfied by a focused one.
-      ...(this.#turnRoute?.verificationLevel !== undefined
-        ? { verificationLevel: this.#turnRoute.verificationLevel }
-        : {}),
-    });
     // §5.20 requires the contract to be an observable turn artifact, not a
     // private field: the checks it names are what the completion gate below
     // enforces, so a reader has to be able to see what was required.

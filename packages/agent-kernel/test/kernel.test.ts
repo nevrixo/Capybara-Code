@@ -147,6 +147,7 @@ interface HarnessOptions {
   readonly workspaceGeneration?: KernelOptions["workspaceGeneration"];
   readonly verificationCoverage?: KernelOptions["verificationCoverage"];
   readonly minimumReviewRisk?: KernelOptions["minimumReviewRisk"];
+  readonly reviewPolicy?: KernelOptions["reviewPolicy"];
 }
 
 type InlineStream = (
@@ -333,6 +334,7 @@ function harness(options: HarnessOptions) {
     ...(options.minimumReviewRisk !== undefined
       ? { minimumReviewRisk: options.minimumReviewRisk }
       : {}),
+    ...(options.reviewPolicy !== undefined ? { reviewPolicy: options.reviewPolicy } : {}),
   });
 
   return { kernel, events, provider, registry, executed, approvalsSeen };
@@ -4977,6 +4979,7 @@ describe("verification contract enforcement (§5.20, §5.24)", () => {
     readonly workspaceGeneration?: number;
     readonly reviewer?: KernelOptions["reviewer"];
     readonly minimumReviewRisk?: KernelOptions["minimumReviewRisk"];
+    readonly reviewPolicy?: KernelOptions["reviewPolicy"];
     readonly verificationCoverage?: KernelOptions["verificationCoverage"];
     readonly path?: string;
   }
@@ -5016,6 +5019,7 @@ describe("verification contract enforcement (§5.20, §5.24)", () => {
         : {}),
       ...(options.reviewer !== undefined ? { autoReview: true, reviewer: options.reviewer } : {}),
       ...(options.minimumReviewRisk !== undefined ? { minimumReviewRisk: options.minimumReviewRisk } : {}),
+      ...(options.reviewPolicy !== undefined ? { reviewPolicy: options.reviewPolicy } : {}),
       ...(options.verificationCoverage !== undefined
         ? { verificationCoverage: options.verificationCoverage }
         : {}),
@@ -5108,6 +5112,29 @@ describe("verification contract enforcement (§5.20, §5.24)", () => {
     expect(
       result.report.risks.some((risk) => risk.includes("independent-review")),
     ).toBe(false);
+  });
+
+  test("the contract can pull in a reviewer the risk score alone would skip", async () => {
+    // Built after the review dispatch, contract.reviewRequired could only record
+    // a decision already made. Built before it, a contract that requires review
+    // is what causes the reviewer to run.
+    let reviewed = false;
+    const { kernel } = contractHarness({
+      // A credential path: the plan's own auth impact signal makes the contract
+      // require a reviewer, while a critical threshold leaves risk.reviewRequired
+      // false for a change this small.
+      path: "packages/permissions/src/credentials.ts",
+      minimumReviewRisk: "critical",
+      // Under the risk policy nothing but the contract can ask for a reviewer;
+      // the default "always" would run one regardless and prove nothing.
+      reviewPolicy: "risk",
+      reviewer: async () => {
+        reviewed = true;
+        return { summary: "no blocking findings", findings: [] };
+      },
+    });
+    await kernel.runTurn("replace the landing page", new AbortController().signal);
+    expect(reviewed).toBe(true);
   });
 
   test("a high-risk turn whose review cannot run is blocked by the named check", async () => {
