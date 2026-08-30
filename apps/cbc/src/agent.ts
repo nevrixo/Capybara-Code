@@ -31,6 +31,7 @@ import {
   type TurnResult,
 } from "@cbc/agent-kernel";
 import type { CacheMode, CbcConfig, ReasoningEffort } from "@cbc/config-schema";
+import { inertSettingsFor, type DoctorSnapshot } from "./commands/doctor.ts";
 import { TurnBudgetController } from "@cbc/inference-domain";
 import { MemoryService } from "@cbc/memory-service";
 import { GoalContractController, requestModeChange, TaskEpochManager, type EpochTransition, type GoalContractInput, type GoalEvaluation, type InteractionMode, type ModeChangeSource } from "@cbc/session-domain";
@@ -64,12 +65,15 @@ import {
 import { canonicalDigest, classifyCommand, mcpActionArgumentsHash, normalizeApprovedPlanScope, resolvePermissionPolicy, type PermissionPreset, type ApprovedPlanScope, type PlanCommandScope, type PermissionContext, type ProposedAction, type StoredRule, type TrustState } from "@cbc/permissions";
 import type { CbcEvent, CbcEventKind, EventVisibility } from "@cbc/protocol";
 import {
+  backendProfileOf,
+  bundledCapability,
   CachePlanner,
   InferenceUtilityController,
   selectContextBand,
   type InferencePolicyDecision,
   type InferencePolicyPort,
   type ModelInputItem,
+  DEFAULT_HOSTED_SCOUT_POLICY,
   type ModelProvider,
 } from "@cbc/provider-openai";
 import {
@@ -119,7 +123,7 @@ import {
   type CustomAgentDefinition,
   type SubagentScheduler,
 } from "@cbc/subagents";
-import { errorResult, nativeToolsForFeatures, okResult, ToolRegistry, globMatch, type ToolDefinition } from "@cbc/tool-registry";
+import { applyActionSurface, errorResult, nativeToolsForFeatures, okResult, ToolRegistry, globMatch, type ToolDefinition } from "@cbc/tool-registry";
 
 import type { GrantedRules } from "./approvals.ts";
 import { ExtensionManager } from "./extensions.ts";
@@ -659,7 +663,7 @@ export class AgentSession {
       options.config.lsp.enabled &&
       (options.trust === "trusted-always" || options.trust === "trusted-once") &&
       options.bridges?.lsp !== undefined;
-    const sessionTools = nativeToolsForFeatures({
+    const detailedTools = nativeToolsForFeatures({
       editEngineV2: options.config.experimental.editEngineV2,
       durableMemory:
         options.config.experimental.durableMemory &&
@@ -690,6 +694,11 @@ export class AgentSession {
       options.config.agent.compoundTools ||
       (tool.id !== "repo.investigate" && tool.id !== "verification.run_many"),
     );
+    // §6.5/§6.6: an empty actionSurface leaves the catalog exactly as it was, so
+    // the default session sees no group at all. Each enabled group replaces its
+    // members' always-active flag with one group entry; the members stay in the
+    // catalog and remain reachable by internal id and by tool.discover.
+    const sessionTools = applyActionSurface(detailedTools, options.config.agent.actionSurface);
     this.taskEpoch = new TaskEpochManager({
       initial: {
         goalDigest: "unassigned-goal",
@@ -1633,7 +1642,7 @@ export class AgentSession {
           this.#invalidateContextPath(
             path,
             `${event.action.toolId} reported ${errorCode}`,
-            alreadyFenced ? { preserveGeneration: true } : undefined,
+            alreadyFenced ? { preserveGeneration: true, external: true } : { external: true },
           );
         }
       }
@@ -1680,9 +1689,6 @@ export class AgentSession {
       this.#workspaceGeneration += 1;
       this.#verificationInvalidatingGeneration = this.#workspaceGeneration;
       for (const path of event.action.reads ?? []) this.#recordPathMutation(path);
-      // The bytes moved without this session writing them, so §5.11 row 5
-      // applies: the evidence the model reasoned from no longer exists.
-      this.#noteExternalWorkspaceChange();
     }
     for (const evidenceId of result.invalidatedEvidenceIds) {
       this.#emit("context.evidence_invalidated", {
@@ -2087,15 +2093,21 @@ export class AgentSession {
   #invalidateContextPath(
     path: string,
     reason: string,
-    options: { readonly preserveGeneration?: boolean } = {},
+    options: { readonly preserveGeneration?: boolean; readonly external?: boolean } = {},
   ): void {
     if (options.preserveGeneration !== true) {
       this.#workspaceGeneration += 1;
       this.kernel.resetProviderContinuation(`workspace generation changed: ${reason}`);
       this.#verificationInvalidatingGeneration = this.#workspaceGeneration;
-      // §5.11 row 6: the epoch's workspace identity moves with the generation,
-      // but a path this session mutated is not a reason to discard its own
-      // reasoning about the change it just made.
+    }
+    // §5.11 rows 5-6: the epoch's workspace identity moves either way, but only
+    // a change this session did not author invalidates the reasoning built on
+    // the bytes that changed. Staleness does not depend on the generation
+    // moving — an executor that already fenced the bump still reports bytes we
+    // read before someone else rewrote them.
+    if (options.external === true) {
+      this.#noteExternalWorkspaceChange();
+    } else if (options.preserveGeneration !== true) {
       this.taskEpoch.observeWorkspace(this.#liveWorkspaceIdentityDigest());
     }
     this.#recordPathMutation(path);
@@ -3605,6 +3617,80 @@ export class AgentSession {
     if (this.context.repositoryMapDirty) await this.#refreshRepositoryMap();
   }
 
+  /**
+   * The live §6 P1-03 diagnostic snapshot.
+   *
+   * Assembled here rather than in the command because this is the only place
+   * that can see all of it: the kernel owns the lane accessors and the fallback
+   * tally, the epoch manager owns the current epoch, and the config owns the
+   * declared policy. Passing a plain snapshot out keeps the renderer pure and
+   * testable, and keeps the command from reaching into private session state.
+   *
+   * `provenance` is the caller's because the session holds only the effective
+   * config, not the record of which layer wrote each key, and the inert-settings
+   * list must name only keys the user actually set (§5.18).
+   */
+  openAiDiagnostic(provenance: Readonly<Record<string, string>> = {}): DoctorSnapshot {
+    const config = this.#options.config;
+    const openai = config.provider.openai;
+    const capability = this.#currentRoute?.capability;
+    const snapshot = capability ?? bundledCapability(this.liveModelId);
+    const backend = snapshot === undefined
+      ? { profile: "unknown", reason: "no capability snapshot is resolved for the active model yet" }
+      : backendProfileOf(snapshot);
+    const epoch = this.taskEpoch.current();
+    const program = this.kernel.nativeLaneEligibility({
+      lane: "program",
+      ...(snapshot !== undefined ? { capability: snapshot } : {}),
+    });
+    const hosted = this.kernel.nativeLaneEligibility({
+      lane: "hosted_scout",
+      ...(snapshot !== undefined ? { capability: snapshot } : {}),
+    });
+    const usage = this.viewModel.usage;
+    return {
+      backendProfile: { profile: backend.profile, reason: backend.reason },
+      model: {
+        id: this.liveModelId,
+        effort: this.liveReasoningEffort,
+        mode: this.#currentRoute?.mode ?? config.model.reasoningMode,
+      },
+      ...(epoch === undefined
+        ? {}
+        : {
+            epoch: {
+              taskEpochId: epoch.id,
+              reasoningContext: epoch.reasoningScope.continuity,
+              ...(epoch.resetReason !== undefined ? { resetReason: epoch.resetReason } : {}),
+            },
+          }),
+      programmaticLane: { enabled: program.eligible, reason: program.reason },
+      hostedMultiAgent: { enabled: hosted.eligible, reason: hosted.reason },
+      transport: {
+        configured: openai.transport,
+        // The route's own transport is authoritative once a turn has run: a
+        // configured websocket that fell back to HTTP must not read as active.
+        active: this.#currentRoute === undefined ? openai.transport : openai.transport,
+        socketOpen: openai.transport === "websocket",
+        circuitOpen: false,
+        previousResponseSupported: openai.transport !== "http_full",
+      },
+      cache: {
+        mode: config.model.cache.mode,
+        breakpoint: config.model.cache.breakpoint,
+        readTokens: usage.cachedInputTokens,
+        writeTokens: usage.cacheWriteTokens,
+      },
+      compaction: {
+        mode: config.model.context.compactionPolicy + " local \u00b7 "
+          + config.model.context.providerCompactionMode + " provider",
+        generation: this.#lastCompactionCapsule?.generation ?? 0,
+      },
+      fallbacks: this.kernel.nativeFallbackTally(),
+      inertSettings: inertSettingsFor(provenance),
+    };
+  }
+
   /** Generation token used to reject out-of-order background repository scans. */
   get workspaceGeneration(): number {
     return this.#workspaceGeneration;
@@ -4836,6 +4922,21 @@ export function testCommandFor(
 }
 
 /** Native tools plus anything Skills or MCP contributed, for `--help` style output. */
+/**
+ * Parse a hosted scout's tool arguments defensively. A malformed argument object
+ * is the scout's mistake to see, not a reason to crash the turn that hosts it.
+ */
+function safeToolArguments(argumentsText: string): Readonly<Record<string, unknown>> {
+  try {
+    const parsed: unknown = JSON.parse(argumentsText);
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 export function catalogSnapshot(registry: ToolRegistry): ToolDefinition[] {
   return registry.all();
 }

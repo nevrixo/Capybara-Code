@@ -123,6 +123,7 @@ interface HarnessOptions {
   readonly onReflection?: KernelOptions["onReflection"];
   readonly onRedirect?: KernelOptions["onRedirect"];
   readonly reasoningEpoch?: KernelOptions["reasoningEpoch"];
+  readonly workspaceIdentityDigest?: KernelOptions["workspaceIdentityDigest"];
   readonly inferencePolicy?: KernelOptions["inferencePolicy"];
   readonly autoRoute?: boolean;
   readonly serviceTier?: KernelOptions["serviceTier"];
@@ -134,6 +135,7 @@ interface HarnessOptions {
   readonly continuationMode?: KernelOptions["continuationMode"];
   readonly parallelToolCalls?: KernelOptions["parallelToolCalls"];
   readonly programmaticPolicy?: KernelOptions["programmaticPolicy"];
+  readonly hostedScoutDispatcher?: KernelOptions["hostedScoutDispatcher"];
   readonly activeToolIds?: readonly string[];
   readonly commandClassification?: KernelOptions["commandClassification"];
   readonly toolGraph?: KernelOptions["toolGraph"];
@@ -280,6 +282,9 @@ function harness(options: HarnessOptions) {
     ...(options.onReflection !== undefined ? { onReflection: options.onReflection } : {}),
     ...(options.onRedirect !== undefined ? { onRedirect: options.onRedirect } : {}),
     ...(options.reasoningEpoch !== undefined ? { reasoningEpoch: options.reasoningEpoch } : {}),
+    ...(options.workspaceIdentityDigest !== undefined
+      ? { workspaceIdentityDigest: options.workspaceIdentityDigest }
+      : {}),
     ...(options.inferencePolicy !== undefined ? { inferencePolicy: options.inferencePolicy } : {}),
     ...(options.autoRoute !== undefined ? { autoRoute: options.autoRoute } : {}),
     ...(options.serviceTier !== undefined ? { serviceTier: options.serviceTier } : {}),
@@ -298,6 +303,9 @@ function harness(options: HarnessOptions) {
       : {}),
     ...(options.programmaticPolicy !== undefined
       ? { programmaticPolicy: options.programmaticPolicy }
+      : {}),
+    ...(options.hostedScoutDispatcher !== undefined
+      ? { hostedScoutDispatcher: options.hostedScoutDispatcher }
       : {}),
     ...(options.commandClassification !== undefined
       ? { commandClassification: options.commandClassification }
@@ -3932,6 +3940,21 @@ describe("routing is decided once and shared (P0-11)", () => {
   });
 });
 
+/** A §5.5-shaped program evidence result, bound to one epoch and workspace. */
+function programEvidence(bound: {
+  readonly taskEpochId: string;
+  readonly workspaceIdentityDigest: string;
+}) {
+  return {
+    status: "complete" as const,
+    ...bound,
+    claims: [{ text: "src/a.ts exports one symbol", evidenceIds: ["ev-1"], paths: ["src/a.ts"] }],
+    missing: [],
+    diagnostics: [],
+    stats: { calls: 1, parallelPeak: 1, inputBytes: 64, outputBytes: 32 },
+  };
+}
+
 describe("OpenAI programmatic read-only lane (P0-01/P0-03)", () => {
   test("a supported program route exposes only read tools to programmatic callers", async () => {
     let compiled: Parameters<NonNullable<KernelOptions["onPromptCompiled"]>>[0] | undefined;
@@ -3991,6 +4014,69 @@ describe("OpenAI programmatic read-only lane (P0-01/P0-03)", () => {
       maxParallelTools: 2,
     });
     expect(payloadsOf(events, "native_lane.fallback")).toHaveLength(0);
+  });
+
+  test("keeps the hosted_scout lane when a dispatcher exists and demotes it when none does", async () => {
+    // §5.15: the lane is only selectable when something can actually run the
+    // separate read-only subtree. The kernel demoted hosted_scout unconditionally,
+    // so a route that asked for it always reported a scout that never ran.
+    const capability = new InferenceUtilityController().decide({
+      intent: "inspect",
+      contextTokens: 1_000,
+    }).capability;
+    const hostedPolicy = (): KernelOptions["inferencePolicy"] => ({
+      decide: (input) => ({
+        ...new InferenceUtilityController().decide(input),
+        lane: "hosted_scout" as const,
+        maxAgents: 3,
+        capability: {
+          ...capability,
+          native: { ...capability.native, hostedMultiAgent: "supported" as const },
+        },
+      }),
+    });
+
+    const wired = harness({
+      steps: [{ text: "Done." }],
+      inferencePolicy: hostedPolicy(),
+      autoRoute: true,
+      hostedScoutDispatcher: { available: () => true },
+      activeToolIds: ["fs.read"],
+    });
+    await wired.kernel.runTurn("scout the routing implementation", new AbortController().signal);
+    expect(payloadsOf(wired.events, "native_lane.selected")[0]).toMatchObject({
+      lane: "hosted_scout",
+    });
+    expect(payloadsOf(wired.events, "native_lane.fallback")).toHaveLength(0);
+
+    // Without a dispatcher the demotion — and its observable event — must stay.
+    const bare = harness({
+      steps: [{ text: "Done." }],
+      inferencePolicy: hostedPolicy(),
+      autoRoute: true,
+      activeToolIds: ["fs.read"],
+    });
+    await bare.kernel.runTurn("scout the routing implementation", new AbortController().signal);
+    expect(payloadsOf(bare.events, "native_lane.fallback")[0]).toMatchObject({
+      requestedLane: "hosted_scout",
+      selectedLane: "direct",
+      reason: "hosted scout dispatcher is unavailable; using direct reasoning",
+    });
+    expect(payloadsOf(bare.events, "native_lane.selected")).toHaveLength(0);
+
+    // A dispatcher that exists but cannot run right now is the same as none.
+    const unavailable = harness({
+      steps: [{ text: "Done." }],
+      inferencePolicy: hostedPolicy(),
+      autoRoute: true,
+      hostedScoutDispatcher: { available: () => false },
+      activeToolIds: ["fs.read"],
+    });
+    await unavailable.kernel.runTurn("scout the routing implementation", new AbortController().signal);
+    expect(payloadsOf(unavailable.events, "native_lane.fallback")[0]).toMatchObject({
+      requestedLane: "hosted_scout",
+      selectedLane: "direct",
+    });
   });
 
   test("a disabled program lane falls back to direct request semantics", async () => {
@@ -4259,7 +4345,7 @@ describe("OpenAI programmatic read-only lane (P0-01/P0-03)", () => {
             kind: "program_output",
             itemId: "prog-out-lifecycle",
             callId: "call-program-lifecycle",
-            result: JSON.stringify({ status: "complete" }),
+            result: JSON.stringify(programEvidence({ taskEpochId: "epoch-lifecycle", workspaceIdentityDigest: "digest-lifecycle" })),
             status: "completed",
           },
         };
@@ -4276,6 +4362,8 @@ describe("OpenAI programmatic read-only lane (P0-01/P0-03)", () => {
       programmaticPolicy: { enabled: true, maxToolCalls: 8, maxParallelCalls: 2 },
       activeToolIds: ["fs.read", "fs.edit"],
       toolResults: { "fs.read": { result: okResult("read"), text: "read" } },
+      reasoningEpoch: () => ({ taskEpochId: "epoch-lifecycle", continuity: "current_turn" }),
+      workspaceIdentityDigest: () => "digest-lifecycle",
     });
 
     await kernel.runTurn("inspect and then try to edit from a program", new AbortController().signal);

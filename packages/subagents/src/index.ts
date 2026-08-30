@@ -21,3 +21,4 @@ export * from "./discovery.ts";
 export * from "./custom.ts";
 export * from './hosted-scout.ts';
 export * from './hosted-scout-local.ts';
+export * from './hosted-scout-provider.ts';

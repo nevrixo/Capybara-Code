@@ -23,7 +23,13 @@ import {
   type HostedScoutRequest,
   type HostedScoutUsage,
 } from "./native-lanes.ts";
-import type { ModelRequest, ModelToolSchema, ReasoningEffort, ReasoningMode } from "./types.ts";
+import type {
+  ModelEvent,
+  ModelRequest,
+  ModelToolSchema,
+  ReasoningEffort,
+  ReasoningMode,
+} from "./types.ts";
 
 export {
   DEFAULT_HOSTED_SCOUT_POLICY,
@@ -130,4 +136,96 @@ export function buildHostedScoutRequest(input: HostedScoutRequestInput): HostedS
       ...(input.safetyIdentifier !== undefined ? { safetyIdentifier: input.safetyIdentifier } : {}),
     },
   };
+}
+
+/**
+ * What the host must supply to actually run a hosted scout subtree: a way to
+ * stream a Responses request, and a way to execute one admitted read-only tool
+ * call. The executor is the host's, because a scout's reads still go through the
+ * same permission layer and read cache the root turn uses — a hosted lane is not
+ * a way around either.
+ */
+export interface HostedScoutExecution {
+  stream(request: ModelRequest, signal: AbortSignal): AsyncIterable<ModelEvent>;
+  callTool(
+    call: { readonly callId: string; readonly name: string; readonly argumentsText: string },
+    signal: AbortSignal,
+  ): Promise<string>;
+}
+
+export interface HostedScoutRunOptions extends Omit<HostedScoutRequestInput, "requestId" | "role" | "request"> {
+  readonly execution: HostedScoutExecution;
+  /** Bounded provider round trips before the scout must report (§5.6 depth 1). */
+  readonly maxRounds?: number;
+}
+
+export interface HostedScoutRunResult {
+  readonly text: string;
+  readonly evidenceLocators: readonly string[];
+  readonly tokenUsage: number;
+}
+
+/**
+ * Drive one hosted scout subtree over the separate read-only request.
+ *
+ * The loop is deliberately small: the scout reads, the host executes the read,
+ * and the scout reports. Anything the provider asks for that is not in the
+ * admitted catalog is refused in-band rather than executed, because the catalog
+ * the gate produced is the whole authority here — a provider that names a tool
+ * outside it is describing a request that was never admitted.
+ */
+export async function runHostedScout(
+  role: HostedRole,
+  request: HostedScoutRequest,
+  options: HostedScoutRunOptions,
+  signal: AbortSignal,
+): Promise<HostedScoutRunResult> {
+  const admitted = new Set(request.requestedTools ?? []);
+  const evidenceLocators: string[] = [];
+  let text = "";
+  let tokenUsage = 0;
+  const maxRounds = Math.max(1, options.maxRounds ?? 4);
+  let input: ModelRequest["input"] | undefined;
+
+  for (let round = 0; round < maxRounds; round += 1) {
+    if (signal.aborted) throw new Error("hosted scout cancelled");
+    const built = buildHostedScoutRequest({
+      ...options,
+      requestId: `hosted_${request.agentId}_${String(round)}`,
+      role,
+      request,
+    });
+    if (!built.ok) throw new Error(built.reason);
+    const outbound = input === undefined ? built.request : { ...built.request, input };
+    const pending: Array<{ readonly callId: string; readonly name: string; readonly argumentsText: string }> = [];
+    for await (const event of options.execution.stream(outbound, signal)) {
+      if (event.type === "text.delta") text += event.text;
+      else if (event.type === "tool.call.completed") pending.push(event.call);
+      else if (event.type === "usage") tokenUsage += Math.max(0, event.usage.totalTokens);
+      else if (event.type === "response.failed") throw new Error(`hosted scout request failed: ${event.error.message}`);
+      else if (event.type === "response.incomplete") throw new Error(`hosted scout request was incomplete: ${event.reason}`);
+    }
+    if (pending.length === 0) break;
+
+    const outputs: ModelRequest["input"] = [...outbound.input];
+    for (const call of pending) {
+      outputs.push({ type: "function_call", callId: call.callId, name: call.name, argumentsText: call.argumentsText });
+      if (!admitted.has(call.name)) {
+        // Refused in-band so the scout can adjust, rather than thrown: a single
+        // out-of-catalog guess should not discard the reads it already has.
+        outputs.push({
+          type: "function_call_output",
+          callId: call.callId,
+          output: JSON.stringify({ error: `'${call.name}' is not in this scout's read-only catalog` }),
+        });
+        continue;
+      }
+      const output = await options.execution.callTool(call, signal);
+      outputs.push({ type: "function_call_output", callId: call.callId, output });
+      evidenceLocators.push(`${call.name} ${call.argumentsText}`);
+    }
+    input = outputs;
+  }
+
+  return { text, evidenceLocators: [...new Set(evidenceLocators)], tokenUsage };
 }

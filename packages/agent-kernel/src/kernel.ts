@@ -122,7 +122,12 @@ const PROGRAMMATIC_TOOL_IDS = new Set<string>(PROGRAM_TOOL_ALLOWLIST);
 // `@cbc/inference-domain` and is re-exported here for existing call sites.
 import type { AgentRole, WorkPhase, TurnBudgetController, BudgetEnforcementMode } from "@cbc/inference-domain";
 import { estimateTokens, type ContextPressureDecision } from "@cbc/session-domain";
-import { buildTurnVerificationContract, reprojectPromptContextDialogue } from "@cbc/context-engine";
+import {
+  buildTurnVerificationContract,
+  describeUnmetRequiredChecks,
+  reprojectPromptContextDialogue,
+  settleTurnVerificationContract,
+} from "@cbc/context-engine";
 export type { AgentRole, WorkPhase };
 
 /**
@@ -896,6 +901,12 @@ export class AgentKernel {
   #changedFiles = new Map<string, { additions: number; deletions: number; purpose: string }>();
   #verification: CompletionReport["verification"] = [];
   #verificationContract: ReturnType<typeof buildTurnVerificationContract> | undefined;
+  /**
+   * §5.20: the contract check ids this turn actually cleared. The contract names
+   * what has to happen; only the runtime can say what did, so the two are kept
+   * apart and correlated once at the completion gate.
+   */
+  #verificationChecksSatisfied = new Set<string>();
   #delegated: CompletionReport["delegatedTasks"] = [];
   #risks: string[] = [];
   #lastFailureSummary: string | undefined;
@@ -1307,6 +1318,7 @@ export class AgentKernel {
     this.#changedFiles.clear();
     this.#verification = [];
     this.#verificationContract = undefined;
+    this.#verificationChecksSatisfied.clear();
     this.#delegated = [];
     this.#risks = [];
     this.#lastFailureSummary = undefined;
@@ -1972,7 +1984,32 @@ export class AgentKernel {
       ...(hostCoverage.unresolvedOperations !== undefined ? { unresolvedOperations: hostCoverage.unresolvedOperations } : {}),
       ...(hostCoverage.highRiskFindings !== undefined ? { highRiskFindings: hostCoverage.highRiskFindings } : {}),
     });
+    // §5.20/§5.24: the turn verification contract governs the turn. Until this
+    // gate existed the contract was a write-only artifact — it was built,
+    // emitted, and then ignored — so a turn could close with a required check
+    // that never ran, which is exactly the false-complete §5.24 forbids. The two
+    // commandless stages are settled from the signals that already enforce them
+    // rather than being assumed: freshness from the host's stale-evidence
+    // counter, TODO consistency from the same projection the gate below reads.
+    const contract = this.#verificationContract;
     let finalReport = truthful;
+    if (contract !== undefined && finalReport.status === "completed") {
+      const settlementIds = new Set(this.#verificationChecksSatisfied);
+      if ((hostCoverage.staleEvidence ?? 0) === 0) settlementIds.add("evidence-freshness");
+      if (this.#unfinishedRootTodos().length === 0) settlementIds.add("todo-consistency");
+      const settlement = settleTurnVerificationContract(contract, settlementIds);
+      if (!settlement.complete) {
+        const message =
+          `the turn verification contract has unsatisfied required check(s): ${describeUnmetRequiredChecks(settlement.unmet)}`;
+        issues.push({ field: "verificationContract", message });
+        finalReport = {
+          ...finalReport,
+          status: "partial",
+          risks: [...finalReport.risks, message],
+          nextStep: `run the contract's required check(s): ${settlement.unmet.map((check) => check.id).join(", ")}`,
+        };
+      }
+    }
     if (finalReport.status === "completed" && coverage.coverageStatus !== "complete") {
       const message = `verification coverage is ${coverage.coverageStatus}: ${coverage.failedChecks} failed, ${coverage.notRunChecks} not run, ${coverage.staleEvidence} stale evidence, ${coverage.unresolvedOperations} unresolved operation(s)`;
       issues.push({ field: "verificationCoverage", message });
@@ -3757,7 +3794,18 @@ export class AgentKernel {
     return state;
   }
 
-  /** Report the program's terminal outcome once its provider output arrives. */
+  /**
+   * Report the program's terminal outcome once its provider output arrives, and
+   * validate the reduced result before it may be read as fact (§5.5).
+   *
+   * The item is kept either way, because provider replay requires it and the
+   * fingerprint must still line up. What validation decides is whether the
+   * result's *claims* are evidence: a result naming a different task epoch or a
+   * different workspace describes a world the turn is no longer in, and §5.5
+   * forbids presenting it as one. A rejection becomes a recorded risk and
+   * `program.failed`, so the model sees an unusable result rather than a
+   * confident one.
+   */
   #concludeProgram(
     programId: string,
     output: { readonly itemId: string; readonly result: string; readonly status: "completed" | "incomplete" },
@@ -3768,13 +3816,34 @@ export class AgentKernel {
       calls: state.callsUsed,
       elapsedMs: Math.max(0, this.#now() - state.startedAt),
     };
-    if (output.status !== "completed") {
+    const fail = (reason: string, errors?: readonly string[]): void => {
+      const text = "PTC_EVIDENCE_REJECTED: " + programId + " produced a result that is not usable as evidence: " + reason;
+      this.#risks.push(text);
+      if (!this.#routeFallbackReasons.includes(text)) this.#routeFallbackReasons.push(text);
       this.#programEvent("program.failed", programId, {
         itemId: output.itemId,
-        result: output.result,
-        reason: "the provider reported an incomplete program",
+        reason,
+        ...(errors !== undefined && errors.length > 0 ? { errors } : {}),
         ...stats,
       }, emit);
+    };
+    if (output.status !== "completed") {
+      fail("the provider reported an incomplete program");
+      return;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(output.result) as unknown;
+    } catch {
+      fail("the program result is not JSON");
+      return;
+    }
+    const decision = this.#programmaticLane.complete(parsed, {
+      taskEpochId: this.#programEpochId(),
+      workspaceIdentityDigest: this.#options.workspaceIdentityDigest?.() ?? "",
+    });
+    if (!decision.accepted) {
+      fail("the program result failed the §5.5 evidence contract", decision.errors);
       return;
     }
     this.#programEvent("program.completed", programId, {
@@ -5304,10 +5373,18 @@ export class AgentKernel {
         case "parse_sanity": {
           const record = await this.#runFileSanity(step.paths, signal, emit);
           this.#recordVerification({ ...record, kind: "check" });
+          // The post-write read is what §5.22 steps 1 and 2 both rest on: it
+          // establishes that every mutated path is still there and still the
+          // revision this turn wrote.
+          if (record.status === "passed") this.#creditContractChecks("revision-match", "parse-sanity");
           break;
         }
         case "closest_tests": {
-          if (this.#verification.some((v) => v.command === step.command)) break;
+          const already = this.#verification.find((v) => v.command === step.command);
+          if (already !== undefined) {
+            if (already.status === "passed") this.#creditContractChecks("focused-tests");
+            break;
+          }
           if (signal.aborted) {
             this.#recordVerification({
               command: step.command,
@@ -5318,18 +5395,46 @@ export class AgentKernel {
           }
           const record = await this.#runVerificationCommand(step.command, signal, emit);
           this.#recordVerification(record);
+          if (record.status === "passed") this.#creditContractChecks("focused-tests");
           break;
         }
         case "git_diff": {
           const record = await this.#runGitDiffSanity(changedPaths, signal, emit);
           this.#recordVerification({ ...record, kind: "check" });
+          if (record.status === "passed") this.#creditContractChecks("diff-integrity");
           break;
         }
         case "broader_tests":
         case "independent_review":
-          // Broader suites require an explicit command before execution, while
-          // the independent review is started above and joined below.
+          // A broader suite is dispatched from the contract below, where the
+          // command and the check id it satisfies travel together; the
+          // independent review is started above and joined below.
           break;
+      }
+    }
+
+    // §5.22 step 4: the affected-consumer tier. The legacy plan can only emit a
+    // broader suite when a caller hands it a justification, and no caller ever
+    // does, so this tier had no dispatcher at all — a required consumer check
+    // was unsatisfiable by construction. The contract names the command, so
+    // dispatch it here through the same policy path as any other planned check.
+    const consumerCheck = this.#verificationContract.requiredChecks.find(
+      (check) => check.id === "broader-tests" && check.command !== undefined,
+    );
+    if (consumerCheck?.command !== undefined && !this.#verificationChecksSatisfied.has("broader-tests")) {
+      const existing = this.#verification.find((record) => record.command === consumerCheck.command);
+      if (existing !== undefined) {
+        if (existing.status === "passed") this.#creditContractChecks("broader-tests");
+      } else if (signal.aborted) {
+        this.#recordVerification({
+          command: consumerCheck.command,
+          status: "not_run",
+          evidence: "the turn was cancelled before the affected-consumer suite could run",
+        });
+      } else {
+        const record = await this.#runVerificationCommand(consumerCheck.command, signal, emit);
+        this.#recordVerification(record);
+        if (record.status === "passed") this.#creditContractChecks("broader-tests");
       }
     }
 
@@ -5362,6 +5467,7 @@ export class AgentKernel {
           status: blocking.length > 0 ? "failed" : "passed",
           evidence: `independent review: ${review.summary}`,
         });
+        if (blocking.length === 0) this.#creditContractChecks("independent-review");
         emit("review.completed", {
           status: blocking.length > 0 ? "failed" : "passed",
           skipped: false,
@@ -5403,6 +5509,15 @@ export class AgentKernel {
       riskLevel: risk.level,
     });
     return "accept";
+  }
+
+  /**
+   * Mark contract check ids as cleared. Only a *passed* runtime result may call
+   * this: a not_run or failed check has to stay unmet so the completion gate can
+   * name it, which is the whole point of §5.20 governing the turn.
+   */
+  #creditContractChecks(...ids: readonly string[]): void {
+    for (const id of ids) this.#verificationChecksSatisfied.add(id);
   }
 
   /**
