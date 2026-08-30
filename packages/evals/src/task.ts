@@ -39,6 +39,54 @@ export const CATEGORY_TARGETS: Readonly<Record<TaskCategory, number>> = {
 
 export const TARGET_TASK_COUNT = 150;
 
+/**
+ * §5.27's OpenAI-native cohort.
+ *
+ * §5.27 says "기존 150개를 유지하면서" — these are an additional cohort, deliberately
+ * kept out of TASK_CATEGORIES and CATEGORY_TARGETS so the release mix, its coverage
+ * report, and the checked-in cohort digest do not move. Each name is one of the eleven
+ * shapes §5.27 lists, in that order.
+ */
+export const OPENAI_NATIVE_TASK_CATEGORIES = [
+  "ptc_aggregation",
+  "semantic_pivot",
+  "ptc_write_boundary",
+  "decomposable_exploration",
+  "anti_decomposable",
+  "mid_turn_redirect",
+  "reviewer_independence",
+  "persisted_reasoning",
+  "cache_economics",
+  "native_lane_fallback",
+  "false_complete_bait",
+] as const;
+
+export type OpenAiNativeTaskCategory = (typeof OPENAI_NATIVE_TASK_CATEGORIES)[number];
+
+/**
+ * Which release category an OpenAI-native task is scored under.
+ *
+ * Statistics stratify by TaskCategory, so a cohort task needs one. Mapping each shape
+ * onto the release category whose skill it actually exercises keeps the strata
+ * meaningful — a PTC aggregation task is a repository-understanding task that happens to
+ * be bulk, and a redirect task is a long-session task.
+ */
+export const OPENAI_NATIVE_CATEGORY_MAPPING: Readonly<
+  Record<OpenAiNativeTaskCategory, TaskCategory>
+> = {
+  ptc_aggregation: "repository_understanding",
+  semantic_pivot: "repository_understanding",
+  ptc_write_boundary: "permission_denial_adaptation",
+  decomposable_exploration: "multi_language_monorepo",
+  anti_decomposable: "refactor",
+  mid_turn_redirect: "long_session_resume_compaction",
+  reviewer_independence: "diff_review",
+  persisted_reasoning: "long_session_resume_compaction",
+  cache_economics: "repository_understanding",
+  native_lane_fallback: "repository_understanding",
+  false_complete_bait: "test_diagnosis",
+};
+
 /** Additional modification-plan categories. They do not change the 150-task §26.2 mix. */
 export const FEATURE_TASK_CATEGORIES = [
   "edit_precision",
@@ -183,6 +231,14 @@ export interface BenchTask {
   readonly expectedApprovals?: readonly string[];
   /** Set when the task is expected to end without completing, e.g. a plan-mode task. */
   readonly expectedStatus?: "completed" | "partial";
+  /**
+   * §5.27 mid-turn redirect: further prompts submitted after the first one settles.
+   *
+   * A redirect task is not expressible with a single prompt at all, which is why it was
+   * the one §5.27 shape the harness could not carry. Scripted rather than interactive so
+   * the sequence is part of the fixture digest and reproduces exactly.
+   */
+  readonly followUpPrompts?: readonly string[];
 }
 
 export interface TaskValidationIssue {
@@ -282,6 +338,15 @@ export function validateTask(task: BenchTask): TaskValidationIssue[] {
       field: "expectedEvidence.reportMentions",
       message: "§26.4 report completeness needs at least one expectation",
     });
+  }
+
+  for (const [index, followUp] of (task.followUpPrompts ?? []).entries()) {
+    if (followUp.trim().length < 10) {
+      issues.push({
+        field: `followUpPrompts[${index}]`,
+        message: "too short to be a real redirect",
+      });
+    }
   }
 
   if (task.budget.maxWallTimeMs <= 0 || task.budget.maxTotalTokens <= 0) {

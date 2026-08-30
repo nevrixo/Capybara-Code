@@ -14,6 +14,8 @@ import {
   REGRESSION_THRESHOLDS,
   RUBRIC_DIMENSIONS,
   TARGET_TASK_COUNT,
+  OPENAI_NATIVE_CATEGORY_MAPPING,
+  OPENAI_NATIVE_TASK_CATEGORIES,
   TASK_CATEGORIES,
   countInvisibleSideEffects,
   countRepetitive,
@@ -169,6 +171,40 @@ describe("task validation", () => {
       baseTask({ risks: ["nonsense" as unknown as BenchTask["risks"][number]] }),
     );
     expect(issues.some((issue) => issue.field === "risks")).toBe(true);
+  });
+
+  test("§5.27 follow-up prompts are validated like the first prompt", () => {
+    expect(validateTask(baseTask({ followUpPrompts: ["Change the goal to the other marker."] })))
+      .toEqual([]);
+    const issues = validateTask(baseTask({ followUpPrompts: ["nope"] }));
+    expect(issues.some((issue) => issue.field === "followUpPrompts[0]")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §5.27 OpenAI-native cohort
+// ---------------------------------------------------------------------------
+
+describe("§5.27 openai-native cohort categories", () => {
+  test("names all eleven shapes and stays out of the release distribution", () => {
+    expect(OPENAI_NATIVE_TASK_CATEGORIES).toHaveLength(11);
+    expect(new Set(OPENAI_NATIVE_TASK_CATEGORIES).size).toBe(11);
+    // §5.27 keeps the 150 as they are: a cohort name must never become a release
+    // category, or the 150-task mix and its digest would move.
+    for (const kind of OPENAI_NATIVE_TASK_CATEGORIES) {
+      expect((TASK_CATEGORIES as readonly string[]).includes(kind)).toBe(false);
+      expect(CATEGORY_TARGETS[OPENAI_NATIVE_CATEGORY_MAPPING[kind]]).toBeGreaterThan(0);
+    }
+    expect(Object.values(CATEGORY_TARGETS).reduce((total, value) => total + value, 0))
+      .toBe(TARGET_TASK_COUNT);
+  });
+
+  test("every shape maps onto a real release category for stratification", () => {
+    expect(Object.keys(OPENAI_NATIVE_CATEGORY_MAPPING).sort())
+      .toEqual([...OPENAI_NATIVE_TASK_CATEGORIES].sort());
+    for (const mapped of Object.values(OPENAI_NATIVE_CATEGORY_MAPPING)) {
+      expect(TASK_CATEGORIES).toContain(mapped);
+    }
   });
 });
 
