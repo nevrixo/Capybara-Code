@@ -352,3 +352,119 @@ describe("workspaceConsumerGraph (§5.21 dependency graph)", () => {
     ).toBe("bun test apps/cbc packages/agent-kernel packages/protocol-ts packages/provider-openai");
   });
 });
+
+describe("semantic change type and public surfaces (§5.21)", () => {
+  test("a moved export widens to the consumer tier and requires the reviewer", () => {
+    // A removed export in an ordinary .ts file matches no path regex, so without
+    // this signal it went out on the edited file's own tests.
+    const plan = planVerification({
+      changedPaths: ["packages/agent-kernel/src/state.ts"],
+      publicSurface: { exportedSymbols: true },
+    });
+    const ids = plan.steps.map((step) => step.id);
+    expect(plan.impact).toContain("public_api");
+    expect(ids).toContain("package-tests");
+    expect(ids).toContain("broader-tests");
+    expect(ids).toContain("independent-review");
+  });
+
+  test("a signature change is treated as reaching callers", () => {
+    const plan = planVerification({
+      changedPaths: ["packages/agent-kernel/src/state.ts"],
+      semanticChange: "signature",
+    });
+    expect(plan.impact).toContain("signature_change");
+    expect(plan.steps.map((step) => step.id)).toContain("broader-tests");
+  });
+
+  test("a moved schema or config key is a widening signal on its own", () => {
+    expect(
+      planVerification({
+        changedPaths: ["packages/protocol-ts/src/events.ts"],
+        publicSurface: { schema: true },
+      }).impact,
+    ).toContain("schema");
+    expect(
+      planVerification({
+        changedPaths: ["packages/config-schema/src/schema.ts"],
+        publicSurface: { config: true },
+      }).steps.map((step) => step.id),
+    ).toContain("broader-tests");
+  });
+
+  test("a body-only behaviour change stays at the focused tier", () => {
+    const ids = planVerification({
+      changedPaths: ["packages/agent-kernel/src/state.ts"],
+      semanticChange: "behaviour",
+    }).steps.map((step) => step.id);
+    expect(ids).not.toContain("package-tests");
+    expect(ids).not.toContain("broader-tests");
+  });
+
+  test("a cosmetic change narrows: no package or consumer tier (§5.24)", () => {
+    // A comment reflow and a signature change have the same path and the same
+    // churn; only the semantic type separates them.
+    const plan = planVerification({
+      changedPaths: ["packages/agent-kernel/src/state.ts", "apps/cbc/src/agent.ts"],
+      semanticChange: "cosmetic",
+    });
+    const ids = plan.steps.map((step) => step.id);
+    expect(plan.impact).toContain("cosmetic");
+    // cross_module would otherwise widen a change spanning two roots.
+    expect(plan.impact).toContain("cross_module");
+    expect(ids).not.toContain("package-tests");
+    expect(ids).not.toContain("broader-tests");
+    // The revision, parse, and diff stages are never skipped.
+    expect(ids).toContain("revision-match");
+    expect(ids).toContain("diff-integrity");
+  });
+
+  test("cosmetic never overrides a moved export or a prior failure", () => {
+    expect(
+      planVerification({
+        changedPaths: ["packages/a/src/x.ts"],
+        semanticChange: "cosmetic",
+        publicSurface: { exportedSymbols: true },
+      }).steps.map((step) => step.id),
+    ).toContain("broader-tests");
+    expect(
+      planVerification({
+        changedPaths: ["packages/a/src/x.ts"],
+        semanticChange: "cosmetic",
+        failedCommands: ["bun test a"],
+      }).steps.map((step) => step.id),
+    ).toContain("broader-tests");
+    expect(
+      planVerification({
+        changedPaths: ["packages/a/src/x.ts"],
+        semanticChange: "cosmetic",
+        riskLevel: "high",
+      }).steps.map((step) => step.id),
+    ).toContain("broader-tests");
+  });
+
+  test("a low-risk docs edit triggers no test run at all (§5.24)", () => {
+    const plan = planVerification({
+      changedPaths: ["docs/wiki/features.md"],
+      semanticChange: "cosmetic",
+    });
+    expect(plan.steps.every((step) => step.command === undefined || step.command.program === "git")).toBe(true);
+  });
+
+  test("the contract carries the semantic and public-surface inputs through", () => {
+    const contract = buildTurnVerificationContract({
+      changedPaths: ["packages/agent-kernel/src/state.ts"],
+      workspaceGeneration: 1,
+      publicSurface: { exportedSymbols: true },
+    });
+    expect(contract.reviewRequired).toBe(true);
+    expect(contract.requiredChecks.map((check) => check.id)).toContain("broader-tests");
+
+    const cosmetic = buildTurnVerificationContract({
+      changedPaths: ["packages/agent-kernel/src/state.ts"],
+      workspaceGeneration: 1,
+      semanticChange: "cosmetic",
+    });
+    expect(cosmetic.requiredChecks.map((check) => check.id)).not.toContain("broader-tests");
+  });
+});

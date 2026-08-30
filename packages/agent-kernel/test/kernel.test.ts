@@ -4422,6 +4422,114 @@ describe("OpenAI programmatic read-only lane (P0-01/P0-03)", () => {
     expect(payloadsOf(events, "program.failed")).toHaveLength(0);
   });
 
+  // §5.5's closing rule: a result the host cannot bind to this epoch and this
+  // workspace must not reach the model as fact. The table drives both halves,
+  // because "accepted" only means something next to a rejection of the same shape.
+  for (const refusal of [
+    {
+      name: "a different task epoch",
+      bound: { taskEpochId: "epoch-stale", workspaceIdentityDigest: "digest-evidence" },
+      error: "different task epoch",
+    },
+    {
+      name: "a stale workspace digest",
+      bound: { taskEpochId: "epoch-evidence", workspaceIdentityDigest: "digest-stale" },
+      error: "different workspace",
+    },
+  ] as const) {
+    test(`a program result naming ${refusal.name} is refused as evidence`, async () => {
+      const provider = new InlineProvider(async function* (_request, _signal, callIndex) {
+        yield { type: "response.started", requestId: "ptc-evidence-" + callIndex };
+        if (callIndex === 0) {
+          yield {
+            type: "response.item",
+            authoritative: true,
+            item: {
+              kind: "program_output",
+              itemId: "prog-out-evidence",
+              callId: "call-program-evidence",
+              result: JSON.stringify(programEvidence(refusal.bound)),
+              status: "completed",
+            },
+          };
+        }
+        yield { type: "text.delta", text: "Program done.", itemId: "final-" + callIndex, outputIndex: 0 };
+        yield { type: "response.completed", responseId: "ptc-evidence-response-" + callIndex };
+      });
+      const { kernel, events } = harness({
+        steps: [],
+        provider,
+        inferencePolicy: new InferenceUtilityController(),
+        autoRoute: true,
+        phasePolicy: true,
+        programmaticPolicy: { enabled: true, maxToolCalls: 8, maxParallelCalls: 2 },
+        activeToolIds: ["fs.read"],
+        toolResults: { "fs.read": { result: okResult("read"), text: "read" } },
+        reasoningEpoch: () => ({ taskEpochId: "epoch-evidence", continuity: "current_turn" }),
+        workspaceIdentityDigest: () => "digest-evidence",
+      });
+
+      const report = await kernel.runTurn("summarise the repo from a program", new AbortController().signal);
+
+      // Refused, and refused legibly: program.completed is the event a reader
+      // would otherwise treat as "these claims are established".
+      expect(payloadsOf(events, "program.completed")).toHaveLength(0);
+      const failures = payloadsOf(events, "program.failed") as Array<{
+        readonly itemId?: string;
+        readonly reason?: string;
+        readonly errors?: readonly string[];
+      }>;
+      expect(failures).toHaveLength(1);
+      expect(failures[0]?.itemId).toBe("prog-out-evidence");
+      expect(failures[0]?.reason).toContain("§5.5 evidence contract");
+      expect(failures[0]?.errors?.some((entry) => entry.includes(refusal.error))).toBe(true);
+      // The turn has to carry the refusal forward; a silently dropped result
+      // reads to the model exactly like a program that never ran.
+      expect(report.report.risks.some((risk) => risk.includes("PTC_EVIDENCE_REJECTED"))).toBe(true);
+    });
+  }
+
+  test("a program result bound to this epoch and workspace is accepted as evidence", async () => {
+    const provider = new InlineProvider(async function* (_request, _signal, callIndex) {
+      yield { type: "response.started", requestId: "ptc-evidence-ok-" + callIndex };
+      if (callIndex === 0) {
+        yield {
+          type: "response.item",
+          authoritative: true,
+          item: {
+            kind: "program_output",
+            itemId: "prog-out-evidence-ok",
+            callId: "call-program-evidence-ok",
+            result: JSON.stringify(
+              programEvidence({ taskEpochId: "epoch-evidence", workspaceIdentityDigest: "digest-evidence" }),
+            ),
+            status: "completed",
+          },
+        };
+      }
+      yield { type: "text.delta", text: "Program done.", itemId: "final-" + callIndex, outputIndex: 0 };
+      yield { type: "response.completed", responseId: "ptc-evidence-ok-response-" + callIndex };
+    });
+    const { kernel, events } = harness({
+      steps: [],
+      provider,
+      inferencePolicy: new InferenceUtilityController(),
+      autoRoute: true,
+      phasePolicy: true,
+      programmaticPolicy: { enabled: true, maxToolCalls: 8, maxParallelCalls: 2 },
+      activeToolIds: ["fs.read"],
+      toolResults: { "fs.read": { result: okResult("read"), text: "read" } },
+      reasoningEpoch: () => ({ taskEpochId: "epoch-evidence", continuity: "current_turn" }),
+      workspaceIdentityDigest: () => "digest-evidence",
+    });
+
+    const report = await kernel.runTurn("summarise the repo from a program", new AbortController().signal);
+
+    expect(payloadsOf(events, "program.failed")).toHaveLength(0);
+    expect(payloadsOf(events, "program.completed")[0]).toMatchObject({ itemId: "prog-out-evidence-ok" });
+    expect(report.report.risks.some((risk) => risk.includes("PTC_EVIDENCE_REJECTED"))).toBe(false);
+  });
+
   test("a coordinated program batch is bounded by output bytes and wall time", async () => {
     const programCall = (callId: string, path: string) => ({
       callId,

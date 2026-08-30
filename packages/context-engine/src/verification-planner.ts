@@ -21,7 +21,35 @@ export type VerificationImpactSignal =
   | "dependency"
   | "generated"
   | "test"
-  | "docs_only";
+  | "docs_only"
+  | "public_api"
+  | "schema"
+  | "signature_change"
+  | "cosmetic";
+
+/**
+ * §5.21's semantic change type: what KIND of edit happened, not which file. A
+ * signature change and a comment reflow have the same path and the same churn,
+ * and verifying them identically is why a one-line docs edit could cost a full
+ * run while a changed export went out on the edited file's own tests.
+ */
+export type SemanticChangeType =
+  | "signature"
+  | "behaviour"
+  | "rename"
+  | "cosmetic"
+  | "addition"
+  | "deletion";
+
+/** Which of a change's public surfaces moved (§5.21 public API/schema/config). */
+export interface PublicSurfaceChange {
+  /** An exported symbol was added, removed, or re-signed. */
+  readonly exportedSymbols?: boolean;
+  /** A serialized schema, protocol event kind, or generated contract moved. */
+  readonly schema?: boolean;
+  /** A user-visible configuration key moved. */
+  readonly config?: boolean;
+}
 
 /**
  * One workspace member as its manifest describes it (§5.21's dependency-graph
@@ -93,6 +121,15 @@ export interface VerificationChangeSet {
   readonly riskLevel?: "low" | "medium" | "high" | "critical";
   readonly languageHints?: readonly ("typescript" | "rust" | "python" | "other")[];
   /**
+   * §5.21 semantic change type. The host derives it from the diff it already
+   * has; the plan only decides what it means. `cosmetic` is the one value that
+   * narrows rather than widens, so it is trusted only when nothing else in the
+   * change set argues against it.
+   */
+  readonly semanticChange?: SemanticChangeType;
+  /** §5.21 public API / schema / config surfaces this change moved. */
+  readonly publicSurface?: PublicSurfaceChange;
+  /**
    * §5.21's dependency-graph input: `package directory -> its consumers`, from
    * `workspaceConsumerGraph`. Absent, the consumer tier can only fall back to the
    * changed packages themselves, which verifies nobody downstream.
@@ -124,11 +161,27 @@ export function planVerification(changeSet: VerificationChangeSet): Verification
     return { version: "2", impact: [], requiredCoverage: [], steps: [], partialIfMissing: false };
   }
   const impact = impactSignals(changeSet, paths);
+  // §5.21: a moved public surface is a consumer problem by definition — the
+  // callers are what a changed export or schema breaks, and they are exactly
+  // what the edited file's own tests cannot see.
+  const reachesConsumers =
+    impact.includes("public_api") || impact.includes("schema") || impact.includes("signature_change");
   const highRisk =
     changeSet.riskLevel === "high" ||
     changeSet.riskLevel === "critical" ||
     impact.includes("auth") ||
-    impact.includes("config");
+    impact.includes("config") ||
+    reachesConsumers;
+  // A cosmetic change is the only signal that narrows, so it is honoured only
+  // when nothing else in the change set argues for widening. Trusting it over a
+  // moved export or a prior failure would turn §5.21's cheapest input into a way
+  // to skip verification.
+  const cosmeticOnly =
+    impact.includes("cosmetic") &&
+    !highRisk &&
+    !reachesConsumers &&
+    (changeSet.failedCommands?.length ?? 0) === 0 &&
+    (changeSet.reflectionPaths?.length ?? 0) === 0;
   const languages = new Set(changeSet.languageHints ?? paths.map(languageForPath));
   const steps: VerificationStepPlan[] = [
     {
@@ -165,6 +218,7 @@ export function planVerification(changeSet: VerificationChangeSet): Verification
   const packageCommand = packageCommandFor(impactedPackages, languages);
   if (
     packageCommand !== undefined &&
+    !cosmeticOnly &&
     (highRisk ||
       impact.includes("cross_module") ||
       impact.includes("dependency") ||
@@ -186,7 +240,14 @@ export function planVerification(changeSet: VerificationChangeSet): Verification
   // packages themselves otherwise — never to the whole suite by default, which is
   // what made this tier indistinguishable from a full run.
   const consumers = consumersOf(impactedPackages, changeSet.packageConsumers);
-  if (highRisk || impact.includes("cross_module") || impact.includes("dependency") || (changeSet.failedCommands?.length ?? 0) > 0 || (changeSet.reflectionPaths?.length ?? 0) > 0) {
+  if (
+    !cosmeticOnly &&
+    (highRisk ||
+      impact.includes("cross_module") ||
+      impact.includes("dependency") ||
+      (changeSet.failedCommands?.length ?? 0) > 0 ||
+      (changeSet.reflectionPaths?.length ?? 0) > 0)
+  ) {
     steps.push({
       id: "broader-tests",
       tier: 3,
@@ -287,6 +348,10 @@ export interface TurnVerificationContractInput {
   readonly languageHints?: VerificationChangeSet["languageHints"];
   /** §5.21 dependency graph, from `workspaceConsumerGraph`. */
   readonly packageConsumers?: VerificationChangeSet["packageConsumers"];
+  /** §5.21 semantic change type. */
+  readonly semanticChange?: VerificationChangeSet["semanticChange"];
+  /** §5.21 public API / schema / config surfaces this change moved. */
+  readonly publicSurface?: VerificationChangeSet["publicSurface"];
 }
 
 // Every mutation turn owns one contract that names the checks the turn must
@@ -304,6 +369,8 @@ export function buildTurnVerificationContract(
     ...(input.failedCommands === undefined ? {} : { failedCommands: input.failedCommands }),
     ...(input.languageHints === undefined ? {} : { languageHints: input.languageHints }),
     ...(input.packageConsumers === undefined ? {} : { packageConsumers: input.packageConsumers }),
+    ...(input.semanticChange === undefined ? {} : { semanticChange: input.semanticChange }),
+    ...(input.publicSurface === undefined ? {} : { publicSurface: input.publicSurface }),
     // The kernel supplies these, and dropping them here made the widening they
     // exist to trigger dead on the contract path.
     ...(input.reflectionPaths === undefined ? {} : { reflectionPaths: input.reflectionPaths }),
@@ -465,6 +532,16 @@ function impactSignals(
   paths: readonly string[],
 ): VerificationImpactSignal[] {
   const signals = new Set<VerificationImpactSignal>(["mutation"]);
+  // §5.21: the semantic change type and the moved public surfaces are host
+  // observations of the diff. Path regexes below can only guess at these — a
+  // removed export in an ordinary .ts file matches nothing — so an explicit
+  // signal always stands, and the regexes remain the fallback for a host that
+  // supplies none.
+  if (changeSet.publicSurface?.exportedSymbols === true) signals.add("public_api");
+  if (changeSet.publicSurface?.schema === true) signals.add("schema");
+  if (changeSet.publicSurface?.config === true) signals.add("config");
+  if (changeSet.semanticChange === "signature") signals.add("signature_change");
+  if (changeSet.semanticChange === "cosmetic") signals.add("cosmetic");
   if (paths.some((path) => /\.(?:json|ya?ml|toml|env|config)$/i.test(path))) signals.add("config");
   if (paths.some((path) => /(?:auth|permission|credential|security|policy)/i.test(path))) signals.add("auth");
   // The dependency signal belongs to manifests and lockfiles, so it is matched
