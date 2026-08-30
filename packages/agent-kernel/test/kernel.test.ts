@@ -4228,6 +4228,97 @@ describe("OpenAI programmatic read-only lane (P0-01/P0-03)", () => {
     expect(denials[0]?.message).toContain("3 calls");
   });
 
+  test("the program lifecycle is reported with routeId and a distinguishable denial", async () => {
+    const provider = new InlineProvider(async function* (_request, _signal, callIndex) {
+      yield { type: "response.started", requestId: "ptc-lifecycle-" + callIndex };
+      if (callIndex === 0) {
+        yield {
+          type: "response.item",
+          authoritative: true,
+          item: {
+            kind: "program",
+            itemId: "prog-lifecycle",
+            callId: "call-program-lifecycle",
+            code: "await tools.fs_read({ path: 'src/a.ts' });",
+            fingerprint: "opaque-program-state",
+          },
+        };
+        for (const call of [
+          { callId: "call-read-ok", name: "fs.read", argumentsText: JSON.stringify({ path: "src/a.ts" }) },
+          { callId: "call-edit-bad", name: "fs.edit", argumentsText: JSON.stringify({ plan: { version: 1, operations: [], summary: "forged" } }) },
+        ]) {
+          const ancestry = { callerId: "call-program-lifecycle", programId: "call-program-lifecycle" };
+          yield { type: "tool.call.started", callId: call.callId, name: call.name, ...ancestry };
+          yield { type: "tool.call.completed", call: { ...call, ...ancestry } };
+        }
+      } else {
+        yield {
+          type: "response.item",
+          authoritative: true,
+          item: {
+            kind: "program_output",
+            itemId: "prog-out-lifecycle",
+            callId: "call-program-lifecycle",
+            result: JSON.stringify({ status: "complete" }),
+            status: "completed",
+          },
+        };
+        yield { type: "text.delta", text: "Program done.", itemId: "final-" + callIndex, outputIndex: 0 };
+      }
+      yield { type: "response.completed", responseId: "ptc-lifecycle-response-" + callIndex };
+    });
+    const { kernel, events } = harness({
+      steps: [],
+      provider,
+      inferencePolicy: new InferenceUtilityController(),
+      autoRoute: true,
+      phasePolicy: true,
+      programmaticPolicy: { enabled: true, maxToolCalls: 8, maxParallelCalls: 2 },
+      activeToolIds: ["fs.read", "fs.edit"],
+      toolResults: { "fs.read": { result: okResult("read"), text: "read" } },
+    });
+
+    await kernel.runTurn("inspect and then try to edit from a program", new AbortController().signal);
+
+    // A mid-turn re-route issues a second routeId, so accept any route this turn
+    // actually announced; what matters is that the join key is never absent.
+    const routeIds = new Set([
+      ...(payloadsOf(events, "model.route_decided") as Array<{ routeId?: string }>)
+        .map((payload) => payload.routeId),
+      ...(payloadsOf(events, "model.route_changed") as Array<{ to?: { routeId?: string } }>)
+        .map((payload) => payload.to?.routeId),
+    ]);
+    expect(routeIds.size).toBeGreaterThan(0);
+    expect(routeIds.has(undefined)).toBe(false);
+    // §5.7: every program.* payload joins back to the route that admitted the lane.
+    for (const kind of [
+      "program.started",
+      "program.tool_call_started",
+      "program.tool_call_admitted",
+      "program.tool_call_denied",
+      "program.tool_call_completed",
+      "program.completed",
+    ] as const) {
+      const payloads = payloadsOf(events, kind) as Array<{ routeId?: string; programId?: string }>;
+      expect(payloads.length).toBeGreaterThan(0);
+      for (const payload of payloads) {
+        expect(routeIds.has(payload.routeId)).toBe(true);
+        expect(payload.programId).toBe("call-program-lifecycle");
+      }
+    }
+    expect(payloadsOf(events, "program.started")).toHaveLength(1);
+    // A PTC refusal must be readable as one, not merely as PERMISSION_DENIED.
+    expect(payloadsOf(events, "program.tool_call_denied")[0]).toMatchObject({
+      callId: "call-edit-bad",
+      toolId: "fs.edit",
+      code: "unknown_tool",
+    });
+    expect((payloadsOf(events, "program.tool_call_admitted") as Array<{ callId?: string }>)
+      .map((payload) => payload.callId)).toEqual(["call-read-ok"]);
+    expect(payloadsOf(events, "program.completed")[0]).toMatchObject({ calls: 1 });
+    expect(payloadsOf(events, "program.failed")).toHaveLength(0);
+  });
+
   test("direct routes cap provider and local read parallelism at one", async () => {
     const provider = new MockProvider({
       steps: [

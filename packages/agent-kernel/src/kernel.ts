@@ -780,6 +780,8 @@ export interface TurnResult {
 interface ProgramRuntimeState {
   callsUsed: number;
   readonly startedAt: number;
+  /** Whether `program.started` was already reported for this program (§5.7). */
+  announced: boolean;
 }
 
 interface PendingCall {
@@ -3185,6 +3187,11 @@ export class AgentKernel {
               code: event.item.code,
               fingerprint: event.item.fingerprint,
             });
+            this.#announceProgram(event.item.callId, emit, {
+              itemId: event.item.itemId,
+              code: event.item.code,
+              fingerprint: event.item.fingerprint,
+            });
           } else if (
             event.item.kind === "program_output" &&
             event.item.callId !== undefined &&
@@ -3198,6 +3205,11 @@ export class AgentKernel {
               result: event.item.result,
               status: event.item.status,
             });
+            this.#concludeProgram(
+              event.item.callId,
+              { itemId: event.item.itemId, result: event.item.result, status: event.item.status },
+              emit,
+            );
           }
           break;
         case "usage":
@@ -3502,11 +3514,78 @@ export class AgentKernel {
       : this.#reasoningEpochId ?? "no-epoch";
   }
 
+  /**
+   * The §5.7 `program.*` lifecycle (`program.started` through `program.completed`
+   * / `program.failed`).
+   *
+   * Every payload carries `routeId` the way `native_lane.*` does, so a reader can
+   * join a program back to the route decision that admitted its lane; turnId,
+   * taskEpochId, and workspaceIdentityDigest come from the emit envelope rather
+   * than being restated here. Denials were previously indistinguishable from an
+   * ordinary permission refusal, which made the PTC safety criterion in §5.8
+   * unmeasurable from the journal.
+   */
+  #programEvent<T extends Record<string, unknown>>(
+    kind: CbcEventKind,
+    programId: string,
+    payload: T,
+    emit: <P>(kind: CbcEventKind, payload: P) => void,
+  ): void {
+    const routeId = this.#turnRoute?.routeId;
+    emit(kind, { programId, ...(routeId !== undefined ? { routeId } : {}), ...payload });
+  }
+
+  /** Report a program the first time the host sees any trace of it. */
+  #announceProgram(
+    programId: string,
+    emit: <P>(kind: CbcEventKind, payload: P) => void,
+    program?: { readonly itemId: string; readonly code: string; readonly fingerprint: string },
+  ): ProgramRuntimeState {
+    const state = this.#programState(programId);
+    if (state.announced) return state;
+    state.announced = true;
+    this.#programEvent("program.started", programId, {
+      maxToolCalls: this.#programmaticPolicy.maxToolCalls,
+      maxParallelCalls: this.#programmaticPolicy.maxParallelCalls,
+      ...(program !== undefined
+        ? { itemId: program.itemId, code: program.code, fingerprint: program.fingerprint }
+        : {}),
+    }, emit);
+    return state;
+  }
+
+  /** Report the program's terminal outcome once its provider output arrives. */
+  #concludeProgram(
+    programId: string,
+    output: { readonly itemId: string; readonly result: string; readonly status: "completed" | "incomplete" },
+    emit: <P>(kind: CbcEventKind, payload: P) => void,
+  ): void {
+    const state = this.#announceProgram(programId, emit);
+    const stats = {
+      calls: state.callsUsed,
+      elapsedMs: Math.max(0, this.#now() - state.startedAt),
+    };
+    if (output.status !== "completed") {
+      this.#programEvent("program.failed", programId, {
+        itemId: output.itemId,
+        result: output.result,
+        reason: "the provider reported an incomplete program",
+        ...stats,
+      }, emit);
+      return;
+    }
+    this.#programEvent("program.completed", programId, {
+      itemId: output.itemId,
+      result: output.result,
+      ...stats,
+    }, emit);
+  }
+
   /** The live accounting record for a program, created on first sight. */
   #programState(programId: string): ProgramRuntimeState {
     const existing = this.#programs.get(programId);
     if (existing !== undefined) return existing;
-    const created: ProgramRuntimeState = { callsUsed: 0, startedAt: this.#now() };
+    const created: ProgramRuntimeState = { announced: false, callsUsed: 0, startedAt: this.#now() };
     this.#programs.set(programId, created);
     return created;
   }
@@ -3514,6 +3593,7 @@ export class AgentKernel {
   /** Revalidate provider-program calls before the ordinary permission path. */
   #programmaticDenials(
     calls: readonly PendingCall[],
+    emit: <P>(kind: CbcEventKind, payload: P) => void,
   ): Map<string, { readonly code: string; readonly message: string }> {
     const groups = new Map<string, PendingCall[]>();
     for (const call of calls) {
@@ -3542,7 +3622,14 @@ export class AgentKernel {
           taskEpochId,
         };
       });
-      const state = this.#programState(programId);
+      const state = this.#announceProgram(programId, emit);
+      for (const call of group) {
+        this.#programEvent("program.tool_call_started", programId, {
+          callId: call.callId,
+          toolId: call.name,
+          ...(call.callerId !== undefined ? { callerId: call.callerId } : {}),
+        }, emit);
+      }
       const admission = this.#programmaticLane.admit({
         programId,
         callerId: programId,
@@ -3556,8 +3643,22 @@ export class AgentKernel {
         const failure = admission.accepted
           ? undefined
           : admission.denied.find((entry) => entry.callId === call.callId) ?? unscoped[0];
-        if (failure === undefined) admitted += 1;
-        else denied.set(call.callId, failure);
+        if (failure === undefined) {
+          admitted += 1;
+          this.#programEvent("program.tool_call_admitted", programId, {
+            callId: call.callId,
+            toolId: call.name,
+            callsUsed: state.callsUsed + admitted,
+          }, emit);
+        } else {
+          denied.set(call.callId, failure);
+          this.#programEvent("program.tool_call_denied", programId, {
+            callId: call.callId,
+            toolId: call.name,
+            code: failure.code,
+            message: failure.message,
+          }, emit);
+        }
       }
       // Only the calls that survived admission spend the program's budget, so a
       // partially denied batch does not hand the next one free capacity.
@@ -3583,7 +3684,7 @@ export class AgentKernel {
     }
 
     const outputHistoryStart = this.#history.length;
-    const programmaticDenials = this.#programmaticDenials(calls);
+    const programmaticDenials = this.#programmaticDenials(calls, emit);
     for (const call of calls) {
       const denial = programmaticDenials.get(call.callId);
       if (denial === undefined) continue;
@@ -4092,6 +4193,13 @@ export class AgentKernel {
           ...(execution.exitCode !== undefined ? { exitCode: execution.exitCode } : {}),
           ...changeDetail,
         });
+        if (call.programId !== undefined) {
+          this.#programEvent("program.tool_call_completed", call.programId, {
+            callId: call.callId,
+            toolId: call.name,
+            durationMs,
+          }, emit);
+        }
       } else {
         emit("tool.failed", {
           callId: call.callId,
