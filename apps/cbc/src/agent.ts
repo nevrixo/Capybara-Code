@@ -2435,11 +2435,27 @@ export class AgentSession {
 
   #guardContextPressure(prompt: CompiledModelRequest): ContextPressureGuardResult {
     const routeWindow = this.#currentRoute?.capability.contextWindow;
-    const reserve = this.#options.config.model.context.reserveOutputTokens;
+    // §5.15: `contextBand` → ContextCompiler hard/target budget. The band was
+    // computed, announced, and stored, but the pressure budget was derived from
+    // the model's whole window — so a route that deliberately selected a 64k band
+    // on a 1M-window model still compacted at the 1M boundary, and the band it
+    // announced described nothing. The band is a ceiling, never a licence, so it
+    // narrows the configured budget rather than replacing it.
+    const routeBand = this.#currentRoute?.contextBand;
+    const reserve = this.#currentRoute?.outputReserveTokens
+      ?? this.#options.config.model.context.reserveOutputTokens;
     const configuredBudget = this.#options.config.model.softContextTokens;
+    const windowBudget = routeWindow === undefined
+      ? configuredBudget
+      : Math.max(1, routeWindow - reserve);
     const inputBudgetTokens = Math.min(
       configuredBudget,
-      routeWindow === undefined ? configuredBudget : Math.max(1, routeWindow - reserve),
+      windowBudget,
+      // An unallowed band was refused on cost or policy grounds, not resized, so
+      // it must not be mistaken for a smaller budget the turn agreed to.
+      routeBand === undefined || this.#currentRoute?.context.allowed !== true
+        ? windowBudget
+        : Math.max(1, routeBand - reserve),
     );
     const savingLevel = this.#tokenSavingLastPlan?.effectiveLevel ?? this.#options.config.agent.tokenSaving;
     const decision = evaluateContextPressure({
