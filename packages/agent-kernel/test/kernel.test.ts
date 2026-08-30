@@ -144,6 +144,9 @@ interface HarnessOptions {
   readonly deepPlanMode?: KernelOptions["deepPlanMode"];
   readonly deepPlanReadiness?: KernelOptions["deepPlanReadiness"];
   readonly todoState?: KernelOptions["todoState"];
+  readonly workspaceGeneration?: KernelOptions["workspaceGeneration"];
+  readonly verificationCoverage?: KernelOptions["verificationCoverage"];
+  readonly minimumReviewRisk?: KernelOptions["minimumReviewRisk"];
 }
 
 type InlineStream = (
@@ -321,6 +324,15 @@ function harness(options: HarnessOptions) {
       ? { deepPlanReadiness: options.deepPlanReadiness }
       : {}),
     ...(options.todoState !== undefined ? { todoState: options.todoState } : {}),
+    ...(options.workspaceGeneration !== undefined
+      ? { workspaceGeneration: options.workspaceGeneration }
+      : {}),
+    ...(options.verificationCoverage !== undefined
+      ? { verificationCoverage: options.verificationCoverage }
+      : {}),
+    ...(options.minimumReviewRisk !== undefined
+      ? { minimumReviewRisk: options.minimumReviewRisk }
+      : {}),
   });
 
   return { kernel, events, provider, registry, executed, approvalsSeen };
@@ -4717,5 +4729,216 @@ describe("native lane eligibility and fallback tally (§6 P1-03)", () => {
     // the answer a user asking "how often did this fall back?" needs.
     await kernel.runTurn("implement the next change", new AbortController().signal);
     expect(kernel.nativeFallbackTally().count).toBeGreaterThan(afterFirst.count);
+  });
+});
+
+describe("route execution receipt reports execution, not the plan (§5.16)", () => {
+  test("the lane the requests actually carried is the lane the receipt names", async () => {
+    const provider = new MockProvider({
+      steps: [{ text: "Done." }],
+      capabilities: { parallelToolCalls: true },
+    });
+    const { kernel } = harness({
+      steps: [],
+      provider,
+      inferencePolicy: new InferenceUtilityController(),
+      autoRoute: true,
+      phasePolicy: true,
+      programmaticPolicy: { enabled: true, maxToolCalls: 8, maxParallelCalls: 2 },
+      activeToolIds: ["fs.read"],
+    });
+
+    const result = await kernel.runTurn("implement the bounded inspection", new AbortController().signal);
+
+    expect(result.routeReceipt?.planned.lane).toBe("program");
+    expect(result.routeReceipt?.actual.lane).toBe("program");
+  });
+
+  test("a demoted lane is reported as direct on both sides, with the reason kept", async () => {
+    // The demotion rewrites the plan too, so agreement here is correct — what
+    // matters is that `actual` is now measured from the request that ran rather
+    // than copied from the plan, and that the reason survives either way.
+    const provider = new MockProvider({ steps: [{ text: "Done." }] });
+    const { kernel } = harness({
+      steps: [],
+      provider,
+      inferencePolicy: new InferenceUtilityController(),
+      autoRoute: true,
+      phasePolicy: true,
+      programmaticPolicy: { enabled: false },
+      activeToolIds: ["fs.read"],
+    });
+
+    const result = await kernel.runTurn("implement after inspecting", new AbortController().signal);
+
+    expect(result.routeReceipt?.actual.lane).toBe("direct");
+    expect(result.routeReceipt?.planned.lane).toBe("direct");
+    expect(result.routeReceipt?.actual.fallbackReasons.join(" "))
+      .toContain("programmatic lane is disabled");
+  });
+});
+
+/**
+ * §5.20/§5.24: the turn verification contract has to govern the turn, not merely
+ * describe it. These tests pin both halves — that the contract is emitted once
+ * per mutation turn with the host's real workspace baseline, and that a required
+ * check with no passing runtime record downgrades completion and names itself.
+ */
+describe("verification contract enforcement (§5.20, §5.24)", () => {
+  const CHECKSUM = "c".repeat(64);
+
+  interface ContractHarnessOptions {
+    readonly readManyResult?: ToolResult;
+    readonly diffResult?: ToolResult;
+    readonly workspaceGeneration?: number;
+    readonly reviewer?: KernelOptions["reviewer"];
+    readonly minimumReviewRisk?: KernelOptions["minimumReviewRisk"];
+    readonly verificationCoverage?: KernelOptions["verificationCoverage"];
+    readonly path?: string;
+  }
+
+  function contractHarness(options: ContractHarnessOptions = {}) {
+    const path = options.path ?? "index.html";
+    return harness({
+      steps: [
+        {
+          commentary: "Applying the change.",
+          toolCalls: [
+            {
+              callId: "c1",
+              name: "fs.write",
+              arguments: { path, content: "<!doctype html><title>Vault</title>", intent: "create" },
+            },
+          ],
+        },
+        { text: "Done." },
+      ],
+      toolResults: {
+        "fs.write": { result: okResult(`wrote ${path}`) },
+        "fs.read_many": {
+          result: options.readManyResult ??
+            okResult("read 1 file", { files: [{ path, checksum: CHECKSUM }], errors: [] }),
+          text: `${path} sha256:${CHECKSUM}`,
+        },
+        "git.diff": {
+          result: options.diffResult ??
+            okResult("1 file, +1 -0", { files: [{ path }], totalAdditions: 1, totalDeletions: 0 }),
+          text: "+<title>Vault</title>",
+        },
+      },
+      limits: { ...ROOT_LIMITS, maxModelSteps: 2 },
+      ...(options.workspaceGeneration !== undefined
+        ? { workspaceGeneration: () => options.workspaceGeneration! }
+        : {}),
+      ...(options.reviewer !== undefined ? { autoReview: true, reviewer: options.reviewer } : {}),
+      ...(options.minimumReviewRisk !== undefined ? { minimumReviewRisk: options.minimumReviewRisk } : {}),
+      ...(options.verificationCoverage !== undefined
+        ? { verificationCoverage: options.verificationCoverage }
+        : {}),
+    });
+  }
+
+  test("a mutation turn emits exactly one contract carrying the host's workspace generation", async () => {
+    const { kernel, events } = contractHarness({ workspaceGeneration: 12 });
+    await kernel.runTurn("replace the landing page", new AbortController().signal);
+
+    const plans = payloadsOf(events, "verification.plan_created") as Array<{
+      workspaceGeneration: number;
+      changedPaths: readonly string[];
+      impactedPackages: readonly string[];
+      requiredChecks: readonly { id: string; required: boolean }[];
+      reviewRequired: boolean;
+      evidenceRequirements: readonly string[];
+    }>;
+    expect(plans.length).toBe(1);
+    const plan = plans[0]!;
+    // The baseline has to come from the host counter; a hard-coded 0 is what made
+    // §5.24's stale-revision criterion unmeasurable.
+    expect(plan.workspaceGeneration).toBe(12);
+    expect(plan.changedPaths).toEqual(["index.html"]);
+    expect(plan.impactedPackages).toEqual(["."]);
+    expect(plan.evidenceRequirements).toContain("revision_match");
+    expect(plan.requiredChecks.map((check) => check.id)).toContain("revision-match");
+  });
+
+  test("a read-only turn builds no contract at all", async () => {
+    const { kernel, events } = harness({
+      steps: [{ text: "Nothing to change." }],
+      limits: { ...ROOT_LIMITS, maxModelSteps: 1 },
+    });
+    await kernel.runTurn("what does this do?", new AbortController().signal);
+    expect(payloadsOf(events, "verification.plan_created")).toEqual([]);
+  });
+
+  test("every contract check is satisfied on a clean turn, so completion stands", async () => {
+    const { kernel } = contractHarness();
+    const result = await kernel.runTurn("replace the landing page", new AbortController().signal);
+
+    expect(result.report.status).toBe("completed");
+    expect(
+      result.report.risks.some((risk) => risk.includes("unsatisfied required check")),
+    ).toBe(false);
+  });
+
+  test("a required check with no passing record blocks completion and names itself", async () => {
+    // The post-write read is what settles revision-match and parse-sanity, so a
+    // runtime that cannot produce it leaves both unmet.
+    const { kernel } = contractHarness({
+      readManyResult: errorResult("FS_READ_FAILED", "the file vanished after the write"),
+    });
+    const result = await kernel.runTurn("replace the landing page", new AbortController().signal);
+
+    expect(result.report.status).not.toBe("completed");
+    const contractRisk = result.report.risks.find((risk) =>
+      risk.includes("unsatisfied required check"),
+    );
+    expect(contractRisk).toBeDefined();
+    expect(contractRisk).toContain("revision-match");
+    expect(contractRisk).toContain("parse-sanity");
+    expect(result.report.nextStep).toContain("revision-match");
+  });
+
+  test("stale host evidence leaves the freshness check unmet (§5.22 step 6)", async () => {
+    const { kernel } = contractHarness({
+      verificationCoverage: () => ({ staleEvidence: 1 }),
+    });
+    const result = await kernel.runTurn("replace the landing page", new AbortController().signal);
+
+    expect(result.report.status).not.toBe("completed");
+    expect(
+      result.report.risks.some((risk) => risk.includes("evidence-freshness")),
+    ).toBe(true);
+  });
+
+  test("a high-risk turn never loses the reviewer: the contract requires it", async () => {
+    const { kernel } = contractHarness({
+      path: "packages/permissions/src/credentials.ts",
+      minimumReviewRisk: "low",
+      reviewer: async () => ({ summary: "no blocking findings", findings: [] }),
+    });
+    const result = await kernel.runTurn("tighten the credential policy", new AbortController().signal);
+
+    expect(
+      result.report.verification.some((record) => record.evidence.includes("independent review")),
+    ).toBe(true);
+    expect(
+      result.report.risks.some((risk) => risk.includes("independent-review")),
+    ).toBe(false);
+  });
+
+  test("a high-risk turn whose review cannot run is blocked by the named check", async () => {
+    const { kernel } = contractHarness({
+      path: "packages/permissions/src/credentials.ts",
+      minimumReviewRisk: "low",
+      reviewer: async () => {
+        throw new Error("the reviewer model is unavailable");
+      },
+    });
+    const result = await kernel.runTurn("tighten the credential policy", new AbortController().signal);
+
+    expect(result.report.status).not.toBe("completed");
+    expect(
+      result.report.risks.some((risk) => risk.includes("independent-review")),
+    ).toBe(true);
   });
 });

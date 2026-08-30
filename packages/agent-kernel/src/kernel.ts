@@ -985,6 +985,16 @@ export class AgentKernel {
   #routeParallelPeak = 0;
   #routeFallbackReasons: string[] = [];
   /**
+   * The lane each provider request of this turn was actually assembled under.
+   *
+   * The receipt's `actual.lane` cannot be read back off the route: the route is
+   * the *plan*, and re-reading it made every receipt agree with itself by
+   * construction — which is exactly the divergence §5.16 exists to expose. A
+   * turn can also change lanes mid-flight through a phase re-route, so the
+   * lane that ran is the last one a request carried, not the last one decided.
+   */
+  #routeLanesRun: InferenceLane[] = [];
+  /**
    * Cumulative native-lane fallbacks for the session. Separate from
    * `#routeFallbackReasons` because that list is cleared every turn (see the
    * reset in `#beginTurn`), and a diagnostic asked after the fact needs the
@@ -1341,6 +1351,7 @@ export class AgentKernel {
     this.#routeEpoch = 0;
     this.#routeParallelPeak = 0;
     this.#routeFallbackReasons = [];
+    this.#routeLanesRun = [];
     this.#pendingNativeLane = undefined;
     this.#programs.clear();
     this.#turnAllowedActions.clear();
@@ -1995,7 +2006,7 @@ export class AgentKernel {
     // counter, TODO consistency from the same projection the gate below reads.
     const contract = this.#verificationContract;
     let finalReport = truthful;
-    if (contract !== undefined && finalReport.status === "completed") {
+    if (contract !== undefined && finalReport.status !== "cancelled") {
       const settlementIds = new Set(this.#verificationChecksSatisfied);
       if ((hostCoverage.staleEvidence ?? 0) === 0) settlementIds.add("evidence-freshness");
       if (this.#unfinishedRootTodos().length === 0) settlementIds.add("todo-consistency");
@@ -2004,10 +2015,16 @@ export class AgentKernel {
         const message =
           `the turn verification contract has unsatisfied required check(s): ${describeUnmetRequiredChecks(settlement.unmet)}`;
         issues.push({ field: "verificationContract", message });
+        // The unmet checks are named even on a report another gate already
+        // downgraded: "which stage of §5.22 did not run" is the answer the
+        // operator needs, and it is lost if the contract only speaks when it is
+        // the first gate to fire.
         finalReport = {
           ...finalReport,
-          status: "partial",
-          risks: [...finalReport.risks, message],
+          ...(finalReport.status === "completed" ? { status: "partial" as const } : {}),
+          risks: finalReport.risks.includes(message)
+            ? finalReport.risks
+            : [...finalReport.risks, message],
           nextStep: `run the contract's required check(s): ${settlement.unmet.map((check) => check.id).join(", ")}`,
         };
       }
@@ -2115,9 +2132,16 @@ export class AgentKernel {
     const nativeFallbacks = route.warnings.filter((warning) =>
       warning.includes("using direct") || warning.includes("dispatcher is unavailable")
     );
+    // A turn that never reached a provider request ran in no lane at all, so it
+    // reports the plan rather than inventing an execution it did not perform.
+    const actualLane = this.#routeLanesRun.at(-1) ?? route.lane;
+    const laneDivergence = actualLane === route.lane
+      ? []
+      : [`the turn ran in the ${actualLane} lane after planning ${route.lane}`];
     const fallbackReasons = [...new Set([
       ...nativeFallbacks,
       ...this.#routeFallbackReasons,
+      ...laneDivergence,
     ])];
     return {
       routeId: route.routeId,
@@ -2136,7 +2160,7 @@ export class AgentKernel {
       },
       actual: {
         model: this.#routedModel(),
-        lane: route.lane,
+        lane: actualLane,
         agentsSpawned: 0,
         parallelPeak: this.#routeParallelPeak,
         reasoningContext: route.reasoningContext,
@@ -2883,6 +2907,10 @@ export class AgentKernel {
               : {}),
           }).maxOutputTokens
         : providerGenerationBudget;
+    // Recorded here rather than at decision time: this is the lane the request
+    // about to be sent actually carries, which is the only claim the receipt is
+    // entitled to make (§5.16).
+    this.#routeLanesRun.push(programmaticEnabled ? "program" : policyDecision?.lane ?? "direct");
     const routeMaxParallelTools = Math.max(1, policyDecision?.maxParallelTools ?? 1);
     const cacheKey = this.#options.cacheKey?.(effectiveCompiled);
     const taskEpochId = reasoningEpoch.taskEpochId;
