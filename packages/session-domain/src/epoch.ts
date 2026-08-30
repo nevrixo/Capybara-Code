@@ -237,6 +237,21 @@ export class TaskEpochManager {
     return { previous, current, reset: false, reason: "unchanged" };
   }
 
+  /**
+   * Record the real capability digest for an epoch started before any route
+   * existed. §5.11 treats a capability-manifest *change* as an invalidation, so
+   * the first observation must not read as one: at construction the host only
+   * knows the model id, and the digest it seeds from that is a placeholder.
+   * Adopting it leaves the generated epoch id alone — the id identifies the
+   * epoch, it is not a reproducible hash of its inputs.
+   */
+  observeCapability(digest: string): boolean {
+    const current = this.#current;
+    if (current === undefined || current.modelCapabilityDigest === digest) return false;
+    this.#current = { ...current, modelCapabilityDigest: digest };
+    return true;
+  }
+
   invalidateHypothesis(now?: string): EpochTransition {
     return this.transition({ hypothesisInvalidated: true, ...(now !== undefined ? { now } : {}) });
   }

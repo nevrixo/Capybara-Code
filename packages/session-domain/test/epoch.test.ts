@@ -93,4 +93,21 @@ describe("TaskEpochManager", () => {
     });
     expect(transition.reason).toBe("workspace_stale");
   });
+
+  test("adopting the first observed capability digest is not itself a capability change", () => {
+    const { modelCapabilityDigest: _seededDigest, ...unseeded } = START;
+    const epochs = new TaskEpochManager({
+      initial: unseeded,
+      now: () => "2026-01-01T00:00:01.000Z",
+    });
+    const seeded = epochs.requireCurrent();
+
+    expect(epochs.observeCapability("capability-live")).toBe(true);
+    expect(epochs.requireCurrent().id).toBe(seeded.id);
+    expect(epochs.requireCurrent().modelCapabilityDigest).toBe("capability-live");
+    expect(epochs.observeCapability("capability-live")).toBe(false);
+
+    const changed = epochs.transition({ modelCapabilityDigest: "capability-next" });
+    expect(changed).toMatchObject({ reset: true, reason: "capability_changed" });
+  });
 });

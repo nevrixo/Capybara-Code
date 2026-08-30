@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { loadConfig } from "@cbc/config-schema";
-import { MockProvider } from "@cbc/provider-openai";
+import { bundledCapability, MockProvider } from "@cbc/provider-openai";
 import type { CbcEvent } from "@cbc/protocol";
 
 import { AgentSession } from "../src/agent.ts";
@@ -71,5 +71,18 @@ describe("epoch invalidation signals", () => {
     expect(session.taskEpoch.requireCurrent().id).not.toBe(before);
     expect(resetReasons(events)).toContain("model_changed");
     expect(session.taskEpoch.scope().continuity).toBe("current_turn");
+  });
+
+  test("the first route adopts the live capability digest without resetting the epoch", async () => {
+    const provider = new MockProvider({ steps: [{ text: "first" }, { text: "second" }] });
+    const { session, events } = harness("epoch-capability-adopt", provider);
+    await session.submit("Fix the parser", new AbortController().signal);
+
+    const epoch = session.taskEpoch.requireCurrent();
+    const route = provider.requests[0]?.model ?? "gpt-5.6-terra";
+    const liveDigest = bundledCapability(route)?.digest;
+    expect(liveDigest).toBeDefined();
+    expect(epoch.modelCapabilityDigest).toBe(liveDigest as string);
+    expect(resetReasons(events)).not.toContain("capability_changed");
   });
 });
