@@ -11,9 +11,9 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { nativeToolsForFeatures, ToolRegistry, type ToolDefinition } from "@cbc/tool-registry";
+import { NATIVE_TOOLS, nativeToolsForFeatures, ToolRegistry, type ToolDefinition } from "@cbc/tool-registry";
 
-import { assemblePrompt, toModelSchema } from "../src/index.ts";
+import { ROOT_POLICY, TOOL_PROTOCOL, assemblePrompt, toModelSchema } from "../src/index.ts";
 
 /** Every experimental gate on — the widest surface a product session can reach. */
 const ALL_GATES = {
@@ -88,9 +88,43 @@ describe("default tool schema budget (§6.7)", () => {
       repositoryContext: [],
       history: [],
     });
-    // Policy text only, no project instructions or skills. Recorded 2026-08:
-    // 5,988 chars ~ 1,497 tokens. §6.6's de-duplication passes must move this
-    // down, never up.
-    expect(assembled.stablePrefixText.length).toBeLessThanOrEqual(5_988);
+    // Policy text only, no project instructions or skills. Recorded 2026-08 at
+    // 5,988 chars; §6.6's mutation-rule de-duplication brought it to 5,120.
+    // Later passes must move this down, never up.
+    expect(assembled.stablePrefixText.length).toBeLessThanOrEqual(5_120);
+  });
+});
+
+describe("each mutation rule is stated once (§6.6)", () => {
+  test("the prompt no longer restates the schema's mutation mechanics", () => {
+    const prompt = `${ROOT_POLICY}\n${TOOL_PROTOCOL}`;
+    // §6.6 "같은 규칙을 한 번만 명시": intent, the per-tool hash field names, and
+    // the patch header form live in the schemas and the failure messages, which
+    // the model reads at the moment they apply. Restating them in the prompt cost
+    // tokens on every turn to say the same thing a third time.
+    for (const restated of ['intent:"create"', "expectedHash", "--- a/path", "+++ b/path", "recursive:true"]) {
+      expect(prompt).not.toContain(restated);
+    }
+  });
+
+  test("the rule itself still survives in one place", () => {
+    // Removing the duplication must not remove the rule: the prompt keeps the
+    // one fact the model has to know before it picks a tool.
+    expect(ROOT_POLICY).toContain("Supply the checksum you read");
+    expect(TOOL_PROTOCOL).toContain("checksum fs.read returned");
+    expect(TOOL_PROTOCOL).toContain("either applies completely or not at all");
+    // The schemas and the recovery message remain the canonical statement of the
+    // mechanics, so a model that gets it wrong is still told exactly what to send.
+    const patch = NATIVE_TOOLS.find((tool) => tool.id === "fs.apply_patch");
+    expect(JSON.stringify(patch?.parameters)).toContain("+++ b/path");
+    const write = NATIVE_TOOLS.find((tool) => tool.id === "fs.write");
+    expect(JSON.stringify(write?.parameters)).toContain("Required when replacing an existing file");
+  });
+
+  test("the prompt still names tool.discover", () => {
+    // Not duplication: without the name in the prompt the model can only find
+    // the discovery path by first getting a rejection, which §6.6's active-tools
+    // -only rule would then make the common case.
+    expect(TOOL_PROTOCOL).toContain("tool.discover");
   });
 });
