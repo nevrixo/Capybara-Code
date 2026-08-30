@@ -27,12 +27,18 @@ function sessionRuntime() {
   };
 }
 
-function makeSession(provider: MockProvider, events: CbcEvent[]): AgentSession {
+function makeSession(
+  provider: MockProvider,
+  events: CbcEvent[],
+  configure?: (config: ReturnType<typeof loadConfig>["config"]) => void,
+): AgentSession {
   let now = 0;
+  const config = loadConfig({ projectTrusted: true, env: {} }).config;
+  configure?.(config);
   return new AgentSession({
     host: { now: () => ++now } as never,
     runtime: sessionRuntime() as never,
-    config: loadConfig({ projectTrusted: true, env: {} }).config,
+    config,
     workspacePath: "/work",
     workspaceIdentityDigest: "b".repeat(64),
     trust: "trusted-always",
@@ -47,6 +53,46 @@ function makeSession(provider: MockProvider, events: CbcEvent[]): AgentSession {
     },
   });
 }
+
+describe("programmatic tool calling runtime wiring", () => {
+  test("the default read-only policy selects PTC only with eligible API tools", async () => {
+    const provider = new MockProvider({
+      steps: [{ text: "Done." }],
+      capabilities: { parallelToolCalls: true },
+    });
+    const events: CbcEvent[] = [];
+    const session = makeSession(provider, events);
+    await session.open({ emitEvent: false });
+
+    await session.submit("implement after inspecting the repository", new AbortController().signal);
+
+    expect(provider.requests[0]?.hostedTools).toEqual([
+      { type: "programmatic_tool_calling" },
+    ]);
+    expect(provider.requests[0]?.tools.find((tool) => tool.name === "fs.read")?.allowedCallers)
+      .toEqual(["direct", "programmatic"]);
+    expect(events.find((event) => event.kind === "model.route_decided")?.payload)
+      .toMatchObject({ lane: "program" });
+  });
+
+  test("the disabled config keeps the same task on the direct lane", async () => {
+    const provider = new MockProvider({
+      steps: [{ text: "Done." }],
+      capabilities: { parallelToolCalls: true },
+    });
+    const events: CbcEvent[] = [];
+    const session = makeSession(provider, events, (config) => {
+      config.provider.openai.native.programmaticToolCalling = "disabled";
+    });
+    await session.open({ emitEvent: false });
+
+    await session.submit("implement after inspecting the repository", new AbortController().signal);
+
+    expect(provider.requests[0]?.hostedTools).toBeUndefined();
+    expect(events.find((event) => event.kind === "model.route_decided")?.payload)
+      .toMatchObject({ lane: "direct" });
+  });
+});
 
 describe("/setting fast-mode and long-context routing", () => {
   test("parses direct commands for both new settings", () => {

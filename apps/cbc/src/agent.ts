@@ -1148,6 +1148,11 @@ export class AgentSession {
       maxOutputTokens: options.config.model.maxOutputTokens,
       promptCompiler: options.config.agent.promptCompiler,
       parallelToolCalls: options.config.agent.toolGraph.providerParallelTools,
+      programmaticPolicy: {
+        enabled: options.config.provider.openai.native.programmaticToolCalling === "read-only",
+        maxToolCalls: options.config.provider.openai.native.maxProgramToolCalls,
+        maxParallelCalls: options.config.provider.openai.native.maxProgramParallelCalls,
+      },
       nativeCompaction: options.config.model.context.providerCompactionMode === "off"
         ? false
         : options.config.model.context.providerCompactionMode === "on"
