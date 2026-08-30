@@ -92,6 +92,12 @@ export const EVENT_KINDS = [
   "deep_plan.draft_requested",
   "deep_plan.completed",
   "deep_plan.cancelled",
+  /**
+   * The per-turn goal contract verdict (§P1-04). Journaled because a resumed or
+   * re-attached session has to reconstruct why a long-running goal stopped,
+   * rather than re-deriving it from a budget it can no longer observe.
+   */
+  "goal.evaluated",
 ] as const;
 
 /** v1.3 provider-native lifecycle kinds, kept separate for legacy consumers. */
@@ -444,6 +450,7 @@ const KIND_DEFAULTS: Record<
   "deep_plan.draft_requested": { level: "info", visibility: "hidden", durability: "journaled" },
   "deep_plan.completed": { level: "success", visibility: "hidden", durability: "journaled" },
   "deep_plan.cancelled": { level: "warning", visibility: "hidden", durability: "journaled" },
+  "goal.evaluated": { level: "info", visibility: "hidden", durability: "journaled" },
   "model.capability_snapshot": { level: "info", visibility: "hidden", durability: "journaled" },
   "model.route_decided": { level: "info", visibility: "hidden", durability: "journaled" },
   "model.phase_changed": { level: "info", visibility: "hidden", durability: "journaled" },

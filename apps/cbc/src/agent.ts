@@ -19,6 +19,7 @@ import {
   TokenSavingController,
   type ApprovalBroker,
   type CompiledModelRequest,
+  type CompletionReport,
   type ContextPressureGuardResult,
   type KernelEmitter,
   type PromptInputs,
@@ -28,10 +29,10 @@ import {
   type TokenSavingPhase,
   type TurnResult,
 } from "@cbc/agent-kernel";
-import type { CbcConfig, ReasoningEffort } from "@cbc/config-schema";
+import type { CacheMode, CbcConfig, ReasoningEffort } from "@cbc/config-schema";
 import { TurnBudgetController } from "@cbc/inference-domain";
 import { MemoryService } from "@cbc/memory-service";
-import { requestModeChange, TaskEpochManager, type EpochTransition, type InteractionMode, type ModeChangeSource } from "@cbc/session-domain";
+import { GoalContractController, requestModeChange, TaskEpochManager, type EpochTransition, type GoalContractInput, type GoalEvaluation, type InteractionMode, type ModeChangeSource } from "@cbc/session-domain";
 import {
   ContextEngine,
   MemoryBank,
@@ -572,6 +573,8 @@ export class AgentSession {
   #lastRepositoryContext: readonly string[] = [];
   #currentRoute: InferencePolicyDecision | undefined;
   #currentContextBand: string | number | undefined;
+  /** True once a route has supplied the epoch's real capability digest. */
+  #capabilityDigestObserved = false;
   /** Evidence selected for the current turn, announced once the route is known. */
   #turnEvidence: EvidenceSelection | undefined;
   #checkpointId: string | undefined;
@@ -608,6 +611,10 @@ export class AgentSession {
   readonly #tokenSaving: TokenSavingController;
   /** Turn-scoped requirements ledger and questionnaire idempotency owner. */
   readonly #deepPlan: DeepPlanController;
+  /** Cross-turn goal contract; empty until a caller declares one (§P1-04). */
+  readonly #goalContract: GoalContractController;
+  /** Wall clock the active contract started against, for its time budget. */
+  #goalContractStartedAt: number | undefined;
   /** Provider continuation was lost mid-turn; the next recovery sample is Off. */
   #tokenSavingContinuationRecovery = false;
   /** The most recently resolved plan, for `/status` and inspectors. */
@@ -632,6 +639,9 @@ export class AgentSession {
     this.#tokenSaving = new TokenSavingController(options.config.agent.tokenSaving);
     this.#deepPlan = new DeepPlanController({
       mode: options.config.agent.deepPlan,
+      now: () => new Date(options.host.now()).toISOString(),
+    });
+    this.#goalContract = new GoalContractController({
       now: () => new Date(options.host.now()).toISOString(),
     });
     this.#pluginHookBus = new PluginHookBus();
@@ -1163,6 +1173,19 @@ export class AgentSession {
       onRouteDecided: (route) => {
         this.#currentRoute = route;
         this.#currentContextBand = route.context.band;
+        // §5.11: the capability manifest is an epoch input, and the route is the
+        // only place the live digest is known. The first route of an epoch is
+        // adopting a digest the constructor could only guess at, so it is not a
+        // change; every later disagreement is a real manifest change and has to
+        // detach reasoning produced under the old envelope.
+        if (this.#capabilityDigestObserved) {
+          this.#announceEpochTransition(
+            this.taskEpoch.transition({ modelCapabilityDigest: route.capability.digest }),
+          );
+        } else {
+          this.taskEpoch.observeCapability(route.capability.digest);
+        }
+        this.#capabilityDigestObserved = true;
       },
       onPromptCompiled: (assembled, metadata) => this.#handleCompiledPrompt(
         assembled,
@@ -2090,7 +2113,7 @@ export class AgentSession {
       candidateBreakpoints: 1,
       maxWritesPerTurn: this.#options.config.model.cache.maxWritesPerTurn,
       model: route?.capability ?? this.#options.config.model.default,
-      mode: this.#options.config.model.cache.mode,
+      mode: cachePlannerMode(this.#options.config.model.cache.mode),
     });
     const key = epoch !== undefined && route !== undefined &&
         (plan.mode === "write" || plan.mode === "read-only")
@@ -3204,6 +3227,79 @@ export class AgentSession {
       scope: "session",
       source: "slash",
     } as never, this.#currentScope() as never);
+  }
+
+  /**
+   * Declare the goal this session is pursuing (§P1-04).
+   *
+   * Contracts are opt-in: a session with none behaves exactly as before, so a
+   * plain interactive turn is not silently given a turn ceiling it never asked
+   * for. Adopting one resets progress, because a fresh goal that inherited a
+   * spent budget could stop before its first step.
+   */
+  startGoalContract(input: GoalContractInput): GoalEvaluation | undefined {
+    const epoch = this.taskEpoch.current();
+    this.#goalContract.start({
+      ...input,
+      ...(epoch !== undefined
+        ? {
+            taskEpochId: epoch.id,
+            workspaceIdentityDigest: epoch.workspaceIdentityDigest,
+          }
+        : {}),
+    });
+    return this.#goalContract.reevaluate(this.#todoController.current());
+  }
+
+  goalContract(): ReturnType<GoalContractController["current"]> {
+    return this.#goalContract.current();
+  }
+
+  goalEvaluation(): GoalEvaluation | undefined {
+    return this.#goalContract.evaluation();
+  }
+
+  clearGoalContract(): void {
+    this.#goalContract.clear();
+  }
+
+  /**
+   * Fold the turn that just finished into the contract and re-decide.
+   *
+   * The evaluator is deterministic and reads only observed state, so the verdict
+   * a detached daemon reaches is the verdict a resumed session reaches — which
+   * is what makes a stop condition trustworthy rather than advisory.
+   */
+  #evaluateGoalContract(report: CompletionReport): GoalEvaluation | undefined {
+    if (this.#goalContract.current() === undefined) return undefined;
+    this.#goalContractStartedAt ??= this.#options.host.now();
+    const startedAt = this.#goalContractStartedAt;
+    // Only a passing record closes a verification criterion. A `not_run` step is
+    // the exact case §5.24 is about: it must leave the criterion open rather
+    // than read as an absence of failure.
+    const verified = report.verification
+      .filter((record) => record.status === "passed" && record.command !== undefined)
+      .map((record) => record.command as string);
+    const blocked = report.status === "failed" || report.status === "partial"
+      ? report.risks[0] ?? report.nextStep
+      : undefined;
+    const evaluation = this.#goalContract.recordTurn({
+      elapsedMs: Math.max(0, this.#options.host.now() - startedAt),
+      ...(verified.length > 0 ? { satisfiedChecks: verified } : {}),
+      ...(blocked !== undefined && blocked.length > 0 ? { blockedReason: blocked } : {}),
+    }, this.#todoController.current());
+    if (evaluation !== undefined) {
+      this.#emit("goal.evaluated", {
+        goalId: this.#goalContract.current()?.id,
+        status: evaluation.status,
+        ...(evaluation.stopReason !== undefined ? { stopReason: evaluation.stopReason } : {}),
+        outstandingCriteria: evaluation.outstandingCriteria,
+        ...(evaluation.nextTodoId !== undefined ? { nextTodoId: evaluation.nextTodoId } : {}),
+        statement: evaluation.statement,
+        budgetRemaining: evaluation.budgetRemaining,
+      } as never, this.#currentScope());
+    }
+    return evaluation;
   }
 
   permissionContext(): PermissionContext {
@@ -4482,6 +4578,17 @@ function sameTodoProgressScope(currentItems: readonly PlanItem[], requestedItems
     };
     return JSON.stringify(todoProgressScope(current)) === JSON.stringify(todoProgressScope(merged));
   });
+}
+
+/**
+ * §8.4 spells the cache ladder as off | implicit | explicit while the planner's
+ * own vocabulary is the economic one (roi | always). `explicit` is the request
+ * to write a breakpoint whenever the capability allows it, which is what the
+ * planner calls `always`; the two ladders stay separate so a config written to
+ * either spelling means the same thing at the planner.
+ */
+function cachePlannerMode(mode: CacheMode): "roi" | "always" | "implicit" | "off" {
+  return mode === "explicit" ? "always" : mode;
 }
 
 function todoDocumentScope(document: unknown): unknown {
