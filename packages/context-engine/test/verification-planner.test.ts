@@ -45,8 +45,11 @@ describe("planVerification order (§5.22)", () => {
 
   test("a high-risk change keeps the independent reviewer and the broader tier", () => {
     const ids = stepIds(["packages/permissions/src/policy.ts"], { riskLevel: "high" });
+    expect(ids).toContain("package-tests");
     expect(ids).toContain("broader-tests");
     expect(ids).toContain("independent-review");
+    // §5.22 orders the changed packages before their consumers.
+    expect(ids.indexOf("package-tests")).toBeLessThan(ids.indexOf("broader-tests"));
     // The reviewer is a tier-4 signal, so it must not precede the diff review.
     expect(ids.indexOf("independent-review")).toBeGreaterThan(ids.indexOf("diff-integrity"));
   });
@@ -77,13 +80,52 @@ describe("planVerification order (§5.22)", () => {
       "revision_match",
       "parse",
       "focused_tests",
+      "package_tests",
       "broader_tests",
+      "affected_consumers",
       "diff_integrity",
       "authoritative_change_set",
       "evidence_freshness",
       "independent_review",
       "todo_consistency",
     ]);
+  });
+
+  test("the package and consumer tiers are scoped, not a full-matrix run (§5.22 steps 3-4)", () => {
+    const plan = planVerification({
+      changedPaths: ["packages/protocol-ts/src/events.ts"],
+      riskLevel: "high",
+    });
+    const pkg = plan.steps.find((step) => step.id === "package-tests");
+    const consumer = plan.steps.find((step) => step.id === "broader-tests");
+    // A bare `bun test` here is what made the consumer tier indistinguishable
+    // from running everything.
+    expect(verificationCommandDisplay(pkg!.command!)).toBe("bun test packages/protocol-ts");
+    expect(verificationCommandDisplay(consumer!.command!)).toBe("bun test packages/protocol-ts");
+    expect(consumer?.covers).toContain("affected_consumers");
+  });
+
+  test("a rust change scopes the package tier to the changed crates", () => {
+    const plan = planVerification({
+      changedPaths: ["crates/cbc-fs/src/lib.rs"],
+      riskLevel: "high",
+    });
+    const pkg = plan.steps.find((step) => step.id === "package-tests");
+    expect(verificationCommandDisplay(pkg!.command!)).toBe("cargo test -p cbc-fs");
+  });
+
+  test("a low-risk single-file edit plans neither the package nor the consumer tier", () => {
+    const ids = stepIds(["packages/agent-kernel/src/state.ts"]);
+    expect(ids).not.toContain("package-tests");
+    expect(ids).not.toContain("broader-tests");
+  });
+
+  test("the dependency signal is a manifest, not any path under packages/", () => {
+    // `packages/x/src/y.ts` used to match the dependency regex, so every file in
+    // the monorepo widened to the package and consumer tiers.
+    expect(planVerification({ changedPaths: ["packages/a/src/y.ts"] }).impact).not.toContain("dependency");
+    expect(planVerification({ changedPaths: ["packages/a/package.json"] }).impact).toContain("dependency");
+    expect(planVerification({ changedPaths: ["bun.lock"] }).impact).toContain("dependency");
   });
 
   test("the legacy adapter prefers the narrowest executable step", () => {

@@ -95,15 +95,48 @@ export function planVerification(changeSet: VerificationChangeSet): Verification
       reason: "run the narrowest tests covering the changed language or test files",
     });
   }
+  // §5.22 step 3: the changed packages' own suites, distinct from the focused
+  // file-level run above. A package command scoped to the impacted packages is
+  // what keeps a one-file edit from reaching for the whole matrix (§5.24's
+  // "저위험 수정에서 불필요한 전체 테스트 실행 감소").
+  const impactedPackages = impactedPackagesFor(paths);
+  const packageCommand = packageCommandFor(impactedPackages, languages);
+  if (
+    packageCommand !== undefined &&
+    (highRisk ||
+      impact.includes("cross_module") ||
+      impact.includes("dependency") ||
+      impact.includes("config") ||
+      impact.includes("generated"))
+  ) {
+    steps.push({
+      id: "package-tests",
+      tier: 2,
+      required: highRisk,
+      command: packageCommand,
+      covers: ["package_tests"],
+      escalate: "the change reaches past the edited files into their own packages",
+      reason: "run the changed packages' own suites, not just the edited files'",
+    });
+  }
+  // §5.22 step 4: the affected consumers. Scoped to the packages that depend on
+  // the changed ones when a dependency graph is supplied, and to the impacted
+  // packages themselves otherwise — never to the whole suite by default, which is
+  // what made this tier indistinguishable from a full run.
+  // Without a dependency graph the impacted packages are the best available
+  // stand-in for their consumers; §5.21's graph input widens this.
+  const consumers = impactedPackages;
   if (highRisk || impact.includes("cross_module") || impact.includes("dependency") || (changeSet.failedCommands?.length ?? 0) > 0 || (changeSet.reflectionPaths?.length ?? 0) > 0) {
     steps.push({
       id: "broader-tests",
-      tier: 2,
+      tier: 3,
       required: highRisk,
-      command: broaderCommandFor(languages),
-      covers: ["broader_tests"],
+      command: consumerCommandFor(consumers, languages),
+      covers: ["broader_tests", ...(consumers.length > 0 ? ["affected_consumers"] : [])],
       escalate: "impact or prior failure justifies widening beyond focused tests",
-      reason: "the change can affect consumers outside the edited files",
+      reason: consumers.length > 0
+        ? `the change can affect consumers outside the edited files (${consumers.join(", ")})`
+        : "the change can affect consumers outside the edited files",
     });
   }
   steps.push({
@@ -306,10 +339,42 @@ function focusedCommandFor(
   return undefined;
 }
 
-function broaderCommandFor(languages: ReadonlySet<string>): VerificationCommand {
-  if (languages.has("rust")) return { program: "cargo", args: ["test", "--workspace"], timeoutMs: 180_000 };
-  if (languages.has("python")) return { program: "python", args: ["-m", "pytest"], timeoutMs: 180_000 };
-  return { program: "bun", args: ["test"], timeoutMs: 180_000 };
+/**
+ * A suite scoped to whole packages. `bun test <dir>` and `cargo test -p <name>`
+ * both narrow to the given set, so a change confined to one package no longer
+ * costs a full-matrix run. An empty scope has no narrower form than the suite.
+ */
+function scopedSuiteFor(
+  scope: readonly string[],
+  languages: ReadonlySet<string>,
+  timeoutMs: number,
+): VerificationCommand {
+  if (languages.has("rust")) {
+    const crates = scope.filter((entry) => entry.startsWith("crates/")).map((entry) => entry.slice("crates/".length));
+    return crates.length > 0
+      ? { program: "cargo", args: ["test", ...crates.flatMap((crate) => ["-p", crate])], timeoutMs }
+      : { program: "cargo", args: ["test", "--workspace"], timeoutMs };
+  }
+  if (languages.has("python")) {
+    return { program: "python", args: ["-m", "pytest", ...scope], timeoutMs };
+  }
+  const directories = scope.filter((entry) => entry !== ".");
+  return { program: "bun", args: ["test", ...directories], timeoutMs };
+}
+
+function packageCommandFor(
+  impactedPackages: readonly string[],
+  languages: ReadonlySet<string>,
+): VerificationCommand | undefined {
+  if (impactedPackages.length === 0) return undefined;
+  return scopedSuiteFor(impactedPackages, languages, 180_000);
+}
+
+function consumerCommandFor(
+  consumers: readonly string[],
+  languages: ReadonlySet<string>,
+): VerificationCommand {
+  return scopedSuiteFor(consumers, languages, 180_000);
 }
 
 function impactSignals(
@@ -319,7 +384,14 @@ function impactSignals(
   const signals = new Set<VerificationImpactSignal>(["mutation"]);
   if (paths.some((path) => /\.(?:json|ya?ml|toml|env|config)$/i.test(path))) signals.add("config");
   if (paths.some((path) => /(?:auth|permission|credential|security|policy)/i.test(path))) signals.add("auth");
-  if (paths.some((path) => /(?:package|lock|cargo|go\.mod|requirements)/i.test(path))) signals.add("dependency");
+  // The dependency signal belongs to manifests and lockfiles, so it is matched
+  // against the file name. Testing the whole path made every file in a
+  // `packages/` monorepo a dependency change, which pulled the package and
+  // consumer tiers into every single-file edit — the opposite of §5.24's
+  // "저위험 수정에서 불필요한 전체 테스트 실행 감소".
+  if (paths.some((path) => /(?:^|\/)(?:package\.json|[^/]*lock[^/]*|cargo\.toml|go\.mod|requirements[^/]*)$/i.test(path))) {
+    signals.add("dependency");
+  }
   if (paths.some((path) => /(?:generated|schema|protocol)/i.test(path))) signals.add("generated");
   if (paths.some((path) => /(?:test|spec)\./i.test(path))) signals.add("test");
   if (paths.length > 1 && new Set(paths.map((path) => path.split("/")[0])).size > 1) signals.add("cross_module");
