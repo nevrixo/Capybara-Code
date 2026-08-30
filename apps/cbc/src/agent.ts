@@ -684,13 +684,7 @@ export class AgentSession {
     this.taskEpoch = new TaskEpochManager({
       initial: {
         goalDigest: "unassigned-goal",
-        policyDigest: stableDigest({
-          mode: options.config.agent.permissionMode,
-          provider: options.config.provider.openai,
-          phasePolicy: options.config.model.router.phasePolicy,
-          promptCompiler: options.config.agent.promptCompiler,
-          compoundTools: options.config.agent.compoundTools,
-        }),
+        policyDigest: sessionPolicyDigest(options.config),
         workspaceIdentityDigest: options.workspaceIdentityDigest ?? stableDigest(options.workspacePath),
         toolsetDigest: toolsetDigest(sessionTools),
         modelId: options.config.model.default,
@@ -3248,6 +3242,9 @@ export class AgentSession {
       scope: "session",
       source: "slash",
     } as never, this.#currentScope() as never);
+    this.#announceEpochTransition(this.taskEpoch.transition({
+      policyDigest: sessionPolicyDigest(this.#options.config),
+    }));
   }
 
   /**
@@ -4249,6 +4246,10 @@ export class AgentSession {
       // they named would bias the next, unrelated request.
       this.context.forgetReflections();
     }
+    // §P1-04(b): the goal verdict is decided after every turn, not only after a
+    // completed one. A turn that ended blocked or partial is exactly when the
+    // contract has to say whether the goal can still proceed.
+    this.#evaluateGoalContract(result.report);
     return result;
   }
 
@@ -4682,6 +4683,31 @@ export function testCommandFor(
 /** Native tools plus anything Skills or MCP contributed, for `--help` style output. */
 export function catalogSnapshot(registry: ToolRegistry): ToolDefinition[] {
   return registry.all();
+}
+
+/**
+ * The epoch's policy identity (§5.11). It has to include the resolved
+ * permission policy, not just the legacy mode string: a preset switch can
+ * change which axes ask, allow, or deny without touching `permissionMode`, and
+ * a plan the model built while a write was allowed is not a plan it would have
+ * built under a policy that denies one.
+ */
+function sessionPolicyDigest(config: CbcConfig): string {
+  return stableDigest({
+    mode: config.agent.permissionMode,
+    provider: config.provider.openai,
+    phasePolicy: config.model.router.phasePolicy,
+    promptCompiler: config.agent.promptCompiler,
+    compoundTools: config.agent.compoundTools,
+    permissions: resolvePermissionPolicy(config.permissions.preset, {
+      projectWrite: config.permissions.projectWrite,
+      shell: config.permissions.shell,
+      network: config.permissions.network,
+      destructive: config.permissions.destructive,
+      credentials: config.permissions.credentials,
+      externalSideEffect: config.permissions.externalSideEffect,
+    }, config.agent.permissionMode).digest,
+  });
 }
 
 /**

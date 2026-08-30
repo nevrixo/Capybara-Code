@@ -117,4 +117,38 @@ describe("session goal contract", () => {
     expect(evaluation?.status).toBe("active");
     expect(evaluation?.outstandingCriteria).toEqual(["c1", "c2"]);
   });
+
+  test("a finished turn advances the contract and journals the verdict", async () => {
+    const { session, events } = harness("goal-turn");
+    session.startGoalContract({
+      goal: "close one criterion",
+      successCriteria: [{ id: "c1", statement: "step", kind: "todo", refs: ["t1"] }],
+      budget: { maxTurns: 2, wallTimeMs: 600_000 },
+    });
+    await session.submit("Explain the parser", new AbortController().signal);
+
+    expect(session.goalEvaluation()?.status).toBe("active");
+    const verdicts = events.filter((event) => event.kind === "goal.evaluated");
+    expect(verdicts.length).toBe(1);
+    expect((verdicts[0]?.payload as { statement: string }).statement).not.toHaveLength(0);
+  });
+
+  test("the turn ceiling stops a goal the turns could not close", async () => {
+    const { session } = harness("goal-ceiling");
+    session.startGoalContract({
+      goal: "cannot finish in one turn",
+      successCriteria: [{ id: "c1", statement: "step", kind: "todo", refs: ["t1"] }],
+      budget: { maxTurns: 1, wallTimeMs: 600_000 },
+    });
+    await session.submit("Explain the parser", new AbortController().signal);
+
+    expect(session.goalEvaluation()?.status).toBe("stopped");
+    expect(session.goalEvaluation()?.stopReason).toBe("max_turns");
+  });
+
+  test("a session with no contract journals no verdict", async () => {
+    const { session, events } = harness("goal-none-emitted");
+    await session.submit("Explain the parser", new AbortController().signal);
+    expect(events.filter((event) => event.kind === "goal.evaluated")).toHaveLength(0);
+  });
 });
