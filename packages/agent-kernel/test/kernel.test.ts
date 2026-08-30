@@ -1101,9 +1101,12 @@ describe("prompt assembly (§10.9, §11.4, §18.1)", () => {
     expect(rendered).toContain("prefer fs.search");
   });
 
-  test("the tool protocol states the risk classes and approval rules", () => {
+  test("the tool protocol states the approval rule without the host's risk taxonomy", () => {
     const { stablePrefixText } = assemblePrompt(base);
-    expect(stablePrefixText).toContain("R4, R5, and R6 actions are approved one operation at a time");
+    // §6.6 drops host-internal invariants: the model acts on "some actions need
+    // per-operation approval", not on which of R0-R6 an action landed in.
+    expect(stablePrefixText).toContain("require the user's approval for each individual operation");
+    expect(stablePrefixText).not.toContain("R4, R5, and R6");
     expect(stablePrefixText).toContain("tool.discover");
     expect(stablePrefixText).toContain("either applies completely or not at all");
   });

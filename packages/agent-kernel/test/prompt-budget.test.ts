@@ -11,7 +11,14 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { NATIVE_TOOLS, nativeToolsForFeatures, ToolRegistry, type ToolDefinition } from "@cbc/tool-registry";
+import {
+  NATIVE_TOOLS,
+  RISK_DESCRIPTIONS,
+  ToolRegistry,
+  allowsBroadRule,
+  nativeToolsForFeatures,
+  type ToolDefinition,
+} from "@cbc/tool-registry";
 
 import { ROOT_POLICY, TOOL_PROTOCOL, assemblePrompt, toModelSchema } from "../src/index.ts";
 
@@ -89,9 +96,10 @@ describe("default tool schema budget (§6.7)", () => {
       history: [],
     });
     // Policy text only, no project instructions or skills. Recorded 2026-08 at
-    // 5,988 chars; §6.6's mutation-rule de-duplication brought it to 5,120.
-    // Later passes must move this down, never up.
-    expect(assembled.stablePrefixText.length).toBeLessThanOrEqual(5_120);
+    // 5,988 chars; §6.6's mutation-rule de-duplication and the removal of the
+    // host risk taxonomy brought it to 4,985. Later passes must move this down,
+    // never up.
+    expect(assembled.stablePrefixText.length).toBeLessThanOrEqual(4_985);
   });
 });
 
@@ -126,5 +134,31 @@ describe("each mutation rule is stated once (§6.6)", () => {
     // the discovery path by first getting a rejection, which §6.6's active-tools
     // -only rule would then make the common case.
     expect(TOOL_PROTOCOL).toContain("tool.discover");
+  });
+});
+
+describe("host-internal invariants stay out of the prompt (§6.6)", () => {
+  test("the R0-R6 taxonomy is not in the model's prompt", () => {
+    const prompt = `${ROOT_POLICY}\n${TOOL_PROTOCOL}`;
+    // The classes are how the host decides; the model cannot compute them and has
+    // no action that depends on knowing which one an action landed in.
+    for (const internal of ["R0", "R1", "R2", "R3", "R4", "R5", "R6", "pre-approved in bulk"]) {
+      expect(prompt).not.toContain(internal);
+    }
+  });
+
+  test("the one fact the model acts on survives", () => {
+    expect(TOOL_PROTOCOL).toContain("approval for each individual operation");
+  });
+
+  test("removing the taxonomy from the prompt changed no host contract", () => {
+    // The classifier is unchanged and still resolves by tool: the prompt was
+    // never an input to it, which is exactly why the text was removable.
+    for (const risk of ["R0", "R1", "R2", "R3", "R4", "R5", "R6"] as const) {
+      expect(RISK_DESCRIPTIONS[risk]).toBeTruthy();
+    }
+    expect(allowsBroadRule("R3")).toBe(true);
+    expect(allowsBroadRule("R4")).toBe(false);
+    expect(NATIVE_TOOLS.find((tool) => tool.id === "fs.delete")?.maxRisk).toBe("R4");
   });
 });

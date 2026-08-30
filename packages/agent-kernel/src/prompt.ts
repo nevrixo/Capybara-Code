@@ -62,8 +62,7 @@ export const TOOL_PROTOCOL = `Tool protocol:
 - Only a subset of tools is active at any moment. Call tool.discover with a short natural-language query to activate more.
 - Mutations run inside a transaction. A multi-file patch either applies completely or not at all.
 - Mutating an existing file requires the checksum fs.read returned; read it first. Each tool's schema states which field carries it, and a rejected mutation tells you exactly what to send instead.
-- Risk classes: R0 read-only, R1 local reversible execution, R2 bounded workspace mutation, R3 network or broad execution, R4 destructive or privileged, R5 credential or outside-workspace, R6 external side effect.
-- R4, R5, and R6 actions are approved one operation at a time and can never be pre-approved in bulk.
+- Some actions require the user's approval for each individual operation, no matter what was approved before. Expect the occasional denial and plan around it rather than retrying.
 - Large output is truncated in your view and stored as an artifact. Ask for a narrower command rather than assuming you saw everything.`;
 
 export const PLAN_POLICY = `You are in Plan mode.
