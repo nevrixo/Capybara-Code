@@ -61,6 +61,12 @@ export interface UiConfig {
 export type ModelRouterStrategy = "utility" | "latency" | "cost";
 export type PremiumBandPolicy = "deny" | "allow" | "utility-gated";
 export type CacheMode = "roi" | "always" | "off";
+/**
+ * §8.4 reasoning continuity ladder. `adaptive` is the task-epoch behaviour the
+ * kernel already implements: all-turn continuity inside an epoch, current-turn
+ * after a transition. The other two pin the scope regardless of epoch.
+ */
+export type ReasoningContinuity = "current-turn" | "all-turns" | "adaptive";
 
 export interface ModelRouterConfig {
   strategy: ModelRouterStrategy;
@@ -78,7 +84,7 @@ export interface ModelReasoningConfig {
   providerSummary: "auto" | "off";
   /** Legacy provider-summary alias. */
   summary: "auto" | "none";
-  continuity: "task-epoch";
+  continuity: ReasoningContinuity;
   proPolicy: "eval-gated";
   maxPolicy: "eval-gated";
   resetOnWorkspaceChange: boolean;
@@ -524,7 +530,7 @@ export function defaultConfig(): CbcConfig {
         // Request summaries independently of whether the current TUI renders them.
         providerSummary: "auto",
         summary: "auto",
-        continuity: "task-epoch",
+        continuity: "adaptive",
         proPolicy: "eval-gated",
         maxPolicy: "eval-gated",
         resetOnWorkspaceChange: true,
@@ -952,6 +958,7 @@ const ENUMS: Record<string, readonly string[]> = {
   "model.reasoningEffort": ["none", "low", "medium", "high", "xhigh", "max"],
   "model.reasoning.summary": ["auto", "none"],
   "model.reasoning.providerSummary": ["auto", "off"],
+  "model.reasoning.continuity": ["current-turn", "all-turns", "adaptive"],
   "agent.permissionMode": ["plan", "ask", "auto", "auto-review"],
   "agent.interactionMode": ["build", "plan"],
   "agent.reviewMode": ["off", "auto"],

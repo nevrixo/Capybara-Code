@@ -1423,6 +1423,67 @@ describe("request body policy (§10.6, §10.14)", () => {
     expect(enabledTool?.defer_loading).toBe(true);
   });
 
+  test("ships the hosted tool_search tool with every deferred schema", async () => {
+    const deferredTool = {
+      name: "fs.read",
+      description: "read a file",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+      deferLoading: true,
+      strict: true,
+    } as const;
+
+    const enabled = await captureBody(request({ tools: [deferredTool] }), { enableToolSearch: true });
+    const enabledTools = enabled.tools as Array<Record<string, unknown>>;
+    expect(enabledTools.map((tool) => tool.type)).toContain("tool_search");
+    expect(enabledTools.filter((tool) => tool.defer_loading === true)).toHaveLength(1);
+
+    const disabled = await captureBody(request({ tools: [deferredTool] }));
+    const disabledTools = disabled.tools as Array<Record<string, unknown>>;
+    expect(disabledTools.map((tool) => tool.type)).not.toContain("tool_search");
+    expect(disabledTools.some((tool) => tool.defer_loading === true)).toBe(false);
+  });
+
+  test("never defers a schema without a search tool to reload it", async () => {
+    const bodies = await Promise.all([
+      captureBody(request({ tools: [] }), { enableToolSearch: true }),
+      captureBody(request({ hostedTools: [{ type: "web_search" }] }), { enableToolSearch: true }),
+      captureBody(request(), { enableToolSearch: true }),
+    ]);
+    for (const body of bodies) {
+      const tools = (body.tools ?? []) as Array<Record<string, unknown>>;
+      const deferred = tools.some((tool) => tool.defer_loading === true);
+      if (deferred) expect(tools.map((tool) => tool.type)).toContain("tool_search");
+    }
+    // The switch alone is enough to make the search tool available, even when
+    // the caller narrowed the hosted set to something else.
+    expect(((bodies[1]?.tools ?? []) as Array<Record<string, unknown>>).map((tool) => tool.type))
+      .toEqual(["web_search", "tool_search"]);
+  });
+
+  test("keeps tool_search and defer_loading off the ChatGPT backend", async () => {
+    const body = await captureBody(
+      request({
+        tools: [{
+          name: "fs.read",
+          description: "read a file",
+          parameters: { type: "object", properties: {}, additionalProperties: false },
+          deferLoading: true,
+          strict: true,
+        }],
+      }),
+      { enableToolSearch: true, chatGpt: { accountId: "acct_1" } },
+    );
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain("tool_search");
+    expect(serialized).not.toContain("defer_loading");
+  });
+
+  test("an explicit empty hosted override also withholds the search tool", async () => {
+    const body = await captureBody(request({ hostedTools: [] }), { enableToolSearch: true });
+    const tools = (body.tools ?? []) as Array<Record<string, unknown>>;
+    expect(tools.map((tool) => tool.type)).not.toContain("tool_search");
+  });
+
   test("supports a per-request Responses hosted-tool override", async () => {
     const body = await captureBody(request({
       hostedTools: [

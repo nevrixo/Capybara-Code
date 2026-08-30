@@ -401,13 +401,15 @@ export class OpenAiResponsesProvider implements ModelProvider {
     model: ModelDescriptor | undefined,
   ): HostedTool[] {
     const requested = request.hostedTools ?? this.#options.hostedTools ?? DEFAULT_HOSTED_TOOLS;
+    // An explicit empty override means "no hosted tools at all", so it also
+    // withholds the search tool; the caller has opted out of deferral too.
     if (requested.length === 0 || model === undefined) return [];
     const capability = this.capabilitySnapshot(model.id);
     if (capability === undefined) return [];
-    return requested.filter((tool) => {
+    const proven = requested.filter((tool) => {
       if (this.#options.chatGpt !== undefined && this.#options.allowChatGptHostedTools === false) return false;
       if (tool.type === "tool_search") {
-        return this.#options.enableToolSearch === true && this.capabilities.toolSearch;
+        return this.#toolSearchAllowed();
       }
       if (tool.type === "programmatic_tool_calling") {
         return this.#options.chatGpt === undefined && capabilitySupports(capability, "programmaticToolCalling");
@@ -417,6 +419,20 @@ export class OpenAiResponsesProvider implements ModelProvider {
         : "imageGeneration";
       return capabilitySupports(capability, feature);
     });
+    // §6.5: `defer_loading` only makes a schema reachable again if the same
+    // request carries the hosted tool that can search for it. Nothing in the
+    // host ever asked for `tool_search` explicitly, so the rollout switch has to
+    // supply it here or every deferred schema is simply lost for the turn.
+    if (this.#toolSearchAllowed() && !proven.some((tool) => tool.type === "tool_search")) {
+      return [...proven, { type: "tool_search" }];
+    }
+    return proven;
+  }
+
+  /** The hosted search tool exists only on the platform backend, behind the rollout switch. */
+  #toolSearchAllowed(): boolean {
+    if (this.#options.chatGpt !== undefined && this.#options.allowChatGptHostedTools === false) return false;
+    return this.#options.enableToolSearch === true && this.capabilities.toolSearch;
   }
 
   /** §10.6 request policy, honouring the capability registry. */
@@ -480,6 +496,9 @@ export class OpenAiResponsesProvider implements ModelProvider {
 
     const hostedTools = this.#hostedToolsForRequest(request, model);
     const programmaticEnabled = hostedTools.some((tool) => tool.type === "programmatic_tool_calling");
+    // Keyed off the assembled hosted set rather than the option so a deferred
+    // schema can never be advertised without its search tool (§6.5).
+    const toolSearchRequested = hostedTools.some((tool) => tool.type === "tool_search");
     const functionTools = request.tools
       .filter((tool) =>
         tool.allowedCallers === undefined ||
@@ -494,7 +513,7 @@ export class OpenAiResponsesProvider implements ModelProvider {
         strict: tool.strict && supportsProviderStrictSchema(tool.parameters),
         ...(programmaticEnabled && tool.allowedCallers !== undefined ? { allowed_callers: [...tool.allowedCallers] } : {}),
         ...(programmaticEnabled && tool.outputSchema !== undefined ? { output_schema: normalizeProviderSchema(tool.outputSchema) } : {}),
-        ...(this.#options.enableToolSearch === true && tool.deferLoading === true ? { defer_loading: true } : {}),
+        ...(toolSearchRequested && tool.deferLoading === true ? { defer_loading: true } : {}),
       }));
     if (functionTools.length > 0 || hostedTools.length > 0) {
       body.tools = [
