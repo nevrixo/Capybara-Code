@@ -15,7 +15,7 @@ import { isTokenSavingLevel } from "@cbc/agent-kernel";
 import { MANUAL_MODEL_PROFILE, type ReasoningEffort } from "@cbc/config-schema";
 import type { CbcEvent } from "@cbc/protocol";
 import type { SessionViewModel } from "@cbc/session-domain";
-import { clampEffortToModel, findModel, MODEL_REGISTRY } from "@cbc/provider-openai";
+import { clampEffortToModel, findModel, MODEL_REGISTRY, supportsEffort } from "@cbc/provider-openai";
 import { describeEffectivePermissionPolicy, isPermissionPreset, resolvePermissionPolicy } from "@cbc/permissions";
 import { SUBAGENT_ROLES, roleDefinition } from "@cbc/subagents";
 import {
@@ -70,6 +70,50 @@ import { ensureUpdatePrompt, printUpdateGuidance } from "../update-prompt.ts";
 export interface InteractiveArgs {
   readonly prompt?: string;
   readonly noDaemon?: boolean;
+}
+
+/**
+ * The `Ctrl+T` ladder, weakest first.
+ *
+ * Ordered here rather than taken from `REASONING_EFFORTS` because that list is
+ * the set of *legal* values from the config schema, and a set has no direction.
+ * Cycling needs one, and it has to stay ascending even if the schema changes its
+ * declaration order for an unrelated reason. A test asserts the two agree, so a
+ * value added to the schema cannot stay unreachable by key.
+ */
+const EFFORT_CYCLE: readonly ReasoningEffort[] = [
+  "none",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+
+/**
+ * The next effort a `Ctrl+T` press should select.
+ *
+ * Ascending, wrapping back to the weakest value, so repeated presses walk the
+ * whole range in one direction rather than oscillating between two values.
+ *
+ * `supported` narrows the ladder to what the live model advertises. Stepping onto
+ * an unsupported value and letting `clampEffortToModel` push it back would make
+ * the key look stuck: the user presses it, the chrome does not move, and nothing
+ * says why. Skipping those values keeps every press visible.
+ *
+ * Returns `undefined` when the model offers fewer than two efforts — there is no
+ * next value, and the caller says so rather than redrawing an unchanged frame.
+ */
+export function nextReasoningEffort(
+  current: ReasoningEffort,
+  supported: (effort: ReasoningEffort) => boolean,
+): ReasoningEffort | undefined {
+  const ladder = EFFORT_CYCLE.filter(supported);
+  if (ladder.length < 2) return undefined;
+  const index = ladder.indexOf(current);
+  // A current value absent from the ladder (a config written for another model,
+  // say) starts the walk at the weakest rather than failing.
+  return ladder[(index + 1) % ladder.length] ?? ladder[0];
 }
 
 /** Persist concrete model controls without letting the auto router replace them. */
@@ -752,6 +796,26 @@ export async function interactive(
 
         void boot.session.requestInteractionMode(target, "key");
         return undefined;
+      },
+      onCycleReasoningEffort: () => {
+        const current = boot.session.liveReasoningEffort;
+        const descriptor = findModel(boot.session.liveModelId);
+        const next = nextReasoningEffort(
+          current,
+          // An unknown model advertises nothing, so offer the whole ladder rather
+          // than refusing to move at all.
+          descriptor === undefined ? () => true : (effort) => supportsEffort(descriptor, effort),
+        );
+        if (next === undefined) {
+          return `${boot.session.liveModelId} offers only ${current} effort.`;
+        }
+
+        boot.session.setReasoningEffort(next);
+        ui.setReasoningEffort(next);
+        // Persisted the way `/effort` persists, so a value chosen by key survives
+        // a restart instead of quietly reverting to the config's.
+        persistExplicitReasoningEffort(context, ui, next);
+        return `Effort: ${next}`;
       },
       onRunningSlashCommand: (text) => {
         const intent = parseSlash(text);
@@ -1485,6 +1549,38 @@ function applySetting(
 }
 
 let agentSettingWriteTail: Promise<void> = Promise.resolve();
+
+/**
+ * Persist a key-chosen effort to the user config.
+ *
+ * Shares `persistAgentSetting`'s write tail: `Ctrl+T` can be pressed faster than
+ * a config file can be rewritten, and two overlapping writes of the same key can
+ * land out of order. A failure is reported and the session keeps the new value —
+ * the effort is already applied, and reverting it would be the greater surprise.
+ */
+function persistExplicitReasoningEffort(
+  context: CommandContext,
+  ui: InteractiveUi,
+  effort: ReasoningEffort,
+): void {
+  const reportFailure = (reason: string): void => {
+    ui.notice(`Effort ${effort} is active for this session, but was not saved: ${reason}`);
+  };
+  agentSettingWriteTail = agentSettingWriteTail
+    .then(async () => {
+      for (const [path, value] of explicitModelConfigSettings({ reasoningEffort: effort })) {
+        const written = await setUserConfigValue(context.host, path, value);
+        const error = written.issues.find((issue) => issue.severity === "error");
+        if (error !== undefined) {
+          reportFailure(error.message);
+          return;
+        }
+      }
+    })
+    .catch((error: unknown) => {
+      reportFailure(error instanceof Error ? error.message : String(error));
+    });
+}
 
 /**
  * Persist a non-UI setting row to the user config, serialized behind a write

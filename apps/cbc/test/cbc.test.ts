@@ -51,9 +51,11 @@ import {
 } from "@cbc/tui-components";
 import { NATIVE_TOOLS, okResult } from "@cbc/tool-registry";
 import { MODEL_REGISTRY } from "@cbc/provider-openai";
+import type { ReasoningEffort } from "@cbc/config-schema";
 import { ComposerSession } from "../src/composer.ts";
 import {
   explicitModelConfigSettings,
+  nextReasoningEffort,
   worktreeOverlayLines,
 } from "../src/commands/interactive.ts";
 import { buildResumeCandidates } from "../src/resume-picker.ts";
@@ -123,7 +125,7 @@ import {
   type AccountTokenRecord,
 } from "../src/account-login.ts";
 import { renderLoopbackPage, startLoopback } from "../src/loopback.ts";
-import { isReasoningValue, parseSlash, slashCompletions } from "../src/slash.ts";
+import { isReasoningValue, parseSlash, REASONING_EFFORTS, slashCompletions } from "../src/slash.ts";
 import {
   coerceConfigValue,
   emptyTrustStore,
@@ -5805,6 +5807,42 @@ describe("TOML upsert", () => {
       'args = ["-y", "pkg"]',
     );
   });
+  test("Ctrl+T walks the effort ladder upward and wraps", () => {
+    const all = () => true;
+    expect(nextReasoningEffort("none", all)).toBe("low");
+    expect(nextReasoningEffort("medium", all)).toBe("high");
+    expect(nextReasoningEffort("xhigh", all)).toBe("max");
+    expect(nextReasoningEffort("max", all)).toBe("none");
+  });
+
+  test("Ctrl+T skips efforts the live model does not advertise", () => {
+    // A model offering only these three must not stop on medium or xhigh:
+    // stepping onto a clamped value would look like the key did nothing.
+    const offered = new Set(["low", "high", "max"]);
+    const supported = (effort: string) => offered.has(effort);
+    expect(nextReasoningEffort("low", supported)).toBe("high");
+    expect(nextReasoningEffort("high", supported)).toBe("max");
+    expect(nextReasoningEffort("max", supported)).toBe("low");
+  });
+
+  test("Ctrl+T reports no move when the model offers a single effort", () => {
+    expect(nextReasoningEffort("high", (effort) => effort === "high")).toBeUndefined();
+    // A value absent from the ladder still starts the walk rather than failing.
+    expect(nextReasoningEffort("high", (effort) => effort === "low" || effort === "max")).toBe("low");
+  });
+
+  test("every effort the config schema accepts is on the Ctrl+T ladder", () => {
+    const walked = new Set<string>();
+    let effort: ReasoningEffort = "none";
+    for (let step = 0; step < REASONING_EFFORTS.length; step += 1) {
+      walked.add(effort);
+      effort = nextReasoningEffort(effort, () => true)!;
+    }
+    // A schema value missing from the ladder would be unreachable by key.
+    expect([...walked].sort()).toEqual([...REASONING_EFFORTS].sort());
+    expect(effort).toBe("none");
+  });
+
   test("explicit effort and model selections persist through the manual profile", async () => {
     const host = createFakeHost();
     const settings = explicitModelConfigSettings({
