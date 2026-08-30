@@ -38,6 +38,32 @@ does not fail validation, so nothing would catch it except a human reading this 
 
 ---
 
+## events 1.0 — native lane and hosted agent lifecycle kinds
+
+Added native_lane.selected and native_lane.fallback so a route receipt records
+which native OpenAI lane a turn chose and, when the lane could not be used, the
+reason the runtime fell back to the local or direct path. Selection is hidden and
+fallback surfaces in the drawer because a fallback is the interesting case.
+
+Added program.tool_call_admitted and program.tool_call_denied for programmatic
+tool calling. A program-issued call is journaled at the moment the permission
+boundary admits or refuses it, so a denied call leaves evidence even though it
+never reaches a tool. Admission is hidden and denial surfaces as a warning.
+
+Added hosted_agent.requested, hosted_agent.fallback_local, and
+hosted_agent.evidence_rejected to cover the parts of the hosted multi-agent
+lifecycle that the existing spawned, progress, completed, and cancelled kinds do
+not describe: the request before a spawn is granted, the fallback to a local
+subagent, and evidence discarded because it failed the freshness or lineage
+check.
+
+All seven kinds are ancestry-bearing and require turnId, agentId, callerId, and
+taskEpochId, so a native lane decision, an admitted or denied program call, and a
+hosted agent step are all attributable to a caller lineage within one task epoch.
+All seven are journaled.
+
+These are additive 1.x changes. Older event consumers skip the new kinds.
+
 ## config · tools · events · app 1.0 — Deep Plan questionnaires
 
 Added the user-only agent.deepPlan = "off" | "on" setting, defaulting to
