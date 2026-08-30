@@ -25,6 +25,8 @@ export interface ProgramLaneRequest {
   readonly callerId: string;
   readonly taskEpochId: string;
   readonly calls: readonly Partial<ProgramToolCall>[];
+  /** Host-observed calls already completed for this program before this pause. */
+  readonly callsUsed?: number;
   readonly source?: string;
   readonly sourceBytes?: number;
   readonly intermediateBytes?: number;
@@ -123,7 +125,21 @@ export class ProgrammaticToolLane {
     if ((request.loopIterations ?? 0) > (this.#policy.maxLoopIterations ?? 0) || (request.loopIterations ?? 0) > 0 && this.#policy.allowLoops !== true) {
       return { accepted: false, programId: request.programId, state: "denied", outputs: [], denied: [{ code: "loop_denied", message: "program loops are disabled or exceed the iteration budget" }], reason: "program loop policy denied", stats };
     }
-    let callsUsed = 0;
+    if (
+      request.callsUsed !== undefined &&
+      (!Number.isSafeInteger(request.callsUsed) || request.callsUsed < 0)
+    ) {
+      return {
+        accepted: false,
+        programId: request.programId,
+        state: "denied",
+        outputs: [],
+        denied: [{ code: "program_budget", message: "prior program call usage is invalid" }],
+        reason: "program call usage is invalid",
+        stats,
+      };
+    }
+    let callsUsed = request.callsUsed ?? 0;
     const callIds = new Set<string>();
     for (const call of request.calls) {
       if (typeof call.callId !== "string" || call.callId.length === 0 || callIds.has(call.callId)) {
