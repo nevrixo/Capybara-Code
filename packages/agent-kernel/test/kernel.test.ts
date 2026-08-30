@@ -4466,3 +4466,87 @@ describe("premium context policy routing", () => {
     expect(seen).toEqual([undefined]);
   });
 });
+
+describe("native lane eligibility and fallback tally (§6 P1-03)", () => {
+  const supported = {
+    native: { programmaticToolCalling: "supported", hostedMultiAgent: "supported" },
+  } as const;
+
+  test("an eligible program lane says so, and each refusal names its own clause", () => {
+    // §P1-03 asks for "PTC eligibility와 비활성 이유". A boolean is not an answer:
+    // "policy off" and "the backend has no program lane" need different fixes.
+    const eligible = harness({
+      steps: [],
+      programmaticPolicy: { enabled: true, maxToolCalls: 8, maxParallelCalls: 2 },
+      activeToolIds: ["fs.read"],
+    }).kernel.nativeLaneEligibility({ lane: "program", capability: supported, toolNames: ["fs.read"] });
+    expect(eligible.eligible).toBe(true);
+    expect(eligible.blocker).toBeUndefined();
+
+    const disabled = harness({ steps: [], programmaticPolicy: { enabled: false } })
+      .kernel.nativeLaneEligibility({ lane: "program", capability: supported, toolNames: ["fs.read"] });
+    expect(disabled.eligible).toBe(false);
+    expect(disabled.blocker).toBe("policy-disabled");
+    expect(disabled.reason).toContain("configuration");
+
+    const noBudget = harness({
+      steps: [],
+      programmaticPolicy: { enabled: true, maxToolCalls: 0, maxParallelCalls: 2 },
+    }).kernel.nativeLaneEligibility({ lane: "program", capability: supported, toolNames: ["fs.read"] });
+    expect(noBudget.blocker).toBe("zero-call-budget");
+
+    const unsupported = harness({
+      steps: [],
+      programmaticPolicy: { enabled: true, maxToolCalls: 8, maxParallelCalls: 2 },
+    }).kernel.nativeLaneEligibility({
+      lane: "program",
+      capability: { native: { programmaticToolCalling: "unsupported", hostedMultiAgent: "supported" } },
+      toolNames: ["fs.read"],
+    });
+    expect(unsupported.blocker).toBe("capability-unsupported");
+    expect(unsupported.reason).toContain("backend");
+
+    const noTool = harness({
+      steps: [],
+      programmaticPolicy: { enabled: true, maxToolCalls: 8, maxParallelCalls: 2 },
+    }).kernel.nativeLaneEligibility({ lane: "program", capability: supported, toolNames: ["fs.edit"] });
+    expect(noTool.blocker).toBe("no-allowlisted-tool");
+  });
+
+  test("hosted eligibility distinguishes a missing dispatcher from an unavailable one", () => {
+    const none = harness({ steps: [] }).kernel
+      .nativeLaneEligibility({ lane: "hosted_scout", capability: supported });
+    expect(none.eligible).toBe(false);
+    expect(none.blocker).toBe("no-dispatcher");
+    expect(none.reason).toContain("installed");
+  });
+
+  test("the session fallback tally survives the per-turn reason reset", async () => {
+    const provider = new MockProvider({
+      steps: [{ text: "Done." }, { text: "Done." }],
+      capabilities: { parallelToolCalls: true },
+    });
+    const { kernel } = harness({
+      steps: [],
+      provider,
+      inferencePolicy: new InferenceUtilityController(),
+      autoRoute: true,
+      phasePolicy: true,
+      parallelToolCalls: true,
+      programmaticPolicy: { enabled: false },
+      activeToolIds: ["fs.read"],
+    });
+    expect(kernel.nativeFallbackTally()).toEqual({ count: 0, recentReasons: [] });
+
+    const first = await kernel.runTurn("implement after inspecting", new AbortController().signal);
+    expect(first.routeReceipt?.actual.fallbackReasons.length).toBeGreaterThan(0);
+    const afterFirst = kernel.nativeFallbackTally();
+    expect(afterFirst.count).toBeGreaterThan(0);
+    expect(afterFirst.recentReasons.join(" ")).toContain("programmatic lane is disabled");
+
+    // The receipt's own list is cleared at the start of every turn; the tally is
+    // the answer a user asking "how often did this fall back?" needs.
+    await kernel.runTurn("implement the next change", new AbortController().signal);
+    expect(kernel.nativeFallbackTally().count).toBeGreaterThan(afterFirst.count);
+  });
+});

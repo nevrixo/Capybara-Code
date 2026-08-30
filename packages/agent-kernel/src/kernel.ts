@@ -67,6 +67,8 @@ import {
 import {
   ToolExecutionGraph,
   ToolRegistry,
+  expandActionGroupCall,
+  isActionGroupId,
   renderValidationErrors,
   type ArtifactRef,
   type ToolResult,
@@ -543,6 +545,20 @@ export type ContextPressureGuardResult =
   | { readonly action: "accept"; readonly decision?: ContextPressureDecision }
   | { readonly action: "compact" | "emergency"; readonly targetTokens: number; readonly decision: ContextPressureDecision };
 
+/**
+ * The host-owned hosted-scout subtree runner (§5.6, §5.15).
+ *
+ * The kernel deliberately does not know how to build a hosted scout request:
+ * §5.6 makes it a *separate* read-only request, and the session owns the
+ * coordinator that admits it and revalidates its evidence capsule. All the
+ * kernel needs is whether such a runner exists, because the hosted_scout lane
+ * cannot be selected without one.
+ */
+export interface HostedScoutDispatcher {
+  /** Whether the subtree can run right now — budgets and transport included. */
+  available(): boolean;
+}
+
 export interface KernelOptions {
   readonly agentId: string;
   readonly role: AgentRole;
@@ -577,6 +593,12 @@ export interface KernelOptions {
   readonly parallelToolCalls?: boolean;
   /** Host-owned read-only policy for provider programmatic function calls. */
   readonly programmaticPolicy?: Partial<ProgramPolicy>;
+  /**
+   * Host-owned dispatcher for the §5.6 hosted scout subtree. The kernel never
+   * builds that request itself — it is a separate read-only request — so the
+   * hosted_scout lane is only selectable when a host supplies one.
+   */
+  readonly hostedScoutDispatcher?: HostedScoutDispatcher;
   /** Enable opaque server-side compaction when the active provider supports it. */
   readonly nativeCompaction?: boolean;
   /** Use model-relative native compaction instead of a fixed legacy threshold. */
@@ -808,6 +830,46 @@ export const TOOL_BUDGET_WRAP_UP_PROMPT = [
   "state your findings with the file and line evidence you read, and list anything you could not confirm as an open question instead of guessing.",
 ].join(" ");
 
+/**
+ * Why a provider-native lane is or is not available, for §6 P1-03's
+ * "PTC eligibility와 비활성 이유".
+ *
+ * The reason is required even when eligible: a diagnostic that can only say
+ * "off" leaves the user unable to tell a config choice from a backend limit, and
+ * those have different fixes. `blocker` names the first failing clause so the
+ * answer is actionable rather than a conjunction the caller has to re-derive.
+ */
+export type NativeLaneBlocker =
+  | "policy-disabled"
+  | "zero-call-budget"
+  | "zero-parallel-budget"
+  | "capability-unsupported"
+  | "no-allowlisted-tool"
+  | "no-dispatcher";
+
+export interface NativeLaneEligibility {
+  readonly lane: "program" | "hosted_scout";
+  readonly eligible: boolean;
+  readonly reason: string;
+  readonly blocker?: NativeLaneBlocker;
+}
+
+/**
+ * Session-level native fallback tally.
+ *
+ * `#routeFallbackReasons` is per-turn by design — a route receipt describes one
+ * turn — so §P1-03's "fallback 횟수와 최근 이유" had no source at all: by the time
+ * a user asks, the turn that fell back has already cleared its list. The tally
+ * survives the reset and keeps a bounded ring of the most recent reasons rather
+ * than an unbounded log.
+ */
+export interface NativeFallbackTally {
+  readonly count: number;
+  readonly recentReasons: readonly string[];
+}
+
+const RECENT_FALLBACK_REASON_LIMIT = 8;
+
 export class AgentKernel {
   readonly #options: KernelOptions;
   readonly #limits: LoopLimits;
@@ -841,6 +903,7 @@ export class AgentKernel {
   readonly #programmaticPolicy: ProgramPolicy;
   readonly #programmaticLane: ProgrammaticToolLane;
   readonly #programmaticToolIds: ReadonlySet<string>;
+  readonly #hostedScoutDispatcher: HostedScoutDispatcher | undefined;
   /**
    * Live per-program accounting (§5.4). A program pauses and resumes across
    * several provider requests, so its budgets only mean anything if the host
@@ -904,6 +967,14 @@ export class AgentKernel {
   #routeParallelPeak = 0;
   #routeFallbackReasons: string[] = [];
   /**
+   * Cumulative native-lane fallbacks for the session. Separate from
+   * `#routeFallbackReasons` because that list is cleared every turn (see the
+   * reset in `#beginTurn`), and a diagnostic asked after the fact needs the
+   * history, not the current turn's slice.
+   */
+  #nativeFallbackCount = 0;
+  #recentNativeFallbackReasons: string[] = [];
+  /**
    * The native-lane admission outcome for the route currently being announced.
    * `#decideRoute` resolves whether the provider-native lane the policy asked
    * for is actually available, but it has no event sink; recording the outcome
@@ -953,6 +1024,7 @@ export class AgentKernel {
     this.#programmaticToolIds = new Set(
       configuredProgramTools.filter((toolId) => PROGRAMMATIC_TOOL_IDS.has(toolId)),
     );
+    this.#hostedScoutDispatcher = options.hostedScoutDispatcher;
     this.#providerSession = options.provider.createTurnSession?.() ?? {
       capabilities: options.provider.capabilities ?? {
         websocket: false,
@@ -2320,10 +2392,18 @@ export class AgentKernel {
         executable = this.#directRouteFallback(executable, nativeFallbackReason);
       }
     } else if (executable.lane === "hosted_scout") {
-      // Hosted scouts use a separate read-only request owned by AgentSession.
-      // Until that dispatcher is injected, the kernel must not claim execution.
-      nativeFallbackReason = "hosted scout dispatcher is unavailable; using direct reasoning";
-      executable = this.#directRouteFallback(executable, nativeFallbackReason);
+      // Hosted scouts run as a separate read-only request owned by the host, so
+      // the kernel may only keep the lane when that dispatcher actually exists
+      // (§5.15). Without one there is nothing to execute the subtree, and
+      // claiming the lane anyway would report a scout that never ran.
+      const hostedAvailable =
+        this.#hostedScoutDispatcher?.available() === true &&
+        executable.capability.native.hostedMultiAgent === "supported" &&
+        executable.maxAgents > 0;
+      if (!hostedAvailable) {
+        nativeFallbackReason = "hosted scout dispatcher is unavailable; using direct reasoning";
+        executable = this.#directRouteFallback(executable, nativeFallbackReason);
+      }
     }
     this.#pendingNativeLane = {
       requested: requestedLane,
@@ -2340,6 +2420,7 @@ export class AgentKernel {
     if (!this.#routeFallbackReasons.includes(warning)) {
       this.#routeFallbackReasons.push(warning);
     }
+    this.#recordNativeFallback(warning);
     return {
       ...decision,
       lane: "direct",
@@ -2355,6 +2436,120 @@ export class AgentKernel {
       warnings: decision.warnings.includes(warning)
         ? decision.warnings
         : [...decision.warnings, warning],
+    };
+  }
+
+  /**
+   * Count every native-lane fallback for the session, deduping only against the
+   * immediately previous reason: a lane that keeps falling back for the same
+   * reason across ten turns is ten fallbacks, and collapsing them would hide
+   * exactly the pattern §P1-03 wants surfaced.
+   */
+  #recordNativeFallback(reason: string): void {
+    this.#nativeFallbackCount += 1;
+    if (this.#recentNativeFallbackReasons.at(-1) !== reason) {
+      this.#recentNativeFallbackReasons.push(reason);
+      if (this.#recentNativeFallbackReasons.length > RECENT_FALLBACK_REASON_LIMIT) {
+        this.#recentNativeFallbackReasons.shift();
+      }
+    }
+  }
+
+  /** §P1-03: the session's cumulative native-lane fallbacks and recent reasons. */
+  nativeFallbackTally(): NativeFallbackTally {
+    return {
+      count: this.#nativeFallbackCount,
+      recentReasons: [...this.#recentNativeFallbackReasons],
+    };
+  }
+
+  /**
+   * Whether a provider-native lane could run right now, and if not, which clause
+   * refuses it.
+   *
+   * Read-only and independent of a turn: a diagnostic must be answerable between
+   * turns, when `#turnRoute` is undefined. `capability` and `toolNames` are the
+   * caller's because the kernel does not own a snapshot outside a route
+   * decision — passing them keeps this an accessor rather than a second,
+   * possibly divergent, route computation.
+   */
+  nativeLaneEligibility(input: {
+    readonly lane: "program" | "hosted_scout";
+    readonly capability?: { readonly native: { readonly programmaticToolCalling: string; readonly hostedMultiAgent: string } };
+    readonly toolNames?: readonly string[];
+  }): NativeLaneEligibility {
+    if (input.lane === "hosted_scout") {
+      // Same order the route decision applies (§5.15): the dispatcher first,
+      // because without a runner the capability is moot.
+      if (this.#hostedScoutDispatcher?.available() !== true) {
+        return {
+          lane: "hosted_scout",
+          eligible: false,
+          reason: this.#hostedScoutDispatcher === undefined
+            ? "no hosted scout dispatcher is installed, so the kernel cannot run a hosted subtree"
+            : "the hosted scout dispatcher is installed but reports itself unavailable (budget or transport)",
+          blocker: "no-dispatcher",
+        };
+      }
+      if (input.capability !== undefined && input.capability.native.hostedMultiAgent !== "supported") {
+        return {
+          lane: "hosted_scout",
+          eligible: false,
+          reason: "the active backend does not expose hosted multi-agent",
+          blocker: "capability-unsupported",
+        };
+      }
+      return {
+        lane: "hosted_scout",
+        eligible: true,
+        reason: "a hosted scout dispatcher is available and the backend exposes hosted multi-agent",
+      };
+    }
+
+    if (!this.#programmaticPolicy.enabled) {
+      return {
+        lane: "program",
+        eligible: false,
+        reason: "programmatic tool calling is disabled by configuration",
+        blocker: "policy-disabled",
+      };
+    }
+    if (this.#programmaticPolicy.maxToolCalls <= 0) {
+      return {
+        lane: "program",
+        eligible: false,
+        reason: "the per-turn program call budget is zero",
+        blocker: "zero-call-budget",
+      };
+    }
+    if (this.#programmaticPolicy.maxParallelCalls <= 0) {
+      return {
+        lane: "program",
+        eligible: false,
+        reason: "the program parallel-call ceiling is zero",
+        blocker: "zero-parallel-budget",
+      };
+    }
+    if (input.capability !== undefined && input.capability.native.programmaticToolCalling !== "supported") {
+      return {
+        lane: "program",
+        eligible: false,
+        reason: "the active backend does not expose the programmatic tool lane",
+        blocker: "capability-unsupported",
+      };
+    }
+    if (input.toolNames !== undefined && !input.toolNames.some((name) => this.#programmaticToolIds.has(name))) {
+      return {
+        lane: "program",
+        eligible: false,
+        reason: "no allowlisted read-only tool is active this turn",
+        blocker: "no-allowlisted-tool",
+      };
+    }
+    return {
+      lane: "program",
+      eligible: true,
+      reason: "policy, budgets, capability, and the read-only allowlist all admit the program lane",
     };
   }
 
@@ -2936,6 +3131,9 @@ export class AgentKernel {
           if (!this.#routeFallbackReasons.includes(event.reason)) {
             this.#routeFallbackReasons.push(event.reason);
           }
+          // A transport demotion is a fallback the user asked to be counted
+          // (§P1-03) just as much as a lane demotion is.
+          this.#recordNativeFallback(event.reason);
           emit("provider.fallback", {
             requestId,
             from: event.from,
@@ -3684,6 +3882,25 @@ export class AgentKernel {
     }
 
     const outputHistoryStart = this.#history.length;
+    // §6.5: a group call is a facade. Rewrite it into the internal call it names
+    // before anything downstream — the graph, validation, the permission check,
+    // the observation, the evidence — so every one of them sees the real tool id
+    // and none of them has to know the facade exists.
+    const groupRefusals = this.#resolveActionGroupCalls(calls, emit);
+    for (const call of calls) {
+      const refusal = groupRefusals.get(call.callId);
+      if (refusal === undefined) continue;
+      budget.toolCalls = Math.min(this.#limits.maxToolCalls, budget.toolCalls + 1);
+      this.#risks.push(refusal);
+      emit("tool.failed", {
+        callId: call.callId,
+        toolId: call.name,
+        code: "INVALID_ARGUMENTS",
+        message: refusal,
+      });
+      this.#appendToolOutput(call, refusal);
+      machine.tryApply("observed");
+    }
     const programmaticDenials = this.#programmaticDenials(calls, emit);
     for (const call of calls) {
       const denial = programmaticDenials.get(call.callId);
@@ -3700,7 +3917,9 @@ export class AgentKernel {
       });
       this.#appendToolOutput(call, text);
     }
-    const executableCalls = calls.filter((call) => !programmaticDenials.has(call.callId));
+    const executableCalls = calls.filter(
+      (call) => !programmaticDenials.has(call.callId) && !groupRefusals.has(call.callId),
+    );
     const pendingById = new Map(executableCalls.map((call) => [call.callId, call]));
     const routeParallel = this.#turnRoute?.maxParallelTools;
     const configuredGraph = this.#options.toolGraph ?? {};
@@ -4307,6 +4526,48 @@ export class AgentKernel {
   }
 
   /** Append the tool result as a `function_call_output` so replay is faithful. */
+  /**
+   * Rewrite every action-group call in place into the internal call it stands
+   * for, returning a refusal message per call that could not be resolved.
+   *
+   * Mutating the pending call rather than translating at the execution site is
+   * deliberate: §6.5 requires the internal tool id to be what gets validated,
+   * classified, observed, and recorded as evidence, and the only way to be sure
+   * every one of those paths agrees is for the group id to stop existing here.
+   */
+  #resolveActionGroupCalls(
+    calls: readonly PendingCall[],
+    emit: <T>(kind: CbcEventKind, payload: T) => void,
+  ): Map<string, string> {
+    const refusals = new Map<string, string>();
+    for (const call of calls) {
+      if (!isActionGroupId(call.name)) continue;
+      let parsed: unknown;
+      try {
+        parsed = call.argumentsText.length === 0 ? {} : JSON.parse(call.argumentsText) as unknown;
+      } catch {
+        parsed = undefined;
+      }
+      const expansion = expandActionGroupCall(call.name, parsed);
+      if (!expansion.ok) {
+        refusals.set(
+          call.callId,
+          `INVALID_TOOL_CALL: ${call.name} did not name an internal tool (${expansion.reason}).`,
+        );
+        continue;
+      }
+      const group = call.name;
+      (call as { name: string }).name = expansion.toolId;
+      call.argumentsText = JSON.stringify(expansion.arguments);
+      emit("tool.group_expanded", {
+        callId: call.callId,
+        group,
+        toolId: expansion.toolId,
+      });
+    }
+    return refusals;
+  }
+
   #appendToolOutput(call: PendingCall, output: string): void {
     this.#history.push({
       type: "function_call_output",
