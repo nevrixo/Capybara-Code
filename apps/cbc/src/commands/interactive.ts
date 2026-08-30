@@ -12,7 +12,7 @@
  */
 
 import { isTokenSavingLevel } from "@cbc/agent-kernel";
-import { MANUAL_MODEL_PROFILE, type ReasoningEffort } from "@cbc/config-schema";
+import { MANUAL_MODEL_PROFILE, configKeyInfo, type ReasoningEffort } from "@cbc/config-schema";
 import type { CbcEvent } from "@cbc/protocol";
 import type { SessionViewModel } from "@cbc/session-domain";
 import { clampEffortToModel, findModel, MODEL_REGISTRY, supportsEffort } from "@cbc/provider-openai";
@@ -1317,8 +1317,39 @@ interface SettingDescriptor extends SettingsMenuItem {
   readonly apply: (session: ActiveSession, value: string) => SettingsMenuChange;
 }
 
-/** Build the list of available settings for the /setting picker menu. */
+/**
+ * The rows `/setting` offers, with anything inert removed (§5.18).
+ *
+ * key-status.ts is the single source of truth for whether a key does anything, so
+ * the surface is filtered through it rather than curated by hand. Every row is
+ * wired today; the filter exists because nothing stopped an experimental key from
+ * being added to this list and reading as a working toggle, which is the
+ * user-visible no-op §5.19 requires zero of in the default profile.
+ *
+ * A row with no `configPath` is a session action, not a setting, so there is no
+ * key whose status could make it a no-op and it is always offered.
+ */
 function settingDescriptors(ui: InteractiveUi, session: ActiveSession): SettingDescriptor[] {
+  return allSettingDescriptors(ui, session).filter((descriptor) => isWiredSettingRow(descriptor));
+}
+
+/**
+ * Whether a `/setting` row is backed by a key that actually does something.
+ *
+ * Exported so the rule can be asserted directly: constructing the live UI and
+ * session just to check which rows survive would test the harness, not the rule.
+ */
+export function isWiredSettingRow(row: { readonly configPath?: string }): boolean {
+  if (row.configPath === undefined) return true;
+  const info = configKeyInfo(row.configPath);
+  // An unregistered key is offered rather than hidden: the registry not
+  // mentioning it is a gap in the table, and silently dropping a working toggle
+  // is worse than showing one whose status nobody recorded.
+  return info === undefined || info.status === "wired";
+}
+
+/** Every row the picker could offer, before the §5.18 status filter. */
+function allSettingDescriptors(ui: InteractiveUi, session: ActiveSession): SettingDescriptor[] {
   return [
     {
       key: "subagents",
