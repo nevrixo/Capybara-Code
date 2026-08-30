@@ -1004,6 +1004,16 @@ export class AgentKernel {
    */
   #routeLanesRun: InferenceLane[] = [];
   /**
+   * Child agent ids this turn actually started, deduplicated.
+   *
+   * §5.16's receipt compares the route's `maxAgents` ceiling against what the
+   * turn spent, and a hardcoded zero made every turn look like it delegated
+   * nothing — so a route that planned three scouts and started three read
+   * identically to one that started none. Ids rather than a counter because a
+   * `task.status`/`task.await` on an already-started child must not count twice.
+   */
+  readonly #routeAgentsSpawned = new Set<string>();
+  /**
    * Cumulative native-lane fallbacks for the session. Separate from
    * `#routeFallbackReasons` because that list is cleared every turn (see the
    * reset in `#beginTurn`), and a diagnostic asked after the fact needs the
@@ -1362,6 +1372,7 @@ export class AgentKernel {
     this.#routeParallelPeak = 0;
     this.#routeFallbackReasons = [];
     this.#routeLanesRun = [];
+    this.#routeAgentsSpawned.clear();
     this.#pendingNativeLane = undefined;
     this.#programs.clear();
     this.#turnAllowedActions.clear();
@@ -2171,7 +2182,7 @@ export class AgentKernel {
       actual: {
         model: this.#routedModel(),
         lane: actualLane,
-        agentsSpawned: 0,
+        agentsSpawned: this.#routeAgentsSpawned.size,
         parallelPeak: this.#routeParallelPeak,
         reasoningContext: route.reasoningContext,
         cacheReadTokens: this.#usage.cachedInputTokens,
@@ -4726,6 +4737,14 @@ export class AgentKernel {
 
       const durationMs = execution.durationMs ?? this.#now() - started;
       const changeDetail = changeDetailFromResult(execution.result.data);
+      // A spawn is counted from its own successful result, not from the route's
+      // intent: a call the coordinator refused (fan-out, writer lease, budget)
+      // started no agent, and §5.16 asks what the turn spent, not what it asked
+      // for. The id keeps a later await on the same child from counting twice.
+      if (call.name === "task.spawn" && execution.result.ok) {
+        const spawnedId = spawnedAgentIdFromResult(execution.result.data) ?? call.callId;
+        this.#routeAgentsSpawned.add(spawnedId);
+      }
       const tool = this.#options.registry.get(call.name);
       if (tool?.mutates === true || (action.writes?.length ?? 0) > 0) {
         // §10.13 / AC-43: once a mutation lands, replay is unsafe.
@@ -6113,6 +6132,29 @@ function writtenRevisionsFromResult(data: unknown): Map<string, string> {
   // A single-path write reports its revision at the top level.
   consider(record);
   return revisions;
+}
+
+/**
+ * The child agent id a successful `task.spawn` reported.
+ *
+ * The bridge answers with `taskId`; older embedders answered with `agentId` or a
+ * nested handle, so all three are accepted. A result that names none still
+ * counts as one spawn — the caller falls back to the call id — because a
+ * successful spawn did start an agent regardless of how it labelled it.
+ */
+function spawnedAgentIdFromResult(data: unknown): string | undefined {
+  if (typeof data !== "object" || data === null) return undefined;
+  const record = data as Record<string, unknown>;
+  for (const key of ["taskId", "agentId", "id"]) {
+    const value = record[key];
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  const handle = record.handle;
+  if (typeof handle === "object" && handle !== null) {
+    const nested = (handle as Record<string, unknown>).id;
+    if (typeof nested === "string" && nested.length > 0) return nested;
+  }
+  return undefined;
 }
 
 function changedPathsFromResult(data: unknown): string[] {

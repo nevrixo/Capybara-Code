@@ -4757,6 +4757,79 @@ describe("route execution receipt reports execution, not the plan (§5.16)", () 
     expect(result.routeReceipt?.actual.lane).toBe("program");
   });
 
+  test("the agents the turn actually started are counted, not the ceiling", async () => {
+    const provider = new MockProvider({
+      steps: [
+        {
+          toolCalls: [
+            { callId: "spawn-1", name: "task.spawn", arguments: { role: "explore", title: "T", goal: "a".repeat(20), constraints: ["x"], expectedOutput: ["y"] } },
+            { callId: "spawn-2", name: "task.spawn", arguments: { role: "explore", title: "U", goal: "b".repeat(20), constraints: ["x"], expectedOutput: ["y"] } },
+          ],
+        },
+        { text: "Delegated." },
+      ],
+    });
+    const { kernel } = harness({
+      steps: [],
+      provider,
+      inferencePolicy: new InferenceUtilityController(),
+      autoRoute: true,
+      activeToolIds: ["task.spawn"],
+      toolResults: {
+        "task.spawn": (action) => ({
+          result: okResult("started subagent", { taskId: "child-" + action.callId }),
+          text: "started",
+        }),
+      },
+    });
+
+    const result = await kernel.runTurn("delegate the exploration", new AbortController().signal);
+
+    expect(result.routeReceipt?.actual.agentsSpawned).toBe(2);
+  });
+
+  test("a refused spawn started no agent, so it is not counted", async () => {
+    const provider = new MockProvider({
+      steps: [
+        {
+          toolCalls: [
+            { callId: "spawn-ok", name: "task.spawn", arguments: { role: "explore", title: "T", goal: "a".repeat(20), constraints: ["x"], expectedOutput: ["y"] } },
+            { callId: "spawn-refused", name: "task.spawn", arguments: { role: "explore", title: "U", goal: "b".repeat(20), constraints: ["x"], expectedOutput: ["y"] } },
+          ],
+        },
+        { text: "Partially delegated." },
+      ],
+    });
+    const { kernel } = harness({
+      steps: [],
+      provider,
+      inferencePolicy: new InferenceUtilityController(),
+      autoRoute: true,
+      activeToolIds: ["task.spawn"],
+      toolResults: {
+        "task.spawn": (action) => action.callId === "spawn-refused"
+          ? { result: errorResult("INVALID_ARGUMENT", "node reached its child fan-out limit"), text: "refused" }
+          : { result: okResult("started subagent", { taskId: "child-ok" }), text: "started" },
+      },
+    });
+
+    const result = await kernel.runTurn("delegate twice", new AbortController().signal);
+
+    expect(result.routeReceipt?.actual.agentsSpawned).toBe(1);
+  });
+
+  test("a turn that delegated nothing reports zero rather than the planned ceiling", async () => {
+    const { kernel } = harness({
+      steps: [{ text: "Done alone." }],
+      inferencePolicy: new InferenceUtilityController(),
+      autoRoute: true,
+    });
+
+    const result = await kernel.runTurn("answer directly", new AbortController().signal);
+
+    expect(result.routeReceipt?.actual.agentsSpawned).toBe(0);
+  });
+
   test("a demoted lane is reported as direct on both sides, with the reason kept", async () => {
     // The demotion rewrites the plan too, so agreement here is correct — what
     // matters is that `actual` is now measured from the request that ran rather
