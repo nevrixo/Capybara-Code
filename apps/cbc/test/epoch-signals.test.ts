@@ -259,4 +259,66 @@ describe("epoch invalidation signals", () => {
       .toBe(afterMutation.workspaceIdentityDigest);
     expect(afterMutation.workspaceIdentityDigest).not.toBe(startupIdentity);
   });
+
+  test("the independent reviewer runs in its own epoch and inherits no parent reasoning", async () => {
+    const patch = ["--- a/README.md", "+++ b/README.md", "@@ -1 +1 @@", "-old", "+new", ""].join("\n");
+    const provider = new MockProvider({
+      steps: [
+        { toolCalls: [{ callId: "patch-readme", name: "fs.apply_patch", arguments: { diff: patch } }] },
+        { text: "Patched README.md." },
+        { text: '{"summary":"looks fine","findings":[]}' },
+      ],
+    });
+    const config = structuredClone(loadConfig({ projectTrusted: true, env: {} }).config);
+    config.agent.reviewMode = "auto";
+    config.agent.verification.reviewPolicy = "always";
+    config.permissions.projectWrite = "auto";
+
+    let now = 1_000;
+    const events: CbcEvent[] = [];
+    const session = new AgentSession({
+      host: { now: () => ++now } as never,
+      runtime: {
+        ...sessionRuntime(),
+        beginTransaction: async () => ({ transactionId: "tx-review-epoch" }),
+        patch: async () => ({ stagedPaths: ["README.md"], files: [{ path: "README.md", hunks: 1 }] }),
+        commitTransaction: async () => ({
+          operations: [{ path: "README.md", additions: 1, deletions: 1 }],
+          totalAdditions: 1,
+          totalDeletions: 1,
+        }),
+        rollbackTransaction: async () => undefined,
+        gitDiff: async () => ({
+          files: [{ path: "README.md", patch, additions: 1, deletions: 1 }],
+        }),
+        glob: async () => ({ entries: [], truncated: false }),
+      } as never,
+      config,
+      workspacePath: "/work",
+      workspaceIdentityDigest: "d".repeat(64),
+      trust: "trusted-always",
+      sessionId: "epoch-review-requested",
+      provider,
+      approvals: { request: async () => ({ kind: "allow_once" as const }) },
+      granted: new GrantedRules(),
+      nonInteractive: false,
+      now: () => ++now,
+      onEvent: (event) => { events.push(event); },
+    });
+    session.registry.activate(["fs.apply_patch"]);
+
+    await session.submit("Update README.md", new AbortController().signal);
+
+    // §5.13's first completion criterion: the reviewer never evaluates with the
+    // author's reasoning, and §5.11 requires that boundary to be an epoch.
+    expect(resetReasons(events)).toContain("review_requested");
+    const reviewRequest = provider.requests.find((request) =>
+      request.requestId.startsWith("review_")
+    );
+    expect(reviewRequest).toBeDefined();
+    expect(reviewRequest?.reasoning.context).toBe("current_turn");
+    expect(reviewRequest?.previousResponseId).toBeUndefined();
+    // Nothing the author produced may be replayed into the review.
+    expect(reviewRequest?.input).toHaveLength(1);
+  });
 });

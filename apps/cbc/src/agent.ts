@@ -3545,6 +3545,12 @@ export class AgentSession {
   /** Independent provider call over the bounded material above. */
   async #independentReview(diffSummary: string, signal: AbortSignal): Promise<ReviewOutcome> {
     const config = this.#options.config;
+    // §5.11/§5.13: the reviewer's independence has to be a property of the epoch,
+    // not of two unrelated hardcodes. Journaling the boundary is what makes it
+    // auditable — a reader of the session can see that the review was evaluated
+    // under its own epoch rather than having to trust that a literal below and a
+    // role gate in the kernel both still say `current_turn`.
+    this.#announceEpochTransition(this.taskEpoch.requestReviewer());
     const prompt = [
       "You are an independent code reviewer. You did not write this change and you have no context beyond what is shown.",
       "Review the following change summary for correctness, safety, and obvious regressions.",
