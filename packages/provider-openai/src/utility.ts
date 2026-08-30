@@ -2,6 +2,8 @@
 
 import { createHash } from "node:crypto";
 
+import type { WorkPhase } from "@cbc/inference-domain";
+
 import {
   BUNDLED_CAPABILITY_MANIFEST,
   bundledCapability,
@@ -207,6 +209,100 @@ export class CachePlanner {
 
 export type InferenceLane = "direct" | "program" | "hosted_scout" | "local_agent";
 
+/**
+ * How much verification a turn's outcome has to earn (§5.14).
+ *
+ * The router names the level so the verification contract has a planned value
+ * to be measured against; nothing here decides *which* commands run, only how
+ * wide the check has to be.
+ */
+export type VerificationLevel = "focused" | "package" | "integration" | "independent_review";
+
+/** Change-risk vocabulary shared with the kernel's own assessment. */
+export type RouteRiskLevel = "low" | "medium" | "high" | "critical";
+
+const VERIFICATION_RANK: Readonly<Record<VerificationLevel, number>> = {
+  focused: 0,
+  package: 1,
+  integration: 2,
+  independent_review: 3,
+};
+
+export interface VerificationLevelInput {
+  readonly intent: SampleIntent;
+  readonly phase?: WorkPhase;
+  readonly interactionMode?: "build" | "plan";
+  /** Whether the turn has already applied, or is about to apply, a change. */
+  readonly mutatesWorkspace?: boolean;
+  /** The kernel's deterministic change-risk level, when a change exists. */
+  readonly changeRisk?: RouteRiskLevel;
+  /** Compiled input as a fraction of the usable context window. */
+  readonly inputPressure?: number;
+  readonly complexity?: ComplexityFeatures;
+}
+
+export interface VerificationLevelDecision {
+  readonly level: VerificationLevel;
+  readonly codes: readonly string[];
+}
+
+/**
+ * Derive the verification level from execution facts alone (§5.17).
+ *
+ * No per-turn model call: the features are the kernel phase, the interaction
+ * mode, whether the turn mutates, the assessed change risk, input pressure, and
+ * the task's own structure. Free text reaches this only through `intent`, which
+ * the caller has already normalized — the one place a regex is allowed to speak,
+ * and only as a secondary signal on top of the structural ones.
+ *
+ * Ambiguity resolves *upward*. A caller that cannot say whether the turn changed
+ * the workspace must not be handed the weakest contract by default, because the
+ * cost of an unnecessary package run is a slower turn while the cost of a missed
+ * one is an unverified change.
+ */
+export function deriveVerificationLevel(input: VerificationLevelInput): VerificationLevelDecision {
+  const codes: string[] = [];
+  const readOnlyPhase = input.phase === "orient" || input.phase === "investigate";
+  // Plan mode applies nothing, so there is no change whose blast radius a wider
+  // level could cover; a package run there is pure cost.
+  if (input.interactionMode === "plan" && input.mutatesWorkspace !== true) {
+    return { level: "focused", codes: ["verify:plan-mode"] };
+  }
+  const mutates = input.mutatesWorkspace ?? (readOnlyPhase ? false : undefined);
+  if (mutates === false) {
+    // A review of code the turn did not touch still owns its own claims, so it
+    // is checked at package scope; anything else read-only needs no more than
+    // the focused check.
+    const level: VerificationLevel = input.intent === "review" ? "package" : "focused";
+    return { level, codes: ["verify:read-only-turn", `verify:${level}`] };
+  }
+  let level: VerificationLevel = "package";
+  codes.push(mutates === true ? "verify:mutating-turn" : "verify:mutation-unknown");
+  const raise = (candidate: VerificationLevel, code: string): void => {
+    if (VERIFICATION_RANK[candidate] <= VERIFICATION_RANK[level]) return;
+    level = candidate;
+    codes.push(code);
+  };
+  // Risk is preferred over the coarse `highRiskDomain` flag because it is
+  // derived from the paths a change actually touched; using both would only
+  // double-count the same sensitive surface.
+  if (input.changeRisk === "critical") raise("independent_review", "verify:risk-critical");
+  else if (input.changeRisk === "high") raise("integration", "verify:risk-high");
+  if (input.phase === "repair") raise("integration", "verify:repair-phase");
+  const features = input.complexity;
+  if (features !== undefined) {
+    if (features.previousFailedAttempts >= 2) raise("integration", "verify:repeated-failure");
+    if (features.expectedFilesTouched >= 8) raise("integration", "verify:wide-change");
+    if (features.crossLanguageImpact) raise("integration", "verify:cross-language");
+  }
+  // A turn that already fills its window has accumulated enough surface that a
+  // package-local check no longer describes what it could have broken.
+  if ((input.inputPressure ?? 0) >= 0.8) raise("integration", "verify:input-pressure");
+  if (input.intent === "review") raise("independent_review", "verify:review-intent");
+  codes.push(`verify:${level}`);
+  return { level, codes };
+}
+
 /** Provider-neutral routing plan emitted before request assembly. */
 export interface InferencePlan {
   readonly routeId: string;
@@ -219,6 +315,8 @@ export interface InferencePlan {
   readonly maxAgents: number;
   readonly maxParallelTools: number;
   readonly maxCostUsd: number;
+  /** How wide the turn's verification contract has to be (§5.14, §5.17). */
+  readonly verificationLevel: VerificationLevel;
   readonly rationaleCodes: readonly string[];
 }
 
@@ -233,6 +331,7 @@ export function inferenceRouteId(route: {
   readonly maxAgents: number;
   readonly maxParallelTools: number;
   readonly maxCostUsd: number;
+  readonly verificationLevel: VerificationLevel;
   readonly outputTokens: number;
   readonly context: Pick<ContextBandDecision, "allowed" | "premium">;
   readonly reasonCode: string;
@@ -248,6 +347,7 @@ export function inferenceRouteId(route: {
     route.maxAgents,
     route.maxParallelTools,
     route.maxCostUsd,
+    route.verificationLevel,
     route.outputTokens,
     route.context.allowed,
     route.context.premium,
@@ -276,6 +376,13 @@ export interface InferencePolicyInput {
   readonly needsReasoningSummary?: boolean;
   /** Preserve a user-selected maximum-quality effort during automatic routing. */
   readonly qualityFirst?: boolean;
+  /** Kernel work phase, the primary §5.17 classification feature. */
+  readonly phase?: WorkPhase;
+  readonly interactionMode?: "build" | "plan";
+  /** Whether the turn has already applied, or is about to apply, a change. */
+  readonly mutatesWorkspace?: boolean;
+  /** The kernel's assessed change risk, when the turn has changed paths. */
+  readonly changeRisk?: RouteRiskLevel;
 }
 
 export interface InferencePolicyDecision extends InferencePlan {
@@ -418,6 +525,15 @@ export class InferenceUtilityController implements InferencePolicyPort {
     const rationaleCodes = [reasonCode, lane, context.premium ? "premium-context" : "standard-context", ...warnings.map(() => "capability-warning")];
     const maxAgents = lane === "hosted_scout" ? 3 : 0;
     const maxParallelTools = lane === "program" ? 6 : 1;
+    const verification = deriveVerificationLevel({
+      intent: input.intent,
+      ...(input.phase !== undefined ? { phase: input.phase } : {}),
+      ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+      ...(input.mutatesWorkspace !== undefined ? { mutatesWorkspace: input.mutatesWorkspace } : {}),
+      ...(input.changeRisk !== undefined ? { changeRisk: input.changeRisk } : {}),
+      inputPressure: inputPressure(input.contextTokens, capability, input.reserveOutputTokens),
+      ...(input.complexity !== undefined ? { complexity: input.complexity } : {}),
+    });
     const routeId = inferenceRouteId({
       model,
       capability,
@@ -429,6 +545,7 @@ export class InferenceUtilityController implements InferencePolicyPort {
       maxAgents,
       maxParallelTools,
       maxCostUsd,
+      verificationLevel: verification.level,
       outputTokens: output,
       context,
       reasonCode,
@@ -450,7 +567,8 @@ export class InferenceUtilityController implements InferencePolicyPort {
       maxAgents,
       maxParallelTools,
       maxCostUsd,
-      rationaleCodes,
+      verificationLevel: verification.level,
+      rationaleCodes: [...rationaleCodes, ...verification.codes],
       ...(input.maxCostUsd !== undefined ? { estimatedCostCeilingUsd: input.maxCostUsd } : {}),
       warnings,
     };
@@ -498,6 +616,23 @@ function requirePolicy(): { complexityScore: (features: ComplexityFeatures) => n
     score += Math.min(2, features.previousFailedAttempts);
     return Math.max(0, Math.min(10, score));
   } };
+}
+
+/**
+ * Compiled input as a fraction of the window the request may actually use.
+ *
+ * The reserve is subtracted first: a turn that fits the raw window but not the
+ * window minus its own output reserve is already under pressure.
+ */
+function inputPressure(
+  contextTokens: number,
+  capability: ModelCapabilitySnapshot,
+  reserveOutputTokens: number | undefined,
+): number {
+  const reserve = Math.max(0, Math.floor(reserveOutputTokens ?? 0));
+  const usable = Math.max(1, Math.floor(capability.contextWindow) - reserve);
+  const requested = Math.max(0, Math.floor(Number.isFinite(contextTokens) ? contextTokens : 0));
+  return clamp01(requested / usable);
 }
 
 function clamp01(value: number): number {

@@ -203,6 +203,154 @@ describe("ChatGPT/Codex routing profile", () => {
   });
 });
 
+describe("verification level (§5.14, §5.17)", () => {
+  test("a read-only investigation earns only the focused contract", () => {
+    const decision = new InferenceUtilityController().decide({
+      intent: "tool_select",
+      phase: "investigate",
+      interactionMode: "build",
+      contextTokens: 4_000,
+    });
+
+    expect(decision.verificationLevel).toBe("focused");
+    expect(decision.rationaleCodes).toContain("verify:read-only-turn");
+  });
+
+  test("plan mode never widens past focused, because it applies nothing", () => {
+    const decision = new InferenceUtilityController().decide({
+      intent: "program",
+      phase: "implement",
+      interactionMode: "plan",
+      contextTokens: 4_000,
+    });
+
+    expect(decision.verificationLevel).toBe("focused");
+    expect(decision.rationaleCodes).toContain("verify:plan-mode");
+  });
+
+  test("a mutating turn is at least package-scoped", () => {
+    const decision = new InferenceUtilityController().decide({
+      intent: "program",
+      phase: "implement",
+      interactionMode: "build",
+      mutatesWorkspace: true,
+      contextTokens: 4_000,
+    });
+
+    expect(decision.verificationLevel).toBe("package");
+  });
+
+  test("assessed risk widens the level without a second model call", () => {
+    const high = new InferenceUtilityController().decide({
+      intent: "program",
+      phase: "implement",
+      interactionMode: "build",
+      mutatesWorkspace: true,
+      changeRisk: "high",
+      contextTokens: 4_000,
+    });
+    const critical = new InferenceUtilityController().decide({
+      intent: "program",
+      phase: "implement",
+      interactionMode: "build",
+      mutatesWorkspace: true,
+      changeRisk: "critical",
+      contextTokens: 4_000,
+    });
+
+    expect(high.verificationLevel).toBe("integration");
+    expect(high.rationaleCodes).toContain("verify:risk-high");
+    expect(critical.verificationLevel).toBe("independent_review");
+  });
+
+  test("a repair phase and repeated failures both reach integration", () => {
+    const repair = new InferenceUtilityController().decide({
+      intent: "program",
+      phase: "repair",
+      interactionMode: "build",
+      mutatesWorkspace: true,
+      contextTokens: 4_000,
+    });
+    const retried = new InferenceUtilityController().decide({
+      intent: "program",
+      phase: "implement",
+      interactionMode: "build",
+      mutatesWorkspace: true,
+      complexity: { ...defaultFeatures(), previousFailedAttempts: 2 },
+      contextTokens: 4_000,
+    });
+
+    expect(repair.verificationLevel).toBe("integration");
+    expect(retried.verificationLevel).toBe("integration");
+    expect(retried.rationaleCodes).toContain("verify:repeated-failure");
+  });
+
+  test("input pressure widens the level once the window is nearly full", () => {
+    const capability = BUNDLED_CAPABILITY_MANIFEST.snapshots[0]!;
+    const decision = new InferenceUtilityController().decide({
+      intent: "program",
+      phase: "implement",
+      interactionMode: "build",
+      mutatesWorkspace: true,
+      capability,
+      contextTokens: Math.floor(capability.contextWindow * 0.95),
+      reserveOutputTokens: 32_000,
+    });
+
+    expect(decision.verificationLevel).toBe("integration");
+    expect(decision.rationaleCodes).toContain("verify:input-pressure");
+  });
+
+  test("an unstated mutation is treated as one rather than defaulting to focused", () => {
+    // §5.17's safe default: a caller that cannot say whether the turn changed
+    // anything must not receive the weakest contract.
+    const decision = new InferenceUtilityController().decide({
+      intent: "program",
+      phase: "implement",
+      contextTokens: 4_000,
+    });
+
+    expect(decision.verificationLevel).toBe("package");
+    expect(decision.rationaleCodes).toContain("verify:mutation-unknown");
+  });
+
+  test("the level participates in route identity, so a wider contract is a new route", () => {
+    const base = {
+      intent: "program" as const,
+      phase: "implement" as const,
+      interactionMode: "build" as const,
+      mutatesWorkspace: true,
+      contextTokens: 4_000,
+    };
+    const policy = new InferenceUtilityController();
+    const packageScoped = policy.decide(base);
+    const integration = policy.decide({ ...base, changeRisk: "high" });
+
+    expect(packageScoped.routeId).not.toBe(integration.routeId);
+  });
+
+  test("the same input and capability snapshot reproduce the whole decision (§5.19)", () => {
+    const input = {
+      intent: "program" as const,
+      phase: "implement" as const,
+      interactionMode: "build" as const,
+      mutatesWorkspace: true,
+      changeRisk: "high" as const,
+      capability: BUNDLED_CAPABILITY_MANIFEST.snapshots[0]!,
+      contextTokens: 12_345,
+      reserveOutputTokens: 32_000,
+    };
+    const first = new InferenceUtilityController().decide(input);
+    const second = new InferenceUtilityController().decide(input);
+
+    expect(second.routeId).toBe(first.routeId);
+    expect(second.verificationLevel).toBe(first.verificationLevel);
+    expect(second.rationaleCodes).toEqual(first.rationaleCodes);
+    expect(second.lane).toBe(first.lane);
+    expect(second.contextBand).toBe(first.contextBand);
+  });
+});
+
 describe("premium context band policy", () => {
   const reserve = { reserveOutputTokens: 32_000 };
 
