@@ -311,7 +311,14 @@ export function chatGptCodexCapability(
       contextWindow: CHATGPT_CODEX_CONTEXT_WINDOW,
       maxOutputTokens: CHATGPT_CODEX_MAX_OUTPUT_TOKENS,
       reasoningModes: ["standard"],
-      native: bundled.native,
+      // The ChatGPT/Codex account backend does not expose the API-only PTC,
+      // multi-agent, code, or mutation tools. Preserve only the hosted tools
+      // that the account transport can actually surface.
+      native: {
+        ...SAFE_NATIVE,
+        webSearch: bundled.native.webSearch,
+        imageGeneration: bundled.native.imageGeneration,
+      },
       provenanceSources: ["bundled", "chatgpt-codex-account"],
       observedAt: CHATGPT_CODEX_PROFILE_OBSERVED_AT,
     },
