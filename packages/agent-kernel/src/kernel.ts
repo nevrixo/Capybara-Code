@@ -2132,6 +2132,23 @@ export class AgentKernel {
       completionGate: coverage.coverageStatus,
     });
 
+    // §5.16: the receipt is announced as its own event before the terminal one,
+    // so a bench reading the journal finds it on a cancelled turn too — the case
+    // `turn.completed` cannot cover, and the case a route comparison most wants,
+    // since a turn abandoned mid-flight is where plan and execution diverge.
+    // §5.19 requires zero required-field mismatches between the route event and
+    // the receipt, so the payload carries the same `routeId` the decision was
+    // announced under and both halves verbatim rather than a flattened summary.
+    if (routeReceipt !== undefined) {
+      emit("model.route_receipt", {
+        routeId: routeReceipt.routeId,
+        planned: routeReceipt.planned,
+        actual: routeReceipt.actual,
+        routeEpoch: this.#routeEpoch,
+        phase: this.#phase,
+        turnStatus: machine.state === "cancelled" ? "cancelled" : finalReport.status,
+      });
+    }
     if (machine.state === "cancelled") {
       emit("turn.cancelled", { reason: "user cancelled" });
     } else {

@@ -4867,6 +4867,58 @@ describe("route execution receipt reports execution, not the plan (§5.16)", () 
     expect(result.routeReceipt?.actual.lane).toBe("program");
   });
 
+  test("the receipt is announced as its own event with the decision's routeId", async () => {
+    const { kernel, events } = harness({
+      steps: [{ text: "Done." }],
+      inferencePolicy: new InferenceUtilityController(),
+      autoRoute: true,
+    });
+
+    const result = await kernel.runTurn("answer briefly", new AbortController().signal);
+
+    const decided = payloadsOf(events, "model.route_decided")[0] as { routeId?: string };
+    const receipts = payloadsOf(events, "model.route_receipt") as Array<{
+      routeId?: string;
+      planned?: Record<string, unknown>;
+      actual?: Record<string, unknown>;
+    }>;
+    expect(receipts).toHaveLength(1);
+    // §5.19 wants zero required-field mismatches between the route event and the
+    // receipt, which is only checkable if both name the same route.
+    expect(receipts[0]?.routeId).toBe(decided.routeId);
+    expect(receipts[0]?.planned).toEqual(result.routeReceipt?.planned);
+    expect(receipts[0]?.actual).toEqual(result.routeReceipt?.actual);
+  });
+
+  test("a cancelled turn still reports its receipt, which turn.completed cannot", async () => {
+    const controller = new AbortController();
+    const { kernel, events } = harness({
+      steps: [
+        { toolCalls: [{ callId: "c1", name: "fs.read", arguments: { path: "src/a.ts" } }] },
+        { text: "Done." },
+      ],
+      inferencePolicy: new InferenceUtilityController(),
+      autoRoute: true,
+      activeToolIds: ["fs.read"],
+      toolResults: {
+        "fs.read": () => {
+          controller.abort();
+          return { result: okResult("read"), text: "read" };
+        },
+      },
+    });
+
+    await kernel.runTurn("read then stop", controller.signal);
+
+    // A turn abandoned mid-flight is exactly where plan and execution diverge, so
+    // hanging the receipt off turn.completed hid the most interesting case.
+    expect(payloadsOf(events, "turn.completed")).toHaveLength(0);
+    expect(payloadsOf(events, "model.route_receipt")).toHaveLength(1);
+    expect(payloadsOf(events, "model.route_receipt")[0]).toMatchObject({
+      turnStatus: "cancelled",
+    });
+  });
+
   test("the agents the turn actually started are counted, not the ceiling", async () => {
     const provider = new MockProvider({
       steps: [

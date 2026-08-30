@@ -109,6 +109,12 @@ export const V13_EVENT_KINDS = [
   "model.phase_changed",
   "model.route_changed",
   "model.route_escalated",
+  /**
+   * The §5.16 route execution receipt: the turn's plan beside what it actually
+   * ran. Journaled and carried as its own kind so the bench can ingest it
+   * without depending on `turn.completed`, which a cancelled turn never emits.
+   */
+  "model.route_receipt",
   "reasoning.epoch_started",
   "reasoning.epoch_reset",
   "reasoning.context_effective",
@@ -323,6 +329,7 @@ export type CbcEventKind = (typeof ALL_EVENT_KINDS)[number];
 
 /** v1.3 events whose durable envelope must retain full proposer ancestry. */
 export const V13_ANCESTRY_EVENT_KINDS: readonly CbcEventKind[] = [
+  "model.route_receipt",
   "native_lane.selected", "native_lane.fallback",
   "program.started", "program.tool_call_started", "program.tool_call_admitted", "program.tool_call_denied",
   "program.tool_call_completed", "program.completed", "program.failed",
@@ -458,6 +465,7 @@ const KIND_DEFAULTS: Record<
   "model.phase_changed": { level: "info", visibility: "hidden", durability: "journaled" },
   "model.route_changed": { level: "info", visibility: "hidden", durability: "journaled" },
   "model.route_escalated": { level: "warning", visibility: "timeline", durability: "journaled" },
+  "model.route_receipt": { level: "info", visibility: "hidden", durability: "journaled" },
   "reasoning.epoch_started": { level: "info", visibility: "hidden", durability: "journaled" },
   "reasoning.epoch_reset": { level: "warning", visibility: "hidden", durability: "journaled" },
   "reasoning.context_effective": { level: "info", visibility: "hidden", durability: "journaled" },
