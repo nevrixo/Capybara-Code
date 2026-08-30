@@ -4,6 +4,7 @@
  */
 
 export * from "./catalog.ts";
+export * from "./action-groups.ts";
 export * from "./validate.ts";
 export * from "./discovery.ts";
 export * from "./scheduler.ts";
