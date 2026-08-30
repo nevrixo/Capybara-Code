@@ -64,6 +64,13 @@ export function planVerification(changeSet: VerificationChangeSet): Verification
   const languages = new Set(changeSet.languageHints ?? paths.map(languageForPath));
   const steps: VerificationStepPlan[] = [
     {
+      id: "revision-match",
+      tier: 0,
+      required: true,
+      covers: ["revision_match"],
+      reason: "each mutated file revision must match the recorded mutation result before anything is trusted",
+    },
+    {
       id: "parse-sanity",
       tier: 0,
       required: true,
@@ -101,6 +108,13 @@ export function planVerification(changeSet: VerificationChangeSet): Verification
     covers: ["diff_integrity", "authoritative_change_set"],
     reason: "confirm the final diff is bounded and free of whitespace corruption",
   });
+  steps.push({
+    id: "evidence-freshness",
+    tier: 3,
+    required: true,
+    covers: ["evidence_freshness"],
+    reason: "re-check that every captured verification result still matches the final workspace state",
+  });
   if (highRisk) {
     steps.push({
       id: "independent-review",
@@ -111,6 +125,13 @@ export function planVerification(changeSet: VerificationChangeSet): Verification
       reason: "risk policy requires a separate review signal",
     });
   }
+  steps.push({
+    id: "todo-consistency",
+    tier: 4,
+    required: true,
+    covers: ["todo_consistency"],
+    reason: "the remaining TODO state must agree with the completion report before the turn can close",
+  });
   const requiredCoverage = steps.filter((step) => step.required).flatMap((step) => step.covers);
   return {
     version: "2",
