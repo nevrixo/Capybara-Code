@@ -139,6 +139,15 @@ export interface RouteMetrics {
   readonly lanePlanHonored: boolean;
   readonly plannedMaxAgents: number;
   readonly plannedMaxParallelTools: number;
+  /** The §5.14 verification level the route planned for this turn. */
+  readonly plannedVerificationLevel?: string;
+  /**
+   * The §5.14 output reserve the route held back from the input budget. Optional
+   * rather than defaulted to zero: a journal from before the field existed did
+   * not plan a zero reserve, it planned nothing, and a fabricated zero would read
+   * as a route that held back no generation capacity at all.
+   */
+  readonly plannedOutputReserveTokens?: number;
   readonly agentsSpawned: number;
   /** §5.28 parallel peak: the most tool calls that were ever in flight at once. */
   readonly parallelPeak: number;
@@ -994,7 +1003,12 @@ function routeReceiptPayload(
   events: readonly CbcEvent[],
 ): { readonly planned: Record<string, unknown>; readonly actual: Record<string, unknown>; readonly routeId?: string } | undefined {
   for (const event of [...events].reverse()) {
-    const receipt = payload(event).routeReceipt;
+    // `model.route_receipt` carries the two halves at the top level rather than
+    // under a `routeReceipt` key, and it is the only carrier a cancelled turn
+    // produces — the case a plan-versus-actual comparison most wants.
+    const receipt = event.kind === "model.route_receipt"
+      ? payload(event)
+      : payload(event).routeReceipt;
     if (receipt === null || typeof receipt !== "object") continue;
     const body = receipt as Record<string, unknown>;
     const planned = body.planned;
@@ -1020,6 +1034,8 @@ function deriveRouteMetrics(
   const receipt = routeReceiptPayload(events);
   const planned = receipt?.planned ?? {};
   const actual = receipt?.actual ?? {};
+  const plannedVerificationLevel = str(planned.verificationLevel);
+  const plannedOutputReserveTokens = optionalNumber(planned.outputReserveTokens);
 
   let laneSelections = 0;
   let laneFallbacks = 0;
@@ -1140,6 +1156,8 @@ function deriveRouteMetrics(
       : plannedLane === actualLane,
     plannedMaxAgents: optionalNumber(planned.maxAgents) ?? 0,
     plannedMaxParallelTools: optionalNumber(planned.maxParallelTools) ?? 0,
+    ...(plannedVerificationLevel !== undefined ? { plannedVerificationLevel } : {}),
+    ...(plannedOutputReserveTokens !== undefined ? { plannedOutputReserveTokens } : {}),
     agentsSpawned: optionalNumber(actual.agentsSpawned) ??
       events.filter((event) => event.kind === "task.created").length,
     parallelPeak: Math.max(parallelPeak, receiptPeak),

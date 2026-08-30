@@ -218,6 +218,72 @@ describe("route and native lane metrics", () => {
     expect(metrics.route.idleWaitMs).toBe(1_500);
   });
 
+  test("the dedicated route receipt event is ingested, including a cancelled turn", () => {
+    // §5.16's receipt now has its own kind, and it is the only carrier a cancelled
+    // turn produces — a bench that only knew `turn.completed` recorded nothing for
+    // exactly the turns where plan and execution diverge.
+    const metrics = derive(events([
+      {
+        kind: "model.route_receipt",
+        atMs: 1_800,
+        payload: {
+          routeId: "route-3",
+          turnStatus: "cancelled",
+          planned: {
+            model: "gpt-5.6",
+            lane: "program_tool_calling",
+            maxAgents: 3,
+            maxParallelTools: 4,
+            verificationLevel: "integration",
+            outputReserveTokens: 32_000,
+          },
+          actual: {
+            model: "gpt-5.6",
+            lane: "direct",
+            agentsSpawned: 2,
+            parallelPeak: 3,
+            fallbackReasons: ["hosted scout dispatcher is unavailable; using direct reasoning"],
+          },
+        },
+      },
+      { kind: "turn.cancelled", atMs: 1_900, payload: { reason: "user cancelled" } },
+    ]));
+
+    expect(metrics.route).toMatchObject({
+      routeId: "route-3",
+      plannedLane: "program_tool_calling",
+      actualLane: "direct",
+      lanePlanHonored: false,
+      plannedMaxAgents: 3,
+      agentsSpawned: 2,
+      parallelPeak: 3,
+      plannedVerificationLevel: "integration",
+      plannedOutputReserveTokens: 32_000,
+    });
+  });
+
+  test("a journal from before the new fields planned nothing, not zero", () => {
+    const metrics = derive(events([
+      {
+        kind: "turn.completed",
+        atMs: 1_900,
+        payload: {
+          status: "completed",
+          routeReceipt: {
+            routeId: "route-4",
+            planned: { lane: "direct", maxAgents: 0, maxParallelTools: 1 },
+            actual: { lane: "direct", agentsSpawned: 0, parallelPeak: 1, fallbackReasons: [] },
+          },
+        },
+      },
+    ]));
+
+    // A fabricated zero reserve would read as a route that held back no
+    // generation capacity, which is a different claim from "not recorded".
+    expect(metrics.route.plannedOutputReserveTokens).toBeUndefined();
+    expect(metrics.route.plannedVerificationLevel).toBeUndefined();
+  });
+
   test("a journal with no receipt reports an unviolated plan rather than a failure", () => {
     const metrics = derive(events([
       { kind: "tool.started", atMs: 1_100, payload: { callId: "a" } },
