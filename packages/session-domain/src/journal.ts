@@ -15,7 +15,7 @@ import {
   type EventFactoryOptions,
 } from "@cbc/protocol";
 
-import { reduce, emptyViewModel, shouldPersist, type SessionViewModel } from "./reducer.ts";
+import { reduce, emptyViewModel, shouldPersist, type GoalContractView, type SessionViewModel } from "./reducer.ts";
 import { parseDeepPlanState } from "./deep-plan.ts";
 import { boundResidentViewModel, createSnapshotEnvelope } from "./persistence.ts";
 import { normalizePlanDocument, normalizeTodoItems, planDigest, sanitizeTodoText, type PlanApproval, type PlanDocument, type PlanItem, type TodoListState } from "./todo.ts";
@@ -576,6 +576,7 @@ export function serializeModel(model: SessionViewModel): Record<string, unknown>
     todo: model.todo,
     modeState: model.modeState,
     ...(model.deepPlan === undefined ? {} : { deepPlan: model.deepPlan }),
+    ...(model.goalContract === undefined ? {} : { goalContract: model.goalContract }),
     ...(model.contextUsage === undefined ? {} : { contextUsage: model.contextUsage }),
     ...(model.contextPressure === undefined ? {} : { contextPressure: model.contextPressure }),
     contextGeneration: model.contextGeneration,
@@ -643,6 +644,7 @@ export function deserializeModel(raw: unknown): SessionViewModel | undefined {
   const todo = parseTodoState(value.todo, value.plan);
   const contextUsage = parseContextUsage(value.contextUsage);
   const deepPlan = parseDeepPlanState(value.deepPlan);
+  const goalContract = parseGoalContractView(value.goalContract);
   const base = emptyViewModel(value.sessionId);
   const changed = new Map<string, { additions: number; deletions: number }>();
   if (Array.isArray(value.changedFiles)) {
@@ -693,6 +695,7 @@ export function deserializeModel(raw: unknown): SessionViewModel | undefined {
     plan: todo.items.map((item) => ({ ...item })),
     ...(contextUsage === undefined ? {} : { contextUsage }),
     ...(deepPlan === undefined ? { deepPlan: undefined } : { deepPlan }),
+    ...(goalContract === undefined ? { goalContract: undefined } : { goalContract }),
     ...(pendingApproval !== undefined ? { pendingApproval } : { pendingApproval: undefined }),
   } as SessionViewModel;
 }
@@ -1025,4 +1028,25 @@ export function exportMarkdown(model: SessionViewModel, manifest: SessionManifes
     for (const item of model.todo.items) lines.push(`- [${item.status}] ${item.text}`);
   }
   return lines.join("\n");
+}
+
+/**
+ * A snapshot's goal verdict, or undefined when it is absent or malformed. Like
+ * every other parser here this is fail-soft: a bad goal projection must not
+ * discard an otherwise sound snapshot.
+ */
+function parseGoalContractView(raw: unknown): GoalContractView | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const value = raw as Record<string, unknown>;
+  if (typeof value.status !== "string" || typeof value.statement !== "string") return undefined;
+  return {
+    ...(typeof value.goalId === "string" ? { goalId: value.goalId } : {}),
+    status: value.status,
+    ...(typeof value.stopReason === "string" ? { stopReason: value.stopReason } : {}),
+    outstandingCriteria: Array.isArray(value.outstandingCriteria)
+      ? value.outstandingCriteria.filter((entry): entry is string => typeof entry === "string")
+      : [],
+    ...(typeof value.nextTodoId === "string" ? { nextTodoId: value.nextTodoId } : {}),
+    statement: value.statement,
+  };
 }

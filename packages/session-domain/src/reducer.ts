@@ -457,6 +457,22 @@ export interface SessionViewModel {
   readonly tokenSaving?: TokenSavingViewState;
   /** Durable Deep Plan ledger and pending questionnaire resume state. */
   readonly deepPlan?: DeepPlanState | undefined;
+  /** Latest goal contract verdict; absent until a contract is declared (§P1-04). */
+  readonly goalContract?: GoalContractView | undefined;
+}
+
+/**
+ * The projected goal verdict. Deliberately the evaluation rather than the whole
+ * contract: a resumed reader needs to know what the goal's state *is*, and the
+ * contract itself is rebuilt from its own persisted record.
+ */
+export interface GoalContractView {
+  readonly goalId?: string;
+  readonly status: string;
+  readonly stopReason?: string;
+  readonly outstandingCriteria: readonly string[];
+  readonly nextTodoId?: string;
+  readonly statement: string;
 }
 
 export function emptyViewModel(sessionId: string, budgetTokens = 96_000): SessionViewModel {
@@ -1393,6 +1409,20 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
       break;
     }
 
+    case "goal.evaluated": {
+      const p = payloadOf(event);
+      if (typeof p.status !== "string" || typeof p.statement !== "string") break;
+      next.goalContract = {
+        ...(typeof p.goalId === "string" ? { goalId: p.goalId } : {}),
+        status: p.status,
+        ...(typeof p.stopReason === "string" ? { stopReason: p.stopReason } : {}),
+        outstandingCriteria: strArray(p.outstandingCriteria),
+        ...(typeof p.nextTodoId === "string" ? { nextTodoId: p.nextTodoId } : {}),
+        statement: p.statement,
+      };
+      break;
+    }
+
     case "deep_plan.started":
     case "deep_plan.questionnaire_opened":
     case "deep_plan.questionnaire_updated":
@@ -2164,6 +2194,7 @@ function cloneModel(model: SessionViewModel): Mutable<SessionViewModel> {
     modeState: model.modeState,
     ...(model.contextUsage === undefined ? {} : { contextUsage: model.contextUsage }),
     ...(model.deepPlan === undefined ? {} : { deepPlan: model.deepPlan }),
+    ...(model.goalContract === undefined ? {} : { goalContract: model.goalContract }),
     usage: model.usage,
     notices: model.notices,
     taskLive: model.taskLive,
@@ -2194,6 +2225,7 @@ function cloneEphemeralModel(model: SessionViewModel): Mutable<SessionViewModel>
     modeState: model.modeState,
     ...(model.contextUsage === undefined ? {} : { contextUsage: model.contextUsage }),
     ...(model.deepPlan === undefined ? {} : { deepPlan: model.deepPlan }),
+    ...(model.goalContract === undefined ? {} : { goalContract: model.goalContract }),
     usage: model.usage,
     notices: model.notices,
     taskLive: model.taskLive,
