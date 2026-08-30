@@ -2441,6 +2441,19 @@ describe("keymap (§6.15, §7.7, AC-20, AC-21)", () => {
     }
   });
 
+  test("Ctrl+T cycles reasoning effort and the tasks drawer keeps Ctrl+X T", () => {
+    const idle = {
+      running: false,
+      overlayOpen: false,
+      composerHasText: false,
+      awaitingTask: false,
+    };
+    expect(resolveKey("ctrl+t", idle)?.action).toBe("cycle_reasoning_effort");
+    expect(resolveKey("ctrl+x t", idle)?.action).toBe("tasks_drawer");
+    // Reassigning Ctrl+T must not leave the drawer with only that one route.
+    expect(DEFAULT_KEYMAP.some((b) => b.action === "tasks_drawer")).toBe(true);
+  });
+
   test("Esc closes an overlay before interrupting a wait", () => {
     const overlay = resolveKey("escape", {
       running: true,

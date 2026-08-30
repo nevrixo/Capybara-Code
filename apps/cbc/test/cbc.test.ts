@@ -1244,6 +1244,21 @@ describe("composer session (§6.14, §6.15, AC-05, AC-20)", () => {
       MODEL_REGISTRY.map((model) => model.id),
     );
   });
+  test("Ctrl+T cycles reasoning effort whether or not a draft is present", () => {
+    const { composer } = session();
+    expect(composer.handle({ key: "ctrl+t" }, idle)).toEqual({
+      kind: "cycle_reasoning_effort",
+    });
+
+    // A draft must not turn the gesture into a composer edit: the effort is
+    // session state, so it stays reachable while the user is mid-prompt.
+    type(composer, "draft text");
+    expect(composer.handle({ key: "ctrl+t" }, idle)).toEqual({
+      kind: "cycle_reasoning_effort",
+    });
+    expect(composer.text).toBe("draft text");
+  });
+
   test("Ctrl+R searches composer history", () => {
     const { composer } = session();
     expect(composer.handle({ key: "ctrl+r" }, idle)).toEqual({

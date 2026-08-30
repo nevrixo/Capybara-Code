@@ -52,6 +52,7 @@ export type KeyAction =
   | "worktree_drawer"
   | "plugins_drawer"
   | "cycle_interaction_mode"
+  | "cycle_reasoning_effort"
   | "details_overlay"
   | "toggle_sidebar"
   | "toggle_accordion"
@@ -156,7 +157,9 @@ export const DEFAULT_KEYMAP: readonly KeyBinding[] = [
   { action: "kill_word", key: "ctrl+w", description: "kill previous word", when: "composer" },
   { action: "yank", key: "ctrl+y", description: "yank killed text", when: "composer" },
   { action: "details_overlay", key: "ctrl+o", description: "transcript details", when: "always" },
-  { action: "tasks_drawer", key: "ctrl+t", description: "tasks and jobs", when: "always" },
+  // `Ctrl+T` cycles reasoning effort. The tasks drawer keeps its `Ctrl+X T`
+  // binding below, so nothing became unreachable when this key was reassigned.
+  { action: "cycle_reasoning_effort", key: "ctrl+t", description: "cycle reasoning effort", when: "always" },
   { action: "toggle_sidebar", key: "ctrl+b", description: "active-work background rail", when: "always" },
   { action: "model_picker", key: "alt+p", description: "model picker", when: "always" },
   { action: "thinking_visibility", key: "alt+t", description: "cycle Thinking mode", when: "always" },

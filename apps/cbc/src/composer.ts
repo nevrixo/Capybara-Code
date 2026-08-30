@@ -71,6 +71,8 @@ export type ComposerEffect =
   | { readonly kind: "cancel_task"; readonly taskId: string }
   | { readonly kind: "open_overlay"; readonly overlay: string }
   | { readonly kind: "cycle_interaction_mode" }
+  /** `Ctrl+T`: step the reasoning effort to the next supported value. */
+  | { readonly kind: "cycle_reasoning_effort" }
   | { readonly kind: "toggle_sidebar" }
   | { readonly kind: "toggle_accordion" }
   | { readonly kind: "cycle_thinking" }
@@ -535,7 +537,9 @@ export class ComposerSession {
       case "ctrl+a":
         return { kind: "open_overlay", overlay: "agents" };
       case "ctrl+t":
-        return { kind: "open_overlay", overlay: "jobs" };
+        // Matches the keymap: `Ctrl+T` steps the effort, and the tasks drawer
+        // is reached with `Ctrl+X T`.
+        return { kind: "cycle_reasoning_effort" };
       case "text":
         return event.text === undefined ? { kind: "none" } : this.#insert(event.text);
       case "paste": {
@@ -637,6 +641,8 @@ export class ComposerSession {
         return { kind: "open_overlay", overlay: "details" };
       case "cycle_interaction_mode":
         return { kind: "cycle_interaction_mode" };
+      case "cycle_reasoning_effort":
+        return { kind: "cycle_reasoning_effort" };
       case "toggle_sidebar":
         return { kind: "toggle_sidebar" };
       case "toggle_accordion":

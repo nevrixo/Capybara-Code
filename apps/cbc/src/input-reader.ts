@@ -42,6 +42,12 @@ export interface InputReaderOptions {
    */
   readonly onOpenOverlay?: (overlay: string) => void;
   readonly onCycleInteractionMode?: () => void | string | Promise<string | undefined>;
+  /**
+   * `Ctrl+T`: advance the reasoning effort. The host owns the value because
+   * clamping it to the live model and persisting it are session concerns, not
+   * composer ones. Returns the notice to show, or `undefined` to stay silent.
+   */
+  readonly onCycleReasoningEffort?: () => string | undefined;
   readonly onPromptReady?: () => void | string | Promise<string | undefined>;
   /** The first live background task, if the prompt is otherwise idle. */
   readonly activeTaskId?: () => string | undefined;
@@ -56,6 +62,7 @@ export class InputReader {
   readonly #composer: ComposerSession;
   readonly #onOpenOverlay?: (overlay: string) => void;
   readonly #onCycleInteractionMode?: () => void | string | Promise<string | undefined>;
+  readonly #onCycleReasoningEffort?: () => string | undefined;
   readonly #onPromptReady?: () => void | string | Promise<string | undefined>;
   readonly #activeTaskId?: () => string | undefined;
   readonly #onCancelTask?: (taskId: string, reason?: string) => Promise<void>;
@@ -83,6 +90,7 @@ export class InputReader {
     this.#ui = options.ui;
     if (options.onOpenOverlay !== undefined) this.#onOpenOverlay = options.onOpenOverlay;
     if (options.onCycleInteractionMode !== undefined) this.#onCycleInteractionMode = options.onCycleInteractionMode;
+    if (options.onCycleReasoningEffort !== undefined) this.#onCycleReasoningEffort = options.onCycleReasoningEffort;
     if (options.onPromptReady !== undefined) this.#onPromptReady = options.onPromptReady;
     if (options.activeTaskId !== undefined) this.#activeTaskId = options.activeTaskId;
     if (options.onCancelTask !== undefined) this.#onCancelTask = options.onCancelTask;
@@ -444,6 +452,12 @@ export class InputReader {
             this.#ui.notice(this.#ui.cycleThinkingMode());
             this.#draw();
             return;
+          case "cycle_reasoning_effort": {
+            const notice = this.#onCycleReasoningEffort?.();
+            if (notice !== undefined) this.#ui.notice(notice);
+            this.#draw();
+            return;
+          }
           case "redraw_screen":
             // Esc with an overlay open closes the overlay, not the composer.
             if (this.#ui.overlayOpen) {
@@ -622,6 +636,15 @@ export class InputReader {
           this.#ui.notice(this.#ui.cycleThinkingMode());
           this.#draw();
           return;
+        case "cycle_reasoning_effort": {
+          // The running turn already carries the effort it started with, so the
+          // new value takes effect on the next one. Say so rather than letting
+          // the chrome imply the turn in flight changed.
+          const notice = this.#onCycleReasoningEffort?.();
+          if (notice !== undefined) this.#ui.notice(`${notice} (applies to the next turn)`);
+          this.#draw();
+          return;
+        }
         case "redraw_screen":
           if (this.#ui.overlayOpen) {
             this.#ui.closeOverlay();
