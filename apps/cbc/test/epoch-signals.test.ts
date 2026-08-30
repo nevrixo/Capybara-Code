@@ -321,4 +321,49 @@ describe("epoch invalidation signals", () => {
     // Nothing the author produced may be replayed into the review.
     expect(reviewRequest?.input).toHaveLength(1);
   });
+
+  test("a subagent request is scoped to the current turn and carries the root epoch", async () => {
+    const provider = new MockProvider({
+      steps: [
+        {
+          toolCalls: [{
+            callId: "child-spawn",
+            name: "task.spawn",
+            arguments: {
+              role: "explore",
+              title: "Explore the parser",
+              goal: "Explore the parser module and report exact source evidence.",
+              constraints: ["Read only."],
+              expectedOutput: ["Return exact parser evidence."],
+              context: [],
+              allowedPaths: [],
+              forbiddenPaths: [],
+              verification: [],
+              dependencies: [],
+            },
+          }],
+        },
+        { text: "Child parser evidence complete." },
+        { text: "Root accepted the child evidence." },
+      ],
+    });
+    const { session } = harness("epoch-subagent", provider);
+    session.registry.activate(["task.spawn"]);
+
+    await session.submit("Delegate the parser exploration", new AbortController().signal);
+
+    // §5.9: every non-root agent's first request is current_turn and carries no
+    // inherited continuation, so a child never reasons from a parent's hidden
+    // state. The epoch the child runs under is the one the turn established —
+    // a new user goal legitimately opens a new epoch, so the invariant is that
+    // the child shares the *turn's* epoch, not that no reset happened.
+    const childRequest = provider.requests[1];
+    expect(childRequest).toBeDefined();
+    expect(childRequest?.reasoning.context).toBe("current_turn");
+    expect(childRequest?.previousResponseId).toBeUndefined();
+    expect(session.taskEpoch.requireCurrent().resetReason).toBe("goal_changed");
+    // Spawning a child is not itself an invalidation: the root stays on the
+    // epoch its goal opened rather than churning one per delegation.
+    expect(session.taskEpoch.requireCurrent().generation).toBe(2);
+  });
 });
