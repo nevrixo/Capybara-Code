@@ -100,10 +100,21 @@ export interface BenchmarkRunnerInput {
  * The adapter lives outside this repository and translates its trace into CBC events;
  * Capybara never imports or depends on another agent runtime.
  */
-export interface ExternalBenchmarkAdapter {
-  readonly schemaVersion: "1.0";
-  readonly id: string;
+export type ExternalAdapterComparisonMode = "backbone_matched" | "product_native";
+
+/** Product identity bound into every new external adapter manifest digest. */
+export interface ExternalAdapterIdentity {
+  readonly product: string;
   readonly version: string;
+  readonly model: string;
+  readonly authSurface: string;
+  readonly mode: ExternalAdapterComparisonMode;
+}
+
+export interface ExternalBenchmarkAdapter {
+  readonly schemaVersion: "1.0" | "1.1";
+  readonly id: string;
+  readonly identity: ExternalAdapterIdentity;
   readonly program: string;
   readonly args: readonly string[];
   readonly appliedProfile: EvalProfile;
@@ -114,6 +125,16 @@ export interface ExternalBenchmarkAdapter {
   readonly passEnvironment: readonly string[];
   /** Canonical digest of this fully bound adapter manifest. */
   readonly manifestDigest: string;
+  /** True only for a schemaVersion 1.0 `codex_matched` artifact. */
+  readonly legacyIdentity?: true;
+}
+
+export interface ExternalAdapterParseOptions {
+  readonly mode?: ExternalAdapterComparisonMode;
+  /** Release inspection only: admit the old identity-less schemaVersion 1.0 body. */
+  readonly allowLegacyIdentity?: boolean;
+  /** CLI preflight only: validate shape/profile before the final experiment digest exists. */
+  readonly deferCapabilityBinding?: boolean;
 }
 
 export interface ExternalBenchmarkRunnerInput extends BenchmarkRunnerInput {
@@ -140,17 +161,16 @@ export function parseExternalBenchmarkAdapter(
   value: unknown,
   expectedProfile: EvalProfile,
   expectedCapabilityDigest: string,
+  options: ExternalAdapterParseOptions = {},
 ): ExternalBenchmarkAdapter {
   if (!isRecord(value)) throw new Error("external baseline adapter must be a JSON object");
-  if (value.schemaVersion !== "1.0") throw new Error("external baseline adapter schemaVersion must be 1.0");
+  const mode = options.mode ?? "backbone_matched";
+  const legacyIdentity = value.schemaVersion === "1.0" && value.identity === undefined;
+  if (value.schemaVersion !== "1.1" && !(legacyIdentity && options.allowLegacyIdentity === true)) {
+    throw new Error("external baseline adapter schemaVersion must be 1.1 with an identity");
+  }
   if (typeof value.id !== "string" || value.id.trim().length === 0) {
     throw new Error("external baseline adapter needs a non-empty id");
-  }
-  if (
-    typeof value.version !== "string" ||
-    !/^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/u.test(value.version)
-  ) {
-    throw new Error("external baseline adapter needs a stable version label");
   }
   if (typeof value.program !== "string" || !isAbsolute(value.program)) {
     throw new Error("external baseline adapter program must be an absolute path");
@@ -164,13 +184,34 @@ export function parseExternalBenchmarkAdapter(
   if (!value.args.some((entry) => entry.includes("{output}"))) {
     throw new Error("external baseline adapter args must include {output}");
   }
-  if (
-    !isRecord(value.appliedProfile) ||
-    canonicalValue(value.appliedProfile) !== canonicalValue(expectedProfile)
-  ) {
+  const appliedProfile = parseEvalProfile(value.appliedProfile);
+  if (mode === "backbone_matched" && canonicalValue(appliedProfile) !== canonicalValue(expectedProfile)) {
     throw new Error("external baseline adapter profile does not match the requested comparison profile");
   }
-  if (value.capabilityDigest !== expectedCapabilityDigest) {
+  const identity = legacyIdentity
+    ? legacyAdapterIdentity(value, appliedProfile)
+    : parseExternalAdapterIdentity(value.identity);
+  if (identity.mode !== mode) {
+    throw new Error(`external baseline adapter identity mode must be ${mode}`);
+  }
+  if (identity.model !== appliedProfile.model) {
+    throw new Error("external baseline adapter identity model must match appliedProfile.model");
+  }
+  const declaredCapabilityDigest = value.capabilityDigest;
+  const capabilityDigest = mode === "backbone_matched" && declaredCapabilityDigest === undefined
+    ? expectedCapabilityDigest
+    : declaredCapabilityDigest;
+  if (
+    typeof capabilityDigest !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/u.test(capabilityDigest)
+  ) {
+    throw new Error("external baseline adapter capabilityDigest must be sha256:<64 lowercase hex>");
+  }
+  if (
+    mode === "backbone_matched" &&
+    options.deferCapabilityBinding !== true &&
+    capabilityDigest !== expectedCapabilityDigest
+  ) {
     throw new Error("external baseline adapter capability digest does not match the comparison snapshot");
   }
   if (
@@ -200,22 +241,41 @@ export function parseExternalBenchmarkAdapter(
   }
 
   const manifest = {
-    schemaVersion: "1.0" as const,
+    schemaVersion: "1.1" as const,
     id: value.id,
-    version: value.version,
+    identity,
     program: value.program,
     args: [...value.args] as string[],
-    appliedProfile: { ...expectedProfile },
-    capabilityDigest: expectedCapabilityDigest,
+    appliedProfile,
+    capabilityDigest,
     implementationDigest: value.implementationDigest,
     passEnvironment: environmentNames,
   };
-  const manifestDigest = sha256(canonicalValue(manifest));
+  const legacyManifest = legacyIdentity
+    ? {
+        schemaVersion: "1.0" as const,
+        id: value.id,
+        version: identity.version,
+        program: value.program,
+        args: [...value.args] as string[],
+        appliedProfile,
+        capabilityDigest,
+        implementationDigest: value.implementationDigest,
+        passEnvironment: environmentNames,
+      }
+    : undefined;
+  const manifestDigest = sha256(canonicalValue(legacyManifest ?? manifest));
   if (value.manifestDigest !== undefined && value.manifestDigest !== manifestDigest) {
     throw new Error("external baseline adapter manifestDigest does not match its canonical body");
   }
   return {
-    ...manifest,
+    ...(legacyIdentity
+      ? {
+          ...manifest,
+          schemaVersion: "1.0" as const,
+          legacyIdentity: true as const,
+        }
+      : manifest),
     manifestDigest,
   };
 }
@@ -400,6 +460,7 @@ export function createExternalBenchmarkRunner(
   return {
     ...base,
     appliedProfile: input.adapter.appliedProfile,
+    capabilityDigest: input.adapter.capabilityDigest,
     execute: async ({ task, profile, workspace, signal }) => await executeExternalTask({
       task,
       profile,
@@ -432,7 +493,8 @@ async function executeExternalTask(input: ExternalExecuteInput): Promise<TaskExe
     executionId,
     adapter: {
       id: input.adapter.id,
-      version: input.adapter.version,
+      version: input.adapter.identity.version,
+      identity: input.adapter.identity,
       manifestDigest: input.adapter.manifestDigest,
       implementationDigest: input.adapter.implementationDigest,
     },
@@ -517,7 +579,7 @@ function parseExternalTaskEnvelope(
   const provenanceMatches =
     value.executionId === expectedExecutionId &&
     value.adapterId === adapter.id &&
-    value.adapterVersion === adapter.version &&
+    value.adapterVersion === adapter.identity.version &&
     value.adapterManifestDigest === adapter.manifestDigest &&
     value.capabilityDigest === adapter.capabilityDigest;
   if (!provenanceMatches) {
@@ -586,7 +648,7 @@ function parseExternalTaskEnvelope(
     schemaVersion: "1.0",
     executionId: expectedExecutionId,
     adapterId: adapter.id,
-    adapterVersion: adapter.version,
+    adapterVersion: adapter.identity.version,
     adapterManifestDigest: adapter.manifestDigest,
     capabilityDigest: adapter.capabilityDigest,
     taskId: expectedTaskId,
@@ -758,6 +820,90 @@ function resolveProgram(program: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseExternalAdapterIdentity(value: unknown): ExternalAdapterIdentity {
+  if (!isRecord(value)) {
+    throw new Error("external baseline adapter identity must be an object");
+  }
+  const product = boundedIdentityText(value.product, "identity.product", 128);
+  if (!/^[a-z0-9][a-z0-9._-]{0,127}$/u.test(product)) {
+    throw new Error("external baseline adapter identity.product must be a stable lowercase product id");
+  }
+  const version = stableVersion(value.version);
+  const model = boundedIdentityText(value.model, "identity.model", 256);
+  const authSurface = boundedIdentityText(value.authSurface, "identity.authSurface", 256);
+  const mode = value.mode;
+  if (mode !== "backbone_matched" && mode !== "product_native") {
+    throw new Error("external baseline adapter identity.mode must be backbone_matched or product_native");
+  }
+  return { product, version, model, authSurface, mode };
+}
+
+function legacyAdapterIdentity(
+  value: Record<string, unknown>,
+  appliedProfile: EvalProfile,
+): ExternalAdapterIdentity {
+  return {
+    product: "codex_cli",
+    version: stableVersion(value.version),
+    model: appliedProfile.model,
+    authSurface: "legacy-unspecified",
+    mode: "backbone_matched",
+  };
+}
+
+function stableVersion(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    !/^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/u.test(value)
+  ) {
+    throw new Error("external baseline adapter needs a stable version label");
+  }
+  return value;
+}
+
+function boundedIdentityText(value: unknown, field: string, maximum: number): string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > maximum ||
+    value.trim() !== value ||
+    /[\u0000-\u001f\u007f]/u.test(value)
+  ) {
+    throw new Error(`external baseline adapter ${field} must be bounded non-empty text`);
+  }
+  return value;
+}
+
+function parseEvalProfile(value: unknown): EvalProfile {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    value.id.length === 0 ||
+    typeof value.description !== "string" ||
+    typeof value.model !== "string" ||
+    value.model.length === 0 ||
+    (value.reasoningMode !== "standard" && value.reasoningMode !== "pro") ||
+    !["none", "low", "medium", "high", "xhigh", "max"].includes(String(value.reasoningEffort)) ||
+    typeof value.autoReview !== "boolean" ||
+    typeof value.toolDiscovery !== "boolean" ||
+    typeof value.subagents !== "boolean" ||
+    !["off", "prefix", "aggressive"].includes(String(value.promptCache))
+  ) {
+    throw new Error("external baseline adapter appliedProfile is not a complete eval profile");
+  }
+  return {
+    id: value.id,
+    description: value.description,
+    model: value.model,
+    reasoningMode: value.reasoningMode,
+    reasoningEffort: value.reasoningEffort as EvalProfile["reasoningEffort"],
+    autoReview: value.autoReview,
+    toolDiscovery: value.toolDiscovery,
+    subagents: value.subagents,
+    promptCache: value.promptCache as EvalProfile["promptCache"],
+  };
 }
 
 function canonicalValue(value: unknown): string {

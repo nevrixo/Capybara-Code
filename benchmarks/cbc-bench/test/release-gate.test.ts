@@ -16,6 +16,7 @@ import {
 } from "@cbc/evals";
 
 import type { BenchmarkRepositoryEvidence } from "../src/evidence.ts";
+import { parseExternalBenchmarkAdapter } from "../src/execution.ts";
 import { resolveExecutionProfile } from "../src/profile.ts";
 import {
   inspectReleaseEvidence,
@@ -289,6 +290,94 @@ function makeArtifact(
   };
 }
 
+function makeExternalArtifact(
+  mode: "backbone_matched" | "product_native",
+): Record<string, unknown> {
+  const artifact = makeArtifact();
+  const primaryCapabilityDigest = artifact.capabilityDigest as string;
+  const externalProfile = mode === "product_native"
+    ? { ...baselineProfile, id: "claude-native", description: "Claude Code native", model: "claude-native" }
+    : baselineProfile;
+  const externalCapabilityDigest = mode === "product_native"
+    ? `sha256:${hash("claude-native-capability")}`
+    : primaryCapabilityDigest;
+  const adapter = parseExternalBenchmarkAdapter(
+    {
+      schemaVersion: "1.1",
+      id: `${mode}-adapter`,
+      identity: {
+        product: mode === "product_native" ? "claude_code" : "codex_cli",
+        version: "1.0.0",
+        model: externalProfile.model,
+        authSurface: mode === "product_native" ? "anthropic-oauth" : "openai-api-key",
+        mode,
+      },
+      program: process.execPath,
+      args: ["run", "adapter.ts", "{input}", "{output}"],
+      appliedProfile: externalProfile,
+      capabilityDigest: externalCapabilityDigest,
+      implementationDigest: `sha256:${hash(`${mode}-implementation`)}`,
+      passEnvironment: [],
+    },
+    baselineProfile,
+    primaryCapabilityDigest,
+    { mode },
+  );
+  const target = mode === "product_native"
+    ? "external_product_native"
+    : "external_backbone_matched";
+  artifact.comparisonTarget = target;
+  artifact.profiles = { baseline: externalProfile, candidate: candidateProfile };
+  artifact.executionEvidence = {
+    baseline: { kind: "external", adapter },
+    candidate: {
+      kind: "cbc",
+      profile: resolveExecutionProfile(candidateProfile, {
+        performanceVariant: "optimized",
+        serviceTier: "standard",
+      }),
+    },
+  };
+  const runs = (artifact.runs as Array<Record<string, unknown>>).map((run) => {
+    const descriptor = run.descriptor as Record<string, unknown>;
+    const result = run.result as Record<string, unknown>;
+    if (descriptor.variant !== "baseline") return run;
+    return {
+      ...run,
+      capabilityDigest: externalCapabilityDigest,
+      descriptor: { ...descriptor, profile: externalProfile },
+      result: { ...result, profile: externalProfile },
+    };
+  });
+  artifact.runs = runs;
+  const statisticalRuns: StatisticalRun[] = runs.map((run) => {
+    const descriptor = run.descriptor as Record<string, unknown>;
+    const result = run.result as Record<string, unknown>;
+    return {
+      variant: descriptor.variant as "baseline" | "candidate",
+      repetition: descriptor.repetition as number,
+      temperature: descriptor.temperature as "cold" | "warm",
+      results: (result.results as Array<Record<string, unknown>>).map((entry) => ({
+        taskId: (entry.task as StatisticalTaskDefinition).id,
+        metrics: entry.metrics as RunMetrics,
+      })),
+    };
+  });
+  const aggregate = artifact.aggregate as Record<string, unknown>;
+  aggregate.statistics = analyzePairedStatistics(fullCohort(), statisticalRuns, {
+    target,
+    iterations: 100,
+    seed: "release-gate-test",
+  });
+  aggregate.baseline = summarize(
+    externalProfile.id,
+    statisticalRuns
+      .filter((run) => run.variant === "baseline")
+      .flatMap((run) => run.results.map((result) => result.metrics)),
+  );
+  return artifact;
+}
+
 describe("release evidence inspection", () => {
   test("accepts complete raw evidence and recomputes its statistical gate", () => {
     const artifact = makeArtifact();
@@ -302,6 +391,32 @@ describe("release evidence inspection", () => {
     expect(inspection.candidate?.profile).toBe("candidate");
     expect(inspection.statistics?.taskCount).toBe(RELEASE_MIN_TASKS);
     expect(inspection.statisticalGate?.status).toBe("passed");
+  });
+
+  test("accepts identity-bound backbone and product-native external evidence", () => {
+    const matched = inspectReleaseEvidence(makeExternalArtifact("backbone_matched"));
+    expect(matched.errors).toEqual([]);
+
+    const productArtifact = makeExternalArtifact("product_native");
+    const product = inspectReleaseEvidence(productArtifact);
+    expect(product.errors).toEqual([]);
+    const baselineRun = (productArtifact.runs as Array<Record<string, unknown>>)
+      .find((run) => (run.descriptor as Record<string, unknown>).variant === "baseline");
+    expect(baselineRun?.capabilityDigest).not.toBe(productArtifact.capabilityDigest);
+  });
+
+  test("rejects an external adapter identity edited after its manifest digest was bound", () => {
+    const artifact = makeExternalArtifact("backbone_matched");
+    const execution = artifact.executionEvidence as Record<string, unknown>;
+    const baseline = execution.baseline as Record<string, unknown>;
+    const adapter = baseline.adapter as Record<string, unknown>;
+    adapter.identity = {
+      ...(adapter.identity as Record<string, unknown>),
+      product: "tampered_product",
+    };
+    expect(inspectReleaseEvidence(artifact).errors.some((error) =>
+      error.includes("manifestDigest")
+    )).toBe(true);
   });
 
   test("rejects the 80-task development floor as release evidence", () => {

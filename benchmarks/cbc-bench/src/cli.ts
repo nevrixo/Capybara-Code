@@ -14,6 +14,7 @@ import { dirname } from "node:path";
 
 import {
   EVAL_PROFILES,
+  canonicalComparisonTarget,
   capabilitySnapshotDigest,
   evaluateStatisticalGate,
   profileById,
@@ -208,8 +209,8 @@ Paired flags
   --baseline-variant <id>      CBC baseline variant (default: legacy)
   --candidate-variant <id>     CBC candidate variant (default: --variant)
   --repetitions <n>            executions per variant (default: 5)
-  --comparison <target>        capybara_baseline or codex_matched
-  --baseline-adapter <path>    neutral external adapter manifest for codex_matched
+  --comparison <target>        capybara_baseline, external_backbone_matched, or external_product_native
+  --baseline-adapter <path>    neutral external adapter manifest for an external comparison
   --order <strategy>           abba or seeded_randomized (default: abba)
   --seed <value>               required for seeded_randomized
   --capability-snapshot <path> exact backend capability snapshot JSON
@@ -425,11 +426,32 @@ async function pairedCommand(flags: Flags): Promise<number> {
     console.error("--repetitions must be a positive integer");
     return 2;
   }
-  if (flags.comparison !== "capybara_baseline" && flags.comparison !== "codex_matched") {
-    console.error("--comparison must be 'capybara_baseline' or 'codex_matched'");
+  if (
+    flags.comparison !== "capybara_baseline" &&
+    flags.comparison !== "external_backbone_matched" &&
+    flags.comparison !== "external_product_native" &&
+    flags.comparison !== "codex_matched"
+  ) {
+    console.error(
+      "--comparison must be 'capybara_baseline', 'external_backbone_matched', or 'external_product_native'",
+    );
     return 2;
   }
-  const comparison = flags.comparison as ComparisonTarget;
+  const requestedComparison = flags.comparison as ComparisonTarget;
+  if (requestedComparison === "codex_matched") {
+    console.warn(
+      "codex_matched is deprecated; using external_backbone_matched (record product=codex in adapter.identity)",
+    );
+  }
+  const comparison = canonicalComparisonTarget(requestedComparison);
+  if (comparison !== "capybara_baseline" && flags.baselineAdapter === undefined) {
+    console.error(`${comparison} comparison requires --baseline-adapter <path>`);
+    return 2;
+  }
+  if (comparison === "capybara_baseline" && flags.baselineAdapter !== undefined) {
+    console.error("--baseline-adapter is only valid with an external comparison target");
+    return 2;
+  }
   const baselineVariant = parsePerformanceVariant(
     flags.baselineVariant ?? "legacy",
     "--baseline-variant",
@@ -473,30 +495,63 @@ async function pairedCommand(flags: Flags): Promise<number> {
   }
   const capabilitySnapshot = await readCapabilitySnapshot(flags.capabilitySnapshot);
   if (capabilitySnapshot === undefined) return 2;
-  let baselineAdapter: ExternalBenchmarkAdapter | undefined;
-  if (comparison === "codex_matched") {
-    if (flags.baselineAdapter === undefined) {
-      console.error("codex_matched comparison requires --baseline-adapter <path>");
-      return 2;
-    }
-    const adapterArtifact = await readJsonArtifact(flags.baselineAdapter);
+  let adapterArtifact: unknown;
+  if (comparison !== "capybara_baseline") {
+    adapterArtifact = await readJsonArtifact(flags.baselineAdapter!);
     if (adapterArtifact === undefined) return 2;
     try {
-      baselineAdapter = parseExternalBenchmarkAdapter(
+      parseExternalBenchmarkAdapter(
         adapterArtifact,
         baseline.execution.applied,
         capabilitySnapshotDigest(capabilitySnapshot),
+        {
+          mode: comparison === "external_product_native"
+            ? "product_native"
+            : "backbone_matched",
+          deferCapabilityBinding: true,
+        },
       );
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error));
       return 2;
     }
-  } else if (flags.baselineAdapter !== undefined) {
-    console.error("--baseline-adapter is only valid with --comparison codex_matched");
-    return 2;
   }
   const repositoryEvidence = await loadRepositoryEvidenceOrReport();
   if (repositoryEvidence === undefined) return 1;
+  const pairedCapabilitySnapshot: CapabilitySnapshot = {
+    ...capabilitySnapshot,
+    metadata: {
+      ...capabilitySnapshot.metadata,
+      benchmarkRunner: "cbc-bench",
+      comparisonTarget: comparison,
+      baselineProfile: comparison === "external_product_native"
+        ? "external-product-native"
+        : baseline.execution.applied.id,
+      candidateProfile: candidate.execution.applied.id,
+      baselinePerformanceVariant: baseline.execution.performanceVariant,
+      candidatePerformanceVariant: candidate.execution.performanceVariant,
+      serviceTier,
+      repositoryEvidenceDigest: repositoryEvidence.digest,
+    },
+  };
+  let baselineAdapter: ExternalBenchmarkAdapter | undefined;
+  if (comparison !== "capybara_baseline") {
+    try {
+      baselineAdapter = parseExternalBenchmarkAdapter(
+        adapterArtifact,
+        baseline.execution.applied,
+        capabilitySnapshotDigest(pairedCapabilitySnapshot),
+        {
+          mode: comparison === "external_product_native"
+            ? "product_native"
+            : "backbone_matched",
+        },
+      );
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      return 2;
+    }
+  }
   if (!providerConfigured()) return 9;
 
   const baselineEnvironment = await createBenchmarkEnvironment(`paired-baseline-${baseline.profile.id}`);
@@ -513,7 +568,9 @@ async function pairedCommand(flags: Flags): Promise<number> {
       const result = await runPairedSuite(
         tasks,
         {
-          baseline: baseline.execution.applied,
+          baseline: comparison === "external_product_native" && baselineAdapter !== undefined
+            ? baselineAdapter.appliedProfile
+            : baseline.execution.applied,
           candidate: candidate.execution.applied,
         },
         {
@@ -521,22 +578,7 @@ async function pairedCommand(flags: Flags): Promise<number> {
           comparisonTarget: comparison,
           order: flags.order as PairedOrderStrategy,
           ...(flags.seed !== undefined ? { seed: flags.seed } : {}),
-          capabilitySnapshot: {
-            ...capabilitySnapshot,
-            metadata: {
-              ...capabilitySnapshot.metadata,
-              benchmarkRunner: "cbc-bench",
-              baselineProfile: baseline.execution.applied.id,
-              candidateProfile: candidate.execution.applied.id,
-              baselinePerformanceVariant: baseline.execution.performanceVariant,
-              candidatePerformanceVariant: candidate.execution.performanceVariant,
-              serviceTier,
-              repositoryEvidenceDigest: repositoryEvidence.digest,
-              runtimePlatform: runtimeCapabilities.platform,
-              runtimeArch: runtimeCapabilities.arch,
-              runtimeSandboxBackends: runtimeCapabilities.sandboxBackends,
-            },
-          },
+          capabilitySnapshot: pairedCapabilitySnapshot,
           // Filtered runs are development evidence. The full cohort enforces the complete
           // category distribution immediately; `gate` independently enforces release size.
           requireCompleteCoverage: flags.filter === "all",

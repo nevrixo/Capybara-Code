@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   analyzePairedStatistics,
+  canonicalComparisonTarget,
   evaluateStatisticalGate,
   type ComparisonTarget,
   type RunMetrics,
@@ -192,7 +193,7 @@ describe("paired statistical evidence", () => {
   });
 
   test("blocks a category regression even when the overall mean could look acceptable", () => {
-    const statistics = fixture("codex_matched", 2, ({ task, repetition, variant, value }) => {
+    const statistics = fixture("external_backbone_matched", 2, ({ task, repetition, variant, value }) => {
       if (
         variant === "candidate" &&
         task.category === "security_safety" &&
@@ -223,14 +224,20 @@ describe("paired statistical evidence", () => {
     }));
   });
 
-  test("uses distinct Capybara and matched-Codex speed thresholds", () => {
-    const codex = fixture("codex_matched", 1.6);
+  test("uses distinct Capybara and external-comparison speed thresholds", () => {
+    const external = fixture("external_backbone_matched", 1.6);
     const capybara = fixture("capybara_baseline", 1.6);
 
-    expect(evaluateStatisticalGate(codex).findings.find((entry) => entry.check === "paired median speed"))
+    expect(evaluateStatisticalGate(external).findings.find((entry) => entry.check === "paired median speed"))
       .toMatchObject({ severity: "ok" });
     expect(evaluateStatisticalGate(capybara).findings.find((entry) => entry.check === "paired median speed"))
       .toMatchObject({ severity: "blocking" });
+  });
+
+  test("keeps codex_matched only as a deprecated backbone compatibility alias", () => {
+    expect(canonicalComparisonTarget("codex_matched")).toBe("external_backbone_matched");
+    expect(evaluateStatisticalGate(fixture("codex_matched", 1.6)).status)
+      .toBe(evaluateStatisticalGate(fixture("external_backbone_matched", 1.6)).status);
   });
 
   test("counts missing or duplicate pairs instead of silently dropping them", () => {

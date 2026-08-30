@@ -17,6 +17,7 @@ import { resolveExecutionProfile } from "../src/profile.ts";
 const digest = (value: string): string =>
   `sha256:${createHash("sha256").update(value).digest("hex")}`;
 const IMPLEMENTATION_DIGEST = digest("external-adapter-fixture");
+const CAPABILITY_DIGEST = digest("matched-capability-fixture");
 
 function profile() {
   const value = profileById("standard-medium");
@@ -26,13 +27,19 @@ function profile() {
 
 function manifest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    schemaVersion: "1.0",
+    schemaVersion: "1.1",
     id: "matched-runner",
-    version: "1.2.3",
+    identity: {
+      product: "codex_cli",
+      version: "1.2.3",
+      model: profile().model,
+      authSurface: "openai-api-key",
+      mode: "backbone_matched",
+    },
     program: process.execPath,
     args: ["run", "adapter.ts", "{input}", "{output}"],
     appliedProfile: profile(),
-    capabilityDigest: "capability-digest",
+    capabilityDigest: CAPABILITY_DIGEST,
     implementationDigest: IMPLEMENTATION_DIGEST,
     passEnvironment: [],
     ...overrides,
@@ -66,15 +73,29 @@ describe("neutral external benchmark adapter", () => {
     const adapter = parseExternalBenchmarkAdapter(
       manifest({ passEnvironment: ["TEST_ALLOWED_ENV"] }),
       applied,
-      "capability-digest",
+      CAPABILITY_DIGEST,
     );
 
     expect(adapter.id).toBe("matched-runner");
-    expect(adapter.version).toBe("1.2.3");
+    expect(adapter.identity).toEqual({
+      product: "codex_cli",
+      version: "1.2.3",
+      model: applied.model,
+      authSurface: "openai-api-key",
+      mode: "backbone_matched",
+    });
     expect(adapter.program).toBe(process.execPath);
     expect(adapter.appliedProfile).toEqual(applied);
     expect(adapter.passEnvironment).toEqual(["TEST_ALLOWED_ENV"]);
     expect(adapter.manifestDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+
+    const injectedManifest = manifest();
+    delete injectedManifest.capabilityDigest;
+    expect(parseExternalBenchmarkAdapter(
+      injectedManifest,
+      applied,
+      CAPABILITY_DIGEST,
+    ).capabilityDigest).toBe(CAPABILITY_DIGEST);
   });
 
   test("rejects relative programs, missing exchange paths, profile drift, and executable-control env", () => {
@@ -82,33 +103,73 @@ describe("neutral external benchmark adapter", () => {
     expect(() => parseExternalBenchmarkAdapter(
       manifest({ program: "runner" }),
       applied,
-      "capability-digest",
+      CAPABILITY_DIGEST,
     )).toThrow("absolute path");
 
     expect(() => parseExternalBenchmarkAdapter(
       manifest({ args: ["{input}"] }),
       applied,
-      "capability-digest",
+      CAPABILITY_DIGEST,
     )).toThrow("{output}");
 
     expect(() => parseExternalBenchmarkAdapter(
       manifest({ appliedProfile: { ...applied, reasoningEffort: "high" } }),
       applied,
-      "capability-digest",
+      CAPABILITY_DIGEST,
     )).toThrow("profile does not match");
 
     expect(() => parseExternalBenchmarkAdapter(
       manifest({ passEnvironment: ["NODE_OPTIONS"] }),
       applied,
-      "capability-digest",
+      CAPABILITY_DIGEST,
     )).toThrow("executable-control");
+  });
+
+  test("keeps backbone matching strict but lets product-native bind its own profile and capability", () => {
+    const requested = profile();
+    const native = profileById("standard-high");
+    if (native === undefined) throw new Error("standard-high profile missing");
+    const nativeCapability = digest("product-native-capability");
+    const productManifest = manifest({
+      appliedProfile: native,
+      capabilityDigest: nativeCapability,
+      identity: {
+        product: "claude_code",
+        version: "2.0.0",
+        model: native.model,
+        authSurface: "anthropic-oauth",
+        mode: "product_native",
+      },
+    });
+
+    expect(() => parseExternalBenchmarkAdapter(
+      productManifest,
+      requested,
+      CAPABILITY_DIGEST,
+    )).toThrow("profile does not match");
+
+    const adapter = parseExternalBenchmarkAdapter(
+      productManifest,
+      requested,
+      CAPABILITY_DIGEST,
+      { mode: "product_native" },
+    );
+    expect(adapter.appliedProfile).toEqual(native);
+    expect(adapter.capabilityDigest).toBe(nativeCapability);
+    expect(adapter.identity.product).toBe("claude_code");
+
+    expect(() => parseExternalBenchmarkAdapter(
+      manifest({ capabilityDigest: digest("wrong-shared-snapshot") }),
+      requested,
+      CAPABILITY_DIGEST,
+    )).toThrow("capability digest does not match");
   });
 
   test("rejects a persisted manifest digest that does not match the canonical adapter body", () => {
     expect(() => parseExternalBenchmarkAdapter(
       manifest({ manifestDigest: digest("tampered-adapter-manifest") }),
       profile(),
-      "capability-digest",
+      CAPABILITY_DIGEST,
     )).toThrow("manifestDigest");
   });
 
@@ -166,7 +227,7 @@ describe("neutral external benchmark adapter", () => {
           args: ["run", script, "{input}", "{output}"],
         }),
         applied,
-        "capability-digest",
+        CAPABILITY_DIGEST,
       );
       const runner = createExternalBenchmarkRunner({
         benchmarkRoot: root,

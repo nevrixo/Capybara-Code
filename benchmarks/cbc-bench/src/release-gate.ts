@@ -3,6 +3,7 @@ import {
   RISK_LABELS,
   TASK_CATEGORIES,
   analyzePairedStatistics,
+  canonicalComparisonTarget,
   capabilitySnapshotDigest,
   evaluateStatisticalGate,
   summarize,
@@ -75,9 +76,11 @@ function inspectPaired(
     );
   }
 
-  const comparisonTarget = artifact.comparisonTarget;
-  if (comparisonTarget !== "capybara_baseline" && comparisonTarget !== "codex_matched") {
-    errors.push("paired artifact comparisonTarget must be capybara_baseline or codex_matched");
+  const comparisonTarget = comparisonTargetOf(artifact.comparisonTarget);
+  if (comparisonTarget === undefined) {
+    errors.push(
+      "paired artifact comparisonTarget must be capybara_baseline, external_backbone_matched, or external_product_native",
+    );
   }
   const repositoryValidation = validateBenchmarkRepositoryEvidence(artifact.repositoryEvidence);
   errors.push(...repositoryValidation.errors);
@@ -228,8 +231,13 @@ function inspectPaired(
       nonEmptyString(recordAt(result, "capabilityEvidence")?.digest);
     if (runCapability === undefined) {
       errors.push(`${label} is missing its capability digest`);
-    } else if (capabilityDigest !== undefined && runCapability !== capabilityDigest) {
-      errors.push(`${label} capability digest does not match the paired experiment snapshot`);
+    } else {
+      const expectedRunCapability = variant === "baseline"
+        ? executionEvidence?.baselineCapabilityDigest ?? capabilityDigest
+        : capabilityDigest;
+      if (expectedRunCapability !== undefined && runCapability !== expectedRunCapability) {
+        errors.push(`${label} capability digest does not match its bound execution evidence`);
+      }
     }
   }
 
@@ -286,6 +294,7 @@ interface ValidatedExecutionEvidence {
   readonly candidateProfile: EvalProfile;
   readonly baselineExecution?: ResolvedExecutionProfile;
   readonly candidateExecution: ResolvedExecutionProfile;
+  readonly baselineCapabilityDigest?: string;
 }
 
 function validateExecutionEvidence(
@@ -301,7 +310,12 @@ function validateExecutionEvidence(
     errors.push("paired artifact must contain complete baseline and candidate profiles");
     return undefined;
   }
-  if (!sameBaselineLockContract(baselineProfile, candidateProfile)) {
+  const target = comparisonTargetOf(comparisonTarget);
+  const canonicalTarget = target === undefined ? undefined : canonicalComparisonTarget(target);
+  if (
+    canonicalTarget !== "external_product_native" &&
+    !sameBaselineLockContract(baselineProfile, candidateProfile)
+  ) {
     errors.push("baseline and candidate violate the same-model Baseline Lock Contract");
   }
 
@@ -330,7 +344,8 @@ function validateExecutionEvidence(
   }
 
   let baselineExecution: ResolvedExecutionProfile | undefined;
-  if (comparisonTarget === "capybara_baseline") {
+  let baselineCapabilityDigest: string | undefined;
+  if (canonicalTarget === "capybara_baseline") {
     try {
       baselineExecution = resolveExecutionProfile(baselineProfile, {
         performanceVariant: "legacy",
@@ -345,18 +360,29 @@ function validateExecutionEvidence(
     } else if (canonicalValue(baselineEvidence.profile) !== canonicalValue(baselineExecution)) {
       errors.push("baseline executionEvidence does not match the legacy Standard product configuration");
     }
-  } else if (comparisonTarget === "codex_matched") {
+    baselineCapabilityDigest = capabilityDigest;
+  } else if (
+    canonicalTarget === "external_backbone_matched" ||
+    canonicalTarget === "external_product_native"
+  ) {
     if (baselineEvidence.kind !== "external" || !isRecord(baselineEvidence.adapter)) {
-      errors.push("codex_matched executionEvidence must contain an external adapter manifest");
+      errors.push(`${canonicalTarget} executionEvidence must contain an external adapter manifest`);
     } else if (capabilityDigest === undefined) {
-      errors.push("codex_matched adapter cannot be validated without a capability digest");
+      errors.push(`${canonicalTarget} adapter cannot be validated without a capability digest`);
     } else {
       try {
-        parseExternalBenchmarkAdapter(
+        const adapter = parseExternalBenchmarkAdapter(
           baselineEvidence.adapter,
           baselineProfile,
           capabilityDigest,
+          {
+            mode: canonicalTarget === "external_product_native"
+              ? "product_native"
+              : "backbone_matched",
+            ...(target === "codex_matched" ? { allowLegacyIdentity: true } : {}),
+          },
         );
+        baselineCapabilityDigest = adapter.capabilityDigest;
       } catch (error) {
         errors.push(`external adapter evidence is invalid: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -368,6 +394,7 @@ function validateExecutionEvidence(
     candidateProfile,
     ...(baselineExecution !== undefined ? { baselineExecution } : {}),
     candidateExecution,
+    ...(baselineCapabilityDigest !== undefined ? { baselineCapabilityDigest } : {}),
   };
 }
 
@@ -434,9 +461,11 @@ function recomputeStatisticalEvidence(
     errors.push("paired artifact is missing aggregate.statistics");
     return undefined;
   }
-  const target = stored.target;
-  if (target !== "capybara_baseline" && target !== "codex_matched") {
-    errors.push("aggregate.statistics.target must be capybara_baseline or codex_matched");
+  const target = comparisonTargetOf(stored.target);
+  if (target === undefined) {
+    errors.push(
+      "aggregate.statistics.target must be capybara_baseline, external_backbone_matched, or external_product_native",
+    );
     return undefined;
   }
   if (expectedTarget !== target) {
@@ -618,6 +647,19 @@ function taskCategory(value: unknown): TaskCategory | undefined {
   return typeof value === "string" && TASK_CATEGORIES.includes(value as TaskCategory)
     ? value as TaskCategory
     : undefined;
+}
+
+function comparisonTargetOf(value: unknown): ComparisonTarget | undefined {
+  if (
+    value === "capybara_baseline" ||
+    value === "external_backbone_matched" ||
+    value === "external_product_native" ||
+    // Deprecated artifact compatibility only. New CLI runs canonicalize it.
+    value === "codex_matched"
+  ) {
+    return value;
+  }
+  return undefined;
 }
 
 function riskLabels(value: unknown): readonly RiskLabel[] | undefined {

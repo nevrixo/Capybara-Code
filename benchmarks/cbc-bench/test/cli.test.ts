@@ -66,7 +66,7 @@ describe("cbc-bench CLI wiring", () => {
     expect(await cbcBench([
       "paired",
       "--comparison",
-      "codex_matched",
+      "external_backbone_matched",
       "--capability-snapshot",
       capabilityPath,
     ])).toBe(2);
@@ -87,9 +87,15 @@ describe("cbc-bench CLI wiring", () => {
     const wrongProfile = profileById("standard-high");
     if (wrongProfile === undefined) throw new Error("standard-high profile missing");
     await Bun.write(adapterPath, JSON.stringify({
-      schemaVersion: "1.0",
+      schemaVersion: "1.1",
       id: "mismatched-adapter",
-      version: "1.0.0",
+      identity: {
+        product: "codex_cli",
+        version: "1.0.0",
+        model: wrongProfile.model,
+        authSurface: "openai-api-key",
+        mode: "backbone_matched",
+      },
       program: process.execPath,
       args: ["run", "runner.ts", "{input}", "{output}"],
       appliedProfile: wrongProfile,
@@ -110,7 +116,7 @@ describe("cbc-bench CLI wiring", () => {
     expect(await cbcBench([
       "paired",
       "--comparison",
-      "codex_matched",
+      "external_backbone_matched",
       "--capability-snapshot",
       capabilityPath,
       "--baseline-adapter",

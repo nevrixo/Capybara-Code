@@ -55,6 +55,12 @@ export interface RunnerOptions {
    * model name. The paired release gate requires an exact match.
    */
   readonly appliedProfile?: EvalProfile;
+  /**
+   * Digest of the capability snapshot actually used by this runner. CBC runners
+   * inherit the paired experiment's primary snapshot; a product-native external
+   * runner records its own snapshot digest instead of claiming capability parity.
+   */
+  readonly capabilityDigest?: string;
   readonly teardown?: (workspace: string) => Promise<void>;
   readonly onProgress?: (event: ProgressEvent) => void;
   /** Tasks to run at once. Defaults to 1: concurrent runs distort wall-time metrics. */

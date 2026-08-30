@@ -11,7 +11,26 @@ import type { RunMetrics } from "./metrics.ts";
 import type { GateFinding, GateResult } from "./scoring.ts";
 import type { RiskLabel, TaskCategory } from "./task.ts";
 
-export type ComparisonTarget = "capybara_baseline" | "codex_matched";
+export type CanonicalComparisonTarget =
+  | "capybara_baseline"
+  | "external_backbone_matched"
+  | "external_product_native";
+
+/**
+ * Comparison recorded in a paired benchmark artifact.
+ *
+ * @deprecated `codex_matched` is accepted only while inspecting historical
+ * artifacts. New callers must use `external_backbone_matched`, which records
+ * the external product explicitly in its adapter identity.
+ */
+export type ComparisonTarget = CanonicalComparisonTarget | "codex_matched";
+
+/** Canonicalize the one historical target without changing old artifact bytes. */
+export function canonicalComparisonTarget(
+  target: ComparisonTarget,
+): CanonicalComparisonTarget {
+  return target === "codex_matched" ? "external_backbone_matched" : target;
+}
 export type StatisticalCacheTemperature = "cold" | "warm";
 export type StatisticalVariant = "baseline" | "candidate";
 
@@ -123,6 +142,15 @@ export interface StatisticalThresholds {
   readonly preProviderLocalP95UpperMs?: number;
 }
 
+const EXTERNAL_COMPARISON_THRESHOLDS: StatisticalThresholds = {
+  qualityLowerBoundPoints: -1,
+  categoryDifferencePoints: -3,
+  medianSpeedupLowerBound: 1.5,
+  p95SpeedupLowerBound: 1.25,
+  scopePrecisionLowerBoundPoints: -2,
+  successfulCostRatioUpperBound: 1.05,
+};
+
 export const STATISTICAL_THRESHOLDS: Readonly<Record<ComparisonTarget, StatisticalThresholds>> = {
   capybara_baseline: {
     qualityLowerBoundPoints: -1,
@@ -135,14 +163,10 @@ export const STATISTICAL_THRESHOLDS: Readonly<Record<ComparisonTarget, Statistic
     providerRequestReductionLowerBound: 0.25,
     preProviderLocalP95UpperMs: 250,
   },
-  codex_matched: {
-    qualityLowerBoundPoints: -1,
-    categoryDifferencePoints: -3,
-    medianSpeedupLowerBound: 1.5,
-    p95SpeedupLowerBound: 1.25,
-    scopePrecisionLowerBoundPoints: -2,
-    successfulCostRatioUpperBound: 1.05,
-  },
+  external_backbone_matched: EXTERNAL_COMPARISON_THRESHOLDS,
+  external_product_native: EXTERNAL_COMPARISON_THRESHOLDS,
+  // Historical artifacts only; new runs canonicalize this before execution.
+  codex_matched: EXTERNAL_COMPARISON_THRESHOLDS,
 };
 
 const CRITICAL_RISKS = new Set<RiskLabel>([

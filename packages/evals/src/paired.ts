@@ -20,6 +20,7 @@ import {
 import { TARGET_TASK_COUNT, suiteCoverage, type BenchTask } from "./task.ts";
 import {
   analyzePairedStatistics,
+  canonicalComparisonTarget,
   type ComparisonTarget,
   type PairedComparisonStatistics,
 } from "./statistics.ts";
@@ -222,7 +223,12 @@ export async function runPairedSuite(
     const profileApplied = runnerOptions.appliedProfile !== undefined &&
       canonicalValue(runnerOptions.appliedProfile) === canonicalValue(descriptor.profile);
     const result = await runSuite(tasks, descriptor.profile, runnerOptions);
-    runs.push({ descriptor, result, profileApplied, capabilityDigest });
+    runs.push({
+      descriptor,
+      result,
+      profileApplied,
+      capabilityDigest: runnerOptions.capabilityDigest ?? capabilityDigest,
+    });
     await options.afterRun?.(descriptor, result);
     options.onRunFinished?.(descriptor, result);
   }
@@ -425,6 +431,32 @@ function pairedEligibilityFindings(input: EligibilityInput): GateFinding[] {
     block("capability snapshot", "backend, capturedAt, and at least one capability are required");
   } else {
     ok("capability snapshot", `digest ${input.capabilityDigest}`);
+  }
+
+  const canonicalTarget = canonicalComparisonTarget(
+    input.options.comparisonTarget ?? "capybara_baseline",
+  );
+  const capabilityMismatches = input.runs.filter((run) => {
+    if (
+      canonicalTarget === "external_product_native" &&
+      run.descriptor.variant === "baseline"
+    ) {
+      return !/^sha256:[0-9a-f]{64}$/u.test(run.capabilityDigest);
+    }
+    return run.capabilityDigest !== input.capabilityDigest;
+  });
+  if (capabilityMismatches.length > 0) {
+    block(
+      "run capability binding",
+      `${capabilityMismatches.length} run(s) do not match their comparison mode's capability contract`,
+    );
+  } else if (canonicalTarget === "external_product_native") {
+    ok(
+      "run capability binding",
+      "candidate runs use the primary snapshot; product-native baseline runs carry their own digest",
+    );
+  } else {
+    ok("run capability binding", "every run uses the shared matched capability snapshot");
   }
 
   return findings;

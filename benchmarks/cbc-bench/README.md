@@ -91,15 +91,30 @@ bun run benchmarks/cbc-bench/src/cli.ts paired \
 A release-candidate run uses all 150 tasks, at least five repetitions per variant, and
 both cold and warm strata. Filtered runs are development evidence only.
 
-### Matched external comparison
+### External comparisons
 
-CBC does not import, package, or directly invoke another agent runtime. A matched
-competitor is supplied by an operator-owned neutral adapter:
+CBC does not import or package another agent runtime. An operator-owned neutral adapter
+is used for both external modes:
+
+- `external_backbone_matched` measures harness differences under the exact same model,
+  reasoning, profile, budget, and capability snapshot.
+- `external_product_native` measures each product with its declared native/default
+  profile. Its adapter carries its own capability digest; CBC Bench deliberately does
+  not claim that it equals the Capybara candidate snapshot.
+
+Every new manifest is schemaVersion 1.1 and binds the product identity into its digest:
 
 ```json
 {
-  "schemaVersion": "1.0",
+  "schemaVersion": "1.1",
   "id": "matched-agent-adapter",
+  "identity": {
+    "product": "codex",
+    "version": "1.2.3",
+    "model": "gpt-5.6-sol",
+    "authSurface": "openai-api-key",
+    "mode": "backbone_matched"
+  },
   "program": "/absolute/path/to/adapter",
   "args": ["--input", "{input}", "--output", "{output}"],
   "appliedProfile": {
@@ -113,7 +128,8 @@ competitor is supplied by an operator-owned neutral adapter:
     "subagents": true,
     "promptCache": "prefix"
   },
-  "capabilityDigest": "<digest of the supplied capability snapshot>"
+  "implementationDigest": "sha256:<digest of the adapter implementation>",
+  "passEnvironment": []
 }
 ```
 
@@ -121,7 +137,7 @@ Run it with:
 
 ```bash
 bun run benchmarks/cbc-bench/src/cli.ts paired \
-  --comparison codex_matched \
+  --comparison external_backbone_matched \
   --baseline-adapter /absolute/path/to/adapter-manifest.json \
   --capability-snapshot /absolute/path/to/capabilities.json \
   --repetitions 5 \
@@ -130,12 +146,23 @@ bun run benchmarks/cbc-bench/src/cli.ts paired \
   --out benchmarks/cbc-bench/results/matched-paired.json
 ```
 
-The adapter receives a JSON file containing the exact task, workspace, profile, budget,
-permission/network contract, and capability digest. It writes a schema-versioned result
-file containing timing and CBC events. The harness validates the task/profile binding,
-event schema, timing order, exit code, and capability/profile manifest before accepting
-the observation. Snapshot preparation, hidden acceptance, scoring, and teardown remain
-owned by CBC Bench.
+For a native-default comparison, set `identity.mode` to `product_native`, declare the
+adapter's actual native profile/model/auth surface plus its own `capabilityDigest`, and run with
+`--comparison external_product_native`. The adapter receives a JSON file containing the
+exact task, workspace, applied profile, budget, permission/network contract, identity,
+and capability digest. It writes a schema-versioned result containing timing and CBC
+events. The harness validates identity/digest provenance, event schema, timing order,
+exit code, and the mode-specific profile/capability contract before accepting the
+observation. Snapshot preparation, hidden acceptance, scoring, and teardown remain owned
+by CBC Bench.
+
+For `backbone_matched`, omit `capabilityDigest` from the input manifest: CBC Bench binds
+the exact supplied capability snapshot into the canonical adapter manifest and digest.
+If a backbone manifest supplies the field explicitly, it must match byte-for-byte.
+
+`codex_matched` is accepted only when inspecting historical schemaVersion 1.0 artifacts;
+new CLI runs canonicalize it to `external_backbone_matched` and require identity-bound
+schemaVersion 1.1 evidence.
 
 ## Capability snapshot
 
