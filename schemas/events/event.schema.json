@@ -230,6 +230,7 @@
         "tool.completed",
         "tool.failed",
         "tool.preflight_repaired",
+        "tool.group_expanded",
         "tool.attempt_failed",
         "tool.recovery_applied",
         "tool.reconciled",

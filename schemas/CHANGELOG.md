@@ -38,6 +38,19 @@ does not fail validation, so nothing would catch it except a human reading this 
 
 ---
 
+## events 1.0 — action group expansion
+
+Added tool.group_expanded, journaled when a §6.5 action-group call is rewritten
+into the internal tool it names. The kind exists because the rest of the timeline
+deliberately never mentions the group: validation, the permission check,
+tool.started, and the evidence all carry the expanded tool id, which is the
+guarantee that a facade cannot widen authority. Without this one record there
+would be nothing in a replay showing that the model asked through a group at all,
+and a wrong-group-selection rate could not be measured. Hidden, because the
+expansion is not a step the user needs to see.
+
+This is an additive 1.x change. Older event consumers skip the new kind.
+
 ## events 1.0 — native lane and hosted agent lifecycle kinds
 
 Added native_lane.selected and native_lane.fallback so a route receipt records

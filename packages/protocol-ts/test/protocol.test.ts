@@ -73,7 +73,7 @@ describe("event envelope (§20.6)", () => {
   });
 
   test("every registered kind has defaults", () => {
-    expect(EVENT_KINDS.length).toBe(70);
+    expect(EVENT_KINDS.length).toBe(71);
     expect(RUNTIME_FEATURE_EVENT_KINDS.length).toBeGreaterThan(80);
     for (const kind of ALL_EVENT_KINDS) {
       const defaults = defaultsForKind(kind);
