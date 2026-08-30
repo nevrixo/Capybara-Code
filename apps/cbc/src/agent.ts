@@ -30,6 +30,7 @@ import {
   toModelSchema,
   type TurnResult,
 } from "@cbc/agent-kernel";
+import { profileStrategy } from "@cbc/config-schema";
 import type { CacheMode, CbcConfig, ReasoningEffort } from "@cbc/config-schema";
 import { inertSettingsFor, type DoctorSnapshot } from "./commands/doctor.ts";
 import { TurnBudgetController } from "@cbc/inference-domain";
@@ -51,6 +52,8 @@ import {
   scopedExactExcerptBodyDigest,
   scopedExactExcerptIdentityDigest,
   validateTaskContextCapsule,
+  workspaceConsumerGraph,
+  type WorkspacePackageManifest,
   type ContextInspection,
   type ContextPack,
   type EvidenceSelection,
@@ -588,6 +591,13 @@ export class AgentSession {
   #checkpointId: string | undefined;
   #turnCounter = 0;
   #workspaceGeneration = 0;
+  /**
+   * §5.21's dependency-graph impact input, built once from the workspace
+   * manifests. `undefined` until the first successful build; the planner treats a
+   * missing graph as "widen no further than the changed packages" rather than as
+   * a reason to run everything.
+   */
+  #packageConsumerGraph: ReadonlyMap<string, readonly string[]> | undefined;
   #repositoryRefreshRevision = 0;
   #repositoryRefresh: Promise<void> | undefined;
   readonly #pendingRepositoryDeltaPaths = new Set<string>();
@@ -914,6 +924,7 @@ export class AgentSession {
         this.#invalidateContextPath(path, "sub-agent mutation committed");
       },
       workspaceGeneration: () => this.#workspaceGeneration,
+      taskEpochId: () => this.taskEpoch.current()?.id,
       onWorkspacePotentiallyChanged: (toolId, action, execution) => {
         if (workspaceChangeObserved(execution) === false) return;
         readCache.invalidateAll();
@@ -1252,6 +1263,10 @@ export class AgentSession {
       premiumContextPolicy: options.config.model.context.premiumBandPolicy,
       phasePolicy: options.config.model.router.phasePolicy,
       commandClassification: options.config.agent.toolGraph.commandClassification,
+      // §P1-03: the active profile's verification column reaches the router as a
+      // floor. Read per call rather than captured, so `/model use profile:deep`
+      // applies to the next turn instead of the session's original choice.
+      profileVerificationFloor: () => this.#activeProfileVerification(),
       // §5.18: `perf.budgetEnforcement` and `model.router.maxCostUsdPerTurn` were
       // both recorded as wired, but the kernel only ever received the mode — no
       // host constructed the ledger, so the guard had nothing to charge against
@@ -1295,6 +1310,12 @@ export class AgentSession {
       // post-write revision against and §5.24's stale-revision criterion could
       // not be measured at all.
       workspaceGeneration: () => this.#workspaceGeneration,
+      // §5.21: a change in one workspace package has to pull in the packages that
+      // depend on it, and only the host can read the manifests that say which
+      // those are. Kept as a synchronous read of a cached graph, primed at the
+      // start of a mutating turn — the contract is built inside #verify and cannot
+      // await a manifest scan there.
+      packageConsumers: () => this.#packageConsumerGraph,
 
       verificationCoverage: () => ({
         staleEvidence: [...this.#verificationGenerations.values()].filter(
@@ -2010,6 +2031,12 @@ export class AgentSession {
     try {
       const scan = await scanRepository(this.#options.runtime);
       if (revision !== this.#repositoryRefreshRevision) return;
+      // A manifest that changed invalidates the graph. Clearing rather than
+      // rebuilding keeps the read path lazy: the next contract rebuilds it, and a
+      // turn that never verifies never pays for manifests it did not need.
+      if (scan.files.some((file) => isWorkspaceManifest(file.path))) {
+        this.#packageConsumerGraph = undefined;
+      }
       // A superseded generation is intentionally discarded; the dirty flag stays
       // set so the next observation/startup refresh can retry with a live scan.
       const instructionDigestBefore = stableDigest(this.context.instructions);
@@ -2031,6 +2058,66 @@ export class AgentSession {
     } catch {
       // Safe fallback: keep the stale map omitted. A later observation can retry.
     }
+  }
+
+  /**
+   * Build §5.21's dependency graph from the workspace manifests the scan found.
+   *
+   * A path-prefix guess can say a change touched `packages/protocol-ts`, but only
+   * a manifest can say `agent-kernel` depends on it, and the consumers are the
+   * thing a changed export actually breaks. Rebuilt from the scan rather than
+   * watched: a manifest change is exactly the kind of edit that invalidates the
+   * whole map anyway, and an unreadable manifest leaves the graph as it was
+   * rather than narrowing the plan on partial information.
+   */
+  async #refreshPackageConsumerGraph(): Promise<void> {
+    if (this.#packageConsumerGraph !== undefined) return;
+    // The repository map is the cheap source, but a first turn can start before
+    // the background scan has settled. Falling back to a direct scan is what keeps
+    // the very first mutating turn from planning without a graph.
+    let manifests = (this.context.repositoryMap?.files ?? [])
+      .map((file) => file.path.replaceAll("\\", "/"))
+      .filter(isWorkspaceManifest);
+    if (manifests.length === 0) {
+      try {
+        const scan = await scanRepository(this.#options.runtime);
+        manifests = scan.files.map((file) => file.path.replaceAll("\\", "/")).filter(isWorkspaceManifest);
+      } catch {
+        // No graph is a narrower plan, never a wrong one: the consumer tier falls
+        // back to the changed packages.
+        return;
+      }
+    }
+    if (manifests.length === 0) return;
+    const parsed: WorkspacePackageManifest[] = [];
+    for (const path of manifests) {
+      const raw = await this.#options.host.fs.read(path).catch(() => undefined);
+      if (raw === undefined) continue;
+      try {
+        const manifest = JSON.parse(raw) as {
+          name?: unknown;
+          dependencies?: unknown;
+          devDependencies?: unknown;
+        };
+        if (typeof manifest.name !== "string" || manifest.name.length === 0) continue;
+        // Dev dependencies count: a package whose tests import another package is
+        // still a consumer whose suite a change can break.
+        const dependencies = [
+          ...dependencyNames(manifest.dependencies),
+          ...dependencyNames(manifest.devDependencies),
+        ];
+        parsed.push({
+          directory: path.slice(0, path.length - "/package.json".length),
+          name: manifest.name,
+          dependencies,
+        });
+      } catch {
+        // A malformed manifest drops out of the graph; a partial graph still
+        // widens correctly for the members it did parse.
+      }
+    }
+    if (parsed.length === 0) return;
+    this.#packageConsumerGraph = workspaceConsumerGraph(parsed);
   }
 
   #invalidateWholeWorkspace(
@@ -3408,6 +3495,24 @@ export class AgentSession {
     return evaluation;
   }
 
+  /**
+   * The verification depth the selected profile asks for (§P1-03).
+   *
+   * `auto` and the manual selection deliberately return nothing: neither names a
+   * profile, so there is no user choice to honour, and inventing a floor there
+   * would quietly widen verification for everyone who never picked a profile.
+   */
+  #activeProfileVerification(): "focused" | "package" | "integration" | "independent_review" | undefined {
+    const config = this.#options.config;
+    const name = config.model.profile;
+    if (name === "auto") return undefined;
+    const profile = config.model.profiles[name];
+    // Resolved through `profileStrategy` rather than read raw: a profile written
+    // in TOML may name only the fields the user cared about, and the accessor
+    // owns the fallback so this cannot disagree with the rest of the host.
+    return profile === undefined ? undefined : profileStrategy(profile).verification;
+  }
+
   permissionContext(): PermissionContext {
     const config = this.#options.config;
     const modeState = this.recorder.model.modeState;
@@ -4354,6 +4459,10 @@ export class AgentSession {
     }
     this.#turnChangedPaths.clear();
     this.#turnVerificationPassed = false;
+    // §5.21: the verification contract is built inside the kernel's #verify, which
+    // is synchronous with respect to the host, so the dependency graph has to be
+    // in hand before the turn starts rather than fetched when it is asked for.
+    await this.#refreshPackageConsumerGraph();
     this.setTaskDescription(prompt);
     this.context.select({
       taskText: prompt,
@@ -4920,6 +5029,16 @@ function sameTodoDocumentScope(current: unknown, requested: unknown): boolean {
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** A workspace member's manifest, the only file that can name a package's deps. */
+function isWorkspaceManifest(path: string): boolean {
+  return /^(?:packages|apps)\/[^/]+\/package\.json$/u.test(path);
+}
+
+/** Dependency names from a manifest field that may be absent or malformed. */
+function dependencyNames(value: unknown): string[] {
+  return isRecord(value) ? Object.keys(value) : [];
 }
 /**
  * 짠11.8's focused test command.
