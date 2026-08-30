@@ -317,6 +317,16 @@ export interface InferencePlan {
   readonly maxCostUsd: number;
   /** How wide the turn's verification contract has to be (§5.14, §5.17). */
   readonly verificationLevel: VerificationLevel;
+  /**
+   * Generation capacity held back from the input budget (§5.14).
+   *
+   * Named on the decision rather than only folded into `outputTokens`, because
+   * the two answer different questions: `outputTokens` is what this request may
+   * generate, while the reserve is what the *context* side must leave free. A
+   * consumer computing context pressure needs the reserve, and could not
+   * recover it from the resolved ceiling.
+   */
+  readonly outputReserveTokens: number;
   readonly rationaleCodes: readonly string[];
 }
 
@@ -333,6 +343,7 @@ export function inferenceRouteId(route: {
   readonly maxCostUsd: number;
   readonly verificationLevel: VerificationLevel;
   readonly outputTokens: number;
+  readonly outputReserveTokens: number;
   readonly context: Pick<ContextBandDecision, "allowed" | "premium">;
   readonly reasonCode: string;
 }): string {
@@ -349,6 +360,7 @@ export function inferenceRouteId(route: {
     route.maxCostUsd,
     route.verificationLevel,
     route.outputTokens,
+    route.outputReserveTokens,
     route.context.allowed,
     route.context.premium,
     route.reasonCode,
@@ -478,6 +490,10 @@ export class InferenceUtilityController implements InferencePolicyPort {
     };
     const modeDecision = input.explicitMode === "standard" ? { mode: "standard" as const, reason: "explicit standard mode", showCostWarning: false } : selectReasoningMode(proRequest, legacy);
     const mode = capability.reasoningModes.includes(modeDecision.mode) ? modeDecision.mode : "standard";
+    // The reserve is resolved once and reused by the band, the generation
+    // budget, and the decision itself; deriving it separately at each site is
+    // how the three came to disagree about how much capacity was held back.
+    const outputReserveTokens = Math.max(0, Math.floor(input.reserveOutputTokens ?? 0));
     const context = selectContextBand(input.contextTokens, {
       capability,
       ...(input.premiumPolicy !== undefined ? { premiumPolicy: input.premiumPolicy } : {}),
@@ -547,6 +563,7 @@ export class InferenceUtilityController implements InferencePolicyPort {
       maxCostUsd,
       verificationLevel: verification.level,
       outputTokens: output,
+      outputReserveTokens,
       context,
       reasonCode,
     });
@@ -568,6 +585,7 @@ export class InferenceUtilityController implements InferencePolicyPort {
       maxParallelTools,
       maxCostUsd,
       verificationLevel: verification.level,
+      outputReserveTokens,
       rationaleCodes: [...rationaleCodes, ...verification.codes],
       ...(input.maxCostUsd !== undefined ? { estimatedCostCeilingUsd: input.maxCostUsd } : {}),
       warnings,

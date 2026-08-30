@@ -764,6 +764,8 @@ export interface RouteExecutionReceipt {
     readonly maxAgents: number;
     readonly maxParallelTools: number;
     readonly outputTokens: number;
+    /** Capacity the route held back from the input budget (§5.14). */
+    readonly outputReserveTokens: number;
     readonly reasons: readonly string[];
   };
   readonly actual: {
@@ -2129,6 +2131,7 @@ export class AgentKernel {
         maxAgents: route.maxAgents,
         maxParallelTools: route.maxParallelTools,
         outputTokens: route.outputTokens,
+        outputReserveTokens: route.outputReserveTokens,
         reasons: [...route.rationaleCodes, ...route.warnings],
       },
       actual: {
@@ -2949,14 +2952,20 @@ export class AgentKernel {
         };
       }
     }
-    const modelWindowTokens = model?.contextWindow ?? effectiveCompiled.inputTokens + (this.#options.reserveOutputTokens ?? 32_000) + 8_192;
+    // §5.15: the route's named reserve is what the context side must leave free,
+    // so the compaction threshold reads it rather than re-deriving the number
+    // from the host option the route was already built from.
+    const outputReserveTokens = policyDecision !== undefined && policyDecision.outputReserveTokens > 0
+      ? policyDecision.outputReserveTokens
+      : this.#options.reserveOutputTokens ?? 32_000;
+    const modelWindowTokens = model?.contextWindow ?? effectiveCompiled.inputTokens + outputReserveTokens + 8_192;
     const adaptiveLocalTargetTokens = Math.max(
       effectiveCompiled.inputTokens,
-      Math.floor(Math.max(1_024, modelWindowTokens - (this.#options.reserveOutputTokens ?? 32_000)) * 0.76),
+      Math.floor(Math.max(1_024, modelWindowTokens - outputReserveTokens) * 0.76),
     );
     const nativeThreshold = calculateNativeCompactionThreshold({
       modelWindowTokens,
-      outputReserveTokens: this.#options.reserveOutputTokens ?? 32_000,
+      outputReserveTokens,
       adaptiveLocalTargetTokens,
     });
     const request: ModelRequest = {

@@ -203,6 +203,39 @@ describe("ChatGPT/Codex routing profile", () => {
   });
 });
 
+describe("named output reserve (§5.14)", () => {
+  test("the reserve is reported, not only folded into the generation ceiling", () => {
+    const decision = new InferenceUtilityController().decide({
+      intent: "final",
+      contextTokens: 20_000,
+      reserveOutputTokens: 32_000,
+      configuredMaxOutputTokens: 64_000,
+    });
+
+    // Context pressure needs the reserve itself; the resolved ceiling alone
+    // cannot say how much capacity the input side has to leave free.
+    expect(decision.outputReserveTokens).toBe(32_000);
+    expect(decision.outputTokens).toBeGreaterThan(0);
+  });
+
+  test("an unset reserve is zero rather than an implicit hidden default", () => {
+    const decision = new InferenceUtilityController().decide({
+      intent: "final",
+      contextTokens: 20_000,
+    });
+
+    expect(decision.outputReserveTokens).toBe(0);
+  });
+
+  test("the reserve participates in route identity", () => {
+    const policy = new InferenceUtilityController();
+    const lean = policy.decide({ intent: "final", contextTokens: 20_000, reserveOutputTokens: 8_000 });
+    const generous = policy.decide({ intent: "final", contextTokens: 20_000, reserveOutputTokens: 64_000 });
+
+    expect(lean.routeId).not.toBe(generous.routeId);
+  });
+});
+
 describe("verification level (§5.14, §5.17)", () => {
   test("a read-only investigation earns only the focused contract", () => {
     const decision = new InferenceUtilityController().decide({
