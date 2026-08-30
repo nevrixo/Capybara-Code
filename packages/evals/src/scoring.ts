@@ -247,6 +247,13 @@ export interface GateFinding {
   readonly check: string;
   readonly severity: GateSeverity;
   readonly detail: string;
+  /**
+   * §5.29: set to false when the check passed on its own terms but is not credited as
+   * an improvement, because a quality or safety check blocked the release. A speed or
+   * token win under a failed quality gate is not an improvement, and printing it
+   * unqualified is how a regression gets reported as progress.
+   */
+  readonly credited?: false;
 }
 
 export interface GateResult {
@@ -509,7 +516,11 @@ export function renderGate(result: GateResult): string[] {
   };
   const width = result.findings.reduce((max, finding) => Math.max(max, finding.check.length), 0);
   const lines = result.findings.map(
-    (finding) => `${mark[finding.severity]} ${finding.check.padEnd(width)}  ${finding.detail}`,
+    (finding) =>
+      `${mark[finding.severity]} ${finding.check.padEnd(width)}  ${finding.detail}` +
+      // §5.29: an uncredited win is still printed, so the measurement is not hidden,
+      // but it is never printed as an improvement.
+      (finding.credited === false ? " (not credited: the quality gate blocked)" : ""),
   );
 
   lines.push("");

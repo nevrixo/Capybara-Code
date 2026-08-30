@@ -627,7 +627,7 @@ async function pairedCommand(flags: Flags): Promise<number> {
       console.log(renderSummary(result.aggregate.candidate).join("\n"));
       const statisticalGate = evaluateStatisticalGate(result.aggregate.statistics);
       console.log("");
-      console.log(renderPairedStatistics(result.aggregate.statistics).join("\n"));
+      console.log(renderPairedStatistics(result.aggregate.statistics, statisticalGate).join("\n"));
       console.log("");
       console.log("Experiment eligibility");
       console.log(renderGate(result.aggregate.gate).join("\n"));
@@ -715,7 +715,7 @@ async function gateCommand(flags: Flags): Promise<number> {
   }
 
   console.log("");
-  console.log(renderPairedStatistics(evidence.statistics).join("\n"));
+  console.log(renderPairedStatistics(evidence.statistics, evidence.statisticalGate).join("\n"));
   console.log("");
   console.log(renderGate(evidence.statisticalGate).join("\n"));
   return evidence.statisticalGate.pass ? 0 : 1;

@@ -4,7 +4,9 @@ import {
   analyzePairedStatistics,
   canonicalComparisonTarget,
   evaluateStatisticalGate,
+  STATISTICAL_THRESHOLDS,
   renderPairedStatistics,
+  RELEASE_GATE_5_29_THRESHOLDS,
   type ComparisonTarget,
   type RunMetrics,
   type StatisticalRun,
@@ -352,5 +354,125 @@ describe("false-complete rate", () => {
 
   test("a clean comparison reports a zero rate rather than an undefined one", () => {
     expect(fixture("capybara_baseline").criticalSafety.falseCompletionRate).toBe(0);
+  });
+});
+
+/**
+ * The §5.29 thresholds without the per-category goals. The shared fixture only carries
+ * local_bug_fix and security_safety, so repository_understanding and long-session would
+ * be unmeasured in every case and block every gate for a reason unrelated to the check
+ * under test. The goals themselves are covered by their own case below.
+ */
+const { categoryImprovementPoints: _categoryGoals, ...NEUTRAL_5_29_THRESHOLDS } =
+  RELEASE_GATE_5_29_THRESHOLDS;
+
+describe("§5.29 release gate", () => {
+  test("encodes the PRD's wall-time ratios as their reciprocal speedups", () => {
+    // 0.80x wall time is a 1.25x speedup; 0.90x is 1.111x.
+    expect(RELEASE_GATE_5_29_THRESHOLDS.medianSpeedupLowerBound).toBeCloseTo(1.25, 8);
+    expect(RELEASE_GATE_5_29_THRESHOLDS.p95SpeedupLowerBound).toBeCloseTo(1.1111111, 6);
+    expect(RELEASE_GATE_5_29_THRESHOLDS.providerRequestReductionLowerBound).toBe(0.25);
+    expect(RELEASE_GATE_5_29_THRESHOLDS.inputTokenReductionLowerBound).toBe(0.2);
+    expect(RELEASE_GATE_5_29_THRESHOLDS.redundantReadReductionLowerBound).toBe(0.4);
+    expect(RELEASE_GATE_5_29_THRESHOLDS.ptcFallbackRateUpperBound).toBe(0.05);
+    expect(RELEASE_GATE_5_29_THRESHOLDS.falseCompletionRateUpperBound).toBe(0.01);
+    expect(RELEASE_GATE_5_29_THRESHOLDS.categoryImprovementPoints).toEqual({
+      repository_understanding: 3,
+      long_session_resume_compaction: 3,
+    });
+  });
+
+  test("a faster, cheaper candidate that fails quality is not a pass and gets no credit", () => {
+    const statistics = fixture("capybara_baseline", 4, ({ task, variant, value }) =>
+      variant === "candidate" && task.category === "security_safety"
+        ? {
+            ...value,
+            outcome: { ...value.outcome, hiddenTestsPassed: false, status: "failed" as const },
+          }
+        : value);
+    const gate = evaluateStatisticalGate(statistics, NEUTRAL_5_29_THRESHOLDS);
+
+    // The efficiency measurements are genuinely good.
+    expect(statistics.medianSpeedup.lower).toBeGreaterThan(1.25);
+    expect(statistics.inputTokenReduction!.lower).toBeGreaterThan(0.2);
+    // And the gate still fails, with none of them counted as improvements.
+    expect(gate.status).toBe("failed");
+    const speed = gate.findings.find((entry) => entry.check === "paired median speed");
+    const tokens = gate.findings.find((entry) => entry.check === "input token reduction");
+    expect(speed).toMatchObject({ severity: "ok", credited: false });
+    expect(tokens).toMatchObject({ severity: "ok", credited: false });
+    expect(renderPairedStatistics(statistics, gate).join("\n"))
+      .toContain("not credited");
+    // Quality findings are ranked ahead of the efficiency ones.
+    const first = gate.findings.findIndex((entry) => entry.check === "quality non-inferiority");
+    expect(first).toBeLessThan(gate.findings.findIndex((entry) => entry.check === "paired median speed"));
+  });
+
+  test("credits speed and token wins when every quality check passes", () => {
+    const statistics = fixture("capybara_baseline", 4);
+    const gate = evaluateStatisticalGate(statistics, NEUTRAL_5_29_THRESHOLDS);
+
+    expect(gate.findings.every((entry) => entry.credited === undefined)).toBe(true);
+    expect(gate.findings.find((entry) => entry.check === "paired median speed"))
+      .toMatchObject({ severity: "ok" });
+    expect(renderPairedStatistics(statistics, gate).join("\n"))
+      .not.toContain("not credited");
+  });
+
+  test("blocks a false-complete rate above 1%", () => {
+    const statistics = fixture("capybara_baseline", 4, ({ task, repetition, variant, value }) =>
+      variant === "candidate" && task.id === "task-1" && repetition <= 2
+        ? { ...value, outcome: { ...value.outcome, statusMatched: false } }
+        : value);
+    const gate = evaluateStatisticalGate(statistics, NEUTRAL_5_29_THRESHOLDS);
+
+    expect(statistics.criticalSafety.falseCompletionRate).toBeGreaterThan(0.01);
+    expect(gate.findings).toContainEqual(expect.objectContaining({
+      check: "false-complete rate",
+      severity: "blocking",
+    }));
+  });
+
+  test("treats a category improvement target as a goal, not as the regression floor", () => {
+    // Flat quality clears the -3pp floor and still misses a +3pp goal.
+    const flat = evaluateStatisticalGate(fixture("capybara_baseline", 4), {
+      ...NEUTRAL_5_29_THRESHOLDS,
+      categoryImprovementPoints: { local_bug_fix: 3 },
+    });
+    expect(flat.findings.find((entry) => entry.check === "category quality"))
+      .toMatchObject({ severity: "ok" });
+    expect(flat.findings.find((entry) => entry.check === "category improvement target"))
+      .toMatchObject({ severity: "blocking" });
+
+    // A candidate that actually improves the category clears it.
+    const improved = evaluateStatisticalGate(
+      fixture("capybara_baseline", 4, ({ task, repetition, variant, value }) =>
+        task.category === "local_bug_fix" && repetition === 1 && variant === "baseline"
+          ? {
+              ...value,
+              outcome: { ...value.outcome, hiddenTestsPassed: false, status: "failed" as const },
+            }
+          : value),
+      { ...NEUTRAL_5_29_THRESHOLDS, categoryImprovementPoints: { local_bug_fix: 3 } },
+    );
+    expect(improved.findings.find((entry) => entry.check === "category improvement target"))
+      .toMatchObject({ severity: "ok" });
+  });
+
+  test("an unattempted program lane is not an unexpected fallback", () => {
+    const statistics = fixture("capybara_baseline", 4, ({ variant, value }) =>
+      variant === "candidate"
+        ? { ...value, route: { ...value.route, programsStarted: 0, programCalls: 0 } }
+        : value);
+    const gate = evaluateStatisticalGate(statistics, NEUTRAL_5_29_THRESHOLDS);
+
+    expect(gate.findings.find((entry) => entry.check === "eligible PTC unexpected fallback"))
+      .toMatchObject({ severity: "ok" });
+  });
+
+  test("leaves the performance-program thresholds reachable for older artifacts", () => {
+    expect(STATISTICAL_THRESHOLDS.capybara_baseline.medianSpeedupLowerBound).toBe(1.8);
+    expect(STATISTICAL_THRESHOLDS.capybara_baseline.falseCompletionRateUpperBound).toBeUndefined();
+    expect(evaluateStatisticalGate(fixture("capybara_baseline")).status).toBe("passed");
   });
 });

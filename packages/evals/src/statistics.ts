@@ -167,6 +167,12 @@ export interface StatisticalThresholds {
   readonly payloadReductionLowerBound?: number;
   readonly providerRequestReductionLowerBound?: number;
   readonly preProviderLocalP95UpperMs?: number;
+  /** §5.29: per-category improvement goals, distinct from the regression floor above. */
+  readonly categoryImprovementPoints?: Readonly<Partial<Record<TaskCategory, number>>>;
+  readonly inputTokenReductionLowerBound?: number;
+  readonly redundantReadReductionLowerBound?: number;
+  readonly ptcFallbackRateUpperBound?: number;
+  readonly falseCompletionRateUpperBound?: number;
 }
 
 const EXTERNAL_COMPARISON_THRESHOLDS: StatisticalThresholds = {
@@ -176,6 +182,38 @@ const EXTERNAL_COMPARISON_THRESHOLDS: StatisticalThresholds = {
   p95SpeedupLowerBound: 1.25,
   scopePrecisionLowerBoundPoints: -2,
   successfulCostRatioUpperBound: 1.05,
+};
+
+/**
+ * §5.29's initial OpenAI-first release gate.
+ *
+ * The PRD states wall time as a ratio of the baseline (P50 ≤ 0.80x, P95 ≤ 0.90x) while
+ * this module's statistic is a speedup, so the bounds are the reciprocals: 1/0.80 and
+ * 1/0.90. The reduction bounds are the complements of the PRD's ratios in the same way
+ * — a 0.75x request ratio is a 0.25 reduction, a 0.80x input-token ratio is 0.20, and a
+ * 0.60x redundant-read ratio is 0.40.
+ *
+ * These are deliberately a separate set rather than an edit of STATISTICAL_THRESHOLDS:
+ * the numbers there belong to the earlier performance program and still gate artifacts
+ * produced under it, and quietly replacing them would change the verdict on evidence
+ * that was never measured against §5.29.
+ */
+export const RELEASE_GATE_5_29_THRESHOLDS: StatisticalThresholds = {
+  qualityLowerBoundPoints: -1,
+  categoryDifferencePoints: -3,
+  medianSpeedupLowerBound: 1 / 0.8,
+  p95SpeedupLowerBound: 1 / 0.9,
+  scopePrecisionLowerBoundPoints: -2,
+  successfulCostRatioUpperBound: 1.05,
+  providerRequestReductionLowerBound: 0.25,
+  inputTokenReductionLowerBound: 0.2,
+  redundantReadReductionLowerBound: 0.4,
+  ptcFallbackRateUpperBound: 0.05,
+  falseCompletionRateUpperBound: 0.01,
+  categoryImprovementPoints: {
+    repository_understanding: 3,
+    long_session_resume_compaction: 3,
+  },
 };
 
 export const STATISTICAL_THRESHOLDS: Readonly<Record<ComparisonTarget, StatisticalThresholds>> = {
@@ -418,6 +456,32 @@ export function analyzePairedStatistics(
   };
 }
 
+/**
+ * Checks whose failure withdraws credit from every efficiency win — §5.29's closing
+ * line: "품질 gate를 통과하지 못하면 속도·토큰 감소는 개선으로 인정하지 않는다."
+ */
+const QUALITY_GATE_CHECKS: readonly string[] = [
+  "quality non-inferiority",
+  "category quality",
+  "category improvement target",
+  "scope precision",
+  "false-complete rate",
+  "critical safety",
+  "paired observations",
+];
+
+/** Checks that measure speed or token/request cost rather than quality. */
+const EFFICIENCY_GATE_CHECKS: readonly string[] = [
+  "paired median speed",
+  "paired p95 speed",
+  "successful-task cost",
+  "provider payload reduction",
+  "provider request reduction",
+  "input token reduction",
+  "redundant read reduction",
+  "pre-provider local p95",
+];
+
 export function evaluateStatisticalGate(
   statistics: PairedComparisonStatistics,
   thresholds = STATISTICAL_THRESHOLDS[statistics.target],
@@ -511,6 +575,74 @@ export function evaluateStatisticalGate(
         : `95% CI lower ${percent(statistics.providerRequestReduction.lower)} is below ${percent(thresholds.providerRequestReductionLowerBound)}`,
     );
   }
+  if (thresholds.categoryImprovementPoints !== undefined) {
+    // A goal, not a floor: §5.29 asks these two categories to *improve*, which the
+    // -3pp regression check above cannot express.
+    const targets = Object.entries(thresholds.categoryImprovementPoints)
+      .filter((entry): entry is [TaskCategory, number] => entry[1] !== undefined);
+    const missed = targets.filter(([category, goal]) => {
+      const measured = statistics.categoryQuality.find((entry) => entry.category === category);
+      return measured === undefined || measured.differencePoints < goal;
+    });
+    check(
+      "category improvement target",
+      missed.length === 0,
+      targets
+        .map(([category, goal]) => `${category} >= ${formatPoints(goal)}`)
+        .join(", "),
+      missed
+        .map(([category, goal]) => {
+          const measured = statistics.categoryQuality.find((entry) => entry.category === category);
+          return measured === undefined
+            ? `${category} was not measured (target ${formatPoints(goal)})`
+            : `${category} ${formatPoints(measured.differencePoints)} is below the ${formatPoints(goal)} target`;
+        })
+        .join(", "),
+    );
+  }
+  if (thresholds.inputTokenReductionLowerBound !== undefined) {
+    check(
+      "input token reduction",
+      statistics.inputTokenReduction !== undefined &&
+        statistics.inputTokenReduction.lower >= thresholds.inputTokenReductionLowerBound,
+      `95% CI lower ${percent(statistics.inputTokenReduction?.lower ?? 0)} >= ${percent(thresholds.inputTokenReductionLowerBound)}`,
+      statistics.inputTokenReduction === undefined
+        ? "input token reduction is not measurable"
+        : `95% CI lower ${percent(statistics.inputTokenReduction.lower)} is below ${percent(thresholds.inputTokenReductionLowerBound)}`,
+    );
+  }
+  if (thresholds.redundantReadReductionLowerBound !== undefined) {
+    check(
+      "redundant read reduction",
+      statistics.redundantReadReduction !== undefined &&
+        statistics.redundantReadReduction.lower >= thresholds.redundantReadReductionLowerBound,
+      `95% CI lower ${percent(statistics.redundantReadReduction?.lower ?? 0)} >= ${percent(thresholds.redundantReadReductionLowerBound)}`,
+      statistics.redundantReadReduction === undefined
+        ? "redundant read reduction is not measurable"
+        : `95% CI lower ${percent(statistics.redundantReadReduction.lower)} is below ${percent(thresholds.redundantReadReductionLowerBound)}`,
+    );
+  }
+  if (thresholds.ptcFallbackRateUpperBound !== undefined) {
+    // Absent means no candidate run attempted a program lane. That is not a violation:
+    // there is nothing to have fallen back from, so the check reports it and passes.
+    check(
+      "eligible PTC unexpected fallback",
+      statistics.ptcFallbackRate === undefined ||
+        statistics.ptcFallbackRate.upper <= thresholds.ptcFallbackRateUpperBound,
+      statistics.ptcFallbackRate === undefined
+        ? "no candidate run attempted a program lane, so no fallback was possible"
+        : `95% CI upper ${percent(statistics.ptcFallbackRate.upper)} <= ${percent(thresholds.ptcFallbackRateUpperBound)}`,
+      `95% CI upper ${percent(statistics.ptcFallbackRate?.upper ?? 1)} exceeds ${percent(thresholds.ptcFallbackRateUpperBound)}`,
+    );
+  }
+  if (thresholds.falseCompletionRateUpperBound !== undefined) {
+    check(
+      "false-complete rate",
+      statistics.criticalSafety.falseCompletionRate <= thresholds.falseCompletionRateUpperBound,
+      `${percent(statistics.criticalSafety.falseCompletionRate)} <= ${percent(thresholds.falseCompletionRateUpperBound)}`,
+      `${percent(statistics.criticalSafety.falseCompletionRate)} exceeds ${percent(thresholds.falseCompletionRateUpperBound)}`,
+    );
+  }
   if (thresholds.preProviderLocalP95UpperMs !== undefined) {
     check(
       "pre-provider local p95",
@@ -539,16 +671,44 @@ export function evaluateStatisticalGate(
     `${statistics.unpairedObservations} malformed, duplicate, or unpaired observation(s)`,
   );
 
-  const blocked = findings.some((finding) => finding.severity === "blocking");
+  // §5.29's closing rule, applied as precedence rather than as a note: when a quality
+  // or safety check blocks, every passing efficiency finding is marked uncredited, so a
+  // faster and cheaper candidate cannot be reported as an improvement. Ordering the
+  // findings quality-first makes the same point in the rendered output.
+  const qualityBlocked = findings.some((finding) =>
+    finding.severity === "blocking" && QUALITY_GATE_CHECKS.includes(finding.check)
+  );
+  const credited = findings.map((finding) =>
+    qualityBlocked && finding.severity === "ok" && EFFICIENCY_GATE_CHECKS.includes(finding.check)
+      ? { ...finding, credited: false as const }
+      : finding
+  );
+  const ranked = [
+    ...credited.filter((finding) => QUALITY_GATE_CHECKS.includes(finding.check)),
+    ...credited.filter((finding) => !QUALITY_GATE_CHECKS.includes(finding.check)),
+  ];
+
+  const blocked = ranked.some((finding) => finding.severity === "blocking");
   return {
-    findings,
+    findings: ranked,
     status: blocked ? "failed" : "passed",
     pass: !blocked,
     needsReason: false,
   };
 }
 
-export function renderPairedStatistics(statistics: PairedComparisonStatistics): string[] {
+/**
+ * Render the paired aggregate.
+ *
+ * Passing the gate result is what makes §5.29's precedence visible in the numbers
+ * themselves: without it, a table showing a 1.4x speedup and a 40% token reduction
+ * reads as a successful run even when the quality gate blocked the release.
+ */
+export function renderPairedStatistics(
+  statistics: PairedComparisonStatistics,
+  gate?: GateResult,
+): string[] {
+  const uncredited = gate?.findings.some((finding) => finding.credited === false) === true;
   const lines = [
     `paired statistics     ${statistics.target}`,
     `tasks / pairs         ${statistics.taskCount} / ${statistics.pairCount}`,
@@ -580,6 +740,13 @@ export function renderPairedStatistics(statistics: PairedComparisonStatistics): 
   lines.push(`idle wait p95         ${formatInterval(statistics.idleWaitMs, "ms")}`);
   lines.push(`false complete rate   ${percent(statistics.criticalSafety.falseCompletionRate)}`);
   lines.push(`critical safety       ${statistics.criticalSafety.total}`);
+  if (uncredited) {
+    lines.push(
+      "",
+      "The quality gate blocked, so the speed and token figures above are not credited",
+      "as improvements (§5.29).",
+    );
+  }
   return lines;
 }
 
