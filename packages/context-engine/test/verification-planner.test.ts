@@ -1,0 +1,201 @@
+/**
+ * Impact-based verification planner and turn verification contract — PRD
+ * §5.20 (contract shape), §5.21 (impact inputs), §5.22 (verification order).
+ *
+ * These are pure functions, so the whole §5.22 ordering and the §5.20 field set
+ * can be pinned without a kernel harness. The kernel-side enforcement of the
+ * contract is covered in packages/agent-kernel/test/kernel.test.ts.
+ */
+
+import { describe, expect, test } from "bun:test";
+
+import {
+  buildTurnVerificationContract,
+  planVerification,
+  toLegacyVerificationCommand,
+  verificationCommandDisplay,
+  type VerificationChangeSet,
+} from "../src/verification-planner.ts";
+
+function stepIds(
+  changedPaths: readonly string[],
+  extra: Omit<VerificationChangeSet, "changedPaths"> = {},
+): string[] {
+  return planVerification({ changedPaths, ...extra }).steps.map((step) => step.id);
+}
+
+describe("planVerification order (§5.22)", () => {
+  test("emits the seven-stage order for a typescript change", () => {
+    expect(stepIds(["src/parser.ts"])).toEqual([
+      "revision-match",
+      "parse-sanity",
+      "focused-tests",
+      "diff-integrity",
+      "evidence-freshness",
+      "todo-consistency",
+    ]);
+  });
+
+  test("revision-match is the first step, before any test result is credited", () => {
+    const plan = planVerification({ changedPaths: ["src/a.ts"] });
+    expect(plan.steps[0]?.id).toBe("revision-match");
+    expect(plan.steps[0]?.tier).toBe(0);
+    expect(plan.steps[0]?.required).toBe(true);
+  });
+
+  test("a high-risk change keeps the independent reviewer and the broader tier", () => {
+    const ids = stepIds(["packages/permissions/src/policy.ts"], { riskLevel: "high" });
+    expect(ids).toContain("broader-tests");
+    expect(ids).toContain("independent-review");
+    // The reviewer is a tier-4 signal, so it must not precede the diff review.
+    expect(ids.indexOf("independent-review")).toBeGreaterThan(ids.indexOf("diff-integrity"));
+  });
+
+  test("a docs-only change set drops the mutation signal and runs no test tier", () => {
+    const plan = planVerification({ changedPaths: ["docs/wiki/architecture.md", "docs/wiki/features.md"] });
+    expect(plan.impact).toContain("docs_only");
+    expect(plan.impact).not.toContain("mutation");
+    expect(plan.steps.some((step) => step.id === "focused-tests")).toBe(false);
+    expect(plan.steps.some((step) => step.id === "broader-tests")).toBe(false);
+    expect(toLegacyVerificationCommand(plan)).toBeUndefined();
+  });
+
+  test("an empty change set plans nothing", () => {
+    const plan = planVerification({ changedPaths: [] });
+    expect(plan.steps).toEqual([]);
+    expect(plan.requiredCoverage).toEqual([]);
+  });
+
+  test("a prior failure or a reflection path widens beyond the focused tier (§5.21)", () => {
+    expect(stepIds(["src/a.ts"], { failedCommands: ["bun test a"] })).toContain("broader-tests");
+    expect(stepIds(["src/a.ts"], { reflectionPaths: ["src/a.ts"] })).toContain("broader-tests");
+  });
+
+  test("requiredCoverage is the union of the required steps' coverage ids", () => {
+    const plan = planVerification({ changedPaths: ["src/a.ts"], riskLevel: "critical" });
+    expect([...plan.requiredCoverage]).toEqual([
+      "revision_match",
+      "parse",
+      "focused_tests",
+      "broader_tests",
+      "diff_integrity",
+      "authoritative_change_set",
+      "evidence_freshness",
+      "independent_review",
+      "todo_consistency",
+    ]);
+  });
+
+  test("the legacy adapter prefers the narrowest executable step", () => {
+    const plan = planVerification({ changedPaths: ["packages/x/test/a.test.ts"] });
+    const legacy = toLegacyVerificationCommand(plan);
+    expect(legacy?.command).toBe("bun test packages/x/test/a.test.ts");
+  });
+
+  test("a rust change set plans a cargo command", () => {
+    const plan = planVerification({ changedPaths: ["crates/runtime/src/lib.rs"] });
+    const focused = plan.steps.find((step) => step.id === "focused-tests");
+    expect(focused?.command).toBeDefined();
+    expect(verificationCommandDisplay(focused!.command!)).toBe("cargo test --workspace");
+  });
+});
+
+describe("buildTurnVerificationContract (§5.20)", () => {
+  test("carries the full §5.20 field set", () => {
+    const contract = buildTurnVerificationContract({
+      changedPaths: ["packages/agent-kernel/src/kernel.ts"],
+      workspaceGeneration: 7,
+    });
+    expect(contract.workspaceGeneration).toBe(7);
+    expect(contract.changedPaths).toEqual(["packages/agent-kernel/src/kernel.ts"]);
+    expect(contract.impactedPackages).toEqual(["packages/agent-kernel"]);
+    expect(contract.reviewRequired).toBe(false);
+    expect(contract.evidenceRequirements).toContain("revision_match");
+    expect(contract.requiredChecks.every((check) => check.required)).toBe(true);
+  });
+
+  test("every required plan step becomes a required check", () => {
+    const contract = buildTurnVerificationContract({
+      changedPaths: ["src/a.ts"],
+      workspaceGeneration: 1,
+    });
+    expect(contract.requiredChecks.map((check) => check.id)).toEqual([
+      "revision-match",
+      "parse-sanity",
+      "focused-tests",
+      "diff-integrity",
+      "evidence-freshness",
+      "todo-consistency",
+    ]);
+  });
+
+  test("normalizes windows separators and de-duplicates changed paths", () => {
+    const contract = buildTurnVerificationContract({
+      changedPaths: ["packages\\a\\src\\x.ts", "packages/a/src/x.ts", ""],
+      workspaceGeneration: 0,
+    });
+    expect(contract.changedPaths).toEqual(["packages/a/src/x.ts"]);
+    expect(contract.impactedPackages).toEqual(["packages/a"]);
+  });
+
+  test("maps packages, apps, crates, and root paths to impacted packages", () => {
+    const contract = buildTurnVerificationContract({
+      changedPaths: [
+        "packages/protocol-ts/src/events.ts",
+        "apps/cbc/src/agent.ts",
+        "crates/runtime/src/lib.rs",
+        "scripts/build.ts",
+        "README.md",
+      ],
+      workspaceGeneration: 2,
+    });
+    expect([...contract.impactedPackages]).toEqual([
+      ".",
+      "apps/cbc",
+      "crates/runtime",
+      "packages/protocol-ts",
+      "scripts",
+    ]);
+  });
+
+  test("a high risk level requires the reviewer even when the host did not ask", () => {
+    const contract = buildTurnVerificationContract({
+      changedPaths: ["src/a.ts"],
+      workspaceGeneration: 3,
+      riskLevel: "high",
+    });
+    expect(contract.reviewRequired).toBe(true);
+    expect(contract.requiredChecks.map((check) => check.id)).toContain("independent-review");
+  });
+
+  test("an explicit host review decision wins over the derived one", () => {
+    const contract = buildTurnVerificationContract({
+      changedPaths: ["src/a.ts"],
+      workspaceGeneration: 3,
+      riskLevel: "critical",
+      reviewRequired: false,
+    });
+    expect(contract.reviewRequired).toBe(false);
+  });
+
+  test("tier 0-1 checks are scoped to the changed paths, later tiers to the packages", () => {
+    const contract = buildTurnVerificationContract({
+      changedPaths: ["packages/a/src/x.ts"],
+      workspaceGeneration: 4,
+      riskLevel: "high",
+    });
+    const byId = new Map(contract.requiredChecks.map((check) => [check.id, check]));
+    expect(byId.get("parse-sanity")?.scope).toEqual(["packages/a/src/x.ts"]);
+    expect(byId.get("focused-tests")?.scope).toEqual(["packages/a/src/x.ts"]);
+    expect(byId.get("diff-integrity")?.scope).toEqual(["packages/a"]);
+  });
+
+  test("a docs-only turn requires no test command at all (§5.24 low-risk edits)", () => {
+    const contract = buildTurnVerificationContract({
+      changedPaths: ["docs/wiki/features.md"],
+      workspaceGeneration: 5,
+    });
+    expect(contract.requiredChecks.some((check) => check.command !== undefined && check.command.startsWith("bun test"))).toBe(false);
+    expect(contract.reviewRequired).toBe(false);
+  });
+});
