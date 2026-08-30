@@ -339,12 +339,12 @@ export function renderHomeFrame(input: HomeFrameOptions): StyledLine[] {
         })
       : [];
 
-  const hintText = "tab completion   ctrl+p commands";
+  const hintText = "shift+tab completion   ctrl+p commands";
   const hintMargin = Math.max(0, Math.floor((input.columns - panelWidth) / 2));
   const hintGap = Math.max(0, panelWidth - stringWidth(hintText) - 2);
   const guidanceLine: StyledLine = line("composer", [
     segment(" ".repeat(hintMargin + hintGap + 2), {}),
-    segment("tab", { fg: "fg.primary" }),
+    segment("shift+tab", { fg: "fg.primary" }),
     segment(" completion   ", { fg: "fg.muted" }),
     segment("ctrl+p", { fg: "fg.primary" }),
     segment(" commands", { fg: "fg.muted" }),

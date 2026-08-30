@@ -283,7 +283,7 @@ describe("revision home frame", () => {
     const exact = homeFrame(bannerWidth, 30, "").map(lineText).join("\n");
     expect(below).not.toContain(CAPYBARA_BANNER[0]!);
     expect(exact).toContain(CAPYBARA_BANNER[0]!);
-    expect(exact).toContain("tab completion");
+    expect(exact).toContain("shift+tab completion");
     expect(exact).not.toContain("switch agent");
   });
 
