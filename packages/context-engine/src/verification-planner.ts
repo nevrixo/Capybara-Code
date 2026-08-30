@@ -28,6 +28,12 @@ export interface VerificationChangeSet {
   readonly addedPaths?: readonly string[];
   readonly deletedPaths?: readonly string[];
   readonly failedCommands?: readonly string[];
+  /**
+   * Paths a prior reflection blamed for a failure this turn (§5.21). A file the
+   * agent already got wrong once is the last place a narrowed check should skip,
+   * so naming it here widens the plan the same way a failed command does.
+   */
+  readonly reflectionPaths?: readonly string[];
   readonly riskLevel?: "low" | "medium" | "high" | "critical";
   readonly languageHints?: readonly ("typescript" | "rust" | "python" | "other")[];
 }
@@ -89,7 +95,7 @@ export function planVerification(changeSet: VerificationChangeSet): Verification
       reason: "run the narrowest tests covering the changed language or test files",
     });
   }
-  if (highRisk || impact.includes("cross_module") || impact.includes("dependency") || (changeSet.failedCommands?.length ?? 0) > 0) {
+  if (highRisk || impact.includes("cross_module") || impact.includes("dependency") || (changeSet.failedCommands?.length ?? 0) > 0 || (changeSet.reflectionPaths?.length ?? 0) > 0) {
     steps.push({
       id: "broader-tests",
       tier: 2,
@@ -183,6 +189,8 @@ export interface TurnVerificationContractInput {
   readonly riskLevel?: VerificationChangeSet["riskLevel"];
   readonly reviewRequired?: boolean;
   readonly failedCommands?: readonly string[];
+  /** Paths a prior reflection blamed this turn (§5.21). */
+  readonly reflectionPaths?: readonly string[];
   readonly languageHints?: VerificationChangeSet["languageHints"];
 }
 

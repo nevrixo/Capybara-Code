@@ -4275,6 +4275,22 @@ export class AgentKernel {
     );
   }
 
+  /**
+   * Paths this turn's reflections blamed (§5.21). A file the agent already got
+   * wrong once is the last place a narrowed verification plan should skip, so
+   * the impact calculation treats it as a widening signal.
+   */
+  #reflectionImplicatedPaths(): readonly string[] {
+    const paths = new Set<string>();
+    for (const reflection of this.#reflections) {
+      for (const path of reflection.implicatedPaths) {
+        const normalized = path.replaceAll("\\", "/").trim();
+        if (normalized.length > 0) paths.add(normalized);
+      }
+    }
+    return [...paths];
+  }
+
   /** Diagnose the oldest queued failure. */
   async #reflect(
     signal: AbortSignal,
@@ -4568,6 +4584,23 @@ export class AgentKernel {
       workspaceGeneration: this.#options.workspaceGeneration?.() ?? 0,
       riskLevel: risk.level,
       reviewRequired: shouldReview,
+      // §5.21: the paths a prior reflection blamed are an impact input, so a
+      // failure that already named a file cannot be verified by a check that
+      // never looks at it.
+      ...(this.#reflectionImplicatedPaths().length > 0
+        ? { reflectionPaths: this.#reflectionImplicatedPaths() }
+        : {}),
+    });
+    // §5.20 requires the contract to be an observable turn artifact, not a
+    // private field: the checks it names are what the completion gate below
+    // enforces, so a reader has to be able to see what was required.
+    emit("verification.plan_created", {
+      workspaceGeneration: this.#verificationContract.workspaceGeneration,
+      changedPaths: this.#verificationContract.changedPaths,
+      impactedPackages: this.#verificationContract.impactedPackages,
+      requiredChecks: this.#verificationContract.requiredChecks,
+      reviewRequired: this.#verificationContract.reviewRequired,
+      evidenceRequirements: this.#verificationContract.evidenceRequirements,
     });
 
     const steps = planVerification({
