@@ -523,6 +523,96 @@ function normalizeProgress(raw: unknown): GoalProgress {
   };
 }
 
+/**
+ * Owns one contract across the turns that pursue it.
+ *
+ * The controller exists so the goal outlives a single turn *and* a detach: it
+ * accumulates progress, re-evaluates after every turn, and serializes to a
+ * record a resumed session can hydrate. Deliberately kept free of I/O so the
+ * daemon and the interactive session share one implementation of "is this goal
+ * finished, and if not what next".
+ */
+export class GoalContractController {
+  #contract: GoalContract | undefined;
+  #progress: GoalProgress = { turnsUsed: 0, elapsedMs: 0 };
+  #evaluation: GoalEvaluation | undefined;
+  readonly #now: () => string;
+
+  constructor(options: { readonly now?: () => string } = {}) {
+    this.#now = options.now ?? (() => new Date().toISOString());
+  }
+
+  current(): GoalContract | undefined {
+    return this.#contract;
+  }
+
+  progress(): GoalProgress {
+    return this.#progress;
+  }
+
+  evaluation(): GoalEvaluation | undefined {
+    return this.#evaluation;
+  }
+
+  /** Adopt a contract, resetting progress: a new goal never inherits a spent budget. */
+  start(input: GoalContractInput): GoalContract {
+    const contract = createGoalContract({ now: this.#now(), ...input });
+    this.#contract = contract;
+    this.#progress = { turnsUsed: 0, elapsedMs: 0 };
+    this.#evaluation = undefined;
+    return contract;
+  }
+
+  clear(): void {
+    this.#contract = undefined;
+    this.#progress = { turnsUsed: 0, elapsedMs: 0 };
+    this.#evaluation = undefined;
+  }
+
+  /**
+   * Fold one turn's observations in and re-decide. `turnsUsed` is incremented
+   * here rather than taken from the caller so a host cannot under-report turns
+   * and talk its way past the ceiling.
+   */
+  recordTurn(observed: Omit<GoalProgress, "turnsUsed">, todos: TodoListState): GoalEvaluation | undefined {
+    if (this.#contract === undefined) return undefined;
+    this.#progress = {
+      ...observed,
+      turnsUsed: this.#progress.turnsUsed + 1,
+      elapsedMs: Math.max(this.#progress.elapsedMs, observed.elapsedMs),
+    };
+    this.#evaluation = evaluateGoalContract(this.#contract, todos, this.#progress);
+    return this.#evaluation;
+  }
+
+  /** Re-decide without consuming a turn — used when only TODO state moved. */
+  reevaluate(todos: TodoListState): GoalEvaluation | undefined {
+    if (this.#contract === undefined) return undefined;
+    this.#evaluation = evaluateGoalContract(this.#contract, todos, this.#progress);
+    return this.#evaluation;
+  }
+
+  toRecord(): GoalContractRecord | undefined {
+    if (this.#contract === undefined || this.#evaluation === undefined) return undefined;
+    return {
+      contract: this.#contract,
+      progress: this.#progress,
+      evaluation: this.#evaluation,
+      updatedAt: this.#now(),
+    };
+  }
+
+  /** Restore from a persisted record; false leaves the controller untouched. */
+  hydrate(raw: unknown): boolean {
+    const record = parseGoalContractRecord(raw);
+    if (record === undefined) return false;
+    this.#contract = record.contract;
+    this.#progress = record.progress;
+    this.#evaluation = record.evaluation;
+    return true;
+  }
+}
+
 function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
