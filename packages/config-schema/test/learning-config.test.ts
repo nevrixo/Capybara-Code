@@ -73,8 +73,13 @@ min_verified_observations = 3
     )).toBe(true);
   });
 
-  test("both keys stay experimental until a consumer reads them", () => {
-    expect(configKeyInfo("agent.learning.strategyCapsules")?.status).toBe("experimental");
-    expect(configKeyInfo("agent.learning.minVerifiedObservations")?.status).toBe("experimental");
+  test("both keys are wired, and name the consumer that reads them", () => {
+    const policy = configKeyInfo("agent.learning.strategyCapsules");
+    expect(policy?.status).toBe("wired");
+    expect(policy?.consumer).toContain("CapsuleStore");
+
+    const threshold = configKeyInfo("agent.learning.minVerifiedObservations");
+    expect(threshold?.status).toBe("wired");
+    expect(threshold?.consumer).toContain("CapsuleStore");
   });
 });
