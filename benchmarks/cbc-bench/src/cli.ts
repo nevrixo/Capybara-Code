@@ -916,7 +916,48 @@ function serializePairedResult(
         : { kind: "external", adapter: baselineAdapter },
       candidate: { kind: "cbc", profile: candidate },
     },
+    routeEvidence: routeEvidenceSummary(result),
   };
+}
+
+/**
+ * §5.29 route evidence, summarized per variant.
+ *
+ * The per-run receipts already ride each result's metrics; this is the readable roll-up
+ * a reviewer looks at first, and it makes an artifact whose lane claims disagree with
+ * its fallback reasons visible without reading two hundred metric blocks.
+ */
+function routeEvidenceSummary(result: PairedSuiteResult): Record<string, unknown> {
+  const summarize = (variant: "baseline" | "candidate"): Record<string, unknown> => {
+    const routes = result.runs
+      .filter((run) => run.descriptor.variant === variant)
+      .flatMap((run) => run.result.results.map((entry) => entry.metrics.route));
+    const reasons = [...new Set(routes.flatMap((route) => [...route.fallbackReasons]))].sort();
+    const lanes = [...new Set(
+      routes.map((route) => route.actualLane).filter((lane): lane is string => lane !== undefined),
+    )].sort();
+    const plannedLanes = [...new Set(
+      routes.map((route) => route.plannedLane).filter((lane): lane is string => lane !== undefined),
+    )].sort();
+    const attempts = routes.filter((route) =>
+      route.programsStarted > 0 || route.programCalls > 0 || route.programLaneFallbacks > 0
+    ).length;
+    return {
+      runCount: routes.length,
+      plannedLanes,
+      actualLanes: lanes,
+      lanePlanViolations: routes.filter((route) => !route.lanePlanHonored).length,
+      laneSelections: routes.reduce((total, route) => total + route.laneSelections, 0),
+      laneFallbacks: routes.reduce((total, route) => total + route.laneFallbacks, 0),
+      programLaneFallbacks: routes.reduce((total, route) => total + route.programLaneFallbacks, 0),
+      programLaneAttempts: attempts,
+      programCalls: routes.reduce((total, route) => total + route.programCalls, 0),
+      programCallsDenied: routes.reduce((total, route) => total + route.programCallsDenied, 0),
+      maxParallelPeak: routes.reduce((peak, route) => Math.max(peak, route.parallelPeak), 0),
+      fallbackReasons: reasons,
+    };
+  };
+  return { schemaVersion: "1.0", baseline: summarize("baseline"), candidate: summarize("candidate") };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

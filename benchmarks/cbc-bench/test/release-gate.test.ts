@@ -317,11 +317,49 @@ function makeArtifact(
     capabilityDigest,
     schedule,
     runs,
+    routeEvidence: makeRouteEvidence(baselineMetrics, candidateMetrics),
     aggregate: {
       baseline: summarize(baselineProfile.id, baselineMetrics),
       candidate: summarize(candidateProfile.id, candidateMetrics),
       statistics,
     },
+  };
+}
+
+/** The §5.29 route roll-up, derived from the same run metrics the artifact carries. */
+function makeRouteEvidence(
+  baselineMetrics: readonly RunMetrics[],
+  candidateMetrics: readonly RunMetrics[],
+): Record<string, unknown> {
+  const summarize = (runs: readonly RunMetrics[]): Record<string, unknown> => {
+    const routes = runs.map((run) => run.route);
+    const total = (pick: (route: RunMetrics["route"]) => number): number =>
+      routes.reduce((sum, route) => sum + pick(route), 0);
+    return {
+      runCount: routes.length,
+      plannedLanes: [...new Set(
+        routes.map((route) => route.plannedLane).filter((lane) => lane !== undefined),
+      )].sort(),
+      actualLanes: [...new Set(
+        routes.map((route) => route.actualLane).filter((lane) => lane !== undefined),
+      )].sort(),
+      lanePlanViolations: routes.filter((route) => !route.lanePlanHonored).length,
+      laneSelections: total((route) => route.laneSelections),
+      laneFallbacks: total((route) => route.laneFallbacks),
+      programLaneFallbacks: total((route) => route.programLaneFallbacks),
+      programLaneAttempts: routes.filter((route) =>
+        route.programsStarted > 0 || route.programCalls > 0 || route.programLaneFallbacks > 0
+      ).length,
+      programCalls: total((route) => route.programCalls),
+      programCallsDenied: total((route) => route.programCallsDenied),
+      maxParallelPeak: routes.reduce((peak, route) => Math.max(peak, route.parallelPeak), 0),
+      fallbackReasons: [...new Set(routes.flatMap((route) => [...route.fallbackReasons]))].sort(),
+    };
+  };
+  return {
+    schemaVersion: "1.0",
+    baseline: summarize(baselineMetrics),
+    candidate: summarize(candidateMetrics),
   };
 }
 
@@ -583,3 +621,63 @@ function canonicalValue(value: unknown): string {
     `${JSON.stringify(key)}:${canonicalValue(record[key])}`
   ).join(",")}}`;
 }
+
+describe("§5.29 route evidence", () => {
+  test("accepts an artifact whose route roll-up matches its per-run receipts", () => {
+    const evidence = inspectReleaseEvidence(makeArtifact());
+    expect(evidence.errors).toEqual([]);
+  });
+
+  test("rejects an artifact with no route evidence at all", () => {
+    const artifact = makeArtifact();
+    delete artifact.routeEvidence;
+    expect(inspectReleaseEvidence(artifact).errors)
+      .toContain("paired artifact is missing routeEvidence; §5.29 requires route evidence");
+  });
+
+  test("rejects a hand-edited fallback count that the receipts do not support", () => {
+    const artifact = makeArtifact();
+    const evidence = artifact.routeEvidence as Record<string, Record<string, unknown>>;
+    // The fixture's receipts record no fallbacks, so understating the roll-up is a
+    // no-op. Overstating it is the tamper the recompute has to catch: a run that
+    // claims fewer *selections* than its receipts show would flatter the lane.
+    artifact.routeEvidence = {
+      ...evidence,
+      candidate: { ...evidence.candidate, laneFallbacks: 7, programLaneFallbacks: 3 },
+    };
+    const errors = inspectReleaseEvidence(artifact).errors.join("\n");
+    // The declared figure is recomputed, so a favourable lane story cannot be written in.
+    expect(errors).toContain("routeEvidence.candidate.laneFallbacks");
+    expect(errors).toContain("routeEvidence.candidate.programLaneFallbacks");
+  });
+
+  test("rejects a run whose lane claim contradicts its own fallback reasons", () => {
+    const artifact = makeArtifact();
+    const runs = artifact.runs as Array<{ result: { results: Array<{ metrics: RunMetrics }> } }>;
+    const target = runs[0]!.result.results[0]!;
+    target.metrics = {
+      ...target.metrics,
+      route: {
+        ...target.metrics.route,
+        plannedLane: "program_tool_calling",
+        actualLane: "program_tool_calling",
+        // Claims the plan was honored while recording the reason it was not.
+        lanePlanHonored: true,
+        laneFallbacks: 1,
+        fallbackReasons: ["program lane is unsupported on this account"],
+      },
+    };
+    const errors = inspectReleaseEvidence(artifact).errors.join("\n");
+    expect(errors).toContain("lacks valid task metadata or metrics");
+  });
+
+  test("rejects a run metrics block with no route receipt", () => {
+    const artifact = makeArtifact();
+    const runs = artifact.runs as Array<{ result: { results: Array<{ metrics: RunMetrics }> } }>;
+    const target = runs[0]!.result.results[0]!;
+    const { route: _dropped, ...withoutRoute } = target.metrics;
+    target.metrics = withoutRoute as RunMetrics;
+    expect(inspectReleaseEvidence(artifact).errors.join("\n"))
+      .toContain("lacks valid task metadata or metrics");
+  });
+});

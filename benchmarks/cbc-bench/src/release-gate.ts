@@ -270,6 +270,7 @@ function inspectPaired(
     comparisonTarget,
     errors,
   );
+  validateRouteEvidence(artifact, errors);
 
   return {
     kind: "paired",
@@ -604,13 +605,21 @@ function runMetricsAt(parent: Record<string, unknown>, key: string): RunMetrics 
   const outcome = recordAt(metrics, "outcome");
   const behavior = recordAt(metrics, "behavior");
   const cost = recordAt(metrics, "cost");
+  const route = recordAt(metrics, "route");
   const ux = recordAt(metrics, "ux");
   if (
     metrics === undefined ||
     outcome === undefined ||
     behavior === undefined ||
     cost === undefined ||
+    route === undefined ||
     ux === undefined ||
+    // §5.29: the route receipt is release evidence, not optional telemetry. An artifact
+    // without it cannot answer whether the router improved, and the recomputed
+    // statistics would read zeroes as measurements.
+    !isCoherentRouteMetrics(route) ||
+    !finiteNonNegative(behavior.redundantReads) ||
+    !finiteNonNegative(cost.inputTokens) ||
     typeof outcome.hiddenTestsPassed !== "boolean" ||
     typeof outcome.statusMatched !== "boolean" ||
     typeof outcome.scopePrecision !== "number" ||
@@ -641,6 +650,119 @@ function runMetricsAt(parent: Record<string, unknown>, key: string): RunMetrics 
     return undefined;
   }
   return metrics as unknown as RunMetrics;
+}
+
+/**
+ * §5.29: check the artifact's route roll-up against the runs it claims to summarize.
+ *
+ * A summary that is merely *present* proves nothing — it is the easiest field in the
+ * artifact to write by hand. Recomputing it from the raw per-run receipts is what makes
+ * a favourable lane story unwritable, the same way the statistics are already rebuilt
+ * rather than trusted.
+ */
+function validateRouteEvidence(artifact: Record<string, unknown>, errors: string[]): void {
+  const evidence = recordAt(artifact, "routeEvidence");
+  if (evidence === undefined) {
+    errors.push("paired artifact is missing routeEvidence; §5.29 requires route evidence");
+    return;
+  }
+  const rawRuns = Array.isArray(artifact.runs) ? artifact.runs : [];
+  for (const variant of ["baseline", "candidate"] as const) {
+    const summary = recordAt(evidence, variant);
+    if (summary === undefined) {
+      errors.push(`routeEvidence.${variant} is missing`);
+      continue;
+    }
+    const routes: Record<string, unknown>[] = [];
+    for (const rawRun of rawRuns) {
+      if (!isRecord(rawRun)) continue;
+      if (recordAt(rawRun, "descriptor")?.variant !== variant) continue;
+      const results = recordAt(rawRun, "result")?.results;
+      if (!Array.isArray(results)) continue;
+      for (const rawResult of results) {
+        if (!isRecord(rawResult)) continue;
+        const route = recordAt(recordAt(rawResult, "metrics"), "route");
+        if (route !== undefined) routes.push(route);
+      }
+    }
+    const total = (key: string): number =>
+      routes.reduce((sum, route) => sum + (finiteNonNegative(route[key]) ? route[key] as number : 0), 0);
+    const expected: Record<string, unknown> = {
+      runCount: routes.length,
+      lanePlanViolations: routes.filter((route) => route.lanePlanHonored === false).length,
+      laneSelections: total("laneSelections"),
+      laneFallbacks: total("laneFallbacks"),
+      programLaneFallbacks: total("programLaneFallbacks"),
+      programCalls: total("programCalls"),
+      programCallsDenied: total("programCallsDenied"),
+    };
+    for (const [key, value] of Object.entries(expected)) {
+      if (summary[key] !== value) {
+        errors.push(
+          `routeEvidence.${variant}.${key} is ${String(summary[key])}; recomputed ${String(value)}`,
+        );
+      }
+    }
+    const reasons = new Set(
+      routes.flatMap((route) =>
+        stringArray(route.fallbackReasons) ? route.fallbackReasons as string[] : []
+      ),
+    );
+    const declared = stringArray(summary.fallbackReasons) ? summary.fallbackReasons as string[] : [];
+    if (declared.length !== reasons.size || declared.some((reason) => !reasons.has(reason))) {
+      errors.push(`routeEvidence.${variant}.fallbackReasons does not match the recorded receipts`);
+    }
+  }
+}
+
+/**
+ * Validate a persisted route metrics block.
+ *
+ * The lane fields are checked against each other rather than only for type: a run that
+ * claims it ran the lane it planned while also recording the reasons it fell back is
+ * describing two different turns, and an artifact can be hand-edited into that state.
+ */
+function isCoherentRouteMetrics(route: Record<string, unknown>): boolean {
+  const optionalText = (value: unknown): boolean =>
+    value === undefined || (typeof value === "string" && value.length > 0);
+  if (
+    typeof route.lanePlanHonored !== "boolean" ||
+    !optionalText(route.routeId) ||
+    !optionalText(route.plannedLane) ||
+    !optionalText(route.actualLane) ||
+    !stringArray(route.fallbackReasons) ||
+    !finiteNonNegative(route.parallelPeak) ||
+    !finiteNonNegative(route.idleWaitMs) ||
+    !finiteNonNegative(route.agentsSpawned) ||
+    !finiteNonNegative(route.laneSelections) ||
+    !finiteNonNegative(route.laneFallbacks) ||
+    !finiteNonNegative(route.programLaneFallbacks) ||
+    !finiteNonNegative(route.programsStarted) ||
+    !finiteNonNegative(route.programCalls) ||
+    !finiteNonNegative(route.programCallsDenied) ||
+    !finiteNonNegative(route.ptcFallbackRate) ||
+    (route.ptcFallbackRate as number) > 1
+  ) {
+    return false;
+  }
+  const planned = route.plannedLane;
+  const actual = route.actualLane;
+  const honored = route.lanePlanHonored;
+  if (typeof planned === "string" && typeof actual === "string" && honored !== (planned === actual)) {
+    return false;
+  }
+  // A program-lane fallback that recorded no reason, or a claimed clean route that
+  // recorded fallback reasons anyway, is an artifact that contradicts itself.
+  const fallbackReasons = route.fallbackReasons as readonly string[];
+  const laneFallbacks = route.laneFallbacks as number;
+  if (laneFallbacks > 0 && fallbackReasons.length === 0) return false;
+  if ((route.programLaneFallbacks as number) > laneFallbacks) return false;
+  // A run cannot claim its plan was honored while also recording that it fell back.
+  // The lane strings can agree by coincidence — a demotion to `direct` on a turn
+  // that planned `direct` leaves them equal — so the fallback counters are the
+  // independent evidence, and a receipt that disagrees with itself is not evidence.
+  if (honored === true && (laneFallbacks > 0 || fallbackReasons.length > 0)) return false;
+  return true;
 }
 
 function taskCategory(value: unknown): TaskCategory | undefined {
