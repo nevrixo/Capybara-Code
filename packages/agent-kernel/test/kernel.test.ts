@@ -4173,6 +4173,61 @@ describe("OpenAI programmatic read-only lane (P0-01/P0-03)", () => {
     expect(result.routeReceipt?.actual.fallbackReasons.join(" ")).not.toContain("PTC_CALL_DENIED");
   });
 
+  test("the per-program call budget is carried across streamed batches", async () => {
+    const readCall = (index: number) => ({
+      callId: "call-read-" + index,
+      name: "fs.read",
+      argumentsText: JSON.stringify({ path: "src/" + index + ".ts" }),
+      callerId: "call-program-budget",
+      programId: "call-program-budget",
+    });
+    const provider = new InlineProvider(async function* (_request, _signal, callIndex) {
+      yield { type: "response.started", requestId: "ptc-budget-" + callIndex };
+      if (callIndex === 0) {
+        yield {
+          type: "response.item",
+          authoritative: true,
+          item: {
+            kind: "program",
+            itemId: "prog-budget",
+            callId: "call-program-budget",
+            code: "for (const p of paths) await tools.fs_read({ path: p });",
+            fingerprint: "opaque-program-state",
+          },
+        };
+      }
+      if (callIndex <= 1) {
+        // Two batches of two, against a budget of three: the fourth call is the
+        // one the program must not get.
+        for (const index of [callIndex * 2, callIndex * 2 + 1]) {
+          const call = readCall(index);
+          yield { type: "tool.call.started", callId: call.callId, name: call.name, callerId: call.callerId, programId: call.programId };
+          yield { type: "tool.call.completed", call };
+        }
+      } else {
+        yield { type: "text.delta", text: "Capped.", itemId: "final-" + callIndex, outputIndex: 0 };
+      }
+      yield { type: "response.completed", responseId: "ptc-budget-response-" + callIndex };
+    });
+    const { kernel, executed, events } = harness({
+      steps: [],
+      provider,
+      inferencePolicy: new InferenceUtilityController(),
+      autoRoute: true,
+      phasePolicy: true,
+      programmaticPolicy: { enabled: true, maxToolCalls: 3, maxParallelCalls: 4 },
+      activeToolIds: ["fs.read"],
+      toolResults: { "fs.read": { result: okResult("read"), text: "read" } },
+    });
+
+    await kernel.runTurn("read every path from one program", new AbortController().signal);
+
+    expect(executed.map((action) => action.callId)).toEqual(["call-read-0", "call-read-1", "call-read-2"]);
+    const denials = payloadsOf(events, "tool.failed") as Array<{ callId?: string; message?: string }>;
+    expect(denials.map((entry) => entry.callId)).toEqual(["call-read-3"]);
+    expect(denials[0]?.message).toContain("3 calls");
+  });
+
   test("direct routes cap provider and local read parallelism at one", async () => {
     const provider = new MockProvider({
       steps: [

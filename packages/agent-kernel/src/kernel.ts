@@ -770,6 +770,18 @@ export interface TurnResult {
   readonly routeReceipt?: RouteExecutionReceipt;
 }
 
+/**
+ * Host-side state for one in-flight provider program (§5.4).
+ *
+ * A hosted program is not a single request: it pauses on every batch of calls
+ * it issues and resumes after the host answers them. Budgets that reset on each
+ * pause are not budgets, so the counters live here for the life of the program.
+ */
+interface ProgramRuntimeState {
+  callsUsed: number;
+  readonly startedAt: number;
+}
+
 interface PendingCall {
   readonly callId: string;
   readonly name: string;
@@ -827,6 +839,12 @@ export class AgentKernel {
   readonly #programmaticPolicy: ProgramPolicy;
   readonly #programmaticLane: ProgrammaticToolLane;
   readonly #programmaticToolIds: ReadonlySet<string>;
+  /**
+   * Live per-program accounting (§5.4). A program pauses and resumes across
+   * several provider requests, so its budgets only mean anything if the host
+   * remembers what it already spent.
+   */
+  readonly #programs = new Map<string, ProgramRuntimeState>();
   /** Any applied effect makes an automatic provider replay unsafe. */
   #sideEffectsApplied = false;
   /** Only explicitly external mutations contribute to change-review risk. */
@@ -1231,6 +1249,7 @@ export class AgentKernel {
     this.#routeParallelPeak = 0;
     this.#routeFallbackReasons = [];
     this.#pendingNativeLane = undefined;
+    this.#programs.clear();
     this.#turnAllowedActions.clear();
     this.#budgetNudged = false;
     this.#previousResponseFallbackUsed = false;
@@ -3483,6 +3502,15 @@ export class AgentKernel {
       : this.#reasoningEpochId ?? "no-epoch";
   }
 
+  /** The live accounting record for a program, created on first sight. */
+  #programState(programId: string): ProgramRuntimeState {
+    const existing = this.#programs.get(programId);
+    if (existing !== undefined) return existing;
+    const created: ProgramRuntimeState = { callsUsed: 0, startedAt: this.#now() };
+    this.#programs.set(programId, created);
+    return created;
+  }
+
   /** Revalidate provider-program calls before the ordinary permission path. */
   #programmaticDenials(
     calls: readonly PendingCall[],
@@ -3514,19 +3542,26 @@ export class AgentKernel {
           taskEpochId,
         };
       });
+      const state = this.#programState(programId);
       const admission = this.#programmaticLane.admit({
         programId,
         callerId: programId,
         taskEpochId,
         calls: programCalls,
+        callsUsed: state.callsUsed,
       });
-      if (admission.accepted) continue;
       const unscoped = admission.denied.filter((entry) => entry.callId === undefined);
+      let admitted = 0;
       for (const call of group) {
-        const failure = admission.denied.find((entry) => entry.callId === call.callId)
-          ?? unscoped[0];
-        if (failure !== undefined) denied.set(call.callId, failure);
+        const failure = admission.accepted
+          ? undefined
+          : admission.denied.find((entry) => entry.callId === call.callId) ?? unscoped[0];
+        if (failure === undefined) admitted += 1;
+        else denied.set(call.callId, failure);
       }
+      // Only the calls that survived admission spend the program's budget, so a
+      // partially denied batch does not hand the next one free capacity.
+      state.callsUsed += admitted;
     }
     return denied;
   }
