@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-30T20:18:58.902Z",
+  "generatedAt": "2026-08-30T20:22:20.508Z",
   "git": {
-    "commit": "e09bf59434dcd5c61ac87d9d4eb3250df7d639f7",
+    "commit": "a153921ba1997d8c292f17335504bfeb8bc2982f",
     "dirty": true,
-    "dirtyHash": "f83d6e695be1821ecf7db23aa746259aaeb2e1f7f6a6a21976eee46c49c0256d"
+    "dirtyHash": "9e0a3a71c1e51c4a77788821fb856761d38472afc7f32c849b64a844cba73f66"
   },
   "roots": [
     "apps",
@@ -350,8 +350,8 @@
     },
     {
       "path": "apps/cbc/src/config-template.ts",
-      "bytes": 4206,
-      "sha256": "2033811546f97bec5a32dd7fb205116dea81249ee1c9415a956f183b2bbf5f62"
+      "bytes": 4233,
+      "sha256": "259a92adcf357c1ff0ce28ac9990a63f30895af64fe219fea775faa372dc7400"
     },
     {
       "path": "apps/cbc/src/credentials.ts",
@@ -630,8 +630,8 @@
     },
     {
       "path": "apps/cbc/test/config-template.test.ts",
-      "bytes": 773,
-      "sha256": "567fb04df0be3d5c68f4b2ea92d011974d0a924177615ffdeb5f3443d04fb40b"
+      "bytes": 3065,
+      "sha256": "e5046445dc565a7c1a431bde1547581dffbe28d905f6e5256b0216a5d260d1a1"
     },
     {
       "path": "apps/cbc/test/context-p0.test.ts",
@@ -3799,5 +3799,5 @@
       "sha256": "8391ee841757695b95ddefc5dfd0ac274ecc32a76d733f2193b0a02a605a83df"
     }
   ],
-  "digest": "dffd11e8f0fcc60d09c2461ccfca182561c621562b58db017eb1586e3dca0187"
+  "digest": "4ccc697ca63fa141cb912f34fc414dce995a2605955a8ca3382632d071152a1d"
 }
