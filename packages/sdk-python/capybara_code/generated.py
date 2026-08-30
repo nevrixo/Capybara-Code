@@ -195,6 +195,7 @@ EVENT_KINDS = (
     "model.phase_changed",
     "model.route_changed",
     "model.route_escalated",
+    "model.route_receipt",
     "reasoning.epoch_started",
     "reasoning.epoch_reset",
     "reasoning.context_effective",

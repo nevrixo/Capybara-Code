@@ -337,3 +337,6 @@ Canonical Thinking text is bounded at 4 KiB for provider summaries and 64 KiB fo
   per-turn verdict is journaled because a re-attached session has to reconstruct why
   a long-running goal stopped, rather than re-deriving it from a budget it can no
   longer observe.
+- Added the `model.route_receipt` event kind. §5.16's planned-versus-actual receipt is
+  what makes "the router improved" checkable in the bench rather than asserted, so it
+  needs a kind a non-TypeScript reader of the journal can validate.
