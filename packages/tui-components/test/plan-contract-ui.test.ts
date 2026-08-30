@@ -8,6 +8,7 @@ import {
   renderPlanApprovalPicker,
   renderPlanContract,
   renderPlanOverlay,
+  renderPlanSummary,
   renderTodoList,
   renderTimeline,
   type TerminalCapabilities,
@@ -270,5 +271,128 @@ describe("Plan Contract UI", () => {
         files: ["src/parser.ts"], acceptanceCriteria: ["n/a"] },
     ]);
     expect(blocked.blockers).toContain("blocked approach step exists");
+  });
+
+  describe("collapsed timeline projection", () => {
+    const CONTRACT_SECTIONS = [
+      "Critical files & anchors",
+      "Verification",
+      "External actions",
+      "Risks",
+      "Rollback",
+      "Assumptions",
+    ] as const;
+
+    function timelineText(
+      overrides: Record<string, unknown> = {},
+      options: Parameters<typeof renderTimeline>[2] = {},
+      columns = 100,
+    ): string {
+      const lines = renderTimeline(
+        [{ type: "plan", id: "plan-1", sequence: 1, document, items, revision: 3, ...overrides } as never],
+        context(columns),
+        options,
+      );
+      return lines.map(lineText).join("\n");
+    }
+
+    test("keeps the timeline to a summary instead of the whole contract", () => {
+      const text = timelineText();
+      // The contract body is what buried the conversation; it belongs in the overlay.
+      for (const section of CONTRACT_SECTIONS) expect(text).not.toContain(section);
+      expect(text.split("\n").length).toBeLessThan(8);
+      expect(text).toContain("Goal: Make the parser deterministic");
+      expect(text).toContain("Steps: 1/3 done");
+    });
+
+    test("points at the key that opens the full contract", () => {
+      expect(timelineText()).toContain("Ctrl+X P");
+    });
+
+    test("shortens the digest but keeps it auditable", () => {
+      const text = timelineText();
+      expect(text).toMatch(/plan-sha256-[0-9a-f]{8}/u);
+      // A 64-character hash spends a whole row saying what 8 characters already say.
+      expect(text).not.toMatch(/[0-9a-f]{64}/u);
+    });
+
+    test("never hides why execution is blocked", () => {
+      const blockedItems = items.map((item) =>
+        item.kind === "implementation" ? { ...item, status: "blocked" as const } : item,
+      );
+      const text = timelineText({ items: blockedItems });
+      expect(text).toContain("! Blocked");
+      expect(text).toContain("blocker: blocked approach step exists");
+      expect(text).toContain("1 blocked");
+    });
+
+    test("caps a long blocker list rather than growing without bound", () => {
+      const text = timelineText({
+        document: { ...document, context: [], criticalFiles: [], verification: [] },
+        items: [],
+      });
+      expect((text.match(/blocker: /g) ?? []).length).toBe(2);
+      expect(text).toMatch(/\+\d+ more blockers/u);
+    });
+
+    test("an approved digest keeps the existing compact TODO projection", () => {
+      const blockedItems = items.map((item) =>
+        item.kind === "implementation" ? { ...item, status: "blocked" as const } : item,
+      );
+      const text = timelineText({
+        items: blockedItems,
+        approval: { revision: 3, digest: planDigest(document, blockedItems)! },
+      });
+      expect(text).toContain("Todo 1/3 done");
+      // The blocked step stays legible through its status box.
+      expect(text).toContain("[!]");
+    });
+
+    test("an approved scope with blocked work does not read as approved", () => {
+      // Direct call: the timeline's own approved-digest branch keeps the compact
+      // TODO projection (asserted above), and the frame reports blocked execution
+      // through the Plan controls. This pins the summary's own labelling, which is
+      // what renders whenever a scope is not digest-approved.
+      const blockedItems = items.map((item) =>
+        item.kind === "implementation" ? { ...item, status: "blocked" as const } : item,
+      );
+      const text = renderPlanSummary({
+        document,
+        items: blockedItems,
+        revision: 3,
+        approval: { revision: 3, digest: planDigest(document, blockedItems)! },
+      }, context()).map(lineText).join("\n");
+      expect(text).toContain("! Approved scope blocked");
+      expect(text).not.toContain("✓ Approved");
+      expect(text).toContain("blocker: blocked approach step exists");
+    });
+
+    test("labels a ready and approved scope as approved", () => {
+      const text = renderPlanSummary({
+        document,
+        items,
+        revision: 4,
+        approval: { revision: 4, digest: planDigest(document, items)! },
+      }, context()).map(lineText).join("\n");
+      expect(text).toContain("✓ Approved");
+      expect(text).not.toContain("blocker:");
+    });
+
+    test("planDetail full restores the whole contract for review surfaces", () => {
+      const text = timelineText({}, { planDetail: "full" });
+      for (const section of CONTRACT_SECTIONS) expect(text).toContain(section);
+    });
+
+    test("stays inside a narrow terminal and keeps the hint on its own line", () => {
+      const columns = 44;
+      const lines = renderTimeline(
+        [{ type: "plan", id: "plan-1", sequence: 1, document, items, revision: 3 } as never],
+        context(columns),
+      );
+      for (const row of lines) expect(lineWidth(row)).toBeLessThanOrEqual(columns);
+      const text = lines.map(lineText).join("\n");
+      const hintRow = text.split("\n").find((row) => row.includes("Ctrl+X P"));
+      expect(hintRow?.trim()).toBe("Ctrl+X P for full contract");
+    });
   });
 });

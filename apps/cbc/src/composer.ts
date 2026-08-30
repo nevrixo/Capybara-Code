@@ -407,7 +407,7 @@ export class ComposerSession {
 
     if (event.key === "ctrl+x") {
       this.#leaderStartedAt = now;
-      return { kind: "notice", text: "Ctrl+X: A agents, T tasks, D diff, L sessions, C context, M models, H help" };
+      return { kind: "notice", text: "Ctrl+X: A agents, T tasks, P todo, D diff, L sessions, C context, M models, H help" };
     }
 
     const lookupKey =

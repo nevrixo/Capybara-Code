@@ -1594,6 +1594,37 @@ describe("interactive UI (§6.2, §6.21)", () => {
     return { host, instance, output: () => host.out.join("") };
   }
 
+  test("Plan controls are written once until the readiness banner changes", () => {
+    // Plan controls restate readiness, not progress. Reprinting the identical
+    // banner after every turn is what made append-only Plan transcripts noisy.
+    const { instance, output } = ui(120);
+    const base = emptyViewModel("ses_plan_controls");
+    const model = {
+      ...base,
+      modeState: { ...base.modeState, selected: "plan" as const },
+    };
+
+    instance.status(model);
+    const afterFirst = output();
+    expect(afterFirst).toContain("Plan");
+    const bannerCount = (afterFirst.match(/Choose an option below/g) ?? []).length;
+
+    instance.status(model);
+    expect((output().match(/Choose an option below/g) ?? []).length).toBe(bannerCount);
+
+    // A changed banner must still reach the transcript.
+    const blocked = {
+      ...model,
+      todo: {
+        ...model.todo,
+        items: [{ id: "a", text: "Do the thing", status: "blocked" as const }],
+      },
+    };
+    instance.status(blocked);
+    expect(output()).toContain("Plan needs work");
+    instance.restore();
+  });
+
   test("Plan picker owns focus and resolves a selected action", async () => {
     const host = createFakeHost({ isTty: true, columns: 120, env: { NO_COLOR: "1" } });
     const decision = decideRenderMode({ host, rendererAvailable: true });

@@ -9,8 +9,9 @@
 
 import { planDigest, type PlanDocument, type PlanItem, type TodoListState } from "@cbc/session-domain";
 
-import { fitLine, line, segment, wrapPrefixedLines, type BlockContext, type StyledLine } from "./segments.ts";
+import { fitLine, line, segment, wrapPrefixedLines, type BlockContext, type Segment, type StyledLine } from "./segments.ts";
 import { sanitizeInline } from "./sanitize.ts";
+import { stringWidth } from "./width.ts";
 import { todoBox } from "./chrome.ts";
 import type { ThemeToken } from "./theme.ts";
 
@@ -674,6 +675,131 @@ export function renderNormalTodoList(
     }
   }
   return lines;
+}
+
+/** Below this width the "full contract" hint gets its own line. */
+const PLAN_SUMMARY_INLINE_HINT_COLUMNS = 60;
+
+/** How the full contract is reached from the collapsed timeline projection. */
+const PLAN_SUMMARY_HINT = "Ctrl+X P for full contract";
+
+/** Blockers shown inline before the summary falls back to a "+N more" count. */
+const PLAN_SUMMARY_MAX_BLOCKERS = 2;
+
+/**
+ * Render the collapsed Plan projection used by the conversation timeline.
+ *
+ * A Plan Contract is a document, and repainting all of it on every frame buried
+ * the conversation it was supposed to describe. This keeps what a reader has to
+ * act on — the goal, step progress, readiness, and why execution is blocked —
+ * and defers the rest to the Plan/TODO overlay, which still renders in full via
+ * `renderPlanContract`.
+ *
+ * The status vocabulary is deliberately lifted from `renderApprovalSummary` so
+ * the collapsed and full views can never disagree about whether a scope is
+ * approved. Blockers are never hidden: a user must not be stopped without being
+ * told why, so they survive collapse while the prose sections do not.
+ */
+export function renderPlanSummary(
+  input: PlanContractRenderInput | PlanDocumentView,
+  context: BlockContext,
+): StyledLine[] {
+  const root = record(input) ?? {};
+  const document = documentFrom(input);
+  const items = planItemsForInput(input as PlanContractRenderInput);
+  const approval = planApprovalForInput(input as PlanContractRenderInput);
+  const readiness = planReadinessForInput(input as PlanContractRenderInput, document, items);
+  const revision = typeof root.revision === "number"
+    ? root.revision
+    : typeof root.planRevision === "number" ? root.planRevision : 0;
+  const digest = currentPlanDigest(input, document, items) ?? text(root.digest) ?? readiness.digest;
+
+  // Same three-way state as the full contract's approval summary.
+  const approvedScope = approval !== undefined && digest !== undefined && approval.digest === digest;
+  const ready = readiness.ready;
+  const approved = ready && approvedScope;
+  const executionBlocked = !ready && approvedScope;
+  const status = approved
+    ? "✓ Approved"
+    : executionBlocked
+      ? "! Approved scope blocked"
+      : ready ? "○ Ready for approval" : "! Blocked";
+  const statusStyle: ThemeToken = approved
+    ? "accent.green"
+    : ready && !executionBlocked ? "accent.cyan" : "accent.amber";
+
+  const heading: Segment[] = [
+    segment("Plan", { fg: "fg.primary", bold: true }),
+    segment(revision > 0 ? `  r${revision}` : "", { fg: "fg.muted" }),
+    segment("  ·  ", { fg: "fg.muted" }),
+    segment(status, { fg: statusStyle, bold: true }),
+  ];
+  const inlineHint = context.columns >= PLAN_SUMMARY_INLINE_HINT_COLUMNS;
+  if (inlineHint) {
+    const used = heading.reduce((total, part) => total + stringWidth(part.text), 0);
+    const gap = context.columns - used - stringWidth(PLAN_SUMMARY_HINT);
+    if (gap >= 2) {
+      heading.push(segment(" ".repeat(gap), {}));
+      heading.push(segment(PLAN_SUMMARY_HINT, { fg: "fg.muted", dim: true }));
+    }
+  }
+  const lines: StyledLine[] = [fitLine("header", heading, context)];
+  if (!inlineHint) {
+    lines.push(fitLine("body", [segment(`  ${PLAN_SUMMARY_HINT}`, { fg: "fg.muted", dim: true })], context));
+  }
+
+  if (document !== undefined && document.goal.trim().length > 0) {
+    lines.push(...wrapPrefixedLines(
+      [segment("  Goal: ", { fg: "fg.muted" })],
+      sanitizeInline(document.goal, 400),
+      context,
+      { fg: "fg.primary" },
+    ));
+  }
+
+  const done = items.filter((item) => item.status === "done").length;
+  const blocked = items.filter((item) => item.status === "blocked").length;
+  const active = items.filter((item) => item.status === "active").length;
+  const progress = [
+    `${done}/${items.length} done`,
+    active > 0 ? `${active} active` : undefined,
+    blocked > 0 ? `${blocked} blocked` : undefined,
+  ].filter((entry): entry is string => entry !== undefined).join(" · ");
+  lines.push(fitLine("body", [
+    segment("  Steps: ", { fg: "fg.muted" }),
+    segment(progress, { fg: blocked > 0 ? "accent.amber" : "fg.primary" }),
+  ], context));
+
+  if (!ready) {
+    const blockers = readiness.blockers ?? ["Plan is not ready"];
+    for (const blocker of blockers.slice(0, PLAN_SUMMARY_MAX_BLOCKERS)) {
+      lines.push(...wrapPrefixedLines(
+        [segment("  blocker: ", { fg: "fg.muted" })],
+        sanitizeInline(blocker, 400),
+        context,
+        { fg: "accent.amber" },
+      ));
+    }
+    const hidden = blockers.length - PLAN_SUMMARY_MAX_BLOCKERS;
+    if (hidden > 0) {
+      lines.push(fitLine("body", [
+        segment(`  +${hidden} more blocker${hidden === 1 ? "" : "s"}`, { fg: "accent.amber", dim: true }),
+      ], context));
+    }
+  }
+
+  if (digest !== undefined) {
+    // The short form is enough to tell two scopes apart at a glance; the full
+    // 64-character identity stays available in the overlay and the picker.
+    lines.push(fitLine("body", [segment(`  ${shortPlanDigest(digest)}`, { fg: "accent.cyan", dim: true })], context));
+  }
+  return lines;
+}
+
+/** `plan-sha256-<8 hex>` — the auditable prefix, not the whole hash. */
+function shortPlanDigest(digest: string): string {
+  const match = /^(plan-sha256-)([0-9a-f]{8})[0-9a-f]*$/u.exec(digest);
+  return match !== null ? `${match[1]}${match[2]}` : sanitizeInline(digest, 24);
 }
 
 /**

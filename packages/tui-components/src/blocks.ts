@@ -34,7 +34,7 @@ import type {
 } from "@cbc/session-domain";
 
 import { sanitizeInline, sanitizeText, sanitizeUserInput } from "./sanitize.ts";
-import { renderNormalTodoList, renderPlanContract, type PlanContractRenderInput, type PlanDocumentView } from "./todo.ts";
+import { renderNormalTodoList, renderPlanContract, renderPlanSummary, type PlanContractRenderInput, type PlanDocumentView } from "./todo.ts";
 import {
   blank,
   bodyLines,
@@ -1808,6 +1808,11 @@ export function renderNotice(
  * §11.5 plan items with their status, plus the structured Plan Contract when a
  * newer timeline event carries one. The legacy shape remains intentionally small
  * so old journals and golden fixtures render exactly as before.
+ *
+ * A structured contract collapses to `renderPlanSummary` unless the caller asks
+ * for `planDetail: "full"`. The timeline is a conversation, and repainting every
+ * contract section on each frame buried it; the review surfaces (the Plan and
+ * TODO overlays) pass `"full"` and still show everything.
  */
 export function renderPlan(
   item: Pick<TimelinePlan, "items"> & Partial<{
@@ -1822,6 +1827,7 @@ export function renderPlan(
     digest: string;
   }>,
   context: BlockContext,
+  options: Pick<TimelineRenderOptions, "planDetail"> = {},
 ): StyledLine[] {
   const structured = item.document !== undefined || item.planDocument !== undefined || item.contract !== undefined;
   const approval = item.approval ?? item.planApproval;
@@ -1845,7 +1851,9 @@ export function renderPlan(
     }, context);
   }
   if (structured) {
-    return renderPlanContract(item as PlanContractRenderInput, context);
+    return options.planDetail === "full"
+      ? renderPlanContract(item as PlanContractRenderInput, context)
+      : renderPlanSummary(item as PlanContractRenderInput, context);
   }
   if (item.items.length === 0) return [];
   const lines: StyledLine[] = [
@@ -2380,6 +2388,12 @@ export interface TimelineRenderOptions {
   readonly hideSubagentEvents?: boolean;
   /** Accordion master switch: true = Thinking/Tool collapsed. */
   readonly accordionCollapsed?: boolean;
+  /**
+   * How much of a Plan Contract the timeline paints. `compact` (the default) is
+   * the collapsed projection; `full` is the whole contract and is what the Plan
+   * and TODO overlays pass so a review surface keeps every section.
+   */
+  readonly planDetail?: "compact" | "full";
   /** Accordion collapsed summary per item id. */
   readonly accordionSummaries?: Readonly<Record<string, string>>;
   /** Final answer compatibility mode and evidence disclosure. */
@@ -2532,7 +2546,9 @@ export function renderTimelineItem(
     case "notice":
       return renderNotice(item, context);
     case "plan":
-      return renderPlan(item, context);
+      return renderPlan(item, context, {
+        ...(options.planDetail === undefined ? {} : { planDetail: options.planDetail }),
+      });
     case "job":
       return renderJob(item, context);
   }

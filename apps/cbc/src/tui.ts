@@ -45,6 +45,7 @@ import {
   enterSequence,
   joinColumns,
   line,
+  lineText,
   liveStateLabel,
   planLayout,
   renderAnsi,
@@ -302,6 +303,8 @@ export class InteractiveUi {
   #timelineProjection: ProjectedTimeline | undefined;
   #restored = false;
   #lastLiveLabel = "";
+  /** Last Plan-controls banner written in append-only mode, for repeat suppression. */
+  #lastPlanControlLabel = "";
   #sidebarVisible: boolean | undefined;
   #mcpServers: readonly SidebarService[];
   #lspServers: readonly SidebarService[];
@@ -2395,6 +2398,7 @@ export class InteractiveUi {
     this.#residentModel = model;
     this.#latestModel = model;
     this.#lastLiveLabel = "";
+    this.#lastPlanControlLabel = "";
     this.#turnTitle = undefined;
     this.#selectedReasoningEffort = model.reasoningEffort;
     this.#selectedModel = model.modelId;
@@ -2821,9 +2825,19 @@ export class InteractiveUi {
        this.#eraseComposer();
        this.#options.writer.write(lines);
        if (model.modeState.selected === "plan") {
-         this.#options.writer.write(
-           renderPlanControls(model, blockContext(this.#options.decision.capabilities, plan.columns)),
+         const controls = renderPlanControls(
+           model,
+           blockContext(this.#options.decision.capabilities, plan.columns),
          );
+         // Plan controls restate readiness, not progress, so an unchanged banner
+         // says nothing a reader has not already seen. Repeating it after every
+         // turn is what made append-only Plan transcripts noisy, so dedupe on the
+         // rendered text the way `live()` dedupes its phase label.
+         const label = controls.map((styled) => lineText(styled)).join("\n");
+         if (label !== this.#lastPlanControlLabel) {
+           this.#lastPlanControlLabel = label;
+           this.#options.writer.write(controls);
+         }
        }
      }
   }
