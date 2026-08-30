@@ -16,10 +16,12 @@ export {
 } from "./service.ts";
 
 export {
+  APPROVAL_REQUIRED_SCOPES,
   CapsuleStore,
   DEFAULT_MIN_VERIFIED_OBSERVATIONS,
   MIN_VERIFIED_OBSERVATIONS_FLOOR,
   capsuleId,
+  capsuleScopeRequiresApproval,
   compareCapsules,
   freezeCapsule,
   type AcceptedCapsuleProposal,
@@ -28,6 +30,7 @@ export {
   type CapsuleActivationRefused,
   type CapsuleActivationResult,
   type CapsuleKind,
+  type CapsuleLearningPolicy,
   type CapsuleProposalInput,
   type CapsuleProposalResult,
   type CapsuleRecallOptions,

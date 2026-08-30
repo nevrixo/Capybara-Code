@@ -178,7 +178,7 @@ describe("CapsuleStore activation gate (§6.3)", () => {
     expect(store.activate(first.capsule.id).activated).toBe(false);
 
     store.propose(proposal({ routeIds: ["route-3"], evidenceIds: ["ev-3"] }));
-    const result = store.activate(first.capsule.id);
+    const result = store.activate(first.capsule.id, { approved: true });
     expect(result.activated).toBe(true);
     if (!result.activated) return;
     expect(result.capsule.status).toBe("active");
@@ -218,9 +218,71 @@ describe("CapsuleStore activation gate (§6.3)", () => {
     const second = store.propose(proposal({ routeIds: ["route-2"], evidenceIds: ["ev-2"] }));
     expect(second.accepted).toBe(true);
     if (!second.accepted) return;
-    expect(store.activate(second.capsule.id).activated).toBe(true);
+    expect(store.activate(second.capsule.id, { approved: true }).activated).toBe(true);
 
     expect(store.recall({ now: "2026-01-15T00:00:00.000Z" })).toHaveLength(1);
     expect(store.recall({ now: "2026-03-01T00:00:00.000Z" })).toEqual([]);
+  });
+});
+
+describe("CapsuleStore approval policy (§6.3)", () => {
+  function readyStore(policy: "off" | "suggest" | "on", scope: "session" | "workspace" | "user") {
+    const store = new CapsuleStore({
+      minVerifiedObservations: 2,
+      policy,
+      now: () => "2026-01-01T00:00:00.000Z",
+    });
+    store.propose(proposal({ scope, routeIds: ["route-1"] }));
+    const second = store.propose(proposal({ scope, routeIds: ["route-2"], evidenceIds: ["ev-2"] }));
+    return { store, proposed: second };
+  }
+
+  test("workspace scope cannot activate without approval", () => {
+    const { store, proposed } = readyStore("suggest", "workspace");
+    expect(proposed.accepted).toBe(true);
+    if (!proposed.accepted) return;
+
+    const refused = store.activate(proposed.capsule.id);
+    expect(refused.activated).toBe(false);
+    if (!refused.activated) expect(refused.reasons.join(" ")).toContain("approval");
+    expect(store.recall()).toEqual([]);
+
+    const approved = store.activate(proposed.capsule.id, { approved: true });
+    expect(approved.activated).toBe(true);
+    expect(store.recall()).toHaveLength(1);
+  });
+
+  test("user scope needs approval even under the permissive policy", () => {
+    const { store, proposed } = readyStore("on", "user");
+    expect(proposed.accepted).toBe(true);
+    if (!proposed.accepted) return;
+    expect(store.requiresApproval("user")).toBe(true);
+    expect(store.activate(proposed.capsule.id).activated).toBe(false);
+    expect(store.activate(proposed.capsule.id, { approved: true }).activated).toBe(true);
+  });
+
+  test("the default policy keeps even session scope suggestion-only", () => {
+    const { store, proposed } = readyStore("suggest", "session");
+    expect(store.policy).toBe("suggest");
+    expect(store.requiresApproval("session")).toBe(true);
+    expect(proposed.accepted).toBe(true);
+    if (!proposed.accepted) return;
+    expect(store.activate(proposed.capsule.id).activated).toBe(false);
+  });
+
+  test("policy `on` activates session scope unattended and nothing wider", () => {
+    const { store, proposed } = readyStore("on", "session");
+    expect(store.requiresApproval("session")).toBe(false);
+    expect(store.requiresApproval("workspace")).toBe(true);
+    expect(proposed.accepted).toBe(true);
+    if (!proposed.accepted) return;
+    expect(store.activate(proposed.capsule.id).activated).toBe(true);
+  });
+
+  test("policy `off` refuses the proposal outright", () => {
+    const { store, proposed } = readyStore("off", "session");
+    expect(proposed.accepted).toBe(false);
+    if (!proposed.accepted) expect(proposed.reasons.join(" ")).toContain("disabled");
+    expect(store.size).toBe(0);
   });
 });

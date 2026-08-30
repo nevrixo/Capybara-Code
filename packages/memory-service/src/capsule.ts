@@ -82,8 +82,27 @@ export interface CapsuleStoreSnapshot {
   readonly transitions: readonly CapsuleTransition[];
 }
 
+/**
+ * §6.3's application policy, mirroring agent.learning.strategyCapsules. `off`
+ * declines proposals; `suggest` — the §8.4 default — keeps every capsule a
+ * suggestion until the user accepts it; `on` drops the prompt for session scope
+ * only, because workspace and user scope always need approval.
+ */
+export type CapsuleLearningPolicy = "off" | "suggest" | "on";
+
+/** §6.3: activation at these scopes is a user decision, never a model one. */
+export const APPROVAL_REQUIRED_SCOPES: readonly CapsuleScope[] = Object.freeze(["workspace", "user"]);
+
+export function capsuleScopeRequiresApproval(scope: CapsuleScope, policy: CapsuleLearningPolicy): boolean {
+  if (APPROVAL_REQUIRED_SCOPES.includes(scope)) return true;
+  // Session scope is the only one `on` may activate unattended.
+  return policy !== "on";
+}
+
 export interface CapsuleStoreOptions {
   readonly now?: () => string;
+  /** Defaults to `suggest`, matching agent.learning.strategyCapsules. */
+  readonly policy?: CapsuleLearningPolicy;
   /**
    * §6.3's "최소 2~3개의 독립된 검증 궤적" floor, read from
    * agent.learning.minVerifiedObservations. Three is the §8.4 default; the
@@ -107,6 +126,8 @@ export type CapsuleActivationResult = CapsuleActivated | CapsuleActivationRefuse
 
 export interface CapsuleActivationOptions {
   readonly reason?: string;
+  /** The caller's assertion that a user approved this activation. */
+  readonly approved?: boolean;
 }
 
 export interface CapsuleRecallOptions {
@@ -128,6 +149,7 @@ export class CapsuleStore {
   readonly #transitions: CapsuleTransition[] = [];
   readonly #now: () => string;
   readonly #minVerifiedObservations: number;
+  readonly #policy: CapsuleLearningPolicy;
   #sequence = 0;
 
   constructor(options: CapsuleStoreOptions = {}) {
@@ -136,10 +158,20 @@ export class CapsuleStore {
       MIN_VERIFIED_OBSERVATIONS_FLOOR,
       Math.floor(options.minVerifiedObservations ?? DEFAULT_MIN_VERIFIED_OBSERVATIONS),
     );
+    this.#policy = options.policy ?? "suggest";
   }
 
   get minVerifiedObservations(): number {
     return this.#minVerifiedObservations;
+  }
+
+  get policy(): CapsuleLearningPolicy {
+    return this.#policy;
+  }
+
+  /** Whether activating this scope needs a user decision under the live policy. */
+  requiresApproval(scope: CapsuleScope): boolean {
+    return capsuleScopeRequiresApproval(scope, this.#policy);
   }
 
   get size(): number {
@@ -177,6 +209,7 @@ export class CapsuleStore {
       reasons.push("at least one evidence reference is required");
     }
     if (!isConfidence(input.confidence)) reasons.push("capsule confidence must be between 0 and 1");
+    if (this.#policy === "off") reasons.push("strategy capsule learning is disabled (agent.learning.strategyCapsules)");
     reasons.push(...detectSecretShaped(input.kind, statement));
     if (reasons.length > 0) {
       return Object.freeze({
@@ -251,6 +284,9 @@ export class CapsuleStore {
     const reasons: string[] = [];
     if (capsule.status === "forgotten") reasons.push("a forgotten capsule cannot be reactivated");
     if (capsule.status === "contested") reasons.push("a contested capsule must be resolved before activation");
+    if (this.requiresApproval(capsule.scope) && options.approved !== true) {
+      reasons.push(`${capsule.scope} scope activation requires explicit user approval`);
+    }
     if (capsule.observedCount < this.#minVerifiedObservations) {
       reasons.push(
         `capsule needs ${this.#minVerifiedObservations} independent verified observations, has ${capsule.observedCount}`,
