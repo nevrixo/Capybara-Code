@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-30T01:14:37.774Z",
+  "generatedAt": "2026-08-30T02:06:29.601Z",
   "git": {
-    "commit": "d8c0ac51f205d318f5b465c4dedb01451d46b456",
-    "dirty": false,
-    "dirtyHash": "94f5046a81dedf44e251371cb0fa90e1449a06296d1eb448f338a7014b327eda"
+    "commit": "258a1ffa00dd32bd60d8b8c8c63848d29adba84c",
+    "dirty": true,
+    "dirtyHash": "585a802d46df8fe4e434b5d1522d6470c2f4a5871669b806569aeaa0f3a93545"
   },
   "roots": [
     "apps",
@@ -430,8 +430,8 @@
     },
     {
       "path": "apps/cbc/src/opentui-view.ts",
-      "bytes": 12569,
-      "sha256": "272b466b4cca8413ef512c5a5bdb1c13f608029e7d2bb7ac2356a090550570d0"
+      "bytes": 13789,
+      "sha256": "5a4357e4e63c4a38c260ba0d4b232e51ae7e1a8360591a7cf628f85a738768af"
     },
     {
       "path": "apps/cbc/src/output.ts",
@@ -750,8 +750,8 @@
     },
     {
       "path": "apps/cbc/test/opentui-view.test.ts",
-      "bytes": 2458,
-      "sha256": "90ba4699f1b63fe535b331f53fcc04890dcb75c2d0778250dac4228ab6c14fd5"
+      "bytes": 4520,
+      "sha256": "638c5cc88d3306af87dd8cabd4ab38cc4e6bb5380e699f523254f640a1a47dbb"
     },
     {
       "path": "apps/cbc/test/package-runtime.test.ts",
@@ -2985,8 +2985,8 @@
     },
     {
       "path": "packages/session-domain/src/todo.ts",
-      "bytes": 54079,
-      "sha256": "6ef80e92b24843b68491efcab2867ecd162ed4db27ef9b0661d114e7c8f2dd35"
+      "bytes": 54379,
+      "sha256": "61020a615be3940d83fe8bdeb18be64298216674f9a353f56d6894b64cb54a58"
     },
     {
       "path": "packages/session-domain/test/compaction-capsule.test.ts",
@@ -3315,8 +3315,8 @@
     },
     {
       "path": "packages/tui-components/src/todo.ts",
-      "bytes": 34537,
-      "sha256": "4e912434d65534d379a5285981abc356c10cb25334f3ff522fabf4e41fd1cd5e"
+      "bytes": 34973,
+      "sha256": "bf9f9737fdef9f4c1d0aad92d385a83fd6a5dba33f711daf4952c10b3080b055"
     },
     {
       "path": "packages/tui-components/src/width.ts",
@@ -3345,8 +3345,8 @@
     },
     {
       "path": "packages/tui-components/test/plan-contract-ui.test.ts",
-      "bytes": 8068,
-      "sha256": "f9925cd36ee8b778a4908f7ffc4eb2eb391625929d6868eae9e2734c9b29283a"
+      "bytes": 10115,
+      "sha256": "022320152629bcae1885dfc8e22b1ff786ae16f62177eedbf673636dd022ee95"
     },
     {
       "path": "packages/tui-components/test/questionnaire.test.ts",
@@ -3614,5 +3614,5 @@
       "sha256": "8391ee841757695b95ddefc5dfd0ac274ecc32a76d733f2193b0a02a605a83df"
     }
   ],
-  "digest": "154a99d45ed1215ce46cd1f7b227817a712d1b360088f83c4d57cc24792893a4"
+  "digest": "632d1a3c59f47fc601054f099b2bcabb87ec44a29f2b984b661d58c3ea6bf6ab"
 }
