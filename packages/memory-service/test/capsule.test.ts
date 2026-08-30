@@ -286,3 +286,73 @@ describe("CapsuleStore approval policy (§6.3)", () => {
     expect(store.size).toBe(0);
   });
 });
+
+describe("CapsuleStore invalidators (§6.3, §6.4)", () => {
+  function activeCapsule(invalidators: readonly string[]) {
+    const store = new CapsuleStore({
+      minVerifiedObservations: 2,
+      now: () => "2026-01-01T00:00:00.000Z",
+    });
+    store.propose(proposal({ routeIds: ["route-1"], invalidators }));
+    const second = store.propose(proposal({ routeIds: ["route-2"], evidenceIds: ["ev-2"] }));
+    if (!second.accepted) throw new Error("fixture proposal was rejected");
+    const activated = store.activate(second.capsule.id, { approved: true });
+    if (!activated.activated) throw new Error("fixture capsule did not activate");
+    return { store, capsule: activated.capsule };
+  }
+
+  test("a matching code change contests the capsule and drops it from recall", () => {
+    const { store, capsule } = activeCapsule(["packages/config-schema changed"]);
+    expect(store.recall()).toHaveLength(1);
+
+    const result = store.evaluateInvalidators({
+      kind: "code",
+      subjects: ["packages/config-schema/src/schema.ts"],
+    });
+
+    expect(result.contested.map((entry) => entry.id)).toEqual([capsule.id]);
+    expect(store.get(capsule.id)?.status).toBe("contested");
+    expect(store.recall()).toEqual([]);
+  });
+
+  test("a toolset change matches an invalidator that names the kind", () => {
+    const { store, capsule } = activeCapsule(["toolset changed"]);
+    expect(store.evaluateInvalidators({ kind: "toolset" }).contested).toHaveLength(1);
+    expect(store.get(capsule.id)?.status).toBe("contested");
+  });
+
+  test("a policy change matches only capsules that named policy", () => {
+    const { store, capsule } = activeCapsule(["permissions policy digest changed"]);
+    expect(store.evaluateInvalidators({ kind: "code", subjects: ["src/app.ts"] }).contested).toEqual([]);
+    expect(store.get(capsule.id)?.status).toBe("active");
+
+    expect(store.evaluateInvalidators({ kind: "policy" }).contested).toHaveLength(1);
+    expect(store.recall()).toEqual([]);
+  });
+
+  test("an unrelated change leaves the capsule active", () => {
+    const { store, capsule } = activeCapsule(["docs/wiki changed"]);
+    const result = store.evaluateInvalidators({ kind: "code", subjects: ["crates/cbc-runtime/src/lib.rs"] });
+    expect(result.contested).toEqual([]);
+    expect(store.get(capsule.id)?.status).toBe("active");
+    expect(store.recall()).toHaveLength(1);
+  });
+
+  test("a contested capsule cannot be re-activated without resolution", () => {
+    const { store, capsule } = activeCapsule(["toolset changed"]);
+    store.evaluateInvalidators({ kind: "toolset" });
+
+    const retry = store.activate(capsule.id, { approved: true });
+    expect(retry.activated).toBe(false);
+    if (!retry.activated) expect(retry.reasons.join(" ")).toContain("contested");
+  });
+
+  test("invalidation is recorded in the transition log with its reason", () => {
+    const { store } = activeCapsule(["toolset changed"]);
+    store.evaluateInvalidators({ kind: "toolset" });
+
+    const last = store.transitionLog().at(-1);
+    expect(last?.toStatus).toBe("contested");
+    expect(last?.reason).toContain("toolset");
+  });
+});

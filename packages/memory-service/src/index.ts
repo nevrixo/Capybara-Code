@@ -29,6 +29,8 @@ export {
   type CapsuleActivationOptions,
   type CapsuleActivationRefused,
   type CapsuleActivationResult,
+  type CapsuleInvalidationResult,
+  type CapsuleInvalidationTrigger,
   type CapsuleKind,
   type CapsuleLearningPolicy,
   type CapsuleProposalInput,

@@ -130,6 +130,22 @@ export interface CapsuleActivationOptions {
   readonly approved?: boolean;
 }
 
+/**
+ * §6.3's "코드·policy·toolset 변경 시 invalidator 평가". The trigger names what
+ * moved; `subjects` are the concrete things that moved (changed paths, the new
+ * policy digest, the tool ids now active) that an invalidator can name.
+ */
+export interface CapsuleInvalidationTrigger {
+  readonly kind: "code" | "policy" | "toolset" | "workspace";
+  readonly subjects?: readonly string[];
+  readonly reason?: string;
+}
+
+export interface CapsuleInvalidationResult {
+  readonly trigger: CapsuleInvalidationTrigger;
+  readonly contested: readonly StrategyCapsule[];
+}
+
 export interface CapsuleRecallOptions {
   readonly scopes?: readonly CapsuleScope[];
   readonly kinds?: readonly CapsuleKind[];
@@ -339,6 +355,39 @@ export class CapsuleStore {
     }));
   }
 
+  /**
+   * Move every active capsule whose invalidator matches this trigger to
+   * `contested`, which takes it out of recall. A stale strategy is worse than
+   * no strategy — it keeps steering the model after the reason it was true has
+   * gone — so this is deliberately blunt: a match demotes rather than rescores,
+   * and the user resolves from `/learn review`.
+   */
+  evaluateInvalidators(trigger: CapsuleInvalidationTrigger): CapsuleInvalidationResult {
+    const now = this.#now();
+    const contested: StrategyCapsule[] = [];
+    for (const capsule of this.all()) {
+      if (capsule.status !== "active") continue;
+      const matched = capsule.invalidators.filter((invalidator) =>
+        invalidatorMatches(invalidator, trigger)
+      );
+      if (matched.length === 0) continue;
+      const demoted = freezeCapsule({
+        ...capsule,
+        status: "contested",
+        updatedAt: now,
+        revision: capsule.revision + 1,
+      });
+      this.#capsules.set(capsule.id, demoted);
+      this.#record(
+        capsule.status,
+        demoted,
+        trigger.reason ?? `invalidated by ${trigger.kind} change: ${matched.join(", ")}`,
+      );
+      contested.push(demoted);
+    }
+    return Object.freeze({ trigger, contested: Object.freeze(contested) });
+  }
+
   snapshot(): CapsuleStoreSnapshot {
     return Object.freeze({
       schemaVersion: "1",
@@ -420,6 +469,36 @@ export function compareCapsules(left: StrategyCapsule, right: StrategyCapsule): 
   if (left.createdAt !== right.createdAt) return left.createdAt < right.createdAt ? -1 : 1;
   return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
 }
+
+/**
+ * An invalidator is free text the proposer wrote ("packages/foo changed",
+ * "toolset changed"), so matching is textual. The trigger kind matches an
+ * invalidator that names it; otherwise each significant word of the invalidator
+ * is tried against each subject in both directions, so `packages/foo` matches
+ * the changed path `packages/foo/src/bar.ts` and vice versa. Words that carry no
+ * subject of their own are skipped, or every invalidator ending in "changed"
+ * would match any path containing that word.
+ */
+function invalidatorMatches(invalidator: string, trigger: CapsuleInvalidationTrigger): boolean {
+  const needle = invalidator.trim().toLowerCase();
+  if (needle.length === 0) return false;
+  if (needle.includes(trigger.kind)) return true;
+  const words = needle.split(/\s+/).filter((word) => word.length >= 3 && !INVALIDATOR_STOP_WORDS.has(word));
+  for (const subject of trigger.subjects ?? []) {
+    const candidate = subject.trim().toLowerCase();
+    if (candidate.length === 0) continue;
+    if (candidate.includes(needle)) return true;
+    for (const word of words) {
+      if (candidate.includes(word) || word.includes(candidate)) return true;
+    }
+  }
+  return false;
+}
+
+const INVALIDATOR_STOP_WORDS: ReadonlySet<string> = new Set([
+  "and", "any", "are", "changed", "changes", "digest", "for", "modified", "new",
+  "the", "updated", "was", "were", "when", "with",
+]);
 
 function sortedUnique(values: readonly string[]): readonly string[] {
   return Object.freeze([...new Set(values)].sort());
