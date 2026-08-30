@@ -29,6 +29,7 @@ export type SlashIntent =
   | { readonly kind: "overlay"; readonly overlay: OverlayKind; readonly argument?: string }
   | { readonly kind: "help"; readonly topic?: string }
   | { readonly kind: "set_model"; readonly model?: string }
+  | { readonly kind: "set_profile"; readonly profile: string }
   | { readonly kind: "set_reasoning"; readonly value?: string }
   | { readonly kind: "setting"; readonly setting?: string; readonly value?: string }
   | { readonly kind: "set_permission"; readonly preset?: string; readonly save?: boolean }
@@ -88,8 +89,13 @@ export function parseSlash(raw: string): SlashIntent {
     case "/model":
       // With no argument this keeps a list intent for line-oriented clients; with one it applies directly, which
       // is what makes `/model gpt-5.6` usable in a script-like flow.
-      return arg === undefined
-        ? { kind: "overlay", overlay: "model_picker" }
+      if (arg === undefined) return { kind: "overlay", overlay: "model_picker" };
+      // §6 P1-03: `profile:<name>` selects a recommended profile rather than a
+      // model id. Same prefix `capy model use` takes, so the two surfaces do not
+      // need separate vocabularies for the same choice — and it cannot collide
+      // with a model id, none of which contain a colon.
+      return arg.startsWith("profile:")
+        ? { kind: "set_profile", profile: arg.slice("profile:".length) }
         : { kind: "set_model", model: arg };
     case "/effort":
       return arg === undefined

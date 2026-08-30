@@ -92,6 +92,7 @@ export type Command =
   | { readonly kind: "auth"; readonly sub: "status" }
   | { readonly kind: "auth"; readonly sub: "logout"; readonly all: boolean }
   | { readonly kind: "model"; readonly sub: "refresh" }
+  | { readonly kind: "model"; readonly sub: "use"; readonly profile: string }
   | { readonly kind: "config"; readonly sub: "set"; readonly path: string; readonly value: string }
   | { readonly kind: "config"; readonly sub: "validate"; readonly explain: boolean }
   | { readonly kind: "skills"; readonly sub: "list" | "doctor"; readonly json: boolean }
@@ -354,6 +355,14 @@ function buildSubcommand(
   if (commandName === "model" && subName === "refresh") {
     return { kind: "model", sub: "refresh" };
   }
+  if (commandName === "model" && subName === "use") {
+    // `profile:<name>` is the form key-status.ts has always named as this key's
+    // consumer, and the bare name is accepted because a user who types
+    // `model use deep` means the same thing.
+    const requested = (operands[0] ?? "").replace(/^profile:/u, "");
+    if (requested.length === 0) throw usageError("capy model use needs a profile name");
+    return { kind: "model", sub: "use", profile: requested };
+  }
   if (commandName === "clients" && (subName === "list" || subName === "doctor")) {
     return { kind: "clients", sub: subName };
   }
@@ -571,6 +580,7 @@ export const HELP_TEXT = [
   "  auth status                      show the active credential",
   "  auth logout [--all]              drop stored credentials",
   "  model refresh                    refresh model capabilities",
+  "  model use profile:<name>         select a recommended model profile",
   "  config set <path> <value>        set a user configuration value",
   "  config validate [--explain]      check config and explain each key's status",
   "  skills list [--json]             list discovered Skills",

@@ -12,7 +12,7 @@
  */
 
 import { isTokenSavingLevel } from "@cbc/agent-kernel";
-import { MANUAL_MODEL_PROFILE, configKeyInfo, type ReasoningEffort } from "@cbc/config-schema";
+import { MANUAL_MODEL_PROFILE, configKeyInfo, profileStrategy, type ReasoningEffort } from "@cbc/config-schema";
 import type { CbcEvent } from "@cbc/protocol";
 import type { SessionViewModel } from "@cbc/session-domain";
 import { clampEffortToModel, findModel, MODEL_REGISTRY, supportsEffort } from "@cbc/provider-openai";
@@ -1784,6 +1784,37 @@ async function handleSlash(
         clamped.clamped === undefined
           ? `Model set: ${descriptor.id}`
           : `Model set: ${descriptor.id} · effort ${clamped.effort} (${clamped.clamped.reason})`,
+      );
+      return "continue";
+    }
+
+    case "set_profile": {
+      // §6 P1-03: the recommended profiles were unreachable from the UI — every
+      // model change wrote MANUAL_MODEL_PROFILE, so `model.profiles` described
+      // rows nothing could select. Unlike `set_model` this writes only the profile
+      // name: the row's model and effort are folded in at bootstrap, along with
+      // the execution and verification strategies a bare model id cannot carry.
+      const loaded = await context.config();
+      const profile = loaded.config.model.profiles[intent.profile];
+      if (profile === undefined) {
+        context.warn(
+          `Unknown profile ${intent.profile}. Available: ${Object.keys(loaded.config.model.profiles).sort().join(", ")}`,
+        );
+        return "continue";
+      }
+      const { setUserConfigValue } = await import("../state.ts");
+      const written = await setUserConfigValue(context.host, "model.profile", intent.profile);
+      const error = written.issues.find((issue) => issue.severity === "error");
+      if (error !== undefined) {
+        ui.text(`Profile ${intent.profile} was not saved: ${error.message}`);
+        return "continue";
+      }
+      const strategy = profileStrategy(profile);
+      // The strategy columns only take effect on the next session, because they
+      // are folded where the effective config is assembled. Saying so is better
+      // than a line that implies the running turn changed lanes.
+      ui.text(
+        `Profile ${intent.profile}: ${profile.model} · ${profile.reasoningMode}/${profile.reasoningEffort} · ${strategy.execution} · verify ${strategy.verification} (applies on the next session)`,
       );
       return "continue";
     }

@@ -15,7 +15,7 @@ import {
   REPOSITORY_MAP_CACHE_MAX_BYTES,
   parseRepositoryMapCache,
 } from "@cbc/context-engine";
-import { MANUAL_MODEL_PROFILE, type ConfigPermissionRule } from "@cbc/config-schema";
+import { MANUAL_MODEL_PROFILE, profileStrategy, type ConfigPermissionRule } from "@cbc/config-schema";
 import { mcpActionArgumentsHash, type StoredRule } from "@cbc/permissions";
 import { EVENT_SCHEMA_VERSION, isKnownEventKind, type CbcEvent } from "@cbc/protocol";
 import {
@@ -1494,8 +1494,22 @@ async function refreshRepositoryMap(input: {
   }
 }
 
-/** Fold the selected profile into the concrete model fields (§10.3, §21.5). */
-function withActiveProfile<T extends Awaited<ReturnType<CommandContext["requireConfig"]>>>(
+/**
+ * Fold the selected profile into the concrete model fields (§10.3, §21.5) and the
+ * settings its execution and verification columns govern (§6 P1-03).
+ *
+ * Model and effort alone made every profile a synonym for `/model` plus
+ * `/effort` — selecting Deep changed which model answered and nothing about how
+ * the turn ran. The two strategy columns are folded here, at the one point where
+ * a profile becomes the effective config, so every consumer downstream sees the
+ * profile's intent without having to know a profile was selected at all.
+ *
+ * The fold only ever narrows or deepens. A profile is a preference expressed
+ * before the session started; letting one widen a lane the user's config closed,
+ * or step a review policy back from `always`, would make selecting a preset a way
+ * to escape a decision the user made deliberately.
+ */
+export function withActiveProfile<T extends Awaited<ReturnType<CommandContext["requireConfig"]>>>(
   config: T,
 ): T {
   const name = config.model.profile;
@@ -1507,8 +1521,43 @@ function withActiveProfile<T extends Awaited<ReturnType<CommandContext["requireC
   next.model.default = profile.model;
   next.model.reasoningMode = profile.reasoningMode;
   next.model.reasoningEffort = profile.reasoningEffort;
+
+  const strategy = profileStrategy(profile);
+  const native = next.provider.openai.native;
+  // The hosted read-only scout is the Deep and Quality rows' execution strategy
+  // and nobody else's. Fast and Balanced close it rather than leave it to the
+  // global default, because a profile that says "direct 우선" and still admits a
+  // hosted subtree has not expressed the row.
+  if (strategy.execution !== "hosted_scout" && strategy.execution !== "split_only") {
+    native.hostedMultiAgent = "disabled";
+  }
+  if (strategy.execution === "direct_first") {
+    // §P1-03's Fast row is "direct 우선, 작은 PTC": the lane stays available for a
+    // small read-only batch, so clamping the budget is the right expression and
+    // disabling the lane outright is not. `Math.min` keeps a user who configured a
+    // tighter budget on their own number.
+    native.maxProgramToolCalls = Math.min(native.maxProgramToolCalls, DIRECT_FIRST_PROGRAM_TOOL_CALLS);
+    native.maxProgramParallelCalls = Math.min(native.maxProgramParallelCalls, DIRECT_FIRST_PROGRAM_PARALLEL_CALLS);
+  }
+  // The verification column reaches the router as a floor on the planned level
+  // (§5.14). That governs how wide the *checks* are; the reviewer is a separate
+  // gate on `reviewPolicy`, so a row that asks for an independent review has to
+  // say so here as well or Deep would plan a review it never dispatched.
+  if (strategy.verification === "independent_review") {
+    next.agent.verification.reviewPolicy = "always";
+  }
   return next as T;
 }
+
+/**
+ * The "작은 PTC" of §P1-03's Fast row.
+ *
+ * A quarter of the default budget: enough for a read-only batch that a single
+ * program call can cover, small enough that the lane stops being where the turn
+ * spends its time.
+ */
+const DIRECT_FIRST_PROGRAM_TOOL_CALLS = 6;
+const DIRECT_FIRST_PROGRAM_PARALLEL_CALLS = 2;
 
 function structuredCloneConfig<T>(config: T): T {
   // The config is plain JSON data, so a structured clone is exact and avoids the

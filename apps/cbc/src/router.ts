@@ -21,7 +21,7 @@ import { PackageRuntimeError } from "./package-runtime.ts";
 import { interactive } from "./commands/interactive.ts";
 import { daemonCommand } from "./commands/daemon.ts";
 import { sessionWorker } from "./commands/session-worker.ts";
-import { modelRefresh } from "./commands/model.ts";
+import { modelRefresh, modelUseProfile } from "./commands/model.ts";
 import { run } from "./commands/run.ts";
 import { updateCommand } from "./commands/update.ts";
 import type { Host } from "./host.ts";
@@ -112,7 +112,9 @@ async function dispatch(context: CommandContext, command: Command): Promise<Comm
       }
 
     case "model":
-      return await modelRefresh(context);
+      return command.sub === "use"
+        ? await modelUseProfile(context, { profile: command.profile })
+        : await modelRefresh(context);
 
     case "config":
       return command.sub === "validate"

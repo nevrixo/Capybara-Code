@@ -514,6 +514,7 @@ describe("parseArgs", () => {
       "auth status",
       "auth logout",
       "model refresh",
+      "model use",
       "config set",
       "bootstrap",
       "package search",

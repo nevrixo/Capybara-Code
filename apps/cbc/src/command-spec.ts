@@ -71,9 +71,14 @@ export const COMMAND_REGISTRY: readonly CommandSpec[] = [
   },
   {
     name: "model",
-    summary: "refresh model capabilities",
+    summary: "refresh model capabilities and select a profile",
     subcommands: [
       { name: "refresh", summary: "refresh capability manifest from remote" },
+      {
+        name: "use",
+        summary: "select a recommended model profile",
+        positionals: [{ label: "profile:<name>", required: true }],
+      },
     ],
   },
   {

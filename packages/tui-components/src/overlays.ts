@@ -111,9 +111,9 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: "/help", description: "show contextual help", args: [{ name: "topic" }] },
   {
     name: "/model",
-    description: "choose the model",
+    description: "choose the model, or profile:<name> for a recommended profile",
     // Values come from the registry at runtime (§10.12).
-    args: [{ name: "model", hint: "model id or alias" }],
+    args: [{ name: "model", hint: "model id, alias, or profile:<name>" }],
   },
   {
     name: "/effort",
