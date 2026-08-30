@@ -61,6 +61,7 @@ import {
   type SettingsMenuChange,
   type SettingsMenuItem,
 } from "../tui.ts";
+import { renderOpenAiDoctor } from "./doctor.ts";
 import { applyLearnRequest } from "./learn.ts";
 import { ok, type CommandContext, type CommandResult } from "./context.ts";
 import { ensureTrust, trustLabel } from "../workspace-trust.ts";
@@ -1647,6 +1648,15 @@ async function handleSlash(
       lines.push("", "Keys:");
       for (const keyLine of renderKeymapHelp(effectiveKeymap)) lines.push(`  ${keyLine}`);
       ui.openOverlay("help", lines);
+      return "continue";
+    }
+
+    case "doctor": {
+      // The same renderer the headless command uses, fed the live snapshot: a
+      // second copy of the row list would eventually disagree about which item
+      // §P1-03 requires, and the TUI is the surface most likely to be asked.
+      const loaded = await context.config();
+      ui.openOverlay("doctor", renderOpenAiDoctor(session.openAiDiagnostic(loaded.provenance)));
       return "continue";
     }
 

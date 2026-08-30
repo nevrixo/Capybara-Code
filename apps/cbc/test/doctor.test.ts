@@ -10,6 +10,8 @@
 import { describe, expect, test } from "bun:test";
 
 import { parseArgs } from "../src/args.ts";
+import { parseSlash } from "../src/slash.ts";
+import { OVERLAY_KINDS, OVERLAY_TITLES, searchSlashCommands } from "@cbc/tui-components";
 import {
   inertSettingsFor,
   renderOpenAiDoctor,
@@ -171,5 +173,24 @@ describe("capy doctor argument parsing", () => {
   test("rejects a target it cannot report on", () => {
     expect(() => parseArgs(["doctor", "anthropic"])).toThrow();
     expect(() => parseArgs(["doctor"])).toThrow();
+  });
+});
+
+describe("/doctor in the interactive slash router", () => {
+  test("routes with and without an explicit target", () => {
+    expect(parseSlash("/doctor")).toEqual({ kind: "doctor", target: "openai" });
+    expect(parseSlash("/doctor openai")).toEqual({ kind: "doctor", target: "openai" });
+  });
+
+  test("is discoverable from the command popup", () => {
+    // Completion and routing have to agree: anything the composer offers must
+    // route as a command rather than being sent to the model as text.
+    const names = searchSlashCommands("doct").map((command) => command.name);
+    expect(names).toContain("/doctor");
+  });
+
+  test("the overlay it opens is a registered kind with a title", () => {
+    expect(OVERLAY_KINDS).toContain("doctor");
+    expect(OVERLAY_TITLES.doctor.length).toBeGreaterThan(0);
   });
 });

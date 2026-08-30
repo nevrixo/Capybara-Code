@@ -34,6 +34,7 @@ export type SlashIntent =
   | { readonly kind: "set_permission"; readonly preset?: string; readonly save?: boolean }
   | { readonly kind: "set_mode"; readonly mode?: "build" | "plan"; readonly save?: boolean; readonly stopActive?: boolean }
   | { readonly kind: "status" }
+  | { readonly kind: "doctor"; readonly target: "openai" }
   | { readonly kind: "memory"; readonly action?: "inspect" | "forget" | "resolve"; readonly argument?: string }
   | {
       readonly kind: "learn";
@@ -78,6 +79,10 @@ export function parseSlash(raw: string): SlashIntent {
   }
 
   switch (name) {
+    case "/doctor":
+      // The report is OpenAI-specific, so a bare `/doctor` means the only
+      // target there is rather than erroring on a missing argument.
+      return { kind: "doctor", target: "openai" };
     case "/help":
       return { kind: "help", ...(arg !== undefined ? { topic: arg } : {}) };
     case "/model":

@@ -33,7 +33,8 @@ export type OverlayKind =
   | "memory"
   | "graph"
   | "worktree"
-  | "plugins";
+  | "plugins"
+  | "doctor";
 
 export const OVERLAY_KINDS: readonly OverlayKind[] = [
   "command_palette",
@@ -56,6 +57,7 @@ export const OVERLAY_KINDS: readonly OverlayKind[] = [
   "graph",
   "worktree",
   "plugins",
+  "doctor",
 ];
 
 export const OVERLAY_TITLES: Readonly<Record<OverlayKind, string>> = {
@@ -79,6 +81,7 @@ export const OVERLAY_TITLES: Readonly<Record<OverlayKind, string>> = {
   graph: "Agent graph",
   worktree: "Worktrees",
   plugins: "Plugins",
+  doctor: "OpenAI diagnostic",
 };
 
 /**
@@ -121,6 +124,7 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: "/permissions", description: "choose permission preset (read|edit|auto|yolo)", args: [{ name: "preset", values: ["read", "edit", "auto", "yolo"] }] },
   { name: "/mode", description: "switch Build or Plan interaction mode", args: [{ name: "mode", values: ["build", "plan"] }] },
   { name: "/status", description: "show usage, cost, and session status" },
+  { name: "/doctor", description: "diagnose the active OpenAI feature set and why a disabled one is off" },
   {
     name: "/skills",
     description: "list, inspect, reload, or diagnose Skills",
