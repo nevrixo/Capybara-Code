@@ -151,6 +151,9 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
   ["provider.openai.transport", { status: "wired", consumer: "provider-openai turn session transport" }],
   ["provider.openai.serviceTier", { status: "wired", consumer: "provider-openai Responses request service tier" }],
   ["provider.openai.toolSearch", { status: "wired", consumer: "provider-openai deferred tool search" }],
+  ["provider.openai.native.programmaticToolCalling", { status: "wired", consumer: "AgentSession → AgentKernel read-only PTC lane" }],
+  ["provider.openai.native.maxProgramToolCalls", { status: "wired", consumer: "AgentKernel ProgrammaticToolLane call budget" }],
+  ["provider.openai.native.maxProgramParallelCalls", { status: "wired", consumer: "AgentKernel route and ToolExecutionGraph parallel ceiling" }],
   ["provider.openai.native.", { status: "experimental", note: "native lanes are read-only; the toggles feed the policy digest only" }],
   ["perf.", { status: "wired", consumer: "AgentSession performance event sampling" }],
 

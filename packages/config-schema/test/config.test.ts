@@ -760,6 +760,9 @@ describe("config key status (P1-04)", () => {
     // Longest prefix wins: a leaf overrides its section.
     expect(configKeyInfo("model.router.cheapTier")?.status).toBe("wired");
     expect(configKeyInfo("model.router.strategy")?.status).toBe("wired");
+    expect(configKeyInfo("provider.openai.native.programmaticToolCalling")?.status).toBe("wired");
+    expect(configKeyInfo("provider.openai.native.maxProgramToolCalls")?.status).toBe("wired");
+    expect(configKeyInfo("provider.openai.native.hostedMultiAgent")?.status).toBe("experimental");
   });
 
   test("a wired key names its consumer", () => {
