@@ -900,7 +900,16 @@ export class AgentKernel {
   #previousResponseFallbackUsed = false;
   #providerContextRecoveryUsed = false;
 
-  #changedFiles = new Map<string, { additions: number; deletions: number; purpose: string }>();
+  #changedFiles = new Map<
+    string,
+    { additions: number; deletions: number; purpose: string; revision?: string }
+  >();
+  /**
+   * §5.22 step 1: a path whose post-write re-read did not return the revision the
+   * mutation recorded. A stale or externally clobbered file must not be the basis
+   * of any later result, so this is consulted before a test result is credited.
+   */
+  #staleRevisionPaths = new Set<string>();
   #verification: CompletionReport["verification"] = [];
   #verificationContract: ReturnType<typeof buildTurnVerificationContract> | undefined;
   /**
@@ -1331,6 +1340,7 @@ export class AgentKernel {
     this.#verification = [];
     this.#verificationContract = undefined;
     this.#verificationChecksSatisfied.clear();
+    this.#staleRevisionPaths.clear();
     this.#delegated = [];
     this.#risks = [];
     this.#lastFailureSummary = undefined;
@@ -4727,12 +4737,19 @@ export class AgentKernel {
         // tool like `fs.apply_patch` carries its targets inside the diff, so the
         // result payload is consulted first.
         const reported = changedPathsFromResult(execution.result.data);
+        // §5.22 step 1 needs something to compare a post-write read against. The
+        // runtime reports the revision it produced for each written path, so it
+        // is captured here at write time; a later re-read that disagrees means the
+        // file moved under us and nothing derived from it can be trusted.
+        const revisions = writtenRevisionsFromResult(execution.result.data);
         for (const path of reported.length > 0 ? reported : action.writes ?? []) {
           const prior = this.#changedFiles.get(path);
+          const revision = revisions.get(path) ?? prior?.revision;
           this.#changedFiles.set(path, {
             additions: changeDetail.additions ?? prior?.additions ?? 0,
             deletions: changeDetail.deletions ?? prior?.deletions ?? 0,
             purpose: prior?.purpose ?? execution.result.summary,
+            ...(revision !== undefined ? { revision } : {}),
           });
         }
       }
@@ -5450,6 +5467,11 @@ export class AgentKernel {
       }
     }
 
+    if (this.#staleRevisionPaths.size > 0) {
+      const stale = `the workspace revision of ${[...this.#staleRevisionPaths].join(", ")} no longer matches what this turn wrote, so no verification result can be credited against it`;
+      if (!this.#risks.includes(stale)) this.#risks.push(stale);
+    }
+
     // §5.22 step 4: the affected-consumer tier. The legacy plan can only emit a
     // broader suite when a caller hands it a justification, and no caller ever
     // does, so this tier had no dispatcher at all — a required consumer check
@@ -5554,6 +5576,13 @@ export class AgentKernel {
    * name it, which is the whole point of §5.20 governing the turn.
    */
   #creditContractChecks(...ids: readonly string[]): void {
+    // §5.22 makes the revision comparison the FIRST step for a reason: once a
+    // changed path is known to be a different revision than the one the mutation
+    // wrote, every later result was produced against a workspace nobody planned
+    // for. Crediting a passing test against that is exactly the "stale revision을
+    // 근거로 검증 완료" §5.24 requires zero of, so nothing beyond the revision
+    // check itself may be credited while a mismatch stands.
+    if (this.#staleRevisionPaths.size > 0) return;
     for (const id of ids) this.#verificationChecksSatisfied.add(id);
   }
 
@@ -5716,6 +5745,7 @@ export class AgentKernel {
     }
 
     const evidence: string[] = [];
+    const mismatches: string[] = [];
     for (let offset = 0; offset < paths.length; offset += 20) {
       const batch = paths.slice(offset, offset + 20);
       const action = this.#verificationAction(
@@ -5768,6 +5798,20 @@ export class AgentKernel {
           for (const file of data.files) {
             const path = file.path ?? "unknown path";
             const checksum = file.checksum ?? file.revisionToken;
+            // §5.22 step 1 is a comparison, not a capture. Recording the
+            // post-write checksum as prose proved only that the file was
+            // readable; a file replaced by another process between the write and
+            // the check read cleanly and passed. The revision the mutation
+            // reported is the baseline, so a disagreement is a stale revision and
+            // it must be named rather than narrated.
+            const expected = this.#changedFiles.get(path)?.revision;
+            if (expected !== undefined && checksum !== undefined && checksum !== expected) {
+              this.#staleRevisionPaths.add(path);
+              mismatches.push(
+                `${path} is revision ${checksum.slice(0, 12)} but the mutation recorded ${expected.slice(0, 12)}`,
+              );
+              continue;
+            }
             evidence.push(checksum === undefined ? path : `${path} sha256:${checksum.slice(0, 12)}`);
           }
         } else {
@@ -5782,6 +5826,13 @@ export class AgentKernel {
       }
     }
 
+    if (mismatches.length > 0) {
+      return {
+        command,
+        status: "failed",
+        evidence: `stale revision: ${mismatches.join("; ")}`.slice(0, 2_000),
+      };
+    }
     return {
       command,
       status: "passed",
@@ -6030,6 +6081,40 @@ function firstMeaningfulLine(text: string): string {
  * array, or a single `path` depending on the operation (§20.3), and any of those
  * shapes is more trustworthy than the model's own claim (§15.11).
  */
+/**
+ * The revision each written path ended at, as the runtime reported it. §5.22
+ * step 1 compares a post-write re-read against this, so only a value the runtime
+ * produced counts — a checksum the model supplied in its own arguments describes
+ * the file it *read*, not the file it wrote.
+ */
+function writtenRevisionsFromResult(data: unknown): Map<string, string> {
+  const revisions = new Map<string, string>();
+  if (typeof data !== "object" || data === null) return revisions;
+  const record = data as Record<string, unknown>;
+
+  const consider = (entry: unknown): void => {
+    if (typeof entry !== "object" || entry === null) return;
+    const file = entry as Record<string, unknown>;
+    const path = file.path;
+    if (typeof path !== "string" || path.length === 0) return;
+    for (const key of ["revisionAfter", "revisionToken", "checksum"]) {
+      const value = file[key];
+      if (typeof value === "string" && value.length > 0) {
+        revisions.set(path, value);
+        return;
+      }
+    }
+  };
+
+  for (const key of ["files", "operations"]) {
+    const list = record[key];
+    if (Array.isArray(list)) for (const entry of list) consider(entry);
+  }
+  // A single-path write reports its revision at the top level.
+  consider(record);
+  return revisions;
+}
+
 function changedPathsFromResult(data: unknown): string[] {
   if (typeof data !== "object" || data === null) return [];
   const record = data as Record<string, unknown>;

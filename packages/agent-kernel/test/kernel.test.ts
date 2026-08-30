@@ -4941,4 +4941,105 @@ describe("verification contract enforcement (§5.20, §5.24)", () => {
       result.report.risks.some((risk) => risk.includes("independent-review")),
     ).toBe(true);
   });
+  test("a post-write read that returns a different revision blocks completion (§5.22 step 1)", async () => {
+    // The write reported one revision; the re-read returns another, which means
+    // something replaced the file after the mutation. §5.24 requires zero
+    // completions grounded in a stale revision.
+    const { kernel } = harness({
+      steps: [
+        {
+          commentary: "Applying the change.",
+          toolCalls: [
+            {
+              callId: "c1",
+              name: "fs.write",
+              arguments: { path: "index.html", content: "<!doctype html>", intent: "create" },
+            },
+          ],
+        },
+        { text: "Done." },
+      ],
+      toolResults: {
+        "fs.write": {
+          result: okResult("wrote index.html", {
+            files: [{ path: "index.html", revisionAfter: "a".repeat(64) }],
+          }),
+        },
+        "fs.read_many": {
+          result: okResult("read 1 file", {
+            files: [{ path: "index.html", checksum: "b".repeat(64) }],
+            errors: [],
+          }),
+        },
+        "git.diff": {
+          result: okResult("1 file, +1 -0", {
+            files: [{ path: "index.html" }],
+            totalAdditions: 1,
+            totalDeletions: 0,
+          }),
+        },
+      },
+      limits: { ...ROOT_LIMITS, maxModelSteps: 2 },
+    });
+    const result = await kernel.runTurn("replace the landing page", new AbortController().signal);
+
+    expect(result.report.status).not.toBe("completed");
+    const sanity = result.report.verification.find((record) =>
+      record.command?.startsWith("file checksum sanity"),
+    );
+    expect(sanity?.status).toBe("failed");
+    expect(sanity?.evidence).toContain("stale revision");
+    expect(
+      result.report.risks.some((risk) => risk.includes("no longer matches what this turn wrote")),
+    ).toBe(true);
+    // Nothing later may be credited against a stale revision, so the diff check
+    // that did pass must not settle its contract stage either.
+    expect(
+      result.report.risks.some((risk) => risk.includes("diff-integrity")),
+    ).toBe(true);
+  });
+
+  test("a post-write read that agrees with the recorded revision passes", async () => {
+    const revision = "d".repeat(64);
+    const { kernel } = harness({
+      steps: [
+        {
+          commentary: "Applying the change.",
+          toolCalls: [
+            {
+              callId: "c1",
+              name: "fs.write",
+              arguments: { path: "index.html", content: "<!doctype html>", intent: "create" },
+            },
+          ],
+        },
+        { text: "Done." },
+      ],
+      toolResults: {
+        "fs.write": {
+          result: okResult("wrote index.html", { files: [{ path: "index.html", revisionAfter: revision }] }),
+        },
+        "fs.read_many": {
+          result: okResult("read 1 file", { files: [{ path: "index.html", checksum: revision }], errors: [] }),
+        },
+        "git.diff": {
+          result: okResult("1 file, +1 -0", {
+            files: [{ path: "index.html" }],
+            totalAdditions: 1,
+            totalDeletions: 0,
+          }),
+        },
+      },
+      limits: { ...ROOT_LIMITS, maxModelSteps: 2 },
+    });
+    const result = await kernel.runTurn("replace the landing page", new AbortController().signal);
+
+    expect(result.report.status).toBe("completed");
+    const sanity = result.report.verification.find((record) =>
+      record.command?.startsWith("file checksum sanity"),
+    );
+    expect(sanity?.status).toBe("passed");
+    expect(sanity?.evidence).toContain(revision.slice(0, 12));
+  });
 });
+
