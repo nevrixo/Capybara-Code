@@ -5,9 +5,9 @@
  * emits is a normalized `ModelEvent` (§10.2), so the agent kernel never sees a
  * provider object (§10.1, §19.4).
  *
- * §10.14: provider-hosted shell, file mutation, multi-agent, and programmatic
- * tool calling remain disabled. Capability-checked web search and image generation
- * are built in by default and can be disabled explicitly.
+ * §10.14: provider-hosted shell, file mutation, and multi-agent remain disabled.
+ * Capability-checked web search and image generation are built in by default;
+ * Programmatic Tool Calling is available only when requested explicitly.
  */
 
 import { createHash } from "node:crypto";
@@ -38,6 +38,7 @@ import {
   type ModelProvider,
   type ModelRequest,
   type ModelResponseItem,
+  type ModelToolCaller,
   type ModelToolCall,
   type ModelUsage,
   type ProviderError,
@@ -55,6 +56,17 @@ const MAX_PROVIDER_TOOL_NAME_LENGTH = 64;
 interface ToolNameCodec {
   readonly toProvider: (name: string) => string;
   readonly fromProvider: (name: string) => string;
+}
+
+interface PendingProviderCall {
+  readonly callId: string;
+  readonly name: string;
+  readonly caller?: ModelToolCaller;
+  readonly callerId?: string;
+  readonly programId?: string;
+  readonly agentId?: string;
+  argumentsText: string;
+  emitted: boolean;
 }
 
 /**
@@ -397,6 +409,9 @@ export class OpenAiResponsesProvider implements ModelProvider {
       if (tool.type === "tool_search") {
         return this.#options.enableToolSearch === true && this.capabilities.toolSearch;
       }
+      if (tool.type === "programmatic_tool_calling") {
+        return this.#options.chatGpt === undefined && capabilitySupports(capability, "programmaticToolCalling");
+      }
       const feature = tool.type === "web_search" || tool.type === "web_search_preview"
         ? "webSearch"
         : "imageGeneration";
@@ -464,14 +479,23 @@ export class OpenAiResponsesProvider implements ModelProvider {
     body.reasoning = reasoning;
 
     const hostedTools = this.#hostedToolsForRequest(request, model);
-    const functionTools = request.tools.map((tool) => ({
-      type: "function",
-      name: toolNames.toProvider(tool.name),
-      description: tool.description,
-      parameters: normalizeProviderSchema(tool.parameters),
-      strict: tool.strict && supportsProviderStrictSchema(tool.parameters),
-      ...(this.#options.enableToolSearch === true && tool.deferLoading === true ? { defer_loading: true } : {}),
-    }));
+    const programmaticEnabled = hostedTools.some((tool) => tool.type === "programmatic_tool_calling");
+    const functionTools = request.tools
+      .filter((tool) =>
+        tool.allowedCallers === undefined ||
+        tool.allowedCallers.includes("direct") ||
+        (programmaticEnabled && tool.allowedCallers.includes("programmatic")),
+      )
+      .map((tool) => ({
+        type: "function",
+        name: toolNames.toProvider(tool.name),
+        description: tool.description,
+        parameters: normalizeProviderSchema(tool.parameters),
+        strict: tool.strict && supportsProviderStrictSchema(tool.parameters),
+        ...(programmaticEnabled && tool.allowedCallers !== undefined ? { allowed_callers: [...tool.allowedCallers] } : {}),
+        ...(programmaticEnabled && tool.outputSchema !== undefined ? { output_schema: normalizeProviderSchema(tool.outputSchema) } : {}),
+        ...(this.#options.enableToolSearch === true && tool.deferLoading === true ? { defer_loading: true } : {}),
+      }));
     if (functionTools.length > 0 || hostedTools.length > 0) {
       body.tools = [
         ...functionTools,
@@ -531,7 +555,7 @@ export class OpenAiResponsesProvider implements ModelProvider {
 }
 
 function serializeHostedTool(tool: HostedTool): Record<string, unknown> {
-  if (tool.type === "tool_search") return { type: tool.type };
+  if (tool.type === "tool_search" || tool.type === "programmatic_tool_calling") return { type: tool.type };
   if (tool.type !== "image_generation") {
     return {
       type: tool.type,
@@ -631,15 +655,27 @@ function serializeInputItem(
       if (item.phase) message.phase = item.phase;
       return message;
     }
-    case "function_call":
+    case "function_call": {
+      const caller = inputProgramCaller(item);
       return {
         type: "function_call",
+        ...(item.itemId !== undefined ? { id: item.itemId } : {}),
         call_id: item.callId,
         name: toProviderToolName(item.name),
         arguments: item.argumentsText,
+        ...(caller !== undefined ? { caller: serializeProgramCaller(caller) } : {}),
       };
-    case "function_call_output":
-      return { type: "function_call_output", call_id: item.callId, output: item.output };
+    }
+    case "function_call_output": {
+      const caller = inputProgramCaller(item);
+      return {
+        type: "function_call_output",
+        ...(item.itemId !== undefined ? { id: item.itemId } : {}),
+        call_id: item.callId,
+        output: item.output,
+        ...(caller !== undefined ? { caller: serializeProgramCaller(caller) } : {}),
+      };
+    }
     case "reasoning":
       // §10.6: encrypted reasoning content is opaque and never inspected. The
       // backend requires `summary` to accompany a replayed reasoning item; an
@@ -654,7 +690,36 @@ function serializeInputItem(
       };
     case "compaction":
       return { type: "compaction", encrypted_content: item.opaque };
+    case "program":
+      return {
+        type: "program",
+        id: item.itemId,
+        call_id: item.callId,
+        code: item.code,
+        fingerprint: item.fingerprint,
+      };
+    case "program_output":
+      return {
+        type: "program_output",
+        id: item.itemId,
+        call_id: item.callId,
+        result: item.result,
+        status: item.status,
+      };
   }
+}
+
+function inputProgramCaller(
+  item: Extract<ModelRequest["input"][number], { readonly type: "function_call" | "function_call_output" }>,
+): ModelToolCaller | undefined {
+  if (item.caller !== undefined) return item.caller;
+  return item.programId !== undefined && item.programId.length > 0
+    ? { type: "program", callerId: item.programId }
+    : undefined;
+}
+
+function serializeProgramCaller(caller: ModelToolCaller): Record<string, unknown> {
+  return { type: caller.type, caller_id: caller.callerId };
 }
 
 /**
@@ -673,7 +738,7 @@ export async function* parseResponseStream(
   let buffer = "";
 
   /** Tool call assembly state, keyed by the provider's item id. */
-  const calls = new Map<string, { callId: string; name: string; argumentsText: string; emitted: boolean; callerId?: string; programId?: string; agentId?: string }>();
+  const calls = new Map<string, PendingProviderCall>();
   const hostedCalls = new Map<string, HostedCallEntry>();
   const seenDeltas = new Set<string>();
   let terminal: "completed" | "incomplete" | "failed" | undefined;
@@ -793,7 +858,7 @@ function withSequence<T extends object>(event: T, sequence: number | undefined):
 }
 function* translate(
   frame: Record<string, unknown>,
-  calls: Map<string, { callId: string; name: string; argumentsText: string; emitted: boolean; callerId?: string; programId?: string; agentId?: string }>,
+  calls: Map<string, PendingProviderCall>,
   hostedCalls: Map<string, HostedCallEntry>,
   seenDeltas: Set<string>,
   fromProviderToolName: (name: string) => string,
@@ -890,12 +955,13 @@ function* translate(
       }
       if (item.type === "function_call") {
         const callId = typeof item.call_id === "string" ? item.call_id : itemId;
-        const callerId = typeof item.caller_id === "string" ? item.caller_id : undefined;
-        const programId = typeof item.program_id === "string" ? item.program_id : undefined;
+        const caller = normalizeProgramCaller(item.caller);
+        const callerId = caller?.callerId ?? (typeof item.caller_id === "string" ? item.caller_id : undefined);
+        const programId = caller?.callerId ?? (typeof item.program_id === "string" ? item.program_id : undefined);
         const agentId = typeof item.agent_id === "string" ? item.agent_id : undefined;
         const name = fromProviderToolName(typeof item.name === "string" ? item.name : "");
-        calls.set(itemId, { callId, name, argumentsText: "", emitted: false, ...(callerId !== undefined ? { callerId } : {}), ...(programId !== undefined ? { programId } : {}), ...(agentId !== undefined ? { agentId } : {}) });
-        yield { type: "tool.call.started", callId, name, ...(callerId !== undefined ? { callerId } : {}), ...(programId !== undefined ? { programId } : {}), ...(agentId !== undefined ? { agentId } : {}) };
+        calls.set(itemId, { callId, name, argumentsText: "", emitted: false, ...(caller !== undefined ? { caller } : {}), ...(callerId !== undefined ? { callerId } : {}), ...(programId !== undefined ? { programId } : {}), ...(agentId !== undefined ? { agentId } : {}) });
+        yield { type: "tool.call.started", callId, name, ...(caller !== undefined ? { caller } : {}), ...(callerId !== undefined ? { callerId } : {}), ...(programId !== undefined ? { programId } : {}), ...(agentId !== undefined ? { agentId } : {}) };
         return;
       }
       const normalized = normalizeResponseItem(item, itemId, sequence);
@@ -967,11 +1033,19 @@ function* translate(
           const callId = typeof rawItem.call_id === "string" ? rawItem.call_id : completedItemId;
           const existing = calls.get(completedItemId);
           if (existing?.emitted === true) continue;
+          const caller = normalizeProgramCaller(rawItem.caller);
+          const callerId = caller?.callerId ?? (typeof rawItem.caller_id === "string" ? rawItem.caller_id : undefined);
+          const programId = caller?.callerId ?? (typeof rawItem.program_id === "string" ? rawItem.program_id : undefined);
+          const agentId = typeof rawItem.agent_id === "string" ? rawItem.agent_id : undefined;
           const entry = existing ?? {
             callId,
             name: fromProviderToolName(typeof rawItem.name === "string" ? rawItem.name : ""),
             argumentsText: "",
             emitted: false,
+            ...(caller !== undefined ? { caller } : {}),
+            ...(callerId !== undefined ? { callerId } : {}),
+            ...(programId !== undefined ? { programId } : {}),
+            ...(agentId !== undefined ? { agentId } : {}),
           };
           entry.argumentsText = typeof rawItem.arguments === "string" ? rawItem.arguments : entry.argumentsText;
           entry.emitted = true;
@@ -1059,13 +1133,14 @@ function* translate(
 
 
 function toolCallFromEntry(
-  entry: { callId: string; name: string; callerId?: string; programId?: string; agentId?: string },
+  entry: PendingProviderCall,
   argumentsText: string,
 ): ModelToolCall {
   return {
     callId: entry.callId,
     name: entry.name,
     argumentsText,
+    ...(entry.caller !== undefined ? { caller: entry.caller } : {}),
     ...(entry.callerId !== undefined ? { callerId: entry.callerId } : {}),
     ...(entry.programId !== undefined ? { programId: entry.programId } : {}),
     ...(entry.agentId !== undefined ? { agentId: entry.agentId } : {}),
@@ -1181,10 +1256,11 @@ function generatedImageFromItem(item: Record<string, unknown>): GeneratedImageOu
 
 function normalizeResponseItem(item: Record<string, unknown>, itemId: string, sequence: number | undefined): ModelResponseItem | undefined {
   const rawType = typeof item.type === "string" ? item.type : "unknown";
-  const callerId = typeof item.caller_id === "string" ? item.caller_id : undefined;
-  const programId = typeof item.program_id === "string" ? item.program_id : undefined;
+  const caller = normalizeProgramCaller(item.caller);
+  const callerId = caller?.callerId ?? (typeof item.caller_id === "string" ? item.caller_id : undefined);
+  const programId = caller?.callerId ?? (typeof item.program_id === "string" ? item.program_id : undefined);
   const agentId = typeof item.agent_id === "string" ? item.agent_id : undefined;
-  const base = { itemId, ...(sequence !== undefined ? { sequence } : {}), rawType, ...(callerId !== undefined ? { callerId } : {}), ...(programId !== undefined ? { programId } : {}), ...(agentId !== undefined ? { agentId } : {}) };
+  const base = { itemId, ...(sequence !== undefined ? { sequence } : {}), rawType, ...(caller !== undefined ? { caller } : {}), ...(callerId !== undefined ? { callerId } : {}), ...(programId !== undefined ? { programId } : {}), ...(agentId !== undefined ? { agentId } : {}) };
   if (rawType === "message") {
     const content = Array.isArray(item.content) ? item.content : [];
     const text = content.map(renderMessagePart).join("");
@@ -1204,10 +1280,34 @@ function normalizeResponseItem(item: Record<string, unknown>, itemId: string, se
     const opaque = boundedOpaque(item.encrypted_content ?? item.opaque ?? item);
     return { ...base, kind: "compaction", ...(opaque !== undefined ? { opaque } : {}) };
   }
+  if (rawType === "program") {
+    return {
+      ...base,
+      kind: "program",
+      ...(typeof item.call_id === "string" ? { callId: item.call_id } : {}),
+      ...(typeof item.code === "string" ? { code: item.code } : {}),
+      ...(typeof item.fingerprint === "string" ? { fingerprint: item.fingerprint } : {}),
+    };
+  }
+  if (rawType === "program_output") {
+    const result = typeof item.result === "string" ? item.result : JSON.stringify(item.result ?? "");
+    return {
+      ...base,
+      kind: "program_output",
+      ...(typeof item.call_id === "string" ? { callId: item.call_id } : {}),
+      ...(result !== undefined ? { result } : {}),
+      ...(item.status === "completed" || item.status === "incomplete" ? { status: item.status } : {}),
+    };
+  }
   if (rawType === "function_call") {
     return { ...base, kind: "function_call", ...(typeof item.call_id === "string" ? { callId: item.call_id } : {}), ...(typeof item.name === "string" ? { name: item.name } : {}), ...(typeof item.arguments === "string" ? { argumentsText: item.arguments } : {}) };
   }
   return { ...base, kind: "unknown" };
+}
+
+function normalizeProgramCaller(value: unknown): ModelToolCaller | undefined {
+  if (!isRecord(value) || value.type !== "program" || typeof value.caller_id !== "string" || value.caller_id.length === 0) return undefined;
+  return { type: "program", callerId: value.caller_id };
 }
 
 function renderMessagePart(part: unknown): string {

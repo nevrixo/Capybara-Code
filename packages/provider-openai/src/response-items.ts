@@ -1,6 +1,15 @@
 /** Provider response-item fidelity without persisting raw chain-of-thought. */
 
-export type ResponseItemKind = "message" | "function_call" | "function_call_output" | "reasoning" | "unknown";
+import type { ModelToolCaller } from "./types.ts";
+
+export type ResponseItemKind =
+  | "message"
+  | "function_call"
+  | "function_call_output"
+  | "reasoning"
+  | "program"
+  | "program_output"
+  | "unknown";
 
 export interface ProviderResponseItem {
   readonly type: ResponseItemKind;
@@ -9,7 +18,12 @@ export interface ProviderResponseItem {
   readonly name?: string;
   readonly argumentsText?: string;
   readonly output?: string;
+  readonly code?: string;
+  readonly fingerprint?: string;
+  readonly result?: string;
+  readonly status?: "completed" | "incomplete";
   readonly text?: string;
+  readonly caller?: ModelToolCaller;
   /** Encrypted/opaque reasoning returned by the provider. Never inspect it. */
   readonly encryptedContent?: string;
   readonly phase?: "commentary" | "final_answer";
@@ -21,6 +35,7 @@ export interface ResponseItemEnvelope {
   readonly itemId: string;
   readonly sequence: number;
   readonly kind: ResponseItemKind;
+  readonly caller?: ModelToolCaller;
   readonly callerId?: string;
   readonly programId?: string;
   readonly agentId?: string;
@@ -34,6 +49,7 @@ export interface ResponseItemMetadata {
   readonly responseId?: string;
   readonly itemId?: string;
   readonly sequence?: number;
+  readonly caller?: ModelToolCaller;
   readonly callerId?: string;
   readonly programId?: string;
   readonly agentId?: string;
@@ -48,6 +64,7 @@ export function normalizeResponseItem(
   const source = isRecord(raw) ? raw : {};
   const type = typeof source.type === "string" ? source.type : "unknown";
   const kind = responseKind(type);
+  const caller = normalizeProgramCaller(source.caller) ?? metadata.caller;
   const encryptedContent = source.encrypted_content !== undefined ? boundedOpaque(source.encrypted_content) : undefined;
   const item: ProviderResponseItem = {
     type: kind,
@@ -56,7 +73,12 @@ export function normalizeResponseItem(
     ...(typeof source.name === "string" ? { name: source.name } : {}),
     ...(typeof source.arguments === "string" ? { argumentsText: source.arguments } : {}),
     ...(typeof source.output === "string" ? { output: source.output } : {}),
+    ...(typeof source.code === "string" ? { code: source.code } : {}),
+    ...(typeof source.fingerprint === "string" ? { fingerprint: source.fingerprint } : {}),
+    ...(typeof source.result === "string" ? { result: source.result } : {}),
+    ...(source.status === "completed" || source.status === "incomplete" ? { status: source.status } : {}),
     ...(typeof source.text === "string" ? { text: source.text } : {}),
+    ...(caller !== undefined ? { caller } : {}),
     ...(encryptedContent !== undefined ? { encryptedContent } : {}),
     ...(metadata.phase !== undefined ? { phase: metadata.phase } : typeof source.phase === "string" && isPhase(source.phase) ? { phase: source.phase } : {}),
     // Unknown provider fields remain opaque but are bounded and never executable.
@@ -64,13 +86,16 @@ export function normalizeResponseItem(
   };
   const itemId = metadata.itemId ?? (typeof source.id === "string" ? source.id : `item_${metadata.sequence ?? 0}`);
   const sequence = Number.isInteger(metadata.sequence) && (metadata.sequence ?? 0) >= 0 ? metadata.sequence! : 0;
+  const callerId = metadata.callerId ?? caller?.callerId;
+  const programId = metadata.programId ?? caller?.callerId;
   return {
     ...(metadata.responseId !== undefined ? { responseId: metadata.responseId } : {}),
     itemId,
     sequence,
     kind,
-    ...(metadata.callerId !== undefined ? { callerId: metadata.callerId } : {}),
-    ...(metadata.programId !== undefined ? { programId: metadata.programId } : {}),
+    ...(caller !== undefined ? { caller } : {}),
+    ...(callerId !== undefined ? { callerId } : {}),
+    ...(programId !== undefined ? { programId } : {}),
     ...(metadata.agentId !== undefined ? { agentId: metadata.agentId } : {}),
     ...(item.phase !== undefined ? { phase: item.phase } : {}),
     item,
@@ -78,13 +103,15 @@ export function normalizeResponseItem(
   };
 }
 
-export type ReplayInputAncestry = { readonly callerId?: string; readonly programId?: string; readonly agentId?: string };
+export type ReplayInputAncestry = { readonly caller?: ModelToolCaller; readonly callerId?: string; readonly programId?: string; readonly agentId?: string };
 
 export type ReplayInputItem =
   | ({ readonly type: "message"; readonly role: "assistant"; readonly text: string; readonly phase?: "commentary" | "final_answer" } & ReplayInputAncestry)
-  | ({ readonly type: "function_call"; readonly callId: string; readonly name: string; readonly argumentsText: string } & ReplayInputAncestry)
-  | ({ readonly type: "function_call_output"; readonly callId: string; readonly output: string } & ReplayInputAncestry)
-  | ({ readonly type: "reasoning"; readonly opaque: string; readonly summaryText?: string } & ReplayInputAncestry);
+  | ({ readonly type: "function_call"; readonly itemId?: string; readonly callId: string; readonly name: string; readonly argumentsText: string } & ReplayInputAncestry)
+  | ({ readonly type: "function_call_output"; readonly itemId?: string; readonly callId: string; readonly output: string } & ReplayInputAncestry)
+  | ({ readonly type: "reasoning"; readonly opaque: string; readonly summaryText?: string } & ReplayInputAncestry)
+  | { readonly type: "program"; readonly itemId: string; readonly callId: string; readonly code: string; readonly fingerprint: string }
+  | { readonly type: "program_output"; readonly itemId: string; readonly callId: string; readonly result: string; readonly status: "completed" | "incomplete" };
 
 /** Convert complete response envelopes to stateless replay items. */
 export function replayableResponseItems(envelopes: readonly ResponseItemEnvelope[]): ReplayInputItem[] {
@@ -99,15 +126,25 @@ export function replayableResponseItems(envelopes: readonly ResponseItemEnvelope
         break;
       case "function_call":
         if (item.callId !== undefined && item.name !== undefined) {
-          output.push({ type: "function_call", callId: item.callId, name: item.name, argumentsText: item.argumentsText ?? "", ...ancestryOf(envelope) });
+          output.push({ type: "function_call", ...(item.id !== undefined ? { itemId: item.id } : {}), callId: item.callId, name: item.name, argumentsText: item.argumentsText ?? "", ...ancestryOf(envelope) });
         }
         break;
       case "function_call_output":
-        if (item.callId !== undefined) output.push({ type: "function_call_output", callId: item.callId, output: item.output ?? "", ...ancestryOf(envelope) });
+        if (item.callId !== undefined) output.push({ type: "function_call_output", ...(item.id !== undefined ? { itemId: item.id } : {}), callId: item.callId, output: item.output ?? "", ...ancestryOf(envelope) });
         break;
       case "reasoning":
         if (item.encryptedContent !== undefined && item.encryptedContent.length > 0) {
           output.push({ type: "reasoning", opaque: item.encryptedContent, ...(item.text !== undefined ? { summaryText: item.text } : {}), ...ancestryOf(envelope) });
+        }
+        break;
+      case "program":
+        if (item.callId !== undefined && item.code !== undefined && item.fingerprint !== undefined) {
+          output.push({ type: "program", itemId: item.id ?? envelope.itemId, callId: item.callId, code: item.code, fingerprint: item.fingerprint });
+        }
+        break;
+      case "program_output":
+        if (item.callId !== undefined && item.result !== undefined && item.status !== undefined) {
+          output.push({ type: "program_output", itemId: item.id ?? envelope.itemId, callId: item.callId, result: item.result, status: item.status });
         }
         break;
       case "unknown":
@@ -142,6 +179,7 @@ export function exportResponseItem(
 
 function ancestryOf(envelope: ResponseItemEnvelope): ReplayInputAncestry {
   return {
+    ...(envelope.caller !== undefined ? { caller: envelope.caller } : {}),
     ...(envelope.callerId !== undefined ? { callerId: envelope.callerId } : {}),
     ...(envelope.programId !== undefined ? { programId: envelope.programId } : {}),
     ...(envelope.agentId !== undefined ? { agentId: envelope.agentId } : {}),
@@ -158,7 +196,14 @@ function responseKind(type: string): ResponseItemKind {
   if (type === "function_call") return "function_call";
   if (type === "function_call_output") return "function_call_output";
   if (type === "reasoning") return "reasoning";
+  if (type === "program") return "program";
+  if (type === "program_output") return "program_output";
   return "unknown";
+}
+
+function normalizeProgramCaller(value: unknown): ModelToolCaller | undefined {
+  if (!isRecord(value) || value.type !== "program" || typeof value.caller_id !== "string" || value.caller_id.length === 0) return undefined;
+  return { type: "program", callerId: value.caller_id };
 }
 
 function isPhase(value: unknown): value is "commentary" | "final_answer" {

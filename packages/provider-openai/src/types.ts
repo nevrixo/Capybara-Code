@@ -64,6 +64,12 @@ export type ProviderThinkingFragment =
 
 export type ProviderTransport = "http_full" | "http_previous" | "websocket";
 
+/** Caller linkage returned by Programmatic Tool Calling. */
+export interface ModelToolCaller {
+  readonly type: "program";
+  readonly callerId: string;
+}
+
 export interface ProviderCapabilities {
   readonly websocket: boolean;
   readonly previousResponse: boolean;
@@ -94,7 +100,7 @@ export type ModelEvent =
   | { type: "reasoning.text.done"; text: string; itemId?: string; outputIndex?: number; sequence?: number; deltaId?: string }
   | { type: "reasoning.summary.delta"; text: string; itemId?: string; outputIndex?: number; sequence?: number; deltaId?: string }
   | { type: "text.delta"; text: string; itemId?: string; outputIndex?: number }
-  | { type: "tool.call.started"; callId: string; name: string; callerId?: string; programId?: string; agentId?: string }
+  | { type: "tool.call.started"; callId: string; name: string; caller?: ModelToolCaller; callerId?: string; programId?: string; agentId?: string }
   | { type: "tool.call.arguments.delta"; callId: string; delta: string }
   | { type: "tool.call.completed"; call: ModelToolCall }
   | { type: "hosted.tool.started"; callId: string; name: HostedToolCallName; display: string }
@@ -106,7 +112,15 @@ export type ModelEvent =
   | { type: "transport.fallback"; from: ProviderTransport; to: ProviderTransport; reason: string }
   | { type: "response.failed"; error: ProviderError };
 
-export type ModelResponseItemKind = "message" | "function_call" | "function_call_output" | "reasoning" | "compaction" | "unknown";
+export type ModelResponseItemKind =
+  | "message"
+  | "function_call"
+  | "function_call_output"
+  | "reasoning"
+  | "compaction"
+  | "program"
+  | "program_output"
+  | "unknown";
 
 /** Provider response item metadata preserved for ordered, opaque replay. */
 export interface ModelResponseItem {
@@ -117,6 +131,10 @@ export interface ModelResponseItem {
   readonly name?: string;
   readonly argumentsText?: string;
   readonly output?: string;
+  readonly code?: string;
+  readonly fingerprint?: string;
+  readonly result?: string;
+  readonly status?: "completed" | "incomplete";
   readonly text?: string;
   readonly phase?: AssistantPhase;
   /** Encrypted/opaque provider content; never rendered or exported by CBC. */
@@ -125,11 +143,13 @@ export interface ModelResponseItem {
   readonly reasoningText?: string;
   readonly summaryText?: string;
   readonly rawType?: string;
+  readonly caller?: ModelToolCaller;
   readonly callerId?: string;
   readonly programId?: string;
   readonly agentId?: string;
 }
 export interface ModelToolCall {
+  readonly caller?: ModelToolCaller;
   readonly callerId?: string;
   readonly programId?: string;
   readonly agentId?: string;
@@ -165,10 +185,15 @@ export interface ProviderError {
  */
 export type ModelInputItem =
   | { type: "message"; role: "developer" | "user" | "assistant"; content: ModelContentPart[]; phase?: AssistantPhase }
-  | { type: "function_call"; callId: string; name: string; argumentsText: string; callerId?: string; programId?: string; agentId?: string }
-  | { type: "function_call_output"; callId: string; output: string; callerId?: string; programId?: string; agentId?: string }
+  | { type: "function_call"; itemId?: string; callId: string; name: string; argumentsText: string; caller?: ModelToolCaller; callerId?: string; programId?: string; agentId?: string }
+  | { type: "function_call_output"; itemId?: string; callId: string; output: string; caller?: ModelToolCaller; callerId?: string; programId?: string; agentId?: string }
   | { type: "reasoning"; opaque: string; summaryText?: string }
   | { type: "compaction"; opaque: string };
+
+/** Provider-owned PTC output items accepted only for exact stateless replay. */
+export type ModelProgramInputItem =
+  | { type: "program"; itemId: string; callId: string; code: string; fingerprint: string }
+  | { type: "program_output"; itemId: string; callId: string; result: string; status: "completed" | "incomplete" };
 
 export type ModelContentPart =
   | { type: "input_text"; text: string; cacheBreakpoint?: boolean }
@@ -197,7 +222,8 @@ export type HostedTool =
       readonly quality?: "low" | "medium" | "high" | "auto";
       readonly size?: string;
     }
-  | { readonly type: "tool_search" };
+  | { readonly type: "tool_search" }
+  | { readonly type: "programmatic_tool_calling" };
 
 export interface ModelToolSchema {
   readonly name: string;
@@ -206,6 +232,10 @@ export interface ModelToolSchema {
   /** Tool Search can defer large schemas until the model selects a namespace. */
   readonly deferLoading?: boolean;
   readonly namespace?: string;
+  /** Routes this tool directly, from hosted JavaScript, or both. */
+  readonly allowedCallers?: readonly ("direct" | "programmatic")[];
+  /** Predictable JSON object returned in `function_call_output.output`. */
+  readonly outputSchema?: Record<string, unknown>;
 
   /** §12.4 requires strict schemas. */
   readonly strict: true;
@@ -242,7 +272,7 @@ export const nativeCompactionThreshold = calculateNativeCompactionThreshold;
 export interface ModelRequest {
   readonly requestId: string;
   readonly model: string;
-  readonly input: ModelInputItem[];
+  readonly input: Array<ModelInputItem | ModelProgramInputItem>;
   readonly tools: ModelToolSchema[];
   /** Optional per-request hosted-tool override. Omitted uses the provider defaults. */
   readonly hostedTools?: readonly HostedTool[];
