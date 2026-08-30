@@ -161,6 +161,13 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
   ["provider.openai.native.programmaticToolCalling", { status: "wired", consumer: "AgentSession → AgentKernel read-only PTC lane" }],
   ["provider.openai.native.maxProgramToolCalls", { status: "wired", consumer: "AgentKernel ProgrammaticToolLane call budget" }],
   ["provider.openai.native.maxProgramParallelCalls", { status: "wired", consumer: "AgentKernel route and ToolExecutionGraph parallel ceiling" }],
+  // §5.4's remaining per-program budgets. All four are applied by the lane
+  // coordinator the kernel now routes program execution through, so each names
+  // the gate that reads it rather than claiming the section catch-all.
+  ["provider.openai.native.maxProgramWallTimeMs", { status: "wired", consumer: "ProgrammaticToolLane per-call deadline and wall-time gate" }],
+  ["provider.openai.native.maxProgramOutputBytes", { status: "wired", consumer: "ProgrammaticToolLane sanitizeProgramOutput byte bound" }],
+  ["provider.openai.native.maxProgramIntermediateBytes", { status: "wired", consumer: "ProgrammaticToolLane cumulative intermediate byte budget" }],
+  ["provider.openai.native.maxProgramRetries", { status: "wired", consumer: "ProgrammaticToolLane executeWithRetry attempt ceiling" }],
   ["provider.openai.native.hostedMultiAgent", { status: "wired", consumer: "AgentSession HostedScoutCoordinator → AgentKernel hosted_scout lane" }],
   ["provider.openai.native.maxHostedAgents", { status: "wired", consumer: "HostedScoutPolicy per-epoch agent cap and concurrency ceiling" }],
   ["provider.openai.native.", { status: "experimental", note: "native lanes are read-only; the toggles feed the policy digest only" }],

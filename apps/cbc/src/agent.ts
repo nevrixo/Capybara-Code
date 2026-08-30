@@ -1234,6 +1234,12 @@ export class AgentSession {
         enabled: options.config.provider.openai.native.programmaticToolCalling === "read-only",
         maxToolCalls: options.config.provider.openai.native.maxProgramToolCalls,
         maxParallelCalls: options.config.provider.openai.native.maxProgramParallelCalls,
+        // §5.4: the coordinator applies all four, so leaving them on the library
+        // default made the budgets unconfigurable rather than absent.
+        maxWallTimeMs: options.config.provider.openai.native.maxProgramWallTimeMs,
+        maxOutputBytes: options.config.provider.openai.native.maxProgramOutputBytes,
+        maxIntermediateBytes: options.config.provider.openai.native.maxProgramIntermediateBytes,
+        maxRetries: options.config.provider.openai.native.maxProgramRetries,
       },
       nativeCompaction: options.config.model.context.providerCompactionMode === "off"
         ? false

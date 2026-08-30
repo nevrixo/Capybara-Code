@@ -129,6 +129,15 @@ export interface ProviderOpenAINativeConfig {
   maxHostedAgents: number;
   maxProgramToolCalls: number;
   maxProgramParallelCalls: number;
+  /**
+   * §5.4's remaining per-program budgets. The lane coordinator has enforced
+   * all four since program execution started routing through it; until then
+   * they were library defaults no configuration could reach.
+   */
+  maxProgramWallTimeMs: number;
+  maxProgramOutputBytes: number;
+  maxProgramIntermediateBytes: number;
+  maxProgramRetries: number;
   allowHostedShell: boolean;
   allowHostedApplyPatch: boolean;
   allowComputerUse: boolean;
@@ -688,6 +697,10 @@ export function defaultConfig(): CbcConfig {
           maxHostedAgents: 3,
           maxProgramToolCalls: 24,
           maxProgramParallelCalls: 6,
+          maxProgramWallTimeMs: 30_000,
+          maxProgramOutputBytes: 1_048_576,
+          maxProgramIntermediateBytes: 4_194_304,
+          maxProgramRetries: 1,
           allowHostedShell: false,
           allowHostedApplyPatch: false,
           allowComputerUse: false,
@@ -1582,6 +1595,10 @@ const INTEGER_CONSTRAINTS: Readonly<Record<string, IntegerConstraint>> = {
   "provider.openai.native.maxHostedAgents": { minimum: 0 },
   "provider.openai.native.maxProgramToolCalls": { minimum: 0 },
   "provider.openai.native.maxProgramParallelCalls": { minimum: 1 },
+  "provider.openai.native.maxProgramWallTimeMs": { minimum: 1 },
+  "provider.openai.native.maxProgramOutputBytes": { minimum: 1 },
+  "provider.openai.native.maxProgramIntermediateBytes": { minimum: 1 },
+  "provider.openai.native.maxProgramRetries": { minimum: 0, maximum: 8 },
   "edit.maxOperationsPerPlan": { minimum: 1, maximum: 100 },
   "edit.maxFileBytes": { minimum: 1 },
   "edit.maxAnchorTextBytes": { minimum: 1 },

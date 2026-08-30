@@ -770,6 +770,30 @@ describe("config key status (P1-04)", () => {
     expect(configKeyInfo("provider.openai.native.maxHostedAgents")?.status).toBe("wired");
     // The section catch-all still covers the keys that remain digest-only.
     expect(configKeyInfo("provider.openai.native.maxProgramParallelCalls")?.status).toBe("wired");
+    // §5.4's remaining per-program budgets. Each is only "wired" because the lane
+    // coordinator reads it; §5.18 counts a key nothing consumes as an overclaim,
+    // so the consumer string has to name the gate, not the section.
+    for (const key of [
+      "provider.openai.native.maxProgramWallTimeMs",
+      "provider.openai.native.maxProgramOutputBytes",
+      "provider.openai.native.maxProgramIntermediateBytes",
+      "provider.openai.native.maxProgramRetries",
+    ] as const) {
+      expect(configKeyInfo(key)?.status).toBe("wired");
+      expect(configKeyInfo(key)?.consumer).toContain("ProgrammaticToolLane");
+    }
+  });
+
+  test("the per-program budgets default to the lane policy they configure", () => {
+    // These are DEFAULT_PROGRAM_POLICY's values, restated rather than imported:
+    // config-schema is below provider-openai, and depending upwards to assert a
+    // default would invert that. A drift between the two changes the shipped
+    // budget silently, which is exactly what makes them worth pinning here.
+    const native = defaultConfig().provider.openai.native;
+    expect(native.maxProgramWallTimeMs).toBe(30_000);
+    expect(native.maxProgramOutputBytes).toBe(1_048_576);
+    expect(native.maxProgramIntermediateBytes).toBe(4_194_304);
+    expect(native.maxProgramRetries).toBe(1);
   });
 
   test("a wired key names its consumer", () => {
