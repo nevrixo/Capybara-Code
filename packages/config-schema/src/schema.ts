@@ -213,6 +213,10 @@ export interface AgentLearningConfig {
   minVerifiedObservations: number;
 }
 
+/** §6.5 model-facing action groups. */
+export const ACTION_GROUP_NAMES = ["inspect", "change", "verify", "delegate", "remember"] as const;
+export type ActionGroupName = (typeof ACTION_GROUP_NAMES)[number];
+
 // Adaptive saving profile.
 export interface AgentConfig {
   permissionMode: PermissionMode;
@@ -225,6 +229,12 @@ export interface AgentConfig {
   deepPlan: DeepPlanMode;
   promptCompiler: "v1" | "v2";
   compoundTools: boolean;
+  /**
+   * §6.5 high-level action groups, enabled one at a time. Empty by default:
+   * §6.6 requires each group to be introduced with a bench re-run, so this must
+   * never flip on its own.
+   */
+  actionSurface: ActionGroupName[];
   toolRecovery: ToolRecoveryConfig;
   todo: TodoConfig;
   toolGraph: ToolGraphConfig;
@@ -609,6 +619,7 @@ export function defaultConfig(): CbcConfig {
       deepPlan: "off",
       promptCompiler: "v2",
       compoundTools: true,
+      actionSurface: [],
       toolRecovery: { mode: "safe", maxAttempts: 3 },
       todo: { autoProgress: true, safeRebase: true },
       toolGraph: {
@@ -1429,6 +1440,13 @@ function validateDynamicValue(path: string, value: unknown): string | undefined 
   }
   if (CONSTANT_FALSE_CONFIG_PATHS.has(path)) {
     return value === false ? undefined : `'${path}' is a fixed false safety boundary`;
+  }
+  if (path === "agent.actionSurface") {
+    // §6.6 enables the groups one at a time, so an unknown name is a typo that
+    // would silently leave the surface off rather than a value to tolerate.
+    if (!isStringArray(value)) return "expected an array of action group names";
+    const unknown = value.filter((entry) => !ACTION_GROUP_NAMES.includes(entry as ActionGroupName));
+    return unknown.length === 0 ? undefined : `unknown action group(s): ${unknown.join(", ")}`;
   }
   if (path === "lsp.commands.allow") {
     return isStringArray(value) ? undefined : "expected an array of command names";

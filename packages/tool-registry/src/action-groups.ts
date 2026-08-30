@@ -245,6 +245,43 @@ export function actionGroupTools(catalog: readonly ToolDefinition[] = NATIVE_TOO
   );
 }
 
+/**
+ * Compose a session catalog for an enabled set of groups.
+ *
+ * §6.6 requires the ablation to be run one group at a time, so this takes the
+ * enabled set rather than a boolean: `change` can front the writers while
+ * `inspect` still exposes the reads directly, and the bench can attribute a
+ * quality change to one group. A fronted tool stays in the catalog and only
+ * loses its always-active flag — it is still reachable by tool.discover and by
+ * an internal id, because §6.5 keeps the internal ids and removing them would
+ * make the facade the only path to a tool rather than a shorthand for it.
+ *
+ * The eager orchestration tools are never fronted: tool.discover has to stay
+ * callable for on-demand loading to work at all, and todo.write is how the model
+ * reports progress.
+ */
+export const UNFRONTED_TOOL_IDS: readonly string[] = ["tool.discover", "todo.write", "user.ask"];
+
+export function applyActionSurface(
+  catalog: readonly ToolDefinition[],
+  enabled: readonly ActionGroupId[],
+): ToolDefinition[] {
+  if (enabled.length === 0) return [...catalog];
+  const active = new Set(enabled.filter(isActionGroupId));
+  const fronted = new Set(
+    [...active].flatMap((group) => ACTION_GROUP_TARGETS[group]).filter(
+      (toolId) => !UNFRONTED_TOOL_IDS.includes(toolId),
+    ),
+  );
+  const groups = actionGroupTools(catalog)
+    .filter((group) => active.has(group.id as ActionGroupId))
+    .map((group) => ({ ...group, alwaysActive: true }));
+  const detailed = catalog.map((tool) =>
+    fronted.has(tool.id) && tool.alwaysActive ? { ...tool, alwaysActive: false } : tool,
+  );
+  return [...detailed, ...groups];
+}
+
 /** The target enum a group definition ended up carrying, for callers that gate on it. */
 export function actionGroupTargetsOf(tool: ToolDefinition): readonly string[] {
   const properties = tool.parameters.properties as Record<string, { enum?: readonly string[] }> | undefined;
