@@ -1188,6 +1188,12 @@ export class AgentSession {
       reviewPolicy: options.config.agent.verification.reviewPolicy,
       minimumReviewRisk: riskLevelForPermissionThreshold(options.config.agent.verification.independentReviewRiskThreshold),
       reviewMaterial: (paths, signal) => this.#reviewMaterial(paths, signal),
+      // §5.20: the turn verification contract is bound to a workspace baseline,
+      // and the kernel owns no counter of its own. Without this the contract
+      // always claimed generation 0, so §5.22 step 1 had nothing to compare a
+      // post-write revision against and §5.24's stale-revision criterion could
+      // not be measured at all.
+      workspaceGeneration: () => this.#workspaceGeneration,
 
       verificationCoverage: () => ({
         staleEvidence: [...this.#verificationGenerations.values()].filter(
