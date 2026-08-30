@@ -138,3 +138,125 @@ describe("performance cost metrics", () => {
     expect(metrics.cost.modelSteps).toBe(2);
   });
 });
+
+describe("route and native lane metrics", () => {
+  test("ingests the turn's route receipt, lane fallback, and program calls", () => {
+    const metrics = derive(events([
+      { kind: "provider.request_sent", atMs: 1_100, payload: { payloadBytes: 10 } },
+      {
+        kind: "native_lane.fallback",
+        atMs: 1_150,
+        payload: {
+          routeId: "route-1",
+          requestedLane: "program_tool_calling",
+          selectedLane: "direct",
+          reason: "program lane is unsupported on this account",
+        },
+      },
+      { kind: "program.started", atMs: 1_160, payload: { programId: "p1" } },
+      { kind: "program.tool_call_started", atMs: 1_170, payload: { programId: "p1" } },
+      { kind: "program.tool_call_admitted", atMs: 1_175, payload: { programId: "p1" } },
+      { kind: "program.tool_call_started", atMs: 1_178, payload: { programId: "p1" } },
+      { kind: "program.tool_call_denied", atMs: 1_180, payload: { programId: "p1" } },
+      { kind: "program.completed", atMs: 1_200, payload: { programId: "p1" } },
+      { kind: "tool.started", atMs: 1_200, payload: { callId: "a" } },
+      { kind: "tool.started", atMs: 1_210, payload: { callId: "b" } },
+      { kind: "tool.completed", atMs: 1_400, payload: { callId: "b", durationMs: 190 } },
+      { kind: "tool.completed", atMs: 1_500, payload: { callId: "a", durationMs: 300 } },
+      { kind: "provider.response_completed", atMs: 1_600, payload: { durationMs: 500 } },
+      { kind: "task.created", atMs: 1_650, payload: { taskId: "child-1" } },
+      {
+        kind: "turn.completed",
+        atMs: 2_000,
+        payload: {
+          status: "completed",
+          routeReceipt: {
+            routeId: "route-1",
+            planned: {
+              model: "gpt-5.6",
+              lane: "program_tool_calling",
+              maxAgents: 3,
+              maxParallelTools: 4,
+            },
+            actual: {
+              model: "gpt-5.6",
+              lane: "direct",
+              agentsSpawned: 1,
+              parallelPeak: 2,
+              fallbackReasons: ["program lane is unsupported on this account"],
+            },
+          },
+        },
+      },
+    ]));
+
+    expect(metrics.route).toMatchObject({
+      routeId: "route-1",
+      plannedLane: "program_tool_calling",
+      actualLane: "direct",
+      lanePlanHonored: false,
+      plannedMaxAgents: 3,
+      plannedMaxParallelTools: 4,
+      agentsSpawned: 1,
+      parallelPeak: 2,
+      laneFallbacks: 1,
+      programLaneFallbacks: 1,
+      programsStarted: 1,
+      programsCompleted: 1,
+      programCalls: 2,
+      programCallsAdmitted: 1,
+      programCallsDenied: 1,
+    });
+    expect(metrics.route.fallbackReasons).toEqual([
+      "program lane is unsupported on this account",
+    ]);
+    // Two program-lane attempts were made (the plan plus the fallback), one lost.
+    expect(metrics.route.ptcFallbackRate).toBeCloseTo(1 / 3, 8);
+    // Something was in flight only from the first request (1_100) to its response
+    // (1_600) — the tool calls overlap that window — so of the run's 2_000 ms span,
+    // 1_500 ms had nothing in flight at all.
+    expect(metrics.route.idleWaitMs).toBe(1_500);
+  });
+
+  test("a journal with no receipt reports an unviolated plan rather than a failure", () => {
+    const metrics = derive(events([
+      { kind: "tool.started", atMs: 1_100, payload: { callId: "a" } },
+      { kind: "tool.completed", atMs: 1_200, payload: { callId: "a", durationMs: 100 } },
+    ]));
+
+    expect(metrics.route.lanePlanHonored).toBe(true);
+    expect(metrics.route.plannedLane).toBeUndefined();
+    expect(metrics.route.actualLane).toBeUndefined();
+    expect(metrics.route.laneFallbacks).toBe(0);
+    expect(metrics.route.ptcFallbackRate).toBe(0);
+    expect(metrics.route.parallelPeak).toBe(1);
+  });
+
+  test("a lane selection that honors the plan records no fallback", () => {
+    const metrics = derive(events([
+      {
+        kind: "native_lane.selected",
+        atMs: 1_100,
+        payload: { routeId: "route-2", lane: "program_tool_calling", maxAgents: 2 },
+      },
+      {
+        kind: "turn.completed",
+        atMs: 1_900,
+        payload: {
+          status: "completed",
+          routeReceipt: {
+            routeId: "route-2",
+            planned: { lane: "program_tool_calling", maxAgents: 2, maxParallelTools: 2 },
+            actual: { lane: "program_tool_calling", agentsSpawned: 0, parallelPeak: 1, fallbackReasons: [] },
+          },
+        },
+      },
+    ]));
+
+    expect(metrics.route.lanePlanHonored).toBe(true);
+    expect(metrics.route.laneSelections).toBe(1);
+    expect(metrics.route.laneFallbacks).toBe(0);
+    expect(metrics.route.programLaneFallbacks).toBe(0);
+    expect(metrics.route.ptcFallbackRate).toBe(0);
+  });
+});

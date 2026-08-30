@@ -117,6 +117,57 @@ export interface CostMetrics {
 }
 
 /**
+ * Routing and native-lane telemetry — PRD §5.28, §5.29.
+ *
+ * §5.29 makes "the router got better" a checkable claim, which it cannot be while the
+ * kernel's `RouteExecutionReceipt` stops at the turn boundary. The receipt is read from
+ * whatever event carries it (`turn.completed` today, a dedicated route-receipt event
+ * when one lands) so ingestion does not have to be revised when the emitter moves, and
+ * the planned figures are kept beside the actual ones: a lane that was never requested
+ * and a lane that was requested and lost are different routing outcomes.
+ *
+ * Lane and program counts come from the event stream rather than the receipt, because a
+ * fallback that happened mid-turn is visible there even when the turn never completed.
+ */
+export interface RouteMetrics {
+  readonly routeId?: string;
+  readonly plannedModel?: string;
+  readonly actualModel?: string;
+  readonly plannedLane?: string;
+  readonly actualLane?: string;
+  /** False when the turn ran on a lane other than the one the route planned. */
+  readonly lanePlanHonored: boolean;
+  readonly plannedMaxAgents: number;
+  readonly plannedMaxParallelTools: number;
+  readonly agentsSpawned: number;
+  /** §5.28 parallel peak: the most tool calls that were ever in flight at once. */
+  readonly parallelPeak: number;
+  /**
+   * §5.28 idle wait: wall time inside the run during which no tool call and no provider
+   * request was in flight. Distinct from `toolWaitMs`, which measures a call waiting
+   * after its own work finished; this measures the loop waiting on nothing at all.
+   */
+  readonly idleWaitMs: number;
+  readonly laneSelections: number;
+  readonly laneFallbacks: number;
+  /** Fallbacks away from a program lane, which is what §5.29's 5% target is about. */
+  readonly programLaneFallbacks: number;
+  readonly fallbackReasons: readonly string[];
+  readonly programsStarted: number;
+  readonly programsCompleted: number;
+  readonly programsFailed: number;
+  readonly programCalls: number;
+  readonly programCallsAdmitted: number;
+  readonly programCallsDenied: number;
+  /**
+   * §5.28 PTC fallback rate: program-lane attempts that fell back, over all program-lane
+   * attempts. Zero attempts scores 0 rather than 1 — a run that never tried the lane did
+   * not fail at it.
+   */
+  readonly ptcFallbackRate: number;
+}
+
+/**
  * Context-compiler telemetry derived only from the durable event stream.
  *
  * Token fields are totals across compiled packs: a run with three model requests paid
@@ -184,6 +235,7 @@ export interface RunMetrics {
   readonly outcome: OutcomeMetrics;
   readonly behavior: BehaviorMetrics;
   readonly cost: CostMetrics;
+  readonly route: RouteMetrics;
   readonly context: ContextMetrics;
   readonly ux: UxTraceMetrics;
   readonly eventCount: number;
@@ -889,6 +941,9 @@ export function deriveMetrics(input: MetricInput): RunMetrics {
         : childTokens / (usage.inputTokens + usage.outputTokens),
   };
 
+  // ---- routing and native lanes ----
+  const route = deriveRouteMetrics(events, input.startedAtMs, input.finishedAtMs);
+
   // ---- compiled context ----
   const context = deriveContextMetrics(events);
 
@@ -915,9 +970,191 @@ export function deriveMetrics(input: MetricInput): RunMetrics {
     outcome,
     behavior,
     cost,
+    route,
     context,
     ux,
     eventCount: events.length,
+  };
+}
+
+/** A lane name that names the programmatic tool-calling lane (§5.1-5.5). */
+function isProgramLane(lane: string | undefined): boolean {
+  return lane !== undefined && (lane.includes("program") || lane.includes("ptc"));
+}
+
+/**
+ * The route receipt, read from whichever event carries it.
+ *
+ * Matching on the payload key rather than on an event kind is deliberate: the kernel
+ * attaches the receipt to `turn.completed` today and a dedicated event kind is being
+ * added, and a benchmark that only knew one of the two would silently record nothing.
+ * The last receipt wins, because a turn's final routing state is the one that ran.
+ */
+function routeReceiptPayload(
+  events: readonly CbcEvent[],
+): { readonly planned: Record<string, unknown>; readonly actual: Record<string, unknown>; readonly routeId?: string } | undefined {
+  for (const event of [...events].reverse()) {
+    const receipt = payload(event).routeReceipt;
+    if (receipt === null || typeof receipt !== "object") continue;
+    const body = receipt as Record<string, unknown>;
+    const planned = body.planned;
+    const actual = body.actual;
+    if (planned === null || typeof planned !== "object") continue;
+    if (actual === null || typeof actual !== "object") continue;
+    const routeId = str(body.routeId);
+    return {
+      planned: planned as Record<string, unknown>,
+      actual: actual as Record<string, unknown>,
+      ...(routeId !== undefined ? { routeId } : {}),
+    };
+  }
+  return undefined;
+}
+
+/** §5.28 parallel peak and idle wait, plus the §5.29 planned-versus-actual route. */
+function deriveRouteMetrics(
+  events: readonly CbcEvent[],
+  startedAtMs: number,
+  finishedAtMs: number,
+): RouteMetrics {
+  const receipt = routeReceiptPayload(events);
+  const planned = receipt?.planned ?? {};
+  const actual = receipt?.actual ?? {};
+
+  let laneSelections = 0;
+  let laneFallbacks = 0;
+  let programLaneFallbacks = 0;
+  let programsStarted = 0;
+  let programsCompleted = 0;
+  let programsFailed = 0;
+  let programCalls = 0;
+  let programCallsAdmitted = 0;
+  let programCallsDenied = 0;
+  let selectedLane: string | undefined;
+  let requestedLane: string | undefined;
+  const fallbackReasons: string[] = [];
+  const busyIntervals: TimeInterval[] = [];
+  const openTools = new Map<string, number>();
+  const openRequests: number[] = [];
+  let parallelPeak = 0;
+
+  for (const event of events) {
+    const body = payload(event);
+    switch (event.kind) {
+      case "native_lane.selected":
+        laneSelections += 1;
+        selectedLane = str(body.lane) ?? selectedLane;
+        break;
+      case "native_lane.fallback": {
+        laneFallbacks += 1;
+        const requested = str(body.requestedLane);
+        requestedLane = requested ?? requestedLane;
+        selectedLane = str(body.selectedLane) ?? selectedLane;
+        if (isProgramLane(requested)) programLaneFallbacks += 1;
+        const reason = str(body.reason);
+        if (reason !== undefined && !fallbackReasons.includes(reason)) fallbackReasons.push(reason);
+        break;
+      }
+      case "program.started":
+        programsStarted += 1;
+        break;
+      case "program.completed":
+        programsCompleted += 1;
+        break;
+      case "program.failed":
+        programsFailed += 1;
+        break;
+      case "program.tool_call_started":
+        programCalls += 1;
+        break;
+      case "program.tool_call_admitted":
+        programCallsAdmitted += 1;
+        break;
+      case "program.tool_call_denied":
+        programCallsDenied += 1;
+        break;
+      default:
+        break;
+    }
+
+    // In-flight accounting. `tool.started` without a callId cannot be closed, so it is
+    // left out rather than counted as permanently open.
+    const callId = str(body.callId);
+    const callKey = callId === undefined ? undefined : `${event.agentId ?? "root"}:${callId}`;
+    const at = eventMs(event);
+    if (event.kind === "tool.started" && callKey !== undefined) {
+      openTools.set(callKey, at);
+      parallelPeak = Math.max(parallelPeak, openTools.size);
+      continue;
+    }
+    if ((event.kind === "tool.completed" || event.kind === "tool.failed") && callKey !== undefined) {
+      const startedAt = openTools.get(callKey);
+      openTools.delete(callKey);
+      if (startedAt !== undefined) busyIntervals.push({ startMs: startedAt, endMs: at });
+      continue;
+    }
+    if (event.kind === "provider.request_sent") {
+      openRequests.push(at);
+      continue;
+    }
+    if (event.kind === "provider.response_completed") {
+      const startedAt = openRequests.shift();
+      if (startedAt !== undefined) busyIntervals.push({ startMs: startedAt, endMs: at });
+    }
+  }
+
+  // Anything still open at the end was open until the run ended; dropping it would
+  // report the tail of an aborted turn as idle.
+  for (const startedAt of [...openTools.values(), ...openRequests]) {
+    busyIntervals.push({ startMs: startedAt, endMs: finishedAtMs });
+  }
+
+  const receiptPeak = optionalNumber(actual.parallelPeak) ?? 0;
+  const spanMs = Math.max(0, finishedAtMs - startedAtMs);
+  const busyMs = Math.min(spanMs, unionDurationMs(busyIntervals));
+  const receiptFallbacks = Array.isArray(actual.fallbackReasons)
+    ? actual.fallbackReasons.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  for (const reason of receiptFallbacks) {
+    if (!fallbackReasons.includes(reason)) fallbackReasons.push(reason);
+  }
+
+  const plannedLane = str(planned.lane);
+  const actualLane = str(actual.lane) ?? selectedLane;
+  const ptcAttempts = programsStarted + programLaneFallbacks +
+    (isProgramLane(plannedLane) || isProgramLane(requestedLane) ? 1 : 0);
+  const routeId = receipt?.routeId;
+  const plannedModel = str(planned.model);
+  const actualModel = str(actual.model);
+
+  return {
+    ...(routeId !== undefined ? { routeId } : {}),
+    ...(plannedModel !== undefined ? { plannedModel } : {}),
+    ...(actualModel !== undefined ? { actualModel } : {}),
+    ...(plannedLane !== undefined ? { plannedLane } : {}),
+    ...(actualLane !== undefined ? { actualLane } : {}),
+    // No plan recorded is not a violated plan: a journal without a receipt should not
+    // read as a routing failure.
+    lanePlanHonored: plannedLane === undefined || actualLane === undefined
+      ? true
+      : plannedLane === actualLane,
+    plannedMaxAgents: optionalNumber(planned.maxAgents) ?? 0,
+    plannedMaxParallelTools: optionalNumber(planned.maxParallelTools) ?? 0,
+    agentsSpawned: optionalNumber(actual.agentsSpawned) ??
+      events.filter((event) => event.kind === "task.created").length,
+    parallelPeak: Math.max(parallelPeak, receiptPeak),
+    idleWaitMs: Math.max(0, spanMs - busyMs),
+    laneSelections,
+    laneFallbacks,
+    programLaneFallbacks,
+    fallbackReasons,
+    programsStarted,
+    programsCompleted,
+    programsFailed,
+    programCalls: Math.max(programCalls, programCallsAdmitted + programCallsDenied),
+    programCallsAdmitted,
+    programCallsDenied,
+    ptcFallbackRate: ptcAttempts === 0 ? 0 : programLaneFallbacks / ptcAttempts,
   };
 }
 
