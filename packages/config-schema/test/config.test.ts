@@ -1108,4 +1108,53 @@ describe("productized OpenAI-first defaults (§6 P1-03, §8.4)", () => {
   test("continuity stays experimental until a consumer clamps the epoch scope", () => {
     expect(configKeyInfo("model.reasoning.continuity")?.status).toBe("experimental");
   });
+
+  test("the §8.4 cache ladder and breakpoint key are accepted", () => {
+    const defaults = defaultConfig();
+    expect(defaults.model.cache.breakpoint).toBe("stable-prefix");
+    expect(defaults.model.cache.ttl).toBe("30m");
+    expect(configEnumValues("model.cache.mode")).toEqual([
+      "roi",
+      "always",
+      "implicit",
+      "explicit",
+      "off",
+    ]);
+
+    const merged = mergeConfig([
+      { source: "user", values: { "model.cache.mode": "explicit", "model.cache.breakpoint": "stable-prefix" } },
+    ]);
+    expect(merged.config.model.cache.mode).toBe("explicit");
+    expect(merged.issues.some((issue) => issue.severity === "error")).toBe(false);
+  });
+
+  test("cache breakpoint and ttl are experimental because nothing reads them", () => {
+    // §5.18: a key the schema accepts but no consumer applies is an overclaim,
+    // so the two spellings §8.4 asks for say so rather than looking honoured.
+    expect(configKeyInfo("model.cache.breakpoint")?.status).toBe("experimental");
+    expect(configKeyInfo("model.cache.ttl")?.status).toBe("experimental");
+    expect(configKeyInfo("model.cache.mode")?.status).toBe("wired");
+  });
+
+  test("the backend profile key is accepted and marked as derived", () => {
+    expect(defaultConfig().provider.openai.profile).toBe("auto");
+    expect(configEnumValues("provider.openai.profile")).toEqual([
+      "auto",
+      "api-enhanced",
+      "chatgpt-compatible",
+    ]);
+
+    const merged = mergeConfig([
+      { source: "user", values: { "provider.openai.profile": "chatgpt-compatible" } },
+    ]);
+    expect(merged.config.provider.openai.profile).toBe("chatgpt-compatible");
+    expect(configKeyInfo("provider.openai.profile")?.status).toBe("experimental");
+
+    const rejected = mergeConfig([
+      { source: "user", values: { "provider.openai.profile": "azure" } },
+    ]);
+    expect(rejected.issues.some((issue) =>
+      issue.path === "provider.openai.profile" && issue.severity === "error"
+    )).toBe(true);
+  });
 });

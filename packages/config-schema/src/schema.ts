@@ -60,7 +60,7 @@ export interface UiConfig {
 
 export type ModelRouterStrategy = "utility" | "latency" | "cost";
 export type PremiumBandPolicy = "deny" | "allow" | "utility-gated";
-export type CacheMode = "roi" | "always" | "off";
+export type CacheMode = "roi" | "always" | "implicit" | "explicit" | "off";
 /**
  * §8.4 reasoning continuity ladder. `adaptive` is the task-epoch behaviour the
  * kernel already implements: all-turn continuity inside an epoch, current-turn
@@ -113,7 +113,11 @@ export interface ModelContextConfig {
 
 export interface ModelCacheConfig {
   mode: CacheMode;
+  /** §8.4 breakpoint placement. Only the stable prefix is implemented. */
+  breakpoint: "stable-prefix";
   maxWritesPerTurn: number;
+  /** §8.4 spells the provider TTL as a duration; the provider pins it to 30m. */
+  ttl: string;
   ttlMinutes: number;
   minimumReuseProbability: number;
   recordReadWriteTokens: boolean;
@@ -133,6 +137,12 @@ export interface ProviderOpenAINativeConfig {
 export interface ProviderConfig {
   openai: {
     native: ProviderOpenAINativeConfig;
+    /**
+     * §4.1/§4.2 backend identity. `auto` follows the credential type, which is
+     * what the runtime already does; the explicit values state an expectation
+     * so a mismatch can be reported rather than silently degraded.
+     */
+    profile: "auto" | "api-enhanced" | "chatgpt-compatible";
     transport: "http_full" | "http_previous" | "websocket";
     serviceTier: "standard" | "fast";
     toolSearch: boolean;
@@ -570,7 +580,9 @@ export function defaultConfig(): CbcConfig {
       },
       cache: {
         mode: "roi",
+        breakpoint: "stable-prefix",
         maxWritesPerTurn: 2,
+        ttl: "30m",
         ttlMinutes: 30,
         minimumReuseProbability: 0.55,
         recordReadWriteTokens: true,
@@ -655,6 +667,7 @@ export function defaultConfig(): CbcConfig {
     },
     provider: {
       openai: {
+        profile: "auto",
         transport: "websocket",
         serviceTier: "standard",
         toolSearch: false,
@@ -960,11 +973,13 @@ const ENUMS: Record<string, readonly string[]> = {
   "model.context.compactionPolicy": ["off", "legacy", "adaptive"],
   "model.context.providerCompactionMode": ["off", "auto", "on"],
   "model.context.premiumBandPolicy": ["deny", "allow", "utility-gated"],
-  "model.cache.mode": ["roi", "always", "off"],
+  "model.cache.mode": ["roi", "always", "implicit", "explicit", "off"],
+  "model.cache.breakpoint": ["stable-prefix"],
   "provider.openai.native.programmaticToolCalling": ["read-only", "disabled"],
   "provider.openai.native.hostedMultiAgent": ["read-only", "disabled"],
   "provider.openai.transport": ["http_full", "http_previous", "websocket"],
   "provider.openai.serviceTier": ["standard", "fast"],
+  "provider.openai.profile": ["auto", "api-enhanced", "chatgpt-compatible"],
   "agent.tokenSaving": ["off", "light", "balanced", "strong"],
   "agent.deepPlan": ["off", "on"],
   "agent.toolRecovery.mode": ["off", "safe", "full"],

@@ -82,7 +82,9 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
   ["model.cache.mode", { status: "wired", consumer: "agent.ts (cache planner)" }],
   ["model.cache.maxWritesPerTurn", { status: "wired", consumer: "agent.ts (cache planner)" }],
   ["model.cache.minimumReuseProbability", { status: "wired", consumer: "agent.ts (cache planner)" }],
+  ["model.cache.breakpoint", { status: "experimental", note: "the planner always breaks at the stable prefix; nothing reads this key to choose otherwise" }],
   ["model.cache.ttlMinutes", { status: "experimental", note: "cache entries do not expire by TTL yet" }],
+  ["model.cache.ttl", { status: "experimental", note: "the provider pins the prompt-cache TTL to 30m; this duration is not sent" }],
   ["model.cache.recordReadWriteTokens", { status: "experimental", note: "cache token accounting is not journaled yet" }],
   ["model.reasoning.continuity", { status: "experimental", note: "the epoch machinery picks the scope; this key does not override it yet" }],
   ["model.reasoning.", { status: "experimental", note: "reasoning continuity policy is fixed by the provider today" }],
@@ -152,6 +154,7 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
 
   // ---- provider ----
   ["provider.openai.transport", { status: "wired", consumer: "provider-openai turn session transport" }],
+  ["provider.openai.profile", { status: "experimental", note: "the backend profile is derived from the credential type; this key does not override it" }],
   ["provider.openai.serviceTier", { status: "wired", consumer: "provider-openai Responses request service tier" }],
   ["provider.openai.toolSearch", { status: "wired", consumer: "provider-openai deferred tool search" }],
   ["provider.openai.native.programmaticToolCalling", { status: "wired", consumer: "AgentSession → AgentKernel read-only PTC lane" }],
