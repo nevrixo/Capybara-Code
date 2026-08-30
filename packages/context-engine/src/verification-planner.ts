@@ -230,6 +230,49 @@ export function buildTurnVerificationContract(
   };
 }
 
+/**
+ * A required check that no verification record accounts for. §5.20 only makes
+ * the contract worth building if an unmet required check can stop the turn, so
+ * the settlement is a pure function of the contract plus the ids the runtime
+ * actually satisfied — a host cannot claim coverage it did not record.
+ */
+export interface TurnVerificationSettlement {
+  readonly satisfied: readonly string[];
+  readonly unmet: readonly TurnVerificationCheck[];
+  readonly complete: boolean;
+}
+
+export function settleTurnVerificationContract(
+  contract: TurnVerificationContract,
+  satisfiedIds: Iterable<string>,
+): TurnVerificationSettlement {
+  const satisfied = new Set<string>();
+  for (const id of satisfiedIds) {
+    const normalized = id.trim();
+    if (normalized.length > 0) satisfied.add(normalized);
+  }
+  const unmet = contract.requiredChecks.filter(
+    (check) => check.required && !satisfied.has(check.id),
+  );
+  return {
+    satisfied: Object.freeze([...satisfied].sort()),
+    unmet: Object.freeze(unmet),
+    complete: unmet.length === 0,
+  };
+}
+
+/**
+ * Name the specific checks that are missing. A gate that only reported a count
+ * left the operator guessing which stage of §5.22 never ran.
+ */
+export function describeUnmetRequiredChecks(
+  unmet: readonly TurnVerificationCheck[],
+): string {
+  return unmet
+    .map((check) => (check.command === undefined ? check.id : `${check.id} (${check.command})`))
+    .join(", ");
+}
+
 function impactedPackagesFor(paths: readonly string[]): string[] {
   const packages = new Set<string>();
   for (const path of paths) {
