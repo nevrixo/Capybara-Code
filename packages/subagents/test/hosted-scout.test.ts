@@ -16,6 +16,8 @@ import {
   type HostedAgentEventKind,
   type HostedEventAncestry,
 } from "../src/hosted-scout.ts";
+import { localHostedScoutTransport, type LocalScoutSpawn } from "../src/hosted-scout-local.ts";
+import { emptyChildResult } from "../src/instance.ts";
 
 function validRequest(overrides: Partial<HostedScoutRequest> = {}): HostedScoutRequest {
   return {
@@ -445,5 +447,90 @@ describe("hosted scout safety boundary", () => {
       requestedTools: ["git.diff"],
     }, new AbortController().signal);
     expect(result).toMatchObject({ accepted: false, reason: "workspace_mismatch" });
+  });
+
+  test("continues the task on the real local subagent path when the hosted lane fails", async () => {
+    // §5.8: a hosted failure must fall back and continue the same task. The
+    // fallback used to be a second injected transport, so in production a hosted
+    // failure fell back to nothing at all and the task simply stopped.
+    const spawned: LocalScoutSpawn[] = [];
+    const coordinator = new HostedScoutCoordinator({
+      taskEpochId: "epoch-1",
+      taskId: "task-1",
+      turnId: "turn-1",
+      routeId: "route-1",
+      callerId: "root",
+      workspaceIdentityDigest: "workspace-1",
+      transport: { spawn: async () => { throw new Error("hosted multi-agent is unavailable"); } },
+      fallback: localHostedScoutTransport({
+        runner: {
+          run: async (spawn) => {
+            spawned.push(spawn);
+            return {
+              ...emptyChildResult("completed", "routing selects the lane in kernel.ts"),
+              evidence: [{ kind: "file", label: "kernel.ts", locator: "packages/agent-kernel/src/kernel.ts" }],
+              openRisks: ["the hosted branch is untested"],
+            };
+          },
+        },
+      }),
+    });
+
+    const result = await coordinator.run(scout("agent-1"), new AbortController().signal);
+
+    expect(result.accepted).toBe(true);
+    expect(result.report?.claims).toEqual(["routing selects the lane in kernel.ts"]);
+    // The local child is read-only by construction, not by convention.
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]?.role).toBe("explore");
+    expect(spawned[0]?.task.allowedPaths).toEqual([]);
+    // The locally produced capsule is revalidated on the same terms as a remote
+    // one — identity matched and digest recomputed, no shortcut for being local.
+    expect(result.report?.evidenceCapsule.workspaceIdentityDigest).toBe("workspace-1");
+    expect(result.report?.evidenceCapsule.evidenceIds).toEqual(["packages/agent-kernel/src/kernel.ts"]);
+    expect(result.report?.evidenceCapsule.unresolved).toEqual(["the hosted branch is untested"]);
+  });
+
+  test("treats a failed local child as a failed scout rather than an empty success", async () => {
+    const coordinator = new HostedScoutCoordinator({
+      taskEpochId: "epoch-1",
+      taskId: "task-1",
+      turnId: "turn-1",
+      routeId: "route-1",
+      callerId: "root",
+      workspaceIdentityDigest: "workspace-1",
+      transport: { spawn: async () => { throw new Error("offline"); } },
+      fallback: localHostedScoutTransport({
+        runner: { run: async () => emptyChildResult("failed", "the explore child ran out of budget") },
+      }),
+    });
+
+    const result = await coordinator.run(scout("agent-1"), new AbortController().signal);
+    expect(result.accepted).toBe(false);
+    expect(result.reason).toContain("out of budget");
+  });
+
+  test("routes a reviewer to the local reviewer role", async () => {
+    const spawned: LocalScoutSpawn[] = [];
+    const coordinator = new HostedScoutCoordinator({
+      taskEpochId: "epoch-1",
+      taskId: "task-1",
+      turnId: "turn-1",
+      routeId: "route-1",
+      callerId: "root",
+      workspaceIdentityDigest: "workspace-1",
+      transport: { spawn: async () => { throw new Error("offline"); } },
+      fallback: localHostedScoutTransport({
+        runner: {
+          run: async (spawn) => {
+            spawned.push(spawn);
+            return emptyChildResult("completed", "the change is consistent with the surrounding code");
+          },
+        },
+      }),
+    });
+
+    expect((await coordinator.run(scout("agent-1", { role: "reviewer" }), new AbortController().signal)).accepted).toBe(true);
+    expect(spawned[0]?.role).toBe("reviewer");
   });
 });

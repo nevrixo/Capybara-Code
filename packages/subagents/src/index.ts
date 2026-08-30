@@ -20,3 +20,4 @@ export * from "./graph-store.ts";
 export * from "./discovery.ts";
 export * from "./custom.ts";
 export * from './hosted-scout.ts';
+export * from './hosted-scout-local.ts';
