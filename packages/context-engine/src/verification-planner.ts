@@ -160,6 +160,83 @@ export function toLegacyVerificationCommand(
     : { command: verificationCommandDisplay(step.command), reason: step.reason };
 }
 
+export interface TurnVerificationCheck {
+  readonly id: string;
+  readonly command?: string;
+  readonly tool?: string;
+  readonly scope: readonly string[];
+  readonly required: boolean;
+}
+
+export interface TurnVerificationContract {
+  readonly workspaceGeneration: number;
+  readonly changedPaths: readonly string[];
+  readonly impactedPackages: readonly string[];
+  readonly requiredChecks: readonly TurnVerificationCheck[];
+  readonly reviewRequired: boolean;
+  readonly evidenceRequirements: readonly string[];
+}
+
+export interface TurnVerificationContractInput {
+  readonly changedPaths: readonly string[];
+  readonly workspaceGeneration: number;
+  readonly riskLevel?: VerificationChangeSet["riskLevel"];
+  readonly reviewRequired?: boolean;
+  readonly failedCommands?: readonly string[];
+  readonly languageHints?: VerificationChangeSet["languageHints"];
+}
+
+// Every mutation turn owns one contract that names the checks the turn must
+// clear before it may close. The contract is derived from the same plan the
+// runtime dispatches so the required checks can never drift from the steps.
+export function buildTurnVerificationContract(
+  input: TurnVerificationContractInput,
+): TurnVerificationContract {
+  const changedPaths = [
+    ...new Set(input.changedPaths.map((path) => path.replaceAll("\\", "/")).filter(Boolean)),
+  ];
+  const plan = planVerification({
+    changedPaths,
+    ...(input.riskLevel === undefined ? {} : { riskLevel: input.riskLevel }),
+    ...(input.failedCommands === undefined ? {} : { failedCommands: input.failedCommands }),
+    ...(input.languageHints === undefined ? {} : { languageHints: input.languageHints }),
+  });
+  const impactedPackages = impactedPackagesFor(changedPaths);
+  const requiredChecks = plan.steps
+    .filter((step) => step.required)
+    .map((step) => ({
+      id: step.id,
+      ...(step.command === undefined ? {} : { command: verificationCommandDisplay(step.command) }),
+      scope: Object.freeze(step.tier <= 1 && changedPaths.length > 0 ? [...changedPaths] : [...impactedPackages]),
+      required: true,
+    }));
+  const reviewRequired = input.reviewRequired ??
+    plan.steps.some((step) => step.id === "independent-review");
+  return {
+    workspaceGeneration: input.workspaceGeneration,
+    changedPaths: Object.freeze(changedPaths),
+    impactedPackages: Object.freeze(impactedPackages),
+    requiredChecks: Object.freeze(requiredChecks),
+    reviewRequired,
+    evidenceRequirements: Object.freeze([...plan.requiredCoverage]),
+  };
+}
+
+function impactedPackagesFor(paths: readonly string[]): string[] {
+  const packages = new Set<string>();
+  for (const path of paths) {
+    const segments = path.split("/");
+    const root = segments[0];
+    if (root === undefined) continue;
+    if ((root === "packages" || root === "apps" || root === "crates") && segments[1] !== undefined) {
+      packages.add(`${root}/${segments[1]}`);
+      continue;
+    }
+    packages.add(segments.length > 1 ? root : ".");
+  }
+  return [...packages].sort();
+}
+
 function focusedCommandFor(
   paths: readonly string[],
   languages: ReadonlySet<string>,
