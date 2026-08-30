@@ -195,20 +195,11 @@ ChatGPT 모드는 `ChatGPT-Account-Id`, `originator`(기본 `capybara`), `User-A
 
 ## Fast mode
 
-Fast mode는 Responses API의 우선 처리(priority) 티어에 대한 별칭입니다.
+Fast mode는 Responses API 우선 처리 티어에 대한 별칭입니다. 요청 필드는 `ModelRequest.serviceTier?: "standard" | "fast"` (`types.ts:301-302`)이고, 와이어에서는 `fast` → `service_tier: "priority"`, 그 외 → `"default"`로 매핑됩니다 (`openai.ts:549`). 게이트는 `capabilities.fastTier` — **플랫폼 백엔드 전용**입니다 (`openai.ts:547-550`, `:191`).
 
-| 지점 | 내용 |
-| --- | --- |
-| 요청 필드 | `ModelRequest.serviceTier?: "standard" \| "fast"` (`types.ts:301-302`) |
-| 와이어 매핑 | `fast` → `service_tier: "priority"`, 그 외 → `"default"` (`openai.ts:549`) |
-| 게이트 | `capabilities.fastTier` — **플랫폼 백엔드 전용** (`openai.ts:547-550`, `:191`) |
-| 설정 키 | `provider.openai.serviceTier`, 기본 `standard`, 값 `["standard","fast"]` (`schema.ts:636`, `:941`) |
-| 런타임 | `liveServiceTier` (`agent.ts:2983-2985`), `fastModeSupported` (`:2988-2990`) |
-| 전환 | `setServiceTier(tier)` — 미지원이면 `false`를 반환하고 아무것도 바꾸지 않음 (`agent.ts:3001-3005`) |
+설정 키는 `provider.openai.serviceTier`, 기본 `standard`, 값은 `["standard","fast"]` (`schema.ts:636`, `:941`). 런타임에서는 `liveServiceTier`(`agent.ts:2983-2985`)와 `fastModeSupported`(`:2988-2990`)로 조회하고, `setServiceTier(tier)`는 **미지원이면 `false`를 반환하고 아무것도 바꾸지 않습니다** (`agent.ts:3001-3005`). 요청별 값이 프로바이더 옵션 기본값을 이깁니다: `request.serviceTier ?? this.#options.serviceTier` (`openai.ts:547`).
 
-요청별 값이 프로바이더 옵션 기본값을 이깁니다: `request.serviceTier ?? this.#options.serviceTier` (`openai.ts:547`).
-
-`model.profiles.fast` (`schema.ts:559`)는 **별개입니다** — 그것은 `gpt-5.6-terra` + `reasoningEffort: "low"`를 고르는 모델 프로필이고, `service_tier`를 바꾸지 않습니다.
+`model.profiles.fast` (`schema.ts:559`)는 **별개입니다** — 그것은 `gpt-5.6-terra` + `reasoningEffort: "low"`를 고르는 모델 프로필이고 `service_tier`를 바꾸지 않습니다.
 
 ## 1M 컨텍스트
 
@@ -369,15 +360,9 @@ Fast mode는 Responses API의 우선 처리(priority) 티어에 대한 별칭입
 
 **이 목록에 도달한 프로그램도 파일을 만들거나 프로세스를 시작하거나 자격 증명을 만지거나 승인을 요구할 수 없습니다.** 집계형 읽기(`lsp.*`, `repo.investigate`, `artifact.read`)가 프로그램이 실제로 줄일 수 있는 것 — 모델 왕복의 팬아웃을 하나의 구조화된 결과로 바꾸는 것입니다 (`native-lanes.ts:10-19`).
 
-| 정책 | 키 | 기본값 |
-| --- | --- | --- |
-| `DEFAULT_PROGRAM_POLICY` (`:66-79`) | `maxProgramBytes` / `maxWallTimeMs` / `maxIntermediateBytes` | 262,144 / 30,000 / 4,194,304 |
-| | `maxToolCalls` / `maxParallelCalls` / `maxOutputBytes` | 24 / 6 / 1,048,576 |
-| | `allowLoops` / `maxLoopIterations` / `maxRetries` | `false` / 0 / 1 |
-| | `failOpen` | **리터럴 `false`** (`:58`) |
-| `DEFAULT_HOSTED_SCOUT_POLICY` (`:217-227`) | `maxAgents` / `maxDepth` / `maxTokensPerAgent` | 3 / 1 / 16,000 |
-| | `allowShell` / `allowApplyPatch` / `allowComputerUse` | **리터럴 `false`** (`:211-213`) |
-| | `requireEvidenceCapsule` | **리터럴 `true`** (`:214`) |
+`DEFAULT_PROGRAM_POLICY` (`:66-79`): `maxProgramBytes` 262,144, `maxWallTimeMs` 30,000, `maxIntermediateBytes` 4,194,304, `maxToolCalls` 24, `maxParallelCalls` 6, `maxOutputBytes` 1,048,576, `allowLoops` `false`, `maxLoopIterations` 0, `maxRetries` 1, `failOpen` **리터럴 `false`** (`:58`).
+
+`DEFAULT_HOSTED_SCOUT_POLICY` (`:217-227`): `maxAgents` 3, `maxDepth` 1, `maxTokensPerAgent` 16,000, `allowShell`·`allowApplyPatch`·`allowComputerUse`가 **리터럴 `false`** (`:211-213`), `requireEvidenceCapsule`이 **리터럴 `true`** (`:214`).
 
 세 개의 `allow*`와 `requireEvidenceCapsule`이 리터럴 타입인 것이 핵심입니다 — **설정으로 켤 수 없습니다.**
 
@@ -406,15 +391,7 @@ Fast mode는 Responses API의 우선 처리(priority) 티어에 대한 별칭입
 
 `capability-refresh.ts` (254줄). 원격 매니페스트가 번들 매니페스트를 대체할 수 있습니다. `DEFAULT_CAPABILITY_MANIFEST_URL`은 `https://raw.githubusercontent.com/capybara-code/capability-manifest/main/manifest.json` (`:10-11`), 캐시 파일명 `capability-manifest.json` (`:12`), 갱신 주기 24시간 (`:13`)입니다.
 
-`resolveCapabilityManifest` (`:176-220`) 해석 순서:
-
-| 순서 | 소스 | 조건 |
-| --- | --- | --- |
-| 1 | `override` | `CBC_CAPABILITY_OVERRIDE`나 `options.overridePath`의 파일이 파싱될 때 (`:186-191`) |
-| 2 | `cache` | 캐시가 있고 24시간 내 (`:196-198`) |
-| 3 | `remote` | 캐시가 오래됐거나 없고 원격 fetch 성공 (`:199-203`, `:208-212`) |
-| 4 | `cache` | 원격 실패 시 오래된 캐시로 되돌림 (`:204`) |
-| 5 | `bundled` | 그 외 전부 (`:214-219`) |
+`resolveCapabilityManifest` (`:176-220`) 해석 순서: **override**(`CBC_CAPABILITY_OVERRIDE`나 `options.overridePath`의 파일이 파싱될 때, `:186-191`) → **cache**(24시간 내, `:196-198`) → **remote**(캐시가 오래됐거나 없고 fetch 성공, `:199-203`, `:208-212`) → **cache**(원격 실패 시 오래된 캐시로 되돌림, `:204`) → **bundled**(그 외 전부, `:214-219`).
 
 URL 우선순위는 `options.manifestUrl` → `CBC_CAPABILITY_URL` → 기본값 (`:38-40`), 캐시 디렉터리는 `options.cacheDir` → `CAPYBARA_CACHE_DIR` → `XDG_CACHE_HOME` (`:184`)입니다. 원격 fetch 실패·비-OK 응답·파싱 실패는 모두 `undefined`를 반환해 다음 단계로 넘어갑니다 (`:156-165`) — **네트워크 실패가 예외로 새어나가지 않습니다.**
 
@@ -440,13 +417,10 @@ URL 우선순위는 `options.manifestUrl` → `CBC_CAPABILITY_URL` → 기본값
 
 | 필드 | 목적 |
 | --- | --- |
-| `commentary` / `reasoningSummary` | §10.7 가시 프리앰블 / 추론 요약 |
+| `commentary` / `reasoningSummary` / `usage` | §10.7 가시 프리앰블 / 추론 요약 / `Partial<ModelUsage>` |
 | `text` | 최종 답변 — **존재하면 턴이 끝납니다** |
-| `toolCalls` / `usage` | `{callId, name, arguments}` 배열 / `Partial<ModelUsage>` |
-| `error` / `incompleteReason` | 강제 오류 / `response.incomplete` 이유 |
-| `deltaChunks` | 텍스트를 이 개수의 델타로 분할 — 스트리밍 조립 경로를 훈련 |
-| `duplicateDeltas` | 모든 델타를 한 번 복제 — §25.6 dedupe 경로를 훈련 |
-| `delayMs` | 첫 이벤트 전 지연 — 취소 경로를 훈련 |
+| `toolCalls` / `error` / `incompleteReason` | 호출 배열 / 강제 오류 / `response.incomplete` 이유 |
+| `deltaChunks` / `duplicateDeltas` / `delayMs` | 스트리밍 조립 / §25.6 dedupe / 취소 경로를 각각 훈련 |
 
 `repeatLast`는 스텝이 소진되면 실패하는 대신 마지막 스텝을 무한 반복합니다 (`mock.ts:47-48`). `capabilities` 기본값은 `previousResponse`만 참이고 나머지 5개는 전부 `false`이며 (`mock.ts:63-71`), `options.capabilities`로 개별 덮어쓰기가 가능합니다. 검사용 접근자는 `callCount`, `lastRequest`(프롬프트 조립·도구 활성화 단정용, `:78-81`), `reset()`입니다.
 

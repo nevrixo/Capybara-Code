@@ -24,29 +24,14 @@ capy
 
 앞으로 계속 작업할 저장소이므로 `2`를 선택합니다. 이 선택만이 신뢰 결정과 프로젝트 제어 스냅샷을 디스크에 남깁니다 — `1`(trusted-once)은 **의도적으로 저장하지 않습니다**.
 
-TUI가 열리면 먼저 상태를 확인합니다.
-
-```text
-/status
-```
-
-그다음 코드를 만지기 전에 계획만 세우고 싶다면 `Shift+Tab`으로 Plan 모드로 갑니다. 슬래시로도 같은 전환이 됩니다.
+TUI가 열리면 `/status`로 상태를 확인합니다. 코드를 만지기 전에 계획만 세우려면 `Shift+Tab`, 또는 슬래시로 전환합니다.
 
 ```text
 /mode plan
-```
-
-Plan 모드에서 이 세션에서만 쓰고 싶다면 인자 없이, 기본값으로 굳히려면 `--save`를 붙입니다. 대기 중인 승인이나 열린 트랜잭션이 있으면 전환이 그것들이 끝날 때까지 기다리는데, 기다리지 않고 끊으려면 `--stop-active`를 씁니다.
-
-```text
-/mode plan --stop-active
-```
-
-계획이 끝나면 Build로 돌아옵니다.
-
-```text
 /mode build
 ```
+
+기본값으로 굳히려면 `--save`입니다. 대기 중인 승인이나 열린 트랜잭션이 있으면 전환은 그것들이 끝날 때까지 기다리므로, 기다리지 않고 끊으려면 `--stop-active`를 붙입니다.
 
 > `/mode`의 `build|plan` 값과 `--save`·`--stop-active` 토큰은 `apps/cbc/src/slash.ts:104-114`에서 파싱됩니다. 슬래시 명령표 자체는 `packages/tui-components/src/overlays.ts:107-149`이며, `/mode` 항목은 `:122`입니다. 신뢰 선택지 4개와 저장 규칙은 [권한과 신뢰](permissions-and-trust.md)를 참고하십시오.
 
@@ -58,7 +43,7 @@ Plan 모드에서 이 세션에서만 쓰고 싶다면 인자 없이, 기본값�
 capy run "src/ 아래에서 사용되지 않는 export를 찾아 목록만 알려줘"
 ```
 
-`run`은 구조적으로 비대화식이고, 신뢰 프롬프트도 띄우지 않습니다. 신뢰되지 않은 워크스페이스는 경고와 함께 `read-only`로 조용히 격하되므로 위와 같은 **분석**은 그대로 진행됩니다.
+`run`은 구조적으로 비대화식이고 신뢰 프롬프트도 띄우지 않습니다. 신뢰되지 않은 워크스페이스는 경고와 함께 `read-only`로 조용히 격하되므로 위와 같은 **분석**은 그대로 진행됩니다.
 
 CI에서는 사람이 읽는 출력 대신 기계 판독 결과를 파일로 받습니다.
 
@@ -106,10 +91,9 @@ completed
 에이전트는 대체로 다음 순서로 움직입니다.
 
 1. **탐색** — `fs.glob`·`fs.search`로 후보를 좁히고 `fs.read_many`로 관련 파일을 한 번에 읽습니다.
-2. **정밀 조회** — 심볼의 실제 정의와 참조가 필요하면 LSP 도구(`lsp.definition`, `lsp.references`, `lsp.diagnostics`)를 씁니다. 텍스트 그렙보다 정확합니다.
-3. **편집** — `fs.apply_patch` 또는 `fs.edit`으로 고칩니다.
-4. **검증** — `process.run`으로 테스트를 돌립니다.
-5. **확인** — `git.diff`로 최종 변경만 다시 봅니다.
+2. **정밀 조회** — 심볼의 정의와 참조는 텍스트 그렙 대신 LSP 도구(`lsp.definition`, `lsp.references`, `lsp.diagnostics`)로 봅니다.
+3. **편집** — `fs.apply_patch` 또는 `fs.edit`.
+4. **검증** — `process.run`으로 테스트를 돌리고, `git.diff`로 최종 변경만 다시 봅니다.
 
 타임라인에는 도구 호출이 카드로 쌓이고, 그 아래 라이브 라인 한 줄이 현재 단계를 보여줍니다. 형식은 `글리프 [단계] > 라벨`입니다.
 
@@ -147,11 +131,7 @@ completed
 /graph
 ```
 
-writer 서브에이전트는 격리된 worktree에서 작업합니다. 어떤 worktree가 살아 있는지 확인합니다.
-
-```text
-/worktree
-```
+writer 서브에이전트는 격리된 worktree에서 작업하므로, 살아 있는 worktree는 `/worktree`로 봅니다.
 
 루트 턴의 예산은 넉넉합니다 — 모델 스텝·도구 호출·벽시계 시간은 무제한이고, 동시 백그라운드 작업 4개, 자식 깊이 1, repair 2회, 리뷰 2회, reflection 3회입니다. 자식 깊이가 1이라는 점이 중요합니다: 서브에이전트가 다시 서브에이전트를 낳지 않습니다.
 
@@ -163,31 +143,14 @@ writer 서브에이전트는 격리된 worktree에서 작업합니다. 어떤 wo
 
 ## 5. 세션을 이어서 하기
 
-어제 하던 작업으로 돌아갑니다. 인자 없이 부르면 세션 목록 오버레이가 열립니다.
+어제 하던 작업으로 돌아갑니다. 인자 없이 부르면 세션 목록 오버레이가 열리고, id를 알고 있으면 바로 지정합니다. 깨끗하게 새로 시작하려면 `/new`입니다.
 
 ```text
 /resume
-```
-
-세션 id를 이미 알고 있으면 바로 지정합니다.
-
-```text
 /resume 01JD8Q2F7K
 ```
 
-깨끗하게 새로 시작하려면 `/new`입니다.
-
-컨텍스트가 차오르면 예산을 먼저 확인하십시오.
-
-```text
-/context
-```
-
-수동으로 줄이려면 압축을 직접 호출합니다.
-
-```text
-/compact
-```
+컨텍스트가 차오르면 `/context`로 예산을 먼저 확인하고, 수동으로 줄이려면 `/compact`를 부릅니다.
 
 `/compact`가 모델에게 전달되지 않고 **로컬 라우터가 처리**한다는 점이 설계상 중요합니다. 모델이 이 줄을 산문으로 봤다면 호스트가 압축하는 대신 모델이 압축에 대해 대답해 버립니다. 슬래시 명령은 전부 이렇게 처리됩니다.
 
@@ -198,7 +161,9 @@ writer 서브에이전트는 격리된 worktree에서 작업합니다. 어떤 wo
 /memory forget stale-api-shape
 ```
 
-> `/resume`의 인자 유무 분기는 `apps/cbc/src/slash.ts:132-135`, `/compact`는 `:128`, `/memory`의 `inspect|forget|resolve`는 `:117-127`입니다. 슬래시 명령이 모델로 가지 않는 이유는 같은 파일 머리말(`apps/cbc/src/slash.ts:1-12`)에 적혀 있습니다. 기억 도구는 `packages/tool-registry/src/catalog.ts:723`(`memory.search`)·`:756`(`memory.remember`)입니다. 압축 시점의 규칙은 [에이전트와 컨텍스트](agent-and-context.md)에 있습니다.
+`experimental.durableMemory`와 `memory.enabled` 두 게이트가 모두 켜져 있어야 동작합니다. 둘 다 기본값이 켜짐이지만, 끈 상태에서 부르면 "Durable memory is disabled. Enable experimental.durableMemory and memory.enabled."가 나옵니다.
+
+> `/resume`의 인자 유무 분기는 `apps/cbc/src/slash.ts:132-135`, `/compact`는 `:128`, `/memory`의 `inspect|forget|resolve`는 `:117-127`입니다. 슬래시 명령이 모델로 가지 않는 이유는 같은 파일 머리말(`apps/cbc/src/slash.ts:1-12`)에 적혀 있습니다. 기억 도구는 `packages/tool-registry/src/catalog.ts:723`(`memory.search`)·`:756`(`memory.remember`)이고, 두 게이트 검사는 `apps/cbc/src/commands/interactive.ts:1914-1915`, 기본값은 `packages/config-schema/src/schema.ts:664-673`·`:698-699`입니다. 압축 시점의 규칙은 [에이전트와 컨텍스트](agent-and-context.md)에 있습니다.
 
 ## 6. MCP 서버와 LSP 도구 활용
 
@@ -208,19 +173,19 @@ MCP 서버를 붙인 뒤 건강 상태를 먼저 봅니다.
 /mcp
 ```
 
-연결된 서버의 도구는 모델이 직접 부르지 않고 브리지 도구를 통해 씁니다 — 먼저 `mcp.search`로 무엇이 있는지 찾고, `mcp.call`로 호출하고, 리소스는 `mcp.read_resource`로 읽습니다.
+연결된 서버의 도구는 모델이 직접 부르지 않고 브리지를 거칩니다 — `mcp.search`로 무엇이 있는지 찾고, `mcp.call`로 호출하고, 리소스는 `mcp.read_resource`로 읽습니다.
 
 ```text
 > 사내 MCP 서버에서 이 서비스의 최근 배포 이력을 가져와줘
 ```
 
-LSP도 같은 구조입니다. 저장소를 이해할 때 그렙 대신 심볼 단위로 묻습니다.
+LSP도 같은 구조입니다. 아래 요청은 `lsp.workspace_symbols` → `lsp.definition` → `lsp.references` 순서로 풀립니다.
 
 ```text
 > resolvePricing 심볼의 정의와 모든 호출 지점을 정리해줘
 ```
 
-이때 `lsp.workspace_symbols` → `lsp.definition` → `lsp.references` 순서로 호출됩니다. 이름 변경처럼 파일을 건드리는 동작도 미리보기 도구가 따로 있어 (`lsp.rename_preview`, `lsp.format_preview`, `lsp.code_action_preview`) 먼저 결과를 확인한 뒤 편집으로 넘어갑니다.
+파일을 건드리는 동작에는 미리보기 도구가 따로 있어 (`lsp.rename_preview`, `lsp.format_preview`, `lsp.code_action_preview`) 결과를 먼저 확인한 뒤 편집으로 넘어갈 수 있습니다.
 
 ```text
 > resolvePricing을 resolveUnitPricing으로 바꾸는 rename 미리보기를 보여줘
@@ -240,11 +205,16 @@ capy skills doctor --json
 
 `validate`의 위치 인자는 디렉터리가 아니라 **`SKILL.md` 파일 하나**입니다. `--strict`는 경고도 실패로 취급하므로 CI에 넣기 좋습니다. `doctor`는 탐색 루트와 각 후보가 거부된 이유를 보여주므로 "스킬이 안 잡힌다" 상황의 첫 단서입니다.
 
-TUI에서는 오버레이로 확인하고 그 자리에서 다시 읽어들일 수 있습니다.
+TUI에서는 오버레이로 확인합니다. 인자 없이 부르면 목록이고, 스킬 파일을 고친 뒤 재스캔하려면 `reload`입니다.
 
 ```text
 /skills
+/skills reload
+/skills show release-notes
+/skills doctor
 ```
+
+`list`·`show`·`reload`·`doctor` 네 동작이며, 알 수 없는 토큰은 스킬 이름으로 취급됩니다. 재시작 없이 반영된다는 점이 스킬을 짜는 동안 실제로 편합니다.
 
 세션 중에는 모델이 `skill.search`로 후보를 찾고 `skill.load`로 본문을 읽어옵니다. 즉 스킬은 시스템 프롬프트에 미리 다 밀어넣는 것이 아니라 **필요할 때 로드**됩니다.
 
@@ -252,7 +222,7 @@ TUI에서는 오버레이로 확인하고 그 자리에서 다시 읽어들일 �
 > release-notes 스킬을 써서 v0.2.0 릴리스 노트 초안을 만들어줘
 ```
 
-> `capy skills list|doctor|validate`와 `--json`·`--strict`는 `apps/cbc/src/command-spec.ts:244-267`에 정의되어 있습니다. `/skills` 오버레이 항목은 `packages/tui-components/src/overlays.ts:124-128`, 도구는 `packages/tool-registry/src/catalog.ts:1585`(`skill.search`)·`:1598`(`skill.load`)이며, `SKILL.md` 한 파일을 읽는 검증 동작은 `apps/cbc/src/commands/skills.ts:51-76`입니다. 프로젝트 탐색 루트 `.capybara/skills`는 `apps/cbc/src/skill-discovery.ts:231`입니다. 작성 규칙은 [스킬](skills.md)에 있습니다.
+> `capy skills list|doctor|validate`와 `--json`·`--strict`는 `apps/cbc/src/command-spec.ts:244-267`에 정의되어 있습니다. `/skills` 오버레이 항목은 `packages/tui-components/src/overlays.ts:124-128`, 네 동작 토큰은 `apps/cbc/src/slash.ts:208-213`, 도구는 `packages/tool-registry/src/catalog.ts:1585`(`skill.search`)·`:1598`(`skill.load`)이며, `SKILL.md` 한 파일을 읽는 검증 동작은 `apps/cbc/src/commands/skills.ts:51-76`입니다. 프로젝트 탐색 루트 `.capybara/skills`는 `apps/cbc/src/skill-discovery.ts:231`입니다. 작성 규칙은 [스킬](skills.md)에 있습니다.
 
 ## 8. 패키지와 플러그인 설치
 
@@ -268,45 +238,37 @@ capy package list --effective
 
 스코프 플래그는 배타적입니다. 변경 작업은 `--project`(기본)/`--user` 중 하나, 목록 작업은 `--project`/`--user`/`--effective`(기본) 중 하나입니다. 둘 이상 주면 사용법 오류(2)입니다.
 
-로컬에서 만든 서명 없는 패키지를 시험할 때는 명시적으로 열어줘야 합니다.
-
-```bash
-capy package add ./my-pack --allow-unsigned-local
-```
-
-권한을 요청하는 패키지는 승인 없이는 들어오지 않습니다. 비대화식에서 요청된 권한을 그대로 부여하려면 `--grant-requested`입니다.
-
-락 파일 그대로 재현 설치를 하려면 (CI가 여기에 해당합니다):
-
-```bash
-capy bootstrap --frozen --offline
-```
+서명 없는 로컬 패키지는 `--allow-unsigned-local`로 명시적으로 열어줘야 하고, 권한을 요청하는 패키지를 비대화식에서 그대로 부여하려면 `--grant-requested`입니다. 락 파일 그대로 재현 설치를 하려면 (CI가 여기에 해당합니다) `capy bootstrap --frozen --offline`입니다.
 
 플러그인 쪽은 조회와 켜기/끄기입니다.
 
 ```bash
 capy plugin list
-capy plugin inspect acme.lint
 capy plugin grants acme.lint
 capy plugin disable acme.lint
 ```
 
-TUI에서는 하나의 오버레이가 검색·설치·업데이트·제거·조회·활성/비활성·목록을 모두 받습니다.
+TUI에서는 하나의 오버레이가 검색·설치·업데이트·제거·조회·활성/비활성·권한 조회·목록을 모두 받습니다.
 
 ```text
 /plugins list
+/plugins search lint
+/plugins install @acme/lint-pack
 /plugins inspect acme.lint
 ```
 
-문제가 생기면 진단이 먼저입니다.
+단 하나 예외가 있습니다. `/plugins install path:...`처럼 로컬 경로 소스는 TUI에서 **거부**되고 CLI로 안내합니다.
 
-```bash
-capy package doctor @acme/lint-pack
+```text
+Unsigned local installation needs an explicit terminal warning.
+Use: capy package add path:./my-pack --allow-unsigned-local
 ```
 
-`PackageInstallError`는 영수증을 stderr에 JSON으로 뱉고 종료 코드 1, `PackageVerificationError`는 9입니다. 검증 실패와 설치 실패를 CI에서 구분할 수 있습니다.
+서명 없는 로컬 설치는 터미널에서 명시적 경고를 받아야 하는 동작이라, 오버레이 안에서 조용히 처리하지 않습니다.
 
-> 명령·플래그 정의는 `apps/cbc/src/command-spec.ts:132-240`, 스코프 배타 규칙은 `apps/cbc/src/args.ts:492-513`, 핸들러는 `apps/cbc/src/commands/packages.ts:21-225`, 오류→종료 코드 매핑은 `apps/cbc/src/router.ts:149-158`입니다. `/plugins` 오버레이의 액션 목록은 `packages/tui-components/src/overlays.ts:134-144`, 도구는 `packages/tool-registry/src/catalog.ts:1564`(`plugin.invoke`)입니다. 자세한 규칙은 [패키지와 플러그인](packages-and-plugins.md)에 있습니다.
+문제가 생기면 `capy package doctor @acme/lint-pack`이 먼저입니다. `PackageInstallError`는 영수증을 stderr에 JSON으로 뱉고 종료 코드 1, `PackageVerificationError`는 9이므로 검증 실패와 설치 실패를 CI에서 구분할 수 있습니다.
+
+> 명령·플래그 정의는 `apps/cbc/src/command-spec.ts:132-240`, 스코프 배타 규칙은 `apps/cbc/src/args.ts:492-513`, 핸들러는 `apps/cbc/src/commands/packages.ts:21-225`, 오류→종료 코드 매핑은 `apps/cbc/src/router.ts:149-158`입니다. `/plugins` 오버레이의 액션 목록은 `packages/tui-components/src/overlays.ts:134-144`, `path:` 소스 거부는 `apps/cbc/src/commands/interactive.ts:2171-2178`, 도구는 `packages/tool-registry/src/catalog.ts:1564`(`plugin.invoke`)입니다. 자세한 규칙은 [패키지와 플러그인](packages-and-plugins.md)에 있습니다.
 
 ## 9. 자동화에서 무인 실행
 
@@ -326,7 +288,7 @@ capy run "린트와 타입 검사를 돌리고 실패를 요약해줘" \
   --permission-policy allow-listed
 ```
 
-`CI`와 `GITHUB_ACTIONS`가 설정되어 있으면 업데이트 확인은 알아서 게이팅되지만, 로컬 러너에서는 `CBC_NO_UPDATE_CHECK`를 명시하는 편이 확실합니다.
+`CI`나 `GITHUB_ACTIONS`가 `"true"`면 업데이트 확인은 알아서 게이팅되지만, 로컬 러너에서는 `CBC_NO_UPDATE_CHECK`를 명시하는 편이 확실합니다.
 
 설정을 **사용자 설정 파일**에 영구 반영해야 한다면 `config set`입니다. 서브커맨드는 `set` 하나뿐입니다 — `get`·`list`·`unset`은 없습니다. `gpt-5.6`은 `gpt-5.6-sol`의 별칭이므로 그대로 써도 됩니다.
 
@@ -335,15 +297,10 @@ capy config set model.default gpt-5.6
 capy config set permissions.preset edit
 ```
 
-CI에서 신뢰 상태만 점검하려면 `--show-diff`를 반드시 붙이십시오. 없이 실행하면 대화형 터미널을 요구하며 종료 코드 4입니다.
+CI에서 신뢰 상태만 점검하려면 `--show-diff`를 반드시 붙이십시오 — 없이 실행하면 대화형 터미널을 요구하며 종료 코드 4입니다. 인증 키는 위치 인자로 주면 셸 히스토리 경고와 함께 거부되므로 파이프로 넘깁니다.
 
 ```bash
 capy trust --show-diff
-```
-
-인증 키를 넘길 때는 위치 인자로 주지 마십시오. 셸 히스토리 경고와 함께 거부됩니다.
-
-```bash
 printf '%s' "$OPENAI_API_KEY" | capy auth api --stdin
 capy auth status
 ```
@@ -361,24 +318,11 @@ capy integration doctor vscode
 capy integration doctor acp
 ```
 
-ACP를 말하는 에디터에서는 `capy acp`가 브리지가 됩니다. 이 명령은 데몬을 **필수로** 요구하므로, 붙지 못하면 종료 코드 10입니다. 데몬 상태를 따로 확인할 수 있습니다.
+ACP를 말하는 에디터에서는 `capy acp`가 브리지가 됩니다. 이 명령은 데몬을 **필수로** 요구하므로 붙지 못하면 종료 코드 10입니다. 데몬 상태와 로그, 그리고 여러 터미널에서 같은 세션 붙기는 각각 다음입니다.
 
 ```bash
 capy daemon status
 capy daemon logs
-```
-
-GitHub 쪽 설치와 점검도 명령으로 있습니다.
-
-```bash
-capy github install
-capy github doctor
-capy integration doctor github
-```
-
-여러 터미널에서 같은 세션을 보려면 데몬에 붙습니다.
-
-```bash
 capy daemon attach 01JD8Q2F7K
 ```
 
@@ -395,16 +339,9 @@ capy github install
 capy github doctor
 ```
 
-`.github/workflows/capybara-code.yml`이 만들어집니다. 이미 있으면 **덮어쓰지 않고 거부**하고 `capy github doctor`를 쓰라고 안내합니다. 생성되는 워크플로의 핵심만 보면:
+`.github/workflows/capybara-code.yml`이 만들어집니다. 이미 있으면 **덮어쓰지 않고 거부**하고 `capy github doctor`를 쓰라고 안내합니다. 생성되는 워크플로의 핵심 부분입니다.
 
 ```yaml
-on:
-  issue_comment:
-    types: [created]
-  pull_request_review_comment:
-    types: [created]
-  workflow_dispatch:
-
 jobs:
   capybara:
     if: github.event_name != 'issue_comment' || contains(github.event.comment.body, '/capy')
@@ -419,17 +356,15 @@ jobs:
           permission-policy: allow-listed
 ```
 
-즉 PR 코멘트에 `/capy`를 포함시키는 것이 트리거이고, 권한 정책 기본값은 `allow-listed`입니다 — Action이 무인으로 도는 자리이므로 승인 대화가 아니라 사전 규칙으로 통제합니다.
+트리거는 `issue_comment`·`pull_request_review_comment`·`workflow_dispatch`이고, 코멘트 트리거는 본문에 `/capy`가 있어야 합니다. 권한 정책 기본값이 `allow-listed`인 이유는 Action이 무인으로 도는 자리라 승인 대화가 아니라 사전 규칙으로 통제해야 하기 때문입니다.
 
-Action의 입력은 `mode`, `permission-policy`, `event-file`, `result-file`, `capy-binary` 다섯 개이며, 내부적으로는 GitHub 이벤트를 봉투로 변환한 뒤 결국 앞에서 본 그 명령을 부릅니다.
+Action의 입력은 `mode`, `permission-policy`, `event-file`, `result-file`, `capy-binary` 다섯 개입니다. 내부적으로는 GitHub 이벤트를 봉투로 바꿔 모드 `0o600`으로 쓴 뒤 앞에서 본 그 명령을 부르고, 끝나면 봉투를 지웁니다.
 
 ```bash
 capy run --event-file <봉투> --result-file <경로> --permission-policy <정책>
 ```
 
-봉투는 모드 `0o600`으로 쓰이고 실행 후 삭제됩니다. 결과 파일 절대경로는 `result-file` 출력으로 노출되므로 후속 스텝에서 받아 쓸 수 있습니다.
-
-`capy` 바이너리는 **절대경로이고 실제로 존재해야** 합니다. 아니면 "Capybara Action requires a verified absolute capy binary path"로 즉시 실패합니다.
+결과 파일 절대경로는 `result-file` 출력으로 노출되므로 후속 스텝에서 받아 쓸 수 있습니다. `capy` 바이너리는 **절대경로이고 실제로 존재해야** 하며, 아니면 "Capybara Action requires a verified absolute capy binary path"로 즉시 실패합니다.
 
 > 워크플로 템플릿은 `apps/cbc/src/commands/integrations.ts:171-199`, 덮어쓰기 거부는 `:97-103`, doctor의 ready/invalid 판정은 `:153-159`입니다. Action 입력 정의는 `packages/github-action/action.yml`, CLI 호출 조립은 `packages/github-action/src/action-main.ts:31-47`, 바이너리 검증은 `:54-65`입니다.
 
@@ -449,12 +384,12 @@ const session = await client.createSession();
 session.onApproval((request) => ({ decision: "deny", reason: `unattended: ${request.kind}` }));
 
 const turn = await session.submit("이 저장소의 테스트를 실행해줘");
-const receipt = await session.wait({ turnId: turn.turnId });
+await session.wait({ turnId: turn.turnId });
 
 await client.close();
 ```
 
-`transport`는 `"stdio" | "unix" | "pipe"` 세 값입니다. `submit`은 멱등 키가 붙은 봉투를 만들고 그것을 `lastSubmitEnvelope`에 남겨두므로, 재연결 후 같은 키로 다시 보내도 턴이 중복 실행되지 않습니다.
+`transport`는 `"stdio" | "unix" | "pipe"` 세 값입니다. `submit`은 멱등 키가 붙은 봉투를 만들어 `lastSubmitEnvelope`에 남기므로, 재연결 후 같은 키로 다시 보내도 턴이 중복 실행되지 않습니다.
 
 승인 결정은 `allow` · `allow_once` · `allow_session` · `deny` 네 값입니다. 핸들러를 등록하지 않으면 `"no approval handler registered"` 이유와 함께 **자동 거부**되므로 무인 클라이언트도 hang되지는 않습니다. 다만 왜 거부됐는지 로그에 남기려면 위처럼 명시적으로 등록하는 편이 낫습니다.
 
@@ -479,25 +414,20 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-`path`를 생략하면 `default_socket_path()`로 로컬 데몬 소켓을 찾습니다. 프로토콜 상수는 코드에 하드코딩하지 말고 패키지에서 가져오십시오 — `PROTOCOL_VERSION`, `APP_METHODS`, `EVENT_KINDS`, `EVENT_SCHEMA_VERSION`이 모두 export되어 있습니다.
+`path`를 생략하면 `default_socket_path()`로 로컬 데몬 소켓을 찾습니다. 프로토콜 상수는 하드코딩하지 말고 패키지에서 가져오십시오 — `PROTOCOL_VERSION`, `APP_METHODS`, `EVENT_KINDS`, `EVENT_SCHEMA_VERSION`이 모두 export되어 있습니다.
 
 > `connect`의 인자와 소켓 기본값 처리는 `packages/sdk-python/capybara_code/client.py:179-202`, `default_socket_path`는 `:328`, `session()`은 `:243`입니다. `submit`/`wait`는 `packages/sdk-python/capybara_code/session.py:70`·`:127`이고, export 목록은 `packages/sdk-python/capybara_code/__init__.py:17-31`입니다.
 
 ## 12. 막혔을 때 처음 볼 것
 
-세 가지 상황이 대부분입니다.
-
 **설정 오류로 시작이 안 될 때.** 런타임을 필요로 하는 명령은 설정 검증을 먼저 통과해야 하므로, 깨진 설정은 조용한 기본값이 아니라 종료 코드 9로 드러납니다. error 심각도 이슈가 전부 나열됩니다.
 
-**원인이 안 보일 때.** 스택 트레이스와 런타임 stderr를 켜십시오.
+**원인이 안 보일 때.** `CBC_DEBUG=1`이 스택 트레이스와 런타임 stderr를 켭니다.
+
+**턴이 `partial`로 끝날 때.** 종료 코드 8입니다. 예산 소진이 아니라 같은 실패 3회일 수 있으므로 결과 JSON의 `status`와 `errorCategory`를 함께 보십시오 — `errorCategory`는 `cli_error`·`cancelled`·`timeout`·`unhandled` 중 하나입니다.
 
 ```bash
 CBC_DEBUG=1 capy run "..." --result-file /tmp/r.json
-```
-
-**턴이 `partial`로 끝날 때.** 종료 코드 8입니다. 예산 소진이 아니라 같은 실패 3회일 수 있으므로 결과 JSON의 `status`와 `errorCategory`를 함께 보십시오. `errorCategory`는 `cli_error`·`cancelled`·`timeout`·`unhandled` 중 하나입니다.
-
-```bash
 jq -r '.status, .errorCategory, .summary' /tmp/r.json
 ```
 
