@@ -124,6 +124,60 @@ describe("hosted scout safety boundary", () => {
     expect(coordinator.agentsUsed).toBe(0);
   });
 
+  test("hands the transport the narrowed catalog rather than the caller's request", async () => {
+    // §5.8 exposes only a read-only catalog to a hosted agent. The gate computed
+    // the narrowed set and the coordinator dropped it, so a transport was free to
+    // fall back to its own catalog — including writer tools the gate never saw.
+    const seen: Array<readonly string[] | undefined> = [];
+    const coordinator = new HostedScoutCoordinator({
+      taskEpochId: "epoch-1",
+      taskId: "task-1",
+      callerId: "root",
+      workspaceIdentityDigest: "workspace-1",
+      transport: {
+        spawn: async (request) => {
+          seen.push(request.requestedTools);
+          return report(request);
+        },
+      },
+    });
+
+    const result = await coordinator.run({
+      role: "explore",
+      agentId: "agent-scout-1",
+      taskId: "task-1",
+      depth: 0,
+      prompt: "Inspect routing.",
+      requestedTools: ["fs.read", "fs.search"],
+    }, new AbortController().signal);
+
+    expect(result.accepted).toBe(true);
+    expect(seen).toEqual([["fs.read", "fs.search"]]);
+
+    // A request that names no tools is narrowed to the allowlist, not left open.
+    const defaulted = new HostedScoutCoordinator({
+      taskEpochId: "epoch-1",
+      taskId: "task-1",
+      callerId: "root",
+      workspaceIdentityDigest: "workspace-1",
+      transport: {
+        spawn: async (request) => {
+          seen.push(request.requestedTools);
+          return report(request);
+        },
+      },
+    });
+    await defaulted.run({
+      role: "explore",
+      agentId: "agent-scout-2",
+      taskId: "task-1",
+      depth: 0,
+      prompt: "Inspect routing.",
+    }, new AbortController().signal);
+    expect(seen[1]).toEqual([...DEFAULT_HOSTED_SCOUT_POLICY.allowlistedTools]);
+    expect(seen[1]).not.toContain("fs.edit");
+  });
+
   test("falls back once to a local read-only transport and revalidates evidence", async () => {
     const events: Array<{ kind: Parameters<HostedScoutEmitter["emit"]>[0]; payload: Record<string, unknown> }> = [];
     const coordinator = new HostedScoutCoordinator({

@@ -107,16 +107,21 @@ export class HostedScoutCoordinator {
     }
     const decision = validateHostedScoutRequest(request, this.#policy, { agentsUsed: this.#agentsUsed });
     if (!decision.allowed) return { accepted: false, reason: decision.message };
+    // §5.6/§5.8: the gate narrows the catalog, so the *narrowed* list is what may
+    // reach the transport. Forwarding the caller's own `requestedTools` left the
+    // enforced set behind in the decision, and a transport that defaulted to its
+    // own catalog could still have offered a writer tool the gate never admitted.
+    const admitted: HostedScoutRequest = { ...request, requestedTools: decision.tools };
     this.#agentsUsed += 1;
     this.#emitter?.emit("hosted_agent.spawned", { agentId: request.agentId, role: request.role, taskEpochId: request.taskEpochId });
-    const hosted = await this.#attempt(this.#transport, request, signal);
+    const hosted = await this.#attempt(this.#transport, admitted, signal);
     if (hosted.accepted) return this.#complete(request.agentId, hosted);
     if (!signal.aborted && this.#fallback !== undefined) {
       this.#emitter?.emit("hosted_agent.fallback_local", {
         agentId: request.agentId,
         reason: hosted.reason,
       });
-      const local = await this.#attempt(this.#fallback, request, signal);
+      const local = await this.#attempt(this.#fallback, admitted, signal);
       if (local.accepted) return this.#complete(request.agentId, local);
       this.#emitter?.emit("hosted_agent.cancelled", { agentId: request.agentId, reason: local.reason });
       return local;
