@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_HOSTED_SCOUT_POLICY,
   digestHostedEvidenceCapsule,
+  resolveHostedRole,
   validateHostedScoutRequest,
   type HostedScoutReport,
   type HostedScoutRequest,
@@ -75,6 +76,52 @@ describe("hosted scout safety boundary", () => {
         allowlistedTools: [...DEFAULT_HOSTED_SCOUT_POLICY.allowlistedTools, "fs.edit"],
       },
     )).toMatchObject({ allowed: false, code: "tool_denied" });
+  });
+
+  test("accepts the PRD role names and refuses the write-capable ones", () => {
+    // §5.6 names explore/architect/reviewer as the allowed roles; the gate used
+    // to know only its own two class names, so the PRD spelling was rejected.
+    expect(resolveHostedRole("explore")).toBe("HostedScout");
+    expect(resolveHostedRole("architect")).toBe("HostedScout");
+    expect(resolveHostedRole("reviewer")).toBe("HostedReviewer");
+    expect(resolveHostedRole("executor")).toBeUndefined();
+    expect(resolveHostedRole("refactorer")).toBeUndefined();
+    expect(validateHostedScoutRequest(validRequest({ role: "architect" }))).toMatchObject({
+      allowed: true,
+      role: "HostedScout",
+    });
+    expect(validateHostedScoutRequest(validRequest({ role: "reviewer" }))).toMatchObject({
+      allowed: true,
+      role: "HostedReviewer",
+    });
+  });
+
+  test("refuses a write-capable role by authority rather than by name", async () => {
+    const coordinator = new HostedScoutCoordinator({
+      taskEpochId: "epoch-1",
+      taskId: "task-1",
+      callerId: "root",
+      workspaceIdentityDigest: "workspace-1",
+      transport: {
+        spawn: async () => {
+          throw new Error("a writer role must never reach the transport");
+        },
+      },
+    });
+
+    for (const role of ["executor", "refactorer", "test"] as const) {
+      const result = await coordinator.run({
+        role: role as unknown as "HostedScout",
+        agentId: `agent-${role}`,
+        taskId: "task-1",
+        depth: 0,
+        prompt: "Change the routing implementation.",
+        requestedTools: ["fs.read"],
+      }, new AbortController().signal);
+      expect(result.accepted).toBe(false);
+      expect(result.reason).toContain("write-capable");
+    }
+    expect(coordinator.agentsUsed).toBe(0);
   });
 
   test("falls back once to a local read-only transport and revalidates evidence", async () => {

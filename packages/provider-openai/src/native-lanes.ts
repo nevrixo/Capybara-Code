@@ -202,6 +202,43 @@ export function sanitizeProgramOutput(value: unknown, maxBytes = DEFAULT_PROGRAM
 
 export type HostedRole = "HostedScout" | "HostedReviewer";
 
+/**
+ * The role names §5.6 actually names as allowed, alongside the two internal
+ * class names the lane was first built with.
+ *
+ * The gate only ever accepted `HostedScout`/`HostedReviewer`, so a caller using
+ * the subagent vocabulary the PRD is written in — `explore`, `architect`,
+ * `reviewer` — was rejected as `role_invalid`. That made the gate unusable from
+ * the only role table the runtime has. Both spellings resolve to the same two
+ * hosted classes, so nothing about the read-only guarantee below moves.
+ */
+export type HostedRoleName = HostedRole | "explore" | "architect" | "reviewer";
+
+export const HOSTED_ROLE_CLASSES: Readonly<Record<HostedRoleName, HostedRole>> = {
+  HostedScout: "HostedScout",
+  HostedReviewer: "HostedReviewer",
+  explore: "HostedScout",
+  architect: "HostedScout",
+  reviewer: "HostedReviewer",
+};
+
+/**
+ * §5.6's explicit denials. The allow-list above is closed, so these are already
+ * unreachable — they are named anyway so that widening the map cannot silently
+ * admit a writer role, and so the refusal is traceable to the requirement.
+ * Write-capable *custom* roles are denied by authority in the coordinator,
+ * which is the only layer that can see the subagent role table.
+ */
+export const HOSTED_DENIED_ROLES: readonly string[] = ["executor", "refactorer"];
+
+/** Narrow a requested role name to the hosted class it may run as, if any. */
+export function resolveHostedRole(role: unknown): HostedRole | undefined {
+  if (typeof role !== "string" || HOSTED_DENIED_ROLES.includes(role)) return undefined;
+  return Object.prototype.hasOwnProperty.call(HOSTED_ROLE_CLASSES, role)
+    ? HOSTED_ROLE_CLASSES[role as HostedRoleName]
+    : undefined;
+}
+
 export interface HostedScoutPolicy {
   readonly enabled: boolean;
   readonly maxAgents: number;
@@ -227,7 +264,7 @@ export const DEFAULT_HOSTED_SCOUT_POLICY: HostedScoutPolicy = {
 };
 
 export interface HostedScoutRequest {
-  readonly role: HostedRole;
+  readonly role: HostedRoleName;
   readonly agentId: string;
   readonly callerId: string;
   readonly taskEpochId: string;
@@ -241,6 +278,8 @@ export interface HostedScoutRequest {
 
 export interface HostedScoutDecision {
   readonly allowed: boolean;
+  /** The hosted class the requested role was narrowed to. Absent on refusal. */
+  readonly role?: HostedRole;
   readonly code: "allowed" | "disabled" | "agent_budget" | "depth_budget" | "token_budget" | "role_invalid" | "agent_missing" | "caller_missing" | "epoch_missing" | "workspace_missing" | "tool_denied" | "prompt_invalid";
   readonly message: string;
   readonly tools: readonly string[];
@@ -253,7 +292,8 @@ export function validateHostedScoutRequest(
 ): HostedScoutDecision {
   if (!policy.enabled) return { allowed: false, code: "disabled", message: "hosted scouts are disabled by policy", tools: [] };
   if ((usage.agentsUsed ?? 0) >= policy.maxAgents) return { allowed: false, code: "agent_budget", message: `hosted scouts are capped at ${policy.maxAgents}`, tools: [] };
-  if (request.role !== "HostedScout" && request.role !== "HostedReviewer") return { allowed: false, code: "role_invalid", message: "hosted agents are restricted to scout and reviewer roles", tools: [] };
+  const hostedRole = resolveHostedRole(request.role);
+  if (hostedRole === undefined) return { allowed: false, code: "role_invalid", message: "hosted agents are restricted to the read-only explore, architect, and reviewer roles", tools: [] };
   if (typeof request.agentId !== "string" || request.agentId.length === 0) return { allowed: false, code: "agent_missing", message: "hosted scouts require an agentId", tools: [] };
   if (typeof request.depth !== "number" || !Number.isInteger(request.depth) || request.depth < 0 || request.depth > policy.maxDepth) return { allowed: false, code: "depth_budget", message: `hosted scout depth is capped at ${policy.maxDepth}`, tools: [] };
   if (request.requestedTokens !== undefined && (!Number.isFinite(request.requestedTokens) || !Number.isInteger(request.requestedTokens) || request.requestedTokens < 0 || request.requestedTokens > policy.maxTokensPerAgent)) return { allowed: false, code: "token_budget", message: `hosted scout tokens are capped at ${policy.maxTokensPerAgent}`, tools: [] };
@@ -265,7 +305,7 @@ export function validateHostedScoutRequest(
   const canonicalReadOnly = new Set<string>(PROGRAM_TOOL_ALLOWLIST);
   const denied = requested.filter((tool) => !canonicalReadOnly.has(tool) || !policy.allowlistedTools.includes(tool));
   if (denied.length > 0) return { allowed: false, code: "tool_denied", message: `hosted scout requested denied tool(s): ${denied.join(", ")}`, tools: [] };
-  return { allowed: true, code: "allowed", message: "read-only hosted scout accepted", tools: [...requested] };
+  return { allowed: true, role: hostedRole, code: "allowed", message: "read-only hosted scout accepted", tools: [...requested] };
 }
 
 export interface HostedEvidenceClaim {

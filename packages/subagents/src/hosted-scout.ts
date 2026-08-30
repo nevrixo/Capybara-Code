@@ -16,6 +16,20 @@ import {
   type HostedScoutRequest,
 } from "@cbc/provider-openai";
 
+import { ROLE_DEFINITIONS, type SubagentRole } from "./roles.ts";
+
+/**
+ * §5.6 denies `executor`, `refactorer`, and *any* custom role that needs write
+ * authority. The provider gate can only refuse by name, because it cannot see
+ * the subagent role table; this is the one layer that can, so the denial is
+ * made by authority here — a custom role whose `base_role` resolves to a
+ * writer is refused even if it is spelled like a scout.
+ */
+function writeCapable(role: string): boolean {
+  const definition = ROLE_DEFINITIONS[role as SubagentRole];
+  return definition !== undefined && (definition.canWrite || definition.canRunProcess);
+}
+
 export interface HostedScoutTransport {
   spawn(request: HostedScoutRequest, signal: AbortSignal): Promise<HostedScoutReport>;
 }
@@ -88,6 +102,9 @@ export class HostedScoutCoordinator {
       workspaceIdentityDigest: this.#workspaceIdentityDigest,
       taskId: this.#taskId,
     };
+    if (writeCapable(request.role)) {
+      return { accepted: false, reason: `hosted agents cannot run the write-capable ${request.role} role` };
+    }
     const decision = validateHostedScoutRequest(request, this.#policy, { agentsUsed: this.#agentsUsed });
     if (!decision.allowed) return { accepted: false, reason: decision.message };
     this.#agentsUsed += 1;
