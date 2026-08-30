@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   blockContext,
+  computePlanReadiness,
   lineText,
   lineWidth,
   renderPlanApprovalPicker,
@@ -11,7 +12,7 @@ import {
   renderTimeline,
   type TerminalCapabilities,
 } from "../src/index.ts";
-import { planDigest } from "@cbc/session-domain";
+import { assessPlanReadiness, planDigest } from "@cbc/session-domain";
 
 function context(columns = 80) {
   const capabilities: TerminalCapabilities = {
@@ -230,5 +231,44 @@ describe("Plan Contract UI", () => {
     expect(text).toContain("Plan contract");
     expect(text).toContain("Goal");
     expect(text).toContain("esc to close");
+  });
+
+  test("an open analysis step does not hold back an otherwise complete plan", () => {
+    // Same contract as `items`, but the model never ticked its own research step
+    // off. That is not a defect in the plan, so it must not read as one: the
+    // banner it used to produce said "analysis step is not complete", which the
+    // user could not clear by editing any part of the contract.
+    const openAnalysis = items.map((item) =>
+      item.kind === "analysis" ? { ...item, status: "pending" as const } : item,
+    );
+
+    const view = computePlanReadiness(document, openAnalysis);
+    expect(view.ready).toBe(true);
+    expect(view.blockers ?? []).toEqual([]);
+
+    // The session-domain gate is the authority for approval and must agree; a
+    // split verdict would paint the plan approvable while refusing to run it.
+    const domain = assessPlanReadiness(document, openAnalysis);
+    expect(domain.ready).toBe(true);
+    expect(domain.blockers).toEqual([]);
+  });
+
+  test("still reports the structural gaps that make a plan genuinely incomplete", () => {
+    const gutted = computePlanReadiness(
+      { ...document, context: [], criticalFiles: [], verification: [] },
+      [{ id: "look", text: "Look around", status: "pending" as const, kind: "analysis" as const }],
+    );
+    expect(gutted.ready).toBe(false);
+    expect(gutted.blockers).toContain("Context is missing");
+    expect(gutted.blockers).toContain("Critical files are missing");
+    expect(gutted.blockers).toContain("Verification is missing");
+    expect(gutted.blockers).toContain("Approach has no implementation step");
+    // A blocked step is still a real blocker — only the open-analysis gate went.
+    const blocked = computePlanReadiness(document, [
+      ...items,
+      { id: "stuck", text: "Stuck", status: "blocked" as const, kind: "implementation" as const,
+        files: ["src/parser.ts"], acceptanceCriteria: ["n/a"] },
+    ]);
+    expect(blocked.blockers).toContain("blocked approach step exists");
   });
 });

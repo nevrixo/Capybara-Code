@@ -330,9 +330,14 @@ export function computePlanReadiness(
     }
   }
   if (items.some((item) => item.status === "blocked")) blockers.push("blocked approach step exists");
-  if (items.some((item) => item.kind === "analysis" && item.status !== "done" && item.status !== "skipped")) {
-    blockers.push("analysis step is not complete");
-  }
+  // An open analysis step is deliberately NOT a blocker. Analysis is the reading
+  // and reasoning that produces the plan, so a plan that is otherwise complete —
+  // goal, context, critical files, verification, anchored implementation steps —
+  // is approvable whether or not the model bothered to tick its own research
+  // items off. Gating on it stranded finished plans behind an amber banner the
+  // user could not clear by editing anything, since the missing thing was a
+  // status the model never returns to. Genuine incompleteness is still caught by
+  // the structural blockers above.
   if (document !== undefined && document.verification.some((check) =>
     (check.command ?? check.expected ?? check.expectedResult) === undefined)) {
     blockers.push("verification check has no command or expected result");

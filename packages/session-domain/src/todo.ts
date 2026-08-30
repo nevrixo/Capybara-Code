@@ -393,7 +393,12 @@ export function assessPlanReadiness(document: PlanDocument | undefined, items: r
   if (implementations.length === 0) blockers.push("an implementation step is required");
   if (verifications.length === 0) blockers.push("a verification step is required");
   if (items.some((item) => item.status === "blocked")) blockers.push("blocked steps must be resolved");
-  if (items.some((item) => item.kind === "analysis" && !["done", "skipped"].includes(item.status))) blockers.push("analysis steps must be done or skipped");
+  // An open analysis step is deliberately not a blocker; see the matching note in
+  // `@cbc/tui-components`'s `computePlanReadiness`. Analysis is how the plan gets
+  // written, so an otherwise-complete contract must not be held behind a status
+  // the model has no reason to revisit. `isEvidenceBackedAnalysisCompletion`
+  // still governs how an analysis item may *become* done, and approval remains
+  // digest-bound, so execution scope is unchanged.
   for (const item of implementations) {
     if ((item.files?.length ?? 0) === 0) blockers.push(`implementation step '${item.id}' needs file anchors`);
     if ((item.acceptanceCriteria?.length ?? 0) === 0) blockers.push(`implementation step '${item.id}' needs acceptance criteria`);
