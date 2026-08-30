@@ -128,6 +128,9 @@ importers:
       '@cbc/agent-graph-domain':
         specifier: workspace:*
         version: link:../agent-graph-domain
+      '@cbc/provider-openai':
+        specifier: workspace:*
+        version: link:../provider-openai
       '@cbc/protocol':
         specifier: workspace:*
         version: link:../protocol-ts

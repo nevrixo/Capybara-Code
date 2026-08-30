@@ -198,6 +198,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@cbc/agent-graph-domain": "workspace:*",
+        "@cbc/provider-openai": "workspace:*",
         "@cbc/protocol": "workspace:*",
         "@cbc/tool-registry": "workspace:*",
       },

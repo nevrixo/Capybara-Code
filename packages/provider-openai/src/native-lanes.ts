@@ -224,7 +224,7 @@ export interface HostedScoutRequest {
 
 export interface HostedScoutDecision {
   readonly allowed: boolean;
-  readonly code: "allowed" | "disabled" | "agent_budget" | "depth_budget" | "token_budget" | "caller_missing" | "epoch_missing" | "tool_denied" | "prompt_invalid";
+  readonly code: "allowed" | "disabled" | "agent_budget" | "depth_budget" | "token_budget" | "role_invalid" | "agent_missing" | "caller_missing" | "epoch_missing" | "workspace_missing" | "tool_denied" | "prompt_invalid";
   readonly message: string;
   readonly tools: readonly string[];
 }
@@ -236,13 +236,17 @@ export function validateHostedScoutRequest(
 ): HostedScoutDecision {
   if (!policy.enabled) return { allowed: false, code: "disabled", message: "hosted scouts are disabled by policy", tools: [] };
   if ((usage.agentsUsed ?? 0) >= policy.maxAgents) return { allowed: false, code: "agent_budget", message: `hosted scouts are capped at ${policy.maxAgents}`, tools: [] };
+  if (request.role !== "HostedScout" && request.role !== "HostedReviewer") return { allowed: false, code: "role_invalid", message: "hosted agents are restricted to scout and reviewer roles", tools: [] };
+  if (typeof request.agentId !== "string" || request.agentId.length === 0) return { allowed: false, code: "agent_missing", message: "hosted scouts require an agentId", tools: [] };
   if (typeof request.depth !== "number" || !Number.isInteger(request.depth) || request.depth < 0 || request.depth > policy.maxDepth) return { allowed: false, code: "depth_budget", message: `hosted scout depth is capped at ${policy.maxDepth}`, tools: [] };
   if (request.requestedTokens !== undefined && (!Number.isFinite(request.requestedTokens) || !Number.isInteger(request.requestedTokens) || request.requestedTokens < 0 || request.requestedTokens > policy.maxTokensPerAgent)) return { allowed: false, code: "token_budget", message: `hosted scout tokens are capped at ${policy.maxTokensPerAgent}`, tools: [] };
   if (typeof request.callerId !== "string" || request.callerId.length === 0) return { allowed: false, code: "caller_missing", message: "hosted scouts require callerId ancestry", tools: [] };
   if (typeof request.taskEpochId !== "string" || request.taskEpochId.length === 0) return { allowed: false, code: "epoch_missing", message: "hosted scouts require a taskEpochId", tools: [] };
+  if (typeof request.workspaceIdentityDigest !== "string" || request.workspaceIdentityDigest.length === 0) return { allowed: false, code: "workspace_missing", message: "hosted scouts require a workspace identity digest", tools: [] };
   if (typeof request.prompt !== "string" || request.prompt.trim().length === 0) return { allowed: false, code: "prompt_invalid", message: "hosted scout prompt is empty", tools: [] };
   const requested = request.requestedTools ?? policy.allowlistedTools;
-  const denied = requested.filter((tool) => !policy.allowlistedTools.includes(tool));
+  const canonicalReadOnly = new Set<string>(PROGRAM_TOOL_ALLOWLIST);
+  const denied = requested.filter((tool) => !canonicalReadOnly.has(tool) || !policy.allowlistedTools.includes(tool));
   if (denied.length > 0) return { allowed: false, code: "tool_denied", message: `hosted scout requested denied tool(s): ${denied.join(", ")}`, tools: [] };
   return { allowed: true, code: "allowed", message: "read-only hosted scout accepted", tools: [...requested] };
 }

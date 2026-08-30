@@ -11,6 +11,7 @@
   "types": "./src/index.ts",
   "dependencies": {
     "@cbc/agent-graph-domain": "workspace:*",
+    "@cbc/provider-openai": "workspace:*",
     "@cbc/protocol": "workspace:*",
     "@cbc/tool-registry": "workspace:*"
   }

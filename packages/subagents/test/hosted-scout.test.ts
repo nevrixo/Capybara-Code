@@ -1,0 +1,144 @@
+import { describe, expect, test } from "bun:test";
+
+import {
+  DEFAULT_HOSTED_SCOUT_POLICY,
+  digestHostedEvidenceCapsule,
+  validateHostedScoutRequest,
+  type HostedScoutReport,
+  type HostedScoutRequest,
+} from "@cbc/provider-openai";
+
+import {
+  HostedScoutCoordinator,
+  type HostedScoutEmitter,
+} from "../src/hosted-scout.ts";
+
+function validRequest(overrides: Partial<HostedScoutRequest> = {}): HostedScoutRequest {
+  return {
+    role: "HostedScout",
+    agentId: "agent-scout-1",
+    callerId: "root",
+    taskEpochId: "epoch-1",
+    taskId: "task-1",
+    workspaceIdentityDigest: "workspace-1",
+    depth: 0,
+    prompt: "Inspect the routing implementation and cite evidence.",
+    requestedTools: ["fs.read", "fs.search"],
+    ...overrides,
+  };
+}
+
+function report(request: HostedScoutRequest): HostedScoutReport {
+  const capsuleBody = {
+    taskId: request.taskId!,
+    agentClass: request.role,
+    taskEpochId: request.taskEpochId,
+    workspaceIdentityDigest: request.workspaceIdentityDigest!,
+    claims: [{ text: "routing is read-only", evidenceRefs: ["ev-1"], confidence: 0.9 }],
+    unresolved: [],
+    suggestedNextSteps: [],
+    tokenUsage: 120,
+    evidenceIds: ["ev-1"],
+  } as const;
+  return {
+    agentId: request.agentId,
+    callerId: request.callerId,
+    taskEpochId: request.taskEpochId,
+    taskId: request.taskId!,
+    workspaceIdentityDigest: request.workspaceIdentityDigest!,
+    claims: ["routing is read-only"],
+    evidenceCapsule: {
+      ...capsuleBody,
+      digest: digestHostedEvidenceCapsule(capsuleBody),
+    },
+  };
+}
+
+describe("hosted scout safety boundary", () => {
+  test("rejects forged roles, missing identity, and policy attempts to widen the catalog", () => {
+    expect(validateHostedScoutRequest({
+      ...validRequest(),
+      role: "executor" as unknown as "HostedScout",
+    })).toMatchObject({ allowed: false, code: "role_invalid" });
+    expect(validateHostedScoutRequest({
+      ...validRequest(),
+      agentId: "",
+    })).toMatchObject({ allowed: false, code: "agent_missing" });
+    expect(validateHostedScoutRequest({
+      ...validRequest(),
+      workspaceIdentityDigest: "",
+    })).toMatchObject({ allowed: false, code: "workspace_missing" });
+    expect(validateHostedScoutRequest(
+      validRequest({ requestedTools: ["fs.edit"] }),
+      {
+        ...DEFAULT_HOSTED_SCOUT_POLICY,
+        allowlistedTools: [...DEFAULT_HOSTED_SCOUT_POLICY.allowlistedTools, "fs.edit"],
+      },
+    )).toMatchObject({ allowed: false, code: "tool_denied" });
+  });
+
+  test("falls back once to a local read-only transport and revalidates evidence", async () => {
+    const events: Array<{ kind: Parameters<HostedScoutEmitter["emit"]>[0]; payload: Record<string, unknown> }> = [];
+    const coordinator = new HostedScoutCoordinator({
+      taskEpochId: "epoch-1",
+      taskId: "task-1",
+      callerId: "root",
+      workspaceIdentityDigest: "workspace-1",
+      transport: {
+        spawn: async () => {
+          throw new Error("hosted beta unavailable");
+        },
+      },
+      fallback: {
+        spawn: async (request) => report(request),
+      },
+      emitter: {
+        emit: (kind, payload) => events.push({ kind, payload }),
+      },
+    });
+
+    const result = await coordinator.run({
+      role: "HostedScout",
+      agentId: "agent-scout-1",
+      taskId: "task-1",
+      depth: 0,
+      prompt: "Inspect routing.",
+      requestedTools: ["fs.read"],
+    }, new AbortController().signal);
+
+    expect(result.accepted).toBe(true);
+    expect(result.report?.evidenceCapsule.evidenceIds).toEqual(["ev-1"]);
+    expect(coordinator.agentsUsed).toBe(1);
+    expect(events.map((event) => event.kind)).toEqual([
+      "hosted_agent.spawned",
+      "hosted_agent.fallback_local",
+      "hosted_agent.completed",
+    ]);
+  });
+
+  test("rejects mismatched fallback evidence instead of trusting local provenance", async () => {
+    const coordinator = new HostedScoutCoordinator({
+      taskEpochId: "epoch-1",
+      taskId: "task-1",
+      callerId: "root",
+      workspaceIdentityDigest: "workspace-1",
+      transport: { spawn: async () => { throw new Error("offline"); } },
+      fallback: {
+        spawn: async (request) => ({
+          ...report(request),
+          workspaceIdentityDigest: "workspace-other",
+        }),
+      },
+    });
+
+    const result = await coordinator.run({
+      role: "HostedReviewer",
+      agentId: "agent-reviewer-1",
+      taskId: "task-1",
+      depth: 0,
+      prompt: "Review the evidence.",
+      requestedTools: ["git.diff"],
+    }, new AbortController().signal);
+    expect(result).toMatchObject({ accepted: false, reason: "workspace_mismatch" });
+  });
+});
