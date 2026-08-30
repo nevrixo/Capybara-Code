@@ -121,6 +121,8 @@ interface HarnessOptions {
   readonly checkpoints?: KernelOptions["checkpoints"];
   readonly reflector?: KernelOptions["reflector"];
   readonly onReflection?: KernelOptions["onReflection"];
+  readonly onRedirect?: KernelOptions["onRedirect"];
+  readonly reasoningEpoch?: KernelOptions["reasoningEpoch"];
   readonly inferencePolicy?: KernelOptions["inferencePolicy"];
   readonly autoRoute?: boolean;
   readonly serviceTier?: KernelOptions["serviceTier"];
@@ -272,6 +274,8 @@ function harness(options: HarnessOptions) {
     ...(options.checkpoints !== undefined ? { checkpoints: options.checkpoints } : {}),
     ...(options.reflector !== undefined ? { reflector: options.reflector } : {}),
     ...(options.onReflection !== undefined ? { onReflection: options.onReflection } : {}),
+    ...(options.onRedirect !== undefined ? { onRedirect: options.onRedirect } : {}),
+    ...(options.reasoningEpoch !== undefined ? { reasoningEpoch: options.reasoningEpoch } : {}),
     ...(options.inferencePolicy !== undefined ? { inferencePolicy: options.inferencePolicy } : {}),
     ...(options.autoRoute !== undefined ? { autoRoute: options.autoRoute } : {}),
     ...(options.serviceTier !== undefined ? { serviceTier: options.serviceTier } : {}),
@@ -2675,14 +2679,94 @@ describe("Auto Review (§11.9, AC-17)", () => {
   });
 });
 
+describe("adaptive reasoning epoch continuity (P0-02)", () => {
+  test("uses the same host scope for route.decide and the provider request", async () => {
+    const policy = new InferenceUtilityController({ defaultModel: "gpt-5.6-terra" });
+    const { kernel, events, provider } = harness({
+      steps: [{ text: "Done." }],
+      inferencePolicy: policy,
+      autoRoute: true,
+      reasoningEpoch: () => ({
+        taskEpochId: "epoch-current",
+        continuity: "current_turn",
+        resetReason: "goal_changed",
+        goalStable: false,
+        hypothesisInvalidated: false,
+      }),
+    });
+
+    await kernel.runTurn("route with a fresh epoch", new AbortController().signal);
+
+    expect(payloadsOf(events, "model.route_decided")[0]).toMatchObject({
+      reasoningContext: "current_turn",
+    });
+    expect(provider.requests[0]?.reasoning.context).toBe("current_turn");
+  });
+
+  test("an epoch change clears previous_response and excludes prior opaque reasoning from replay", async () => {
+    let epoch: { taskEpochId: string; continuity: "all_turns" | "current_turn" } = {
+      taskEpochId: "epoch-1",
+      continuity: "all_turns",
+    };
+    const provider = new InlineProvider(async function* (_request, _signal, callIndex) {
+      yield { type: "response.started", requestId: `epoch-response-${callIndex}` };
+      if (callIndex === 0) {
+        yield {
+          type: "response.item",
+          authoritative: true,
+          item: {
+            kind: "reasoning",
+            itemId: "reasoning-before-reset",
+            sequence: 0,
+            opaque: "OPAQUE_REASONING_BEFORE_RESET",
+          },
+        };
+      }
+      yield {
+        type: "text.delta",
+        text: callIndex === 0 ? "First answer." : "Second answer.",
+        itemId: `message-${callIndex}`,
+        outputIndex: 0,
+      };
+      yield { type: "response.completed", responseId: `response-${callIndex}` };
+    });
+    const { kernel } = harness({
+      steps: [],
+      provider,
+      continuationMode: "previous_response",
+      reasoningEpoch: () => epoch,
+    });
+
+    await kernel.runTurn("first", new AbortController().signal);
+    expect(kernel.history.some((item) => item.type === "reasoning")).toBe(true);
+
+    epoch = { taskEpochId: "epoch-2", continuity: "current_turn" };
+    await kernel.runTurn("second", new AbortController().signal);
+
+    expect(provider.requests[1]?.previousResponseId).toBeUndefined();
+    expect(provider.requests[1]?.reasoning.context).toBe("current_turn");
+    expect(JSON.stringify(provider.requests[1]?.input)).not.toContain("OPAQUE_REASONING_BEFORE_RESET");
+    expect(kernel.history.some((item) => item.type === "reasoning")).toBe(false);
+  });
+});
+
 describe("mid-turn redirect (§11.10)", () => {
   test("a redirect is folded into the running turn", async () => {
+    let epoch: { taskEpochId: string; continuity: "all_turns" | "current_turn" } = {
+      taskEpochId: "epoch-before-redirect",
+      continuity: "all_turns",
+    };
     const { kernel, events, provider } = harness({
       steps: [
         { toolCalls: [{ callId: "c1", name: "fs.read", arguments: { path: "a.ts" } }] },
         { text: "Handled the redirect." },
       ],
       toolResults: { "fs.read": { result: okResult("ok") } },
+      continuationMode: "previous_response",
+      reasoningEpoch: () => epoch,
+      onRedirect: () => {
+        epoch = { taskEpochId: "epoch-after-redirect", continuity: "current_turn" };
+      },
     });
     kernel.redirect("actually look at b.ts instead");
     const result = await kernel.runTurn("look at a.ts", new AbortController().signal);
@@ -2691,6 +2775,8 @@ describe("mid-turn redirect (§11.10)", () => {
     // The redirect text reached the provider as user input.
     const serialized = JSON.stringify(provider.requests);
     expect(serialized).toContain("actually look at b.ts instead");
+    expect(provider.requests[1]?.previousResponseId).toBeUndefined();
+    expect(provider.requests[1]?.reasoning.context).toBe("current_turn");
   });
 });
 
@@ -2933,7 +3019,7 @@ describe("explicit provider continuation modes (§10.6)", () => {
     expect(serialized).not.toContain("PROJECTED_USER_SENTINEL");
   });
 
-  test("a phase change that resets previous_response recompiles complete tool history", async () => {
+  test("a phase-only change preserves previous_response continuity", async () => {
     const { kernel, provider } = harness({
       continuationMode: "previous_response",
       phasePolicy: true,
@@ -2949,12 +3035,12 @@ describe("explicit provider continuation modes (§10.6)", () => {
     await kernel.runTurn("PHASE_USER_SENTINEL", new AbortController().signal);
 
     const second = provider.requests[1];
-    expect(second?.previousResponseId).toBeUndefined();
+    expect(second?.previousResponseId).toBe("mock_resp_1");
     expect(
       second?.input.some(
         (item) => item.type === "function_call" && item.callId === "phase-call",
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       second?.input.some(
         (item) =>

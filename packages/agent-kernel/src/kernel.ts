@@ -44,7 +44,6 @@ import {
 import {
   decideRetry,
   effortChangeLine,
-  reasoningContextScope,
 } from "@cbc/provider-openai";
 import {
   actionHash,
@@ -522,6 +521,15 @@ export interface GeneratedImageHandle {
 /** Who owns conversation continuation between provider requests (§10.6). */
 export type ContinuationMode = "client_managed" | "previous_response";
 
+/** Host-owned task epoch contract sampled immediately before provider work. */
+export interface KernelReasoningEpochScope {
+  readonly taskEpochId?: string;
+  readonly continuity: ReasoningContextScope;
+  readonly resetReason?: string;
+  readonly goalStable?: boolean;
+  readonly hypothesisInvalidated?: boolean;
+}
+
 export type ContextPressureGuardResult =
   | { readonly action: "accept"; readonly decision?: ContextPressureDecision }
   | { readonly action: "compact" | "emergency"; readonly targetTokens: number; readonly decision: ContextPressureDecision };
@@ -627,6 +635,9 @@ export interface KernelOptions {
   readonly safetyIdentifier?: string;
   /** v1.3 attribution supplied by the session epoch controller. */
   readonly callerId?: string;
+  /** Adaptive persisted-reasoning scope supplied by the session epoch owner. */
+  readonly reasoningEpoch?: () => KernelReasoningEpochScope | undefined;
+  /** Legacy attribution callback retained for hosts without adaptive scope. */
   readonly taskEpochId?: () => string | undefined;
   readonly workspaceIdentityDigest?: () => string | undefined;
   /** §11.9 Auto Review: run an independent reviewer after edits. */
@@ -685,6 +696,8 @@ export interface KernelOptions {
    * turn too late to be useful.
    */
   readonly onReflection?: (analysis: ReflectionAnalysis) => void;
+  /** Notify the host before a mid-turn redirect is sampled. */
+  readonly onRedirect?: (text: string) => void;
   readonly now?: () => number;
 }
 
@@ -755,6 +768,7 @@ export class AgentKernel {
   #usage: ModelUsage = emptyUsage();
   #observations: Observation[] = [];
   #continuationSignature: string | undefined;
+  #reasoningEpochId: string | undefined;
   #previousResponseFallbackUsed = false;
   #providerContextRecoveryUsed = false;
 
@@ -861,7 +875,7 @@ export class AgentKernel {
       resetContinuation: () => {},
       close: async () => {},
     };
-
+    this.#reasoningEpochId = this.#readReasoningEpoch().taskEpochId ?? "no-epoch";
   }
 
   get history(): readonly ModelInputItem[] {
@@ -1019,6 +1033,48 @@ export class AgentKernel {
     this.#providerSession.resetContinuation(reason);
   }
 
+  /** Read the host scope fail-closed and apply the kernel's role boundary. */
+  #readReasoningEpoch(): KernelReasoningEpochScope {
+    let supplied: KernelReasoningEpochScope | undefined;
+    try {
+      supplied = this.#options.reasoningEpoch?.();
+    } catch {
+      supplied = undefined;
+    }
+    const taskEpochId = supplied?.taskEpochId ?? this.#options.taskEpochId?.();
+    const continuity: ReasoningContextScope = this.#options.role === "root"
+      ? supplied?.continuity ?? (this.#options.reasoningEpoch === undefined ? "all_turns" : "current_turn")
+      : "current_turn";
+    return {
+      ...(taskEpochId !== undefined ? { taskEpochId } : {}),
+      continuity,
+      ...(supplied?.resetReason !== undefined ? { resetReason: supplied.resetReason } : {}),
+      ...(supplied?.goalStable !== undefined ? { goalStable: supplied.goalStable } : {}),
+      ...(supplied?.hypothesisInvalidated !== undefined
+        ? { hypothesisInvalidated: supplied.hypothesisInvalidated }
+        : {}),
+    };
+  }
+
+  /**
+   * Synchronize provider continuation with the host epoch before compiling.
+   * Opaque reasoning remains in the journal, but it is removed from the
+   * provider-facing replay when its assumptions no longer hold.
+   */
+  #synchronizeReasoningEpoch(): KernelReasoningEpochScope {
+    const scope = this.#readReasoningEpoch();
+    const nextId = scope.taskEpochId ?? "no-epoch";
+    if (this.#reasoningEpochId !== undefined && this.#reasoningEpochId !== nextId) {
+      const previousId = this.#reasoningEpochId;
+      this.resetProviderContinuation(`task epoch changed: ${previousId} -> ${nextId}`);
+      this.#history = this.#history.filter(
+        (item) => item.type !== "reasoning" && item.type !== "compaction",
+      );
+    }
+    this.#reasoningEpochId = nextId;
+    return scope;
+  }
+
   #resetContinuationForHistoryRewrite(callIds: readonly string[]): void {
     if (this.#previousResponseId === undefined || callIds.length === 0) return;
     const affected = new Set(callIds);
@@ -1093,9 +1149,9 @@ export class AgentKernel {
     this.#previousResponseFallbackUsed = false;
     this.#providerContextRecoveryUsed = false;
 
-    const taskEpochId = this.#options.taskEpochId?.();
-    const workspaceIdentityDigest = this.#options.workspaceIdentityDigest?.();
-    const emit = <T>(kind: CbcEventKind, payload: T) =>
+    const emit = <T>(kind: CbcEventKind, payload: T) => {
+      const taskEpochId = this.#readReasoningEpoch().taskEpochId;
+      const workspaceIdentityDigest = this.#options.workspaceIdentityDigest?.();
       this.#options.emitter.emit(kind, payload, {
         turnId,
         agentId: this.#options.agentId,
@@ -1103,6 +1159,7 @@ export class AgentKernel {
         ...(taskEpochId !== undefined ? { taskEpochId } : {}),
         ...(workspaceIdentityDigest !== undefined ? { workspaceIdentityDigest } : {}),
       });
+    };
 
     emit("run.trace_started", {
       turnId,
@@ -1144,7 +1201,13 @@ export class AgentKernel {
     // can name a model (§10.5). Every consumer — the route events below,
     // `turn.started`, each provider request, and the cost estimate — reads this
     // same decision.
-    this.#turnRoute = this.#decideRoute(firstPrompt, userInput);
+    const initialReasoningEpoch = this.#readReasoningEpoch();
+    this.#turnRoute = this.#decideRoute(
+      firstPrompt,
+      userInput,
+      this.#phase,
+      initialReasoningEpoch.continuity,
+    );
     this.#routeEpoch = this.#turnRoute === undefined ? 0 : 1;
     if (this.#turnRoute !== undefined) {
       this.#emitRouteEvents(this.#turnRoute, emit);
@@ -1378,6 +1441,12 @@ export class AgentKernel {
             // §11.10 interrupt and redirect: fold the new instruction in.
             pendingUserInput = this.#redirect;
             this.#redirect = undefined;
+            try {
+              this.#options.onRedirect?.(pendingUserInput);
+            } catch {
+              // Epoch telemetry must not make a user redirect unresponsive. A
+              // failing host callback is handled fail-closed by reasoningEpoch.
+            }
             emit("turn.interrupted", { reason: "user redirected the current turn" });
           }
           // §11.2: a failed observation is diagnosed before the next sample, so
@@ -1891,6 +1960,7 @@ export class AgentKernel {
       // Context maintenance is best-effort; retain the prior safe view rather
       // than aborting the provider turn it was meant to protect.
     }
+    let reasoningEpoch = this.#synchronizeReasoningEpoch();
     emit("context.prepare_completed", {
       durationMs: Math.max(0, this.#now() - prepareStartedAt),
       historyItems: this.#history.length,
@@ -1946,6 +2016,7 @@ export class AgentKernel {
       } catch {
         // The retry still uses the last safe prompt inputs when maintenance fails.
       }
+      reasoningEpoch = this.#synchronizeReasoningEpoch();
       promptInputs = this.#options.promptInputs();
       this.#resetContinuationForHistoryRewrite(
         promptInputs.historyRewriteCallIds ?? [],
@@ -1967,7 +2038,7 @@ export class AgentKernel {
       }
     }
     const cacheAfter = promptMaterializationCacheStats();
-    const taskEpochId = this.#options.taskEpochId?.();
+    const taskEpochId = reasoningEpoch.taskEpochId;
     const result: CompiledModelRequest = taskEpochId === undefined
       ? compiled
       : { ...compiled, taskEpochId };
@@ -2000,20 +2071,24 @@ export class AgentKernel {
     prompt: CompiledModelRequest,
     userInput: string | undefined,
     emit: <T>(kind: CbcEventKind, payload: T) => void,
+    reasoningContext: ReasoningContextScope,
   ): void {
-    if (this.#options.phasePolicy !== true) return;
     const nextPhase = this.#phaseForSample();
-    if (nextPhase === this.#phase) return;
-    const previousPhase = this.#phase;
-    this.#phase = nextPhase;
-    emit("model.phase_changed", {
-      from: previousPhase,
-      to: nextPhase,
-      epoch: this.#routeEpoch,
-      reason: "runtime work state changed",
-    });
-    if (this.#routeEpoch >= 4) return;
-    const nextRoute = this.#decideRoute(prompt, userInput ?? "", nextPhase);
+    const phaseChanged = this.#options.phasePolicy === true && nextPhase !== this.#phase;
+    const contextChanged = this.#turnRoute?.reasoningContext !== reasoningContext;
+    if (!phaseChanged && !contextChanged) return;
+    if (phaseChanged) {
+      const previousPhase = this.#phase;
+      this.#phase = nextPhase;
+      emit("model.phase_changed", {
+        from: previousPhase,
+        to: nextPhase,
+        epoch: this.#routeEpoch,
+        reason: "runtime work state changed",
+      });
+    }
+    if (this.#routeEpoch >= 4 && !contextChanged) return;
+    const nextRoute = this.#decideRoute(prompt, userInput ?? "", nextPhase, reasoningContext);
     if (nextRoute === undefined) return;
     const previousRoute = this.#turnRoute;
     if (
@@ -2021,7 +2096,8 @@ export class AgentKernel {
       previousRoute.model === nextRoute.model &&
       previousRoute.mode === nextRoute.mode &&
       previousRoute.effort === nextRoute.effort &&
-      previousRoute.intent === nextRoute.intent
+      previousRoute.intent === nextRoute.intent &&
+      previousRoute.reasoningContext === nextRoute.reasoningContext
     ) {
       return;
     }
@@ -2032,9 +2108,9 @@ export class AgentKernel {
       phase: nextPhase,
       from: previousRoute === undefined
         ? undefined
-        : { model: previousRoute.model, mode: previousRoute.mode, effort: previousRoute.effort, intent: previousRoute.intent },
-      to: { model: nextRoute.model, mode: nextRoute.mode, effort: nextRoute.effort, intent: nextRoute.intent },
-      reason: "phase-aware route reconciliation",
+        : { model: previousRoute.model, mode: previousRoute.mode, effort: previousRoute.effort, intent: previousRoute.intent, reasoningContext: previousRoute.reasoningContext },
+      to: { model: nextRoute.model, mode: nextRoute.mode, effort: nextRoute.effort, intent: nextRoute.intent, reasoningContext: nextRoute.reasoningContext },
+      reason: contextChanged ? "reasoning epoch scope changed" : "phase-aware route reconciliation",
     });
     try {
       this.#options.onRouteDecided?.(nextRoute, prompt);
@@ -2048,8 +2124,9 @@ export class AgentKernel {
     prompt: CompiledModelRequest,
     userInput = "",
     phase: WorkPhase = this.#phase,
+    reasoningContext: ReasoningContextScope = this.#readReasoningEpoch().continuity,
   ): InferencePolicyDecision | undefined {
-    return this.#options.inferencePolicy?.decide({
+    const decision = this.#options.inferencePolicy?.decide({
       intent: this.#sampleIntent(userInput, phase),
       ...(this.#autoRoute === true ? {} : { explicitModel: this.#currentModel }),
       explicitEffort: this.#currentEffort,
@@ -2059,9 +2136,14 @@ export class AgentKernel {
       configuredMaxOutputTokens: this.#options.maxOutputTokens ?? 32_000,
       needsReasoningSummary: (this.#options.reasoningSummary ?? "auto") === "auto",
       qualityFirst: this.#reasoningEffortLocked && this.#currentEffort === "max",
+      reasoningContext,
       ...(this.#premiumContextPolicy !== undefined ? { premiumPolicy: this.#premiumContextPolicy } : {}),
       ...(this.#options.reserveOutputTokens !== undefined ? { reserveOutputTokens: this.#options.reserveOutputTokens } : {}),
     });
+    if (decision === undefined || decision.reasoningContext === reasoningContext) return decision;
+    // The epoch owner is the safety authority. A policy implementation may
+    // choose model/effort/lane, but it cannot widen persisted reasoning scope.
+    return { ...decision, reasoningContext };
   }
 
   #sampleIntent(userInput: string, phase: WorkPhase = this.#phase): import("@cbc/provider-openai").SampleIntent {
@@ -2233,7 +2315,8 @@ export class AgentKernel {
         }
       }
     }
-    this.#maybeRouteForPhase(assembled, userInput, emit);
+    const reasoningEpoch = this.#synchronizeReasoningEpoch();
+    this.#maybeRouteForPhase(assembled, userInput, emit, reasoningEpoch.continuity);
     // The turn's single routing decision (§10.5). Sampling steps never re-decide:
     // a second decision could disagree with the one the route events announced.
     const policyDecision = this.#turnRoute;
@@ -2241,12 +2324,7 @@ export class AgentKernel {
     const requestMode = policyDecision?.mode ?? this.#options.reasoningMode ?? "standard";
     const requestEffort = policyDecision?.effort ?? this.#currentEffort;
     const model = findModel(requestModelId);
-    const scope: ReasoningContextScope = reasoningContextScope({
-      isRoot: this.#options.role === "root",
-      goalStable: true,
-      isReviewer: this.#options.role === "reviewer",
-      hypothesisInvalidated: false,
-    });
+    const scope: ReasoningContextScope = policyDecision?.reasoningContext ?? reasoningEpoch.continuity;
     const requestedReasoningSummary = this.#options.reasoningSummary ?? "auto";
     const configuredMaxOutputTokens = this.#options.maxOutputTokens ?? 32_000;
     const providerGenerationBudget = model === undefined
@@ -2261,14 +2339,12 @@ export class AgentKernel {
         }).maxOutputTokens;
 
     const cacheKey = this.#options.cacheKey?.(assembled);
-    const taskEpochId = this.#options.taskEpochId?.();
+    const taskEpochId = reasoningEpoch.taskEpochId;
     const continuationSignature = [
       requestModelId,
       taskEpochId ?? "no-epoch",
       this.#activeInteractionMode,
       fingerprint(assembled.serializedTools),
-      this.#phase,
-      String(this.#routeEpoch),
     ].join(":");
     if (
       this.#previousResponseId !== undefined &&
