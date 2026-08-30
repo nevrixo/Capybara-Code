@@ -466,10 +466,12 @@
         "deepPlan",
         "promptCompiler",
         "compoundTools",
+        "actionSurface",
         "toolRecovery",
         "todo",
         "toolGraph",
-        "verification"
+        "verification",
+        "learning"
       ],
       "properties": {
         "permissionMode": {
@@ -520,6 +522,12 @@
         "compoundTools": {
           "type": "boolean",
           "default": true
+        },
+        "actionSurface": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["inspect", "change", "verify", "delegate", "remember"] },
+          "uniqueItems": true,
+          "default": []
         },
         "toolRecovery": {
           "type": "object",
@@ -646,6 +654,33 @@
                 "risk"
               ],
               "default": "risk"
+            }
+          }
+        },
+        "learning": {
+          "description": "§8.4 [agent.learning] — evidence-backed Strategy Capsule policy (§6.3).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "strategyCapsules",
+            "minVerifiedObservations"
+          ],
+          "properties": {
+            "strategyCapsules": {
+              "description": "off declines proposals; suggest keeps every capsule a suggestion; on activates session scope unattended.",
+              "type": "string",
+              "enum": [
+                "off",
+                "suggest",
+                "on"
+              ],
+              "default": "suggest"
+            },
+            "minVerifiedObservations": {
+              "description": "Independent verified trajectories required before a capsule may activate.",
+              "type": "integer",
+              "minimum": 1,
+              "default": 3
             }
           }
         }

@@ -38,6 +38,22 @@ does not fail validation, so nothing would catch it except a human reading this 
 
 ---
 
+## config 1.0 — action surface groups
+
+Added agent.actionSurface, a list of the §6.5 groups (inspect, change, verify,
+delegate, remember) whose facade is active. It defaults to the empty list, which
+means the default session sees no group at all.
+
+It is a list rather than a boolean because §6.6 requires the groups to be
+introduced one at a time with the bench re-run between them: a single switch
+could not express "front the writers but leave the reads direct", and the bench
+could not attribute a quality change to one group. An enabled group takes over
+its members' always-active flag; the members stay in the catalog, still reachable
+by internal id and by tool.discover, because §6.5 keeps the internal ids.
+
+This is an additive 1.x change with an empty default, so no existing config
+becomes more permissive.
+
 ## events 1.0 — action group expansion
 
 Added tool.group_expanded, journaled when a §6.5 action-group call is rewritten
@@ -309,3 +325,11 @@ Canonical Thinking text is bounded at 4 KiB for provider summaries and 64 KiB fo
   `fs.read.recordEvidence`; the default catalog remains unchanged while
   `experimental.durableMemory` is off.
 - Synchronized `fs.edit.preview` and `fs.edit` tool IDs with the generated tool schema.
+
+## 1.3.0
+
+- Added `schemas/memory/capsule.schema.json` for the §6.2 StrategyCapsule: a capsule
+  enters as `proposed`, carries at least one evidence reference at every scope, and
+  records the independent observation count and invalidators the §6.3 gates read.
+- Added the wired `[agent.learning]` configuration section (`strategy_capsules`,
+  `min_verified_observations`) from §8.4.

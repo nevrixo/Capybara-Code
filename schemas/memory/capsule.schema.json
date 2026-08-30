@@ -1,0 +1,110 @@
+{
+  "x-dialect": "json-schema-draft-2020-12",
+  "$id": "cbc:memory/capsule",
+  "title": "StrategyCapsule",
+  "description": "§6.2 evidence-backed strategy capsule. Matches packages/memory-service/src/capsule.ts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "kind",
+    "statement",
+    "scope",
+    "evidenceIds",
+    "confidence",
+    "observedCount",
+    "invalidators",
+    "createdFromRouteIds",
+    "status",
+    "createdAt",
+    "updatedAt",
+    "revision"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^capsule-"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "invariant",
+        "workflow",
+        "failure_pattern",
+        "user_preference"
+      ]
+    },
+    "statement": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scope": {
+      "type": "string",
+      "enum": [
+        "session",
+        "workspace",
+        "user"
+      ]
+    },
+    "evidenceIds": {
+      "description": "§6.3 no evidence, no autosave: at least one reference is required for every scope.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "observedCount": {
+      "description": "Independent verified trajectories; activation requires agent.learning.minVerifiedObservations.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "invalidators": {
+      "description": "§6.3 conditions whose change retires the capsule.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "expiresAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "createdFromRouteIds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "status": {
+      "description": "A capsule enters as proposed and never as active (§6.3).",
+      "type": "string",
+      "enum": [
+        "proposed",
+        "active",
+        "contested",
+        "forgotten"
+      ]
+    },
+    "createdAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "updatedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    }
+  }
+}
