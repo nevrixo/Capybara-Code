@@ -188,6 +188,21 @@ export interface TodoConfig {
   safeRebase: boolean;
 }
 
+/**
+ * §8.4 [agent.learning] — the Evidence-backed Strategy Capsule policy (P1-01).
+ *
+ * `strategyCapsules` is the §6.3 application policy, not an on/off switch:
+ * `suggest` is the documented default because a capsule the harness learned on
+ * its own must reach the user as a proposal rather than as policy. `off`
+ * declines proposals entirely; `on` still requires approval for workspace and
+ * user scope, and only removes the prompt for session scope.
+ */
+export interface AgentLearningConfig {
+  strategyCapsules: "off" | "suggest" | "on";
+  /** §6.3 minimum independent verified trajectories before activation. */
+  minVerifiedObservations: number;
+}
+
 // Adaptive saving profile.
 export interface AgentConfig {
   permissionMode: PermissionMode;
@@ -204,6 +219,7 @@ export interface AgentConfig {
   todo: TodoConfig;
   toolGraph: ToolGraphConfig;
   verification: VerificationConfig;
+  learning: AgentLearningConfig;
 }
 
 export interface PerformanceConfig {
@@ -597,6 +613,7 @@ export function defaultConfig(): CbcConfig {
         falseCompletePolicy: "block",
         reviewPolicy: "risk",
       },
+      learning: { strategyCapsules: "suggest", minVerifiedObservations: 3 },
     },
     subagents: {
       maxConcurrent: 3,
@@ -899,6 +916,9 @@ const MONOTONIC_PROJECT_ORDER: Record<string, readonly string[]> = {
   "agent.verification.reviewPolicy": ["always", "risk"],
   "agent.verification.independentReviewRiskThreshold": ["R0", "R1", "R2", "R3", "R4", "R5", "R6"],
   "agent.verification.falseCompletePolicy": ["block", "warn"],
+  // §6.3 keeps learning suggestion-only by default; a project may decline
+  // capsules outright but may never promote the user's policy to `on`.
+  "agent.learning.strategyCapsules": ["off", "suggest", "on"],
   "privacy.crashReports": ["off", "ask", "on"],
 };
 
@@ -952,7 +972,9 @@ const ENUMS: Record<string, readonly string[]> = {
   "agent.promptCompiler": ["v1", "v2"],
   "agent.verification.reviewPolicy": ["always", "risk"],
   "agent.verification.independentReviewRiskThreshold": ["R0", "R1", "R2", "R3", "R4", "R5", "R6"],
-  "agent.verification.falseCompletePolicy": ["block", "warn"],  "ui.color": ["auto", "always", "never"],
+  "agent.verification.falseCompletePolicy": ["block", "warn"],
+  "agent.learning.strategyCapsules": ["off", "suggest", "on"],
+  "ui.color": ["auto", "always", "never"],
   "ui.statusDensity": ["auto", "compact", "full"],
   "model.reasoningMode": ["standard", "pro"],
   "model.reasoningEffort": ["none", "low", "medium", "high", "xhigh", "max"],
@@ -1542,6 +1564,7 @@ const INTEGER_CONSTRAINTS: Readonly<Record<string, IntegerConstraint>> = {
   "lsp.restartWindowSeconds": { minimum: 1 },
   "lsp.mutations.maxFiles": { minimum: 1, maximum: 100 },
   "lsp.mutations.maxChangedBytes": { minimum: 1 },
+  "agent.learning.minVerifiedObservations": { minimum: 1 },
   "memory.maxRecordsPerWorkspace": { minimum: 1 },
   "memory.maxValueBytes": { minimum: 1 },
   "memory.recallLimit": { minimum: 1 },
