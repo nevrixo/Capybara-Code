@@ -43,6 +43,59 @@ are versioned deterministic recipes. Each recipe produces a fresh repository, a
 SHA-256 manifest, and no agent-visible acceptance checker. Generated hidden checks
 execute in the harness and inspect the post-run workspace.
 
+## OpenAI-native cohort
+
+The 150-task release cohort measures the product end to end. It cannot attribute a
+change to a *lane*, because most of its tasks are eligible for several. §5.27 therefore
+adds a second, separate cohort of eleven tasks — the release cohort is left untouched —
+each chosen so that exactly one native-lane decision determines the outcome:
+
+| Task | What it isolates |
+|---|---|
+| `on-ptc-aggregation` | a read/search/aggregate shape a program should reduce to one result |
+| `on-semantic-pivot` | the opposite: each intermediate result changes the next question, so PTC should *not* be chosen |
+| `on-ptc-write-boundary` | a program that reaches a mutation must be refused, not silently downgraded |
+| `on-decomposable-exploration` | an investigation that splits cleanly across hosted scouts |
+| `on-anti-decomposable` | one that does not, where splitting costs more than it saves |
+| `on-mid-turn-redirect` | a goal change mid-turn must reset persisted reasoning |
+| `on-reviewer-independence` | a reviewer must not inherit the parent's reasoning |
+| `on-persisted-reasoning` | a long stable goal should keep continuity rather than recompiling |
+| `on-cache-economics` | whether explicit cache writes pay for themselves |
+| `on-native-lane-fallback` | an unavailable native lane must continue the same task locally |
+| `on-false-complete-bait` | a turn that looks finished but has a stale revision behind it |
+
+Select it with `--cohort openai-native`. Two tasks need harness support the release
+cohort never did: `on-mid-turn-redirect` uses a scripted follow-up prompt, and
+`on-native-lane-fallback` needs the lane made unavailable partway through.
+
+### Lane and route metrics
+
+These tasks are only decidable if the run records which lane actually executed, so the
+harness ingests the kernel's `RouteExecutionReceipt` alongside `native_lane.*` and
+`program.*` events. The receipt is what makes "the router improved" checkable rather
+than asserted: it carries the planned decision and the actual one, so a lane that was
+chosen and then quietly demoted to direct is counted as a fallback instead of a success.
+
+Beyond the release cohort's metrics, the artifact records PTC fallback rate, parallel
+peak and idle wait, redundant reads, and false completion as a *rate* rather than only
+as a regression count — §5.29 states its target as a percentage.
+
+### §5.29 release gate
+
+`RELEASE_GATE_5_29_THRESHOLDS` encodes the PRD's initial targets. Two things about it
+are deliberate.
+
+It is a separate threshold set rather than an edit of `STATISTICAL_THRESHOLDS`: those
+numbers belong to the earlier performance program and still gate artifacts produced
+under it, so quietly replacing them would change the verdict on evidence that was never
+measured against §5.29.
+
+And quality outranks speed. §5.29's closing line is that a speed or token reduction is
+not an improvement if the quality gate fails, so the gate evaluates quality first and a
+run that got faster while losing quality fails — it does not trade one for the other.
+Wall time is stated in the PRD as a ratio of baseline (P50 ≤ 0.80x, P95 ≤ 0.90x) while
+this module's statistic is a speedup, so the encoded bounds are the reciprocals.
+
 ## Commands
 
 ```bash
