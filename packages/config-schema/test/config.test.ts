@@ -15,6 +15,7 @@ import {
   normalizeConfigPath,
   normalizeConfigKeys,
   parseToml,
+  profileStrategy,
   readPath,
   resolvePaths,
   writePath,
@@ -225,12 +226,89 @@ describe("defaults (§21.4)", () => {
 
   test("include every §10.3 model profile", () => {
     const profiles = defaultConfig().model.profiles;
-    for (const name of ["auto", "fast", "balanced", "deep", "review", "economy"]) {
+    for (const name of ["auto", "fast", "balanced", "deep", "quality", "review", "economy"]) {
       expect(profiles[name]).toBeDefined();
     }
     expect(profiles.fast?.model).toBe("gpt-5.6-terra");
     expect(profiles.economy?.model).toBe("gpt-5.6-luna");
     expect(profiles.review?.reasoningMode).toBe("pro");
+  });
+
+  test("§6 P1-03 profiles differ in execution and verification, not only in model", () => {
+    const profiles = defaultConfig().model.profiles;
+    // The point of the P1-03 table is that the rows are distinguishable along
+    // three axes. Before the strategy columns existed, Fast and Deep differed
+    // only by effort, so a profile choice could not change how a turn ran.
+    expect(profileStrategy(profiles.fast ?? {})).toEqual({
+      execution: "direct_first",
+      verification: "focused",
+    });
+    expect(profileStrategy(profiles.balanced ?? {})).toEqual({
+      execution: "program_eligible",
+      verification: "package",
+    });
+    expect(profileStrategy(profiles.deep ?? {})).toEqual({
+      execution: "hosted_scout",
+      verification: "independent_review",
+    });
+    expect(profileStrategy(profiles.quality ?? {})).toEqual({
+      execution: "split_only",
+      verification: "independent_review",
+    });
+
+    const executions = new Set(
+      ["fast", "balanced", "deep", "quality"].map((name) => profileStrategy(profiles[name] ?? {}).execution),
+    );
+    expect(executions.size).toBe(4);
+  });
+
+  test("§12 rule 9 keeps the measured default in place", () => {
+    const config = defaultConfig();
+    // "max는 측정 후 선택": no profile may ship max effort, and the default
+    // profile stays `auto` until a bench run justifies moving it.
+    expect(config.model.profile).toBe("auto");
+    expect(profileStrategy(config.model.profiles.auto ?? {})).toEqual({
+      execution: "program_eligible",
+      verification: "package",
+    });
+    for (const [name, profile] of Object.entries(config.model.profiles)) {
+      expect(profile.reasoningEffort, `${name} must not default to max effort`).not.toBe("max");
+    }
+    // Quality is selectable but is not the default, and multi-agent is gated on a
+    // clean split rather than assumed.
+    expect(config.model.profiles.quality?.reasoningMode).toBe("pro");
+    expect(config.model.profile).not.toBe("quality");
+  });
+
+  test("reject an unknown profile strategy rather than passing it to the router", () => {
+    const loaded = loadConfig({
+      userToml: [
+        "[model.profiles.mine]",
+        'model = "gpt-5.6-sol"',
+        'execution = "hosted-scout"',
+        'verification = "everything"',
+      ].join("\n"),
+      env: {},
+    });
+    const messages = loaded.issues
+      .filter((issue) => issue.severity === "error")
+      .map((issue) => issue.path);
+    expect(messages).toContain("model.profiles.mine.execution");
+    expect(messages).toContain("model.profiles.mine.verification");
+  });
+
+  test("a profile that names only a model still resolves to the measured strategy", () => {
+    const loaded = loadConfig({
+      userToml: ['[model.profiles.mine]', 'model = "gpt-5.6-luna"'].join("\n"),
+      env: {},
+    });
+    expect(loaded.issues.filter((issue) => issue.severity === "error")).toEqual([]);
+    // A partial profile is a legal config layer, so the resolver has to fill the
+    // omissions rather than the type pretending they cannot happen.
+    expect(profileStrategy(loaded.config.model.profiles.mine ?? {})).toEqual({
+      execution: "program_eligible",
+      verification: "package",
+    });
   });
 
   test("default to chat-first adaptive context policies", () => {

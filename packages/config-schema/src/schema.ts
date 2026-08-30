@@ -187,10 +187,63 @@ export interface ModelConfig {
   profiles: Record<string, ModelProfileConfig>;
 }
 
+/**
+ * §P1-03's recommended-profile table has three columns, not one. A profile that
+ * carried only a model and an effort could not express the difference the table
+ * describes — Deep and Fast would differ in how hard the model thinks but not in
+ * how the work is executed or how much of it gets verified.
+ *
+ * - `direct_first`     stay direct; take the program lane only for a small batch
+ * - `program_eligible` prefer the program lane whenever it is eligible
+ * - `hosted_scout`     a hosted read-only scout investigates, the writer stays local
+ * - `split_only`       multi-agent only when the work splits cleanly
+ */
+export type ProfileExecutionStrategy = "direct_first" | "program_eligible" | "hosted_scout" | "split_only";
+export type ProfileVerificationStrategy = "focused" | "package" | "integration" | "independent_review";
+
 export interface ModelProfileConfig {
   model: string;
   reasoningMode: ReasoningMode;
   reasoningEffort: ReasoningEffort;
+  /**
+   * Which native lane the profile reaches for first.
+   *
+   * Optional because a profile written in TOML names only the fields the user
+   * cared about — `model.profiles.mine.model` alone is a legal config layer — so
+   * a required field here would describe a shape the loader never guarantees.
+   * Read it through `profileStrategy()` rather than directly.
+   */
+  execution?: ProfileExecutionStrategy;
+  /**
+   * The verification depth the profile asks for. Deliberately the same four
+   * values as the route decision's `verificationLevel`: a profile that spoke a
+   * parallel vocabulary would need a translation table, and the two would drift.
+   *
+   * This is a floor, not an override. The router still derives the level from
+   * what the turn actually did, so Fast's `focused` floor cannot stop a
+   * critical-risk change from earning an independent review.
+   */
+  verification?: ProfileVerificationStrategy;
+}
+
+/** The strategy pair a profile resolves to once its omissions are filled in. */
+export interface ResolvedProfileStrategy {
+  readonly execution: ProfileExecutionStrategy;
+  readonly verification: ProfileVerificationStrategy;
+}
+
+/**
+ * Resolve a profile's two strategy columns.
+ *
+ * The fallback is deliberately the `balanced`/`auto` row rather than the weakest
+ * one: a profile that forgot to say how it executes should behave like the
+ * default the eval measured, not like Fast.
+ */
+export function profileStrategy(profile: Pick<ModelProfileConfig, "execution" | "verification">): ResolvedProfileStrategy {
+  return {
+    execution: profile.execution ?? "program_eligible",
+    verification: profile.verification ?? "package",
+  };
 }
 
 export type SavingLevel = "off" | "light" | "balanced" | "strong";
@@ -608,12 +661,16 @@ export function defaultConfig(): CbcConfig {
       },
       // §10.3 profile table.
       profiles: {
-        auto: { model: "gpt-5.6-sol", reasoningMode: "standard", reasoningEffort: "medium" },
-        fast: { model: "gpt-5.6-terra", reasoningMode: "standard", reasoningEffort: "low" },
-        balanced: { model: "gpt-5.6-sol", reasoningMode: "standard", reasoningEffort: "medium" },
-        deep: { model: "gpt-5.6-sol", reasoningMode: "standard", reasoningEffort: "high" },
-        review: { model: "gpt-5.6-sol", reasoningMode: "pro", reasoningEffort: "high" },
-        economy: { model: "gpt-5.6-luna", reasoningMode: "standard", reasoningEffort: "low" },
+        // §12's rule 9 binds the defaults: `auto` stays where the earlier eval put
+        // it, and the Quality row's own note — "max는 측정 후 선택" — is why no
+        // profile ships pro reasoning at max effort by default.
+        auto: { model: "gpt-5.6-sol", reasoningMode: "standard", reasoningEffort: "medium", execution: "program_eligible", verification: "package" },
+        fast: { model: "gpt-5.6-terra", reasoningMode: "standard", reasoningEffort: "low", execution: "direct_first", verification: "focused" },
+        balanced: { model: "gpt-5.6-sol", reasoningMode: "standard", reasoningEffort: "medium", execution: "program_eligible", verification: "package" },
+        deep: { model: "gpt-5.6-sol", reasoningMode: "standard", reasoningEffort: "high", execution: "hosted_scout", verification: "independent_review" },
+        quality: { model: "gpt-5.6-sol", reasoningMode: "pro", reasoningEffort: "high", execution: "split_only", verification: "independent_review" },
+        review: { model: "gpt-5.6-sol", reasoningMode: "pro", reasoningEffort: "high", execution: "direct_first", verification: "independent_review" },
+        economy: { model: "gpt-5.6-luna", reasoningMode: "standard", reasoningEffort: "low", execution: "direct_first", verification: "focused" },
       },
     },
     agent: {
@@ -1542,6 +1599,20 @@ function validateDynamicValue(path: string, value: unknown): string | undefined 
       return ["none", "low", "medium", "high", "xhigh", "max"].includes(String(value))
         ? undefined
         : "expected a valid reasoning effort";
+    }
+    // §6 P1-03: profiles are an open map, so the generic ENUMS table never sees
+    // these two keys — the per-field validator is the only place their vocabulary
+    // can be checked, and without it a typo would reach the router as a strategy
+    // no lane answers to.
+    if (field === "execution") {
+      return ["direct_first", "program_eligible", "hosted_scout", "split_only"].includes(String(value))
+        ? undefined
+        : "expected 'direct_first', 'program_eligible', 'hosted_scout', or 'split_only'";
+    }
+    if (field === "verification") {
+      return ["focused", "package", "integration", "independent_review"].includes(String(value))
+        ? undefined
+        : "expected 'focused', 'package', 'integration', or 'independent_review'";
     }
     return "unknown model profile field '" + field + "'";
   }

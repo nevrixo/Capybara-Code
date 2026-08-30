@@ -1546,6 +1546,24 @@
         },
         "reasoningEffort": {
           "$ref": "#/$defs/reasoningEffort"
+        },
+        "execution": {
+          "description": "§6 P1-03 execution strategy column.",
+          "enum": [
+            "direct_first",
+            "program_eligible",
+            "hosted_scout",
+            "split_only"
+          ]
+        },
+        "verification": {
+          "description": "§6 P1-03 verification strategy column, sharing the route decision's verificationLevel vocabulary.",
+          "enum": [
+            "focused",
+            "package",
+            "integration",
+            "independent_review"
+          ]
         }
       }
     },
