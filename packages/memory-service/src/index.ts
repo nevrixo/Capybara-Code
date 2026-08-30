@@ -14,3 +14,21 @@ export {
   type MemoryServiceOptions,
   type MemoryServiceSnapshot,
 } from "./service.ts";
+
+export {
+  CapsuleStore,
+  capsuleId,
+  compareCapsules,
+  freezeCapsule,
+  type AcceptedCapsuleProposal,
+  type CapsuleKind,
+  type CapsuleProposalInput,
+  type CapsuleProposalResult,
+  type CapsuleScope,
+  type CapsuleStatus,
+  type CapsuleStoreOptions,
+  type CapsuleStoreSnapshot,
+  type CapsuleTransition,
+  type RejectedCapsuleProposal,
+  type StrategyCapsule,
+} from "./capsule.ts";
