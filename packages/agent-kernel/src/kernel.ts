@@ -21,9 +21,13 @@ import {
   estimateCostUsd,
   emptyUsage,
   findModel,
+  inferenceRouteId,
   resolveProviderGenerationBudget,
   calculateNativeCompactionThreshold,
   clampEffortToModel,
+  DEFAULT_PROGRAM_POLICY,
+  PROGRAM_TOOL_ALLOWLIST,
+  ProgrammaticToolLane,
   selectEffort,
   type ComplexityFeatures,
   type GeneratedImageOutput,
@@ -37,6 +41,8 @@ import {
   type ModelUsage,
   type ProviderError,
   type ProviderTurnSession,
+  type ProgramPolicy,
+  type ProgramToolCall,
   type ReasoningContextScope,
   type ReasoningEffort,
   type ReasoningMode,
@@ -106,10 +112,12 @@ import {
   type TurnState,
 } from "./state.ts";
 
+const PROGRAMMATIC_TOOL_IDS = new Set<string>(PROGRAM_TOOL_ALLOWLIST);
+
 // P1-05: `AgentRole` is provider- and kernel-neutral; the definition lives in
 // `@cbc/inference-domain` and is re-exported here for existing call sites.
 import type { AgentRole, WorkPhase, TurnBudgetController, BudgetEnforcementMode } from "@cbc/inference-domain";
-import type { ContextPressureDecision } from "@cbc/session-domain";
+import { estimateTokens, type ContextPressureDecision } from "@cbc/session-domain";
 import { reprojectPromptContextDialogue } from "@cbc/context-engine";
 export type { AgentRole, WorkPhase };
 
@@ -566,6 +574,8 @@ export interface KernelOptions {
 
   /** Ask the provider to schedule independent function calls concurrently. */
   readonly parallelToolCalls?: boolean;
+  /** Host-owned read-only policy for provider programmatic function calls. */
+  readonly programmaticPolicy?: Partial<ProgramPolicy>;
   /** Enable opaque server-side compaction when the active provider supports it. */
   readonly nativeCompaction?: boolean;
   /** Use model-relative native compaction instead of a fixed legacy threshold. */
@@ -711,6 +721,32 @@ export interface ReviewOutcome {
   readonly summary: string;
 }
 
+export interface RouteExecutionReceipt {
+  readonly routeId: string;
+  readonly planned: {
+    readonly model: string;
+    readonly mode: ReasoningMode;
+    readonly effort: ReasoningEffort;
+    readonly reasoningContext: ReasoningContextScope;
+    readonly lane: string;
+    readonly contextBand: number;
+    readonly maxAgents: number;
+    readonly maxParallelTools: number;
+    readonly outputTokens: number;
+    readonly reasons: readonly string[];
+  };
+  readonly actual: {
+    readonly model: string;
+    readonly lane: string;
+    readonly agentsSpawned: number;
+    readonly parallelPeak: number;
+    readonly reasoningContext: ReasoningContextScope;
+    readonly cacheReadTokens: number;
+    readonly cacheWriteTokens: number;
+    readonly fallbackReasons: readonly string[];
+  };
+}
+
 export interface TurnResult {
   readonly turnId: string;
   readonly state: TurnState;
@@ -728,6 +764,7 @@ export interface TurnResult {
   readonly stateHistory: ReadonlyArray<{ from: TurnState; event: string; to: TurnState }>;
   /** Conversation items to carry into the next turn (§10.6 stateless replay). */
   readonly history: ModelInputItem[];
+  readonly routeReceipt?: RouteExecutionReceipt;
 }
 
 interface PendingCall {
@@ -783,6 +820,9 @@ export class AgentKernel {
   #reasoningEffortLocked: boolean;
   #serviceTier: "standard" | "fast" | undefined;
   #premiumContextPolicy: "utility-gated" | "allow" | "deny" | undefined;
+  readonly #programmaticPolicy: ProgramPolicy;
+  readonly #programmaticLane: ProgrammaticToolLane;
+  readonly #programmaticToolIds: ReadonlySet<string>;
   /** Any applied effect makes an automatic provider replay unsafe. */
   #sideEffectsApplied = false;
   /** Only explicitly external mutations contribute to change-review risk. */
@@ -837,6 +877,8 @@ export class AgentKernel {
   /** Monotonic phase route epoch; at most four route changes per turn. */
   #phase: WorkPhase = "orient";
   #routeEpoch = 0;
+  #routeParallelPeak = 0;
+  #routeFallbackReasons: string[] = [];
   /**
    * Actions the user allowed "for this turn" (§13.4). Keyed by the normalized
    * action hash, cleared when the turn ends: an `allow_turn` grant must apply to
@@ -861,6 +903,20 @@ export class AgentKernel {
     this.#reasoningEffortLocked = options.reasoningEffortLocked === true;
     this.#serviceTier = options.serviceTier;
     this.#premiumContextPolicy = options.premiumContextPolicy;
+    this.#programmaticPolicy = {
+      ...DEFAULT_PROGRAM_POLICY,
+      ...(options.programmaticPolicy ?? {}),
+      enabled: options.programmaticPolicy?.enabled === true,
+      failOpen: false,
+    };
+    this.#programmaticLane = new ProgrammaticToolLane(this.#programmaticPolicy);
+    const configuredProgramTools =
+      this.#programmaticPolicy.allowedToolIds ??
+      this.#programmaticPolicy.allowlist ??
+      PROGRAM_TOOL_ALLOWLIST;
+    this.#programmaticToolIds = new Set(
+      configuredProgramTools.filter((toolId) => PROGRAMMATIC_TOOL_IDS.has(toolId)),
+    );
     this.#providerSession = options.provider.createTurnSession?.() ?? {
       capabilities: options.provider.capabilities ?? {
         websocket: false,
@@ -1067,9 +1123,20 @@ export class AgentKernel {
     if (this.#reasoningEpochId !== undefined && this.#reasoningEpochId !== nextId) {
       const previousId = this.#reasoningEpochId;
       this.resetProviderContinuation(`task epoch changed: ${previousId} -> ${nextId}`);
-      this.#history = this.#history.filter(
-        (item) => item.type !== "reasoning" && item.type !== "compaction",
-      );
+      this.#history = this.#history.filter((item) => {
+        if (
+          item.type === "reasoning" ||
+          item.type === "compaction" ||
+          item.type === "program" ||
+          item.type === "program_output"
+        ) {
+          return false;
+        }
+        if (item.type === "function_call" || item.type === "function_call_output") {
+          return item.programId === undefined && item.caller?.type !== "program";
+        }
+        return true;
+      });
     }
     this.#reasoningEpochId = nextId;
     return scope;
@@ -1144,6 +1211,8 @@ export class AgentKernel {
     this.#turnRoute = undefined;
     this.#phase = "orient";
     this.#routeEpoch = 0;
+    this.#routeParallelPeak = 0;
+    this.#routeFallbackReasons = [];
     this.#turnAllowedActions.clear();
     this.#budgetNudged = false;
     this.#previousResponseFallbackUsed = false;
@@ -1723,6 +1792,7 @@ export class AgentKernel {
     let report: CompletionReport;
     const exhaustion = budgetExhausted(budget, this.#limits, this.#now());
 
+    const routeReceipt = this.#routeExecutionReceipt();
     if (machine.state === "cancelled") {
       report = {
         status: "cancelled",
@@ -1876,12 +1946,50 @@ export class AgentKernel {
         status: finalReport.status,
         changedFiles: finalReport.changedFiles.map((f) => f.path),
         tests: summarizeTests(finalReport.verification),
+        ...(routeReceipt !== undefined ? { routeReceipt } : {}),
       });
     }
     return this.#finish(turnId, machine, finalReport, budget, finalText);
   }
 
   #pendingCalls: PendingCall[] = [];
+
+  #routeExecutionReceipt(): RouteExecutionReceipt | undefined {
+    const route = this.#turnRoute;
+    if (route === undefined) return undefined;
+    const nativeFallbacks = route.warnings.filter((warning) =>
+      warning.includes("using direct") || warning.includes("dispatcher is unavailable")
+    );
+    const fallbackReasons = [...new Set([
+      ...nativeFallbacks,
+      ...this.#routeFallbackReasons,
+    ])];
+    return {
+      routeId: route.routeId,
+      planned: {
+        model: route.model,
+        mode: route.mode,
+        effort: route.effort,
+        reasoningContext: route.reasoningContext,
+        lane: route.lane,
+        contextBand: route.contextBand,
+        maxAgents: route.maxAgents,
+        maxParallelTools: route.maxParallelTools,
+        outputTokens: route.outputTokens,
+        reasons: [...route.rationaleCodes, ...route.warnings],
+      },
+      actual: {
+        model: this.#routedModel(),
+        lane: route.lane,
+        agentsSpawned: 0,
+        parallelPeak: this.#routeParallelPeak,
+        reasoningContext: route.reasoningContext,
+        cacheReadTokens: this.#usage.cachedInputTokens,
+        cacheWriteTokens: this.#usage.cacheWriteTokens,
+        fallbackReasons,
+      },
+    };
+  }
 
   #finish(
     turnId: string,
@@ -1890,6 +1998,7 @@ export class AgentKernel {
     budget: BudgetState,
     answer = "",
   ): TurnResult {
+    const routeReceipt = this.#routeExecutionReceipt();
     return {
       turnId,
       state: machine.state,
@@ -1903,6 +2012,7 @@ export class AgentKernel {
       reflections: [...this.#reflections],
       stateHistory: machine.history,
       history: [...this.#history],
+      ...(routeReceipt !== undefined ? { routeReceipt } : {}),
     };
   }
 
@@ -2093,11 +2203,7 @@ export class AgentKernel {
     const previousRoute = this.#turnRoute;
     if (
       previousRoute !== undefined &&
-      previousRoute.model === nextRoute.model &&
-      previousRoute.mode === nextRoute.mode &&
-      previousRoute.effort === nextRoute.effort &&
-      previousRoute.intent === nextRoute.intent &&
-      previousRoute.reasoningContext === nextRoute.reasoningContext
+      previousRoute.routeId === nextRoute.routeId
     ) {
       return;
     }
@@ -2108,8 +2214,8 @@ export class AgentKernel {
       phase: nextPhase,
       from: previousRoute === undefined
         ? undefined
-        : { model: previousRoute.model, mode: previousRoute.mode, effort: previousRoute.effort, intent: previousRoute.intent, reasoningContext: previousRoute.reasoningContext },
-      to: { model: nextRoute.model, mode: nextRoute.mode, effort: nextRoute.effort, intent: nextRoute.intent, reasoningContext: nextRoute.reasoningContext },
+        : { routeId: previousRoute.routeId, model: previousRoute.model, mode: previousRoute.mode, effort: previousRoute.effort, intent: previousRoute.intent, reasoningContext: previousRoute.reasoningContext },
+      to: { routeId: nextRoute.routeId, model: nextRoute.model, mode: nextRoute.mode, effort: nextRoute.effort, intent: nextRoute.intent, reasoningContext: nextRoute.reasoningContext },
       reason: contextChanged ? "reasoning epoch scope changed" : "phase-aware route reconciliation",
     });
     try {
@@ -2140,10 +2246,67 @@ export class AgentKernel {
       ...(this.#premiumContextPolicy !== undefined ? { premiumPolicy: this.#premiumContextPolicy } : {}),
       ...(this.#options.reserveOutputTokens !== undefined ? { reserveOutputTokens: this.#options.reserveOutputTokens } : {}),
     });
-    if (decision === undefined || decision.reasoningContext === reasoningContext) return decision;
+    if (decision === undefined) return undefined;
     // The epoch owner is the safety authority. A policy implementation may
     // choose model/effort/lane, but it cannot widen persisted reasoning scope.
-    return { ...decision, reasoningContext };
+    let executable = decision.reasoningContext === reasoningContext
+      ? decision
+      : { ...decision, reasoningContext };
+    if (executable.lane === "program") {
+      const programmaticAvailable =
+        this.#programmaticPolicy.enabled &&
+        this.#programmaticPolicy.maxToolCalls > 0 &&
+        this.#programmaticPolicy.maxParallelCalls > 0 &&
+        executable.capability.native.programmaticToolCalling === "supported" &&
+        prompt.tools.some((tool) => this.#programmaticToolIds.has(tool.name));
+      if (programmaticAvailable) {
+        executable = {
+          ...executable,
+          maxParallelTools: Math.max(
+            1,
+            Math.min(executable.maxParallelTools, this.#programmaticPolicy.maxParallelCalls),
+          ),
+        };
+      } else {
+        executable = this.#directRouteFallback(
+          executable,
+          "programmatic lane is disabled or unsupported; using direct tools",
+        );
+      }
+    } else if (executable.lane === "hosted_scout") {
+      // Hosted scouts use a separate read-only request owned by AgentSession.
+      // Until that dispatcher is injected, the kernel must not claim execution.
+      executable = this.#directRouteFallback(
+        executable,
+        "hosted scout dispatcher is unavailable; using direct reasoning",
+      );
+    }
+    return { ...executable, routeId: inferenceRouteId(executable) };
+  }
+
+  #directRouteFallback(
+    decision: InferencePolicyDecision,
+    warning: string,
+  ): InferencePolicyDecision {
+    if (!this.#routeFallbackReasons.includes(warning)) {
+      this.#routeFallbackReasons.push(warning);
+    }
+    return {
+      ...decision,
+      lane: "direct",
+      maxAgents: 0,
+      maxParallelTools: 1,
+      rationaleCodes: [
+        ...decision.rationaleCodes.filter((code) =>
+          code !== "program" && code !== "hosted_scout" && code !== "local_agent"
+        ),
+        "direct",
+        "native-fallback",
+      ],
+      warnings: decision.warnings.includes(warning)
+        ? decision.warnings
+        : [...decision.warnings, warning],
+    };
   }
 
   #sampleIntent(userInput: string, phase: WorkPhase = this.#phase): import("@cbc/provider-openai").SampleIntent {
@@ -2174,6 +2337,7 @@ export class AgentKernel {
     emit: <T>(kind: CbcEventKind, payload: T) => void,
   ): void {
     emit("model.route_decided", {
+      routeId: route.routeId,
       model: route.model,
       modelTier: route.modelTier,
       intent: route.intent,
@@ -2338,13 +2502,72 @@ export class AgentKernel {
             : {}),
         }).maxOutputTokens;
 
-    const cacheKey = this.#options.cacheKey?.(assembled);
+    const programmaticEnabled =
+      policyDecision?.lane === "program" &&
+      this.#programmaticPolicy.enabled &&
+      policyDecision.capability.native.programmaticToolCalling === "supported";
+    const requestTools = programmaticEnabled
+      ? assembled.tools.map((tool) =>
+          this.#programmaticToolIds.has(tool.name)
+            ? { ...tool, allowedCallers: ["direct", "programmatic"] as const }
+            : tool
+        )
+      : assembled.tools;
+    const serializedRequestTools = requestTools.length > 0 ? JSON.stringify(requestTools) : "";
+    const requestToolFingerprint = fingerprint(serializedRequestTools);
+    const requestDigest = programmaticEnabled
+      ? fingerprint(assembled.serializedInput + String.fromCharCode(0) + serializedRequestTools + String.fromCharCode(0) + "ptc-readonly-v1")
+      : assembled.requestDigest;
+    const requestToolTokenDelta = programmaticEnabled
+      ? estimateTokens(serializedRequestTools) - estimateTokens(assembled.serializedTools)
+      : 0;
+    const effectiveCompiled: CompiledModelRequest = programmaticEnabled
+      ? {
+          ...assembled,
+          tools: requestTools,
+          serializedTools: serializedRequestTools,
+          inputTokens: assembled.inputTokens + requestToolTokenDelta,
+          requestDigest,
+          packId: "pack-" + requestDigest,
+          layerTokens: {
+            ...assembled.layerTokens,
+            L1_tool_semantics: assembled.layerTokens.L1_tool_semantics + requestToolTokenDelta,
+          },
+          usageBreakdown: {
+            ...assembled.usageBreakdown,
+            estimatedInputTokens: assembled.usageBreakdown.estimatedInputTokens + requestToolTokenDelta,
+            categories: {
+              ...assembled.usageBreakdown.categories,
+              system_tools: assembled.usageBreakdown.categories.system_tools + requestToolTokenDelta,
+            },
+            layerTokens: {
+              ...assembled.usageBreakdown.layerTokens,
+              L1_tool_semantics:
+                assembled.usageBreakdown.layerTokens.L1_tool_semantics + requestToolTokenDelta,
+            },
+          },
+        }
+      : assembled;
+    const effectiveProviderGenerationBudget =
+      programmaticEnabled && model !== undefined
+        ? resolveProviderGenerationBudget({
+            model,
+            configuredMaxOutputTokens,
+            inputTokens: effectiveCompiled.inputTokens,
+            ...(this.#options.reserveOutputTokens !== undefined
+              ? { safetyReserveTokens: this.#options.reserveOutputTokens }
+              : {}),
+          }).maxOutputTokens
+        : providerGenerationBudget;
+    const routeMaxParallelTools = Math.max(1, policyDecision?.maxParallelTools ?? 1);
+    const cacheKey = this.#options.cacheKey?.(effectiveCompiled);
     const taskEpochId = reasoningEpoch.taskEpochId;
     const continuationSignature = [
       requestModelId,
       taskEpochId ?? "no-epoch",
       this.#activeInteractionMode,
-      fingerprint(assembled.serializedTools),
+      requestToolFingerprint,
+      programmaticEnabled ? "ptc-readonly-v1" : "direct",
     ].join(":");
     if (
       this.#previousResponseId !== undefined &&
@@ -2366,14 +2589,14 @@ export class AgentKernel {
     if (budgetController !== undefined) {
       const predictedCostUsd = estimateCostUsd(requestModelId, {
         ...emptyUsage(),
-        inputTokens: assembled.inputTokens,
-        outputTokens: providerGenerationBudget,
-        totalTokens: assembled.inputTokens + providerGenerationBudget,
+        inputTokens: effectiveCompiled.inputTokens,
+        outputTokens: effectiveProviderGenerationBudget,
+        totalTokens: effectiveCompiled.inputTokens + effectiveProviderGenerationBudget,
       });
       const authorization = budgetController.authorize({
         sampleId: requestId,
-        predictedInputTokens: assembled.inputTokens,
-        predictedOutputTokens: providerGenerationBudget,
+        predictedInputTokens: effectiveCompiled.inputTokens,
+        predictedOutputTokens: effectiveProviderGenerationBudget,
         predictedCostUsd,
         phase: this.#phase,
         mandatoryVerification: this.#workspaceMutated,
@@ -2405,9 +2628,9 @@ export class AgentKernel {
         };
       }
     }
-    const modelWindowTokens = model?.contextWindow ?? assembled.inputTokens + (this.#options.reserveOutputTokens ?? 32_000) + 8_192;
+    const modelWindowTokens = model?.contextWindow ?? effectiveCompiled.inputTokens + (this.#options.reserveOutputTokens ?? 32_000) + 8_192;
     const adaptiveLocalTargetTokens = Math.max(
-      assembled.inputTokens,
+      effectiveCompiled.inputTokens,
       Math.floor(Math.max(1_024, modelWindowTokens - (this.#options.reserveOutputTokens ?? 32_000)) * 0.76),
     );
     const nativeThreshold = calculateNativeCompactionThreshold({
@@ -2418,9 +2641,12 @@ export class AgentKernel {
     const request: ModelRequest = {
       requestId,
       model: requestModelId,
-      requestDigest: assembled.requestDigest,
-      input: assembled.input,
-      tools: assembled.tools,
+      requestDigest,
+      input: effectiveCompiled.input,
+      tools: effectiveCompiled.tools,
+      ...(programmaticEnabled
+        ? { hostedTools: [{ type: "programmatic_tool_calling" as const }] }
+        : {}),
       reasoning: {
         mode: requestMode,
         effort: requestEffort,
@@ -2441,12 +2667,12 @@ export class AgentKernel {
       // Presentation previews must never be allowed to cap it at 512/12K.
       maxOutputTokens: Math.min(
         policyDecision?.outputTokens ?? configuredMaxOutputTokens,
-        providerGenerationBudget,
+        effectiveProviderGenerationBudget,
       ),
       store: false,
       ...(this.#options.parallelToolCalls !== undefined &&
       this.#providerSession.capabilities.parallelToolCalls
-        ? { parallelToolCalls: this.#options.parallelToolCalls }
+        ? { parallelToolCalls: this.#options.parallelToolCalls && routeMaxParallelTools > 1 }
         : {}),
       ...(this.#options.nativeCompaction === true && this.#providerSession.capabilities.nativeCompaction
         ? {
@@ -2474,7 +2700,7 @@ export class AgentKernel {
         : {}),
     };
     try {
-      this.#options.onPromptCompiled?.(assembled, {
+      this.#options.onPromptCompiled?.(effectiveCompiled, {
         requestId,
         turnId,
         modelId: requestModelId,
@@ -2623,6 +2849,9 @@ export class AgentKernel {
           });
           break;
         case "transport.fallback":
+          if (!this.#routeFallbackReasons.includes(event.reason)) {
+            this.#routeFallbackReasons.push(event.reason);
+          }
           emit("provider.fallback", {
             requestId,
             from: event.from,
@@ -2860,6 +3089,32 @@ export class AgentKernel {
             opaqueItems.set(event.item.itemId, {
               type: "compaction",
               opaque: event.item.opaque,
+            });
+          } else if (
+            event.item.kind === "program" &&
+            event.item.callId !== undefined &&
+            event.item.code !== undefined &&
+            event.item.fingerprint !== undefined
+          ) {
+            opaqueItems.set(event.item.itemId, {
+              type: "program",
+              itemId: event.item.itemId,
+              callId: event.item.callId,
+              code: event.item.code,
+              fingerprint: event.item.fingerprint,
+            });
+          } else if (
+            event.item.kind === "program_output" &&
+            event.item.callId !== undefined &&
+            event.item.result !== undefined &&
+            event.item.status !== undefined
+          ) {
+            opaqueItems.set(event.item.itemId, {
+              type: "program_output",
+              itemId: event.item.itemId,
+              callId: event.item.callId,
+              result: event.item.result,
+              status: event.item.status,
             });
           }
           break;
@@ -3148,6 +3403,54 @@ export class AgentKernel {
     await this.#options.beforeToolExecute?.(action, signal);
   }
 
+  /** Revalidate provider-program calls before the ordinary permission path. */
+  #programmaticDenials(
+    calls: readonly PendingCall[],
+  ): Map<string, { readonly code: string; readonly message: string }> {
+    const groups = new Map<string, PendingCall[]>();
+    for (const call of calls) {
+      if (call.programId === undefined) continue;
+      const group = groups.get(call.programId) ?? [];
+      group.push(call);
+      groups.set(call.programId, group);
+    }
+    const denied = new Map<string, { readonly code: string; readonly message: string }>();
+    const taskEpochId = this.#readReasoningEpoch().taskEpochId ?? "";
+    for (const [programId, group] of groups) {
+      const programCalls: Array<Partial<ProgramToolCall>> = group.map((call) => {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(call.argumentsText) as unknown;
+        } catch {
+          parsed = undefined;
+        }
+        return {
+          callId: call.callId,
+          toolId: call.name,
+          ...(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+            ? { arguments: parsed as Record<string, unknown> }
+            : {}),
+          callerId: call.callerId ?? programId,
+          taskEpochId,
+        };
+      });
+      const admission = this.#programmaticLane.admit({
+        programId,
+        callerId: programId,
+        taskEpochId,
+        calls: programCalls,
+      });
+      if (admission.accepted) continue;
+      const unscoped = admission.denied.filter((entry) => entry.callId === undefined);
+      for (const call of group) {
+        const failure = admission.denied.find((entry) => entry.callId === call.callId)
+          ?? unscoped[0];
+        if (failure !== undefined) denied.set(call.callId, failure);
+      }
+    }
+    return denied;
+  }
+
   async #runPendingCalls(
     turnId: string,
     budget: BudgetState,
@@ -3165,9 +3468,36 @@ export class AgentKernel {
     }
 
     const outputHistoryStart = this.#history.length;
-    const pendingById = new Map(calls.map((call) => [call.callId, call]));
-    const graph = new ToolExecutionGraph(this.#options.toolGraph ?? {});
-    const graphCalls: ToolGraphCall[] = calls.map((call) => {
+    const programmaticDenials = this.#programmaticDenials(calls);
+    for (const call of calls) {
+      const denial = programmaticDenials.get(call.callId);
+      if (denial === undefined) continue;
+      budget.toolCalls = Math.min(this.#limits.maxToolCalls, budget.toolCalls + 1);
+      const text = "PTC_CALL_DENIED: " + call.name + " was not executed (" + denial.code + "): " + denial.message;
+      this.#risks.push(text);
+      if (!this.#routeFallbackReasons.includes(text)) this.#routeFallbackReasons.push(text);
+      emit("tool.failed", {
+        callId: call.callId,
+        toolId: call.name,
+        code: "PERMISSION_DENIED",
+        message: denial.message,
+      });
+      this.#appendToolOutput(call, text);
+    }
+    const executableCalls = calls.filter((call) => !programmaticDenials.has(call.callId));
+    const pendingById = new Map(executableCalls.map((call) => [call.callId, call]));
+    const routeParallel = this.#turnRoute?.maxParallelTools;
+    const configuredGraph = this.#options.toolGraph ?? {};
+    const graph = new ToolExecutionGraph({
+      ...configuredGraph,
+      ...(routeParallel === undefined
+        ? {}
+        : {
+            maxParallelReads: Math.min(configuredGraph.maxParallelReads ?? 8, routeParallel),
+            maxParallelTests: Math.min(configuredGraph.maxParallelTests ?? 2, routeParallel),
+          }),
+    });
+    const graphCalls: ToolGraphCall[] = executableCalls.map((call) => {
       const tool = this.#options.registry.get(call.name);
       // Session-state revisions and workspace mutations remain serialized.
       const sessionState = tool?.authority === "session_state";
@@ -3225,7 +3555,7 @@ export class AgentKernel {
     // Validate every streamed call before launching any side effect in the batch.
     // The cached results keep prefetch and sequential execution on one schema snapshot.
     const preflightValidation = new Map<string, ReturnType<ToolRegistry["validateCall"]>>();
-    for (const call of calls) {
+    for (const call of executableCalls) {
       preflightValidation.set(call.callId, this.#options.registry.validateCall(call.name, call.argumentsText, this.#activeInteractionMode));
     }
     for (const rejected of graphPlan.rejected) {
@@ -3233,6 +3563,7 @@ export class AgentKernel {
     }
     for (const batch of graphPlan.batches) {
       if (signal.aborted) return "cancelled";
+      this.#routeParallelPeak = Math.max(this.#routeParallelPeak, batch.calls.length);
       emit("tool.batch_started", {
         batchId: batch.batchId,
         kind: batch.kind,
@@ -3378,6 +3709,7 @@ export class AgentKernel {
         const requestedParallel = Math.max(1, Math.min(
           input.maxParallel ?? 2,
           this.#options.toolGraph?.maxParallelTests ?? 2,
+          this.#turnRoute?.maxParallelTools ?? Number.MAX_SAFE_INTEGER,
         ));
         const allIndependentlyParallel = commands.every((command) => {
           const tokens = parseCommandTokens(command);

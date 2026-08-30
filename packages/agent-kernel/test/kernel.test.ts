@@ -132,6 +132,9 @@ interface HarnessOptions {
   readonly onGeneratedImage?: KernelOptions["onGeneratedImage"];
   readonly inferenceContextTokens?: KernelOptions["inferenceContextTokens"];
   readonly continuationMode?: KernelOptions["continuationMode"];
+  readonly parallelToolCalls?: KernelOptions["parallelToolCalls"];
+  readonly programmaticPolicy?: KernelOptions["programmaticPolicy"];
+  readonly activeToolIds?: readonly string[];
   readonly commandClassification?: KernelOptions["commandClassification"];
   readonly toolGraph?: KernelOptions["toolGraph"];
   readonly promptInputs?: KernelOptions["promptInputs"];
@@ -166,6 +169,7 @@ class InlineProvider extends MockProvider {
 function harness(options: HarnessOptions) {
   const events: Recorded[] = [];
   const registry = new ToolRegistry();
+  if (options.activeToolIds !== undefined) registry.activate(options.activeToolIds);
   const provider =
     options.provider ??
     new MockProvider({
@@ -259,7 +263,7 @@ function harness(options: HarnessOptions) {
     promptInputs:
       options.promptInputs ??
       (() => ({
-        activeTools: [],
+        activeTools: options.activeToolIds === undefined ? [] : registry.activeTools(),
         projectInstructions: [],
         skillCatalog: [],
         loadedSkills: [],
@@ -288,6 +292,12 @@ function harness(options: HarnessOptions) {
       : {}),
     ...(options.continuationMode !== undefined
       ? { continuationMode: options.continuationMode }
+      : {}),
+    ...(options.parallelToolCalls !== undefined
+      ? { parallelToolCalls: options.parallelToolCalls }
+      : {}),
+    ...(options.programmaticPolicy !== undefined
+      ? { programmaticPolicy: options.programmaticPolicy }
       : {}),
     ...(options.commandClassification !== undefined
       ? { commandClassification: options.commandClassification }
@@ -3919,6 +3929,224 @@ describe("routing is decided once and shared (P0-11)", () => {
     expect(routedContextTokens).toBe(measurePrompt(compiled!).totalInputTokens);
     expect(provider.requests[0]?.input).toBe(compiled!.input);
     expect(provider.requests[0]?.tools).toBe(compiled!.tools);
+  });
+});
+
+describe("OpenAI programmatic read-only lane (P0-01/P0-03)", () => {
+  test("a supported program route exposes only read tools to programmatic callers", async () => {
+    let compiled: Parameters<NonNullable<KernelOptions["onPromptCompiled"]>>[0] | undefined;
+    const provider = new MockProvider({
+      steps: [{ text: "Done." }],
+      capabilities: { parallelToolCalls: true },
+    });
+    const { kernel, events } = harness({
+      steps: [],
+      provider,
+      inferencePolicy: new InferenceUtilityController(),
+      autoRoute: true,
+      phasePolicy: true,
+      parallelToolCalls: true,
+      programmaticPolicy: {
+        enabled: true,
+        maxToolCalls: 8,
+        maxParallelCalls: 2,
+      },
+      activeToolIds: ["fs.read", "fs.edit"],
+      onPromptCompiled: (prompt) => {
+        compiled = prompt;
+      },
+    });
+
+    const result = await kernel.runTurn("implement the bounded inspection", new AbortController().signal);
+
+    const routeEvent = payloadsOf(events, "model.route_decided")[0] as {
+      routeId?: string;
+      lane?: string;
+    };
+    expect(routeEvent).toMatchObject({
+      lane: "program",
+      maxParallelTools: 2,
+    });
+    expect(provider.requests[0]?.hostedTools).toEqual([
+      { type: "programmatic_tool_calling" },
+    ]);
+    expect(provider.requests[0]?.tools.find((tool) => tool.name === "fs.read")?.allowedCallers)
+      .toEqual(["direct", "programmatic"]);
+    expect(provider.requests[0]?.tools.find((tool) => tool.name === "fs.edit")?.allowedCallers)
+      .toBeUndefined();
+    expect(provider.requests[0]?.parallelToolCalls).toBe(true);
+    expect(provider.requests[0]?.tools).toBe(compiled?.tools);
+    expect(provider.requests[0]?.requestDigest).toBe(compiled?.requestDigest);
+    expect(compiled?.serializedTools).toContain("programmatic");
+    expect(result.routeReceipt).toMatchObject({
+      routeId: routeEvent.routeId,
+      planned: { lane: "program", maxParallelTools: 2 },
+      actual: { lane: "program", parallelPeak: 0 },
+    });
+  });
+
+  test("a disabled program lane falls back to direct request semantics", async () => {
+    const provider = new MockProvider({
+      steps: [{ text: "Done." }],
+      capabilities: { parallelToolCalls: true },
+    });
+    const { kernel, events } = harness({
+      steps: [],
+      provider,
+      inferencePolicy: new InferenceUtilityController(),
+      autoRoute: true,
+      phasePolicy: true,
+      parallelToolCalls: true,
+      programmaticPolicy: { enabled: false },
+      activeToolIds: ["fs.read"],
+    });
+
+    const result = await kernel.runTurn("implement after inspecting", new AbortController().signal);
+
+    expect(payloadsOf(events, "model.route_decided")[0]).toMatchObject({
+      lane: "direct",
+      maxParallelTools: 1,
+    });
+    expect(provider.requests[0]?.hostedTools).toBeUndefined();
+    expect(provider.requests[0]?.tools[0]?.allowedCallers).toBeUndefined();
+    expect(provider.requests[0]?.parallelToolCalls).toBe(false);
+    expect(result.routeReceipt?.actual.fallbackReasons.join(" "))
+      .toContain("programmatic lane is disabled");
+  });
+
+  test("a forged program mutation is denied before the executor and replay keeps caller state", async () => {
+    const provider = new InlineProvider(async function* (_request, _signal, callIndex) {
+      yield { type: "response.started", requestId: "ptc-forge-" + callIndex };
+      if (callIndex === 0) {
+        yield {
+          type: "response.item",
+          authoritative: true,
+          item: {
+            kind: "program",
+            itemId: "prog-forged",
+            callId: "call-program-forged",
+            code: "await tools.fs_edit({ path: 'src/a.ts' });",
+            fingerprint: "opaque-program-state",
+          },
+        };
+        yield {
+          type: "tool.call.started",
+          callId: "call-edit-forged",
+          name: "fs.edit",
+          callerId: "call-program-forged",
+          programId: "call-program-forged",
+        };
+        yield {
+          type: "tool.call.completed",
+          call: {
+            callId: "call-edit-forged",
+            name: "fs.edit",
+            argumentsText: JSON.stringify({
+              plan: {
+                version: 1,
+                operations: [],
+                summary: "forged",
+              },
+            }),
+            callerId: "call-program-forged",
+            programId: "call-program-forged",
+          },
+        };
+      } else {
+        yield {
+          type: "text.delta",
+          text: "Mutation stayed blocked.",
+          itemId: "final-" + callIndex,
+          outputIndex: 0,
+        };
+      }
+      yield { type: "response.completed", responseId: "ptc-response-" + callIndex };
+    });
+    const { kernel, executed, events } = harness({
+      steps: [],
+      provider,
+      inferencePolicy: new InferenceUtilityController(),
+      autoRoute: true,
+      phasePolicy: true,
+      programmaticPolicy: {
+        enabled: true,
+        maxToolCalls: 8,
+        maxParallelCalls: 2,
+      },
+      activeToolIds: ["fs.read", "fs.edit"],
+    });
+
+    const result = await kernel.runTurn("attempt a forged program mutation", new AbortController().signal);
+
+    expect(executed).toHaveLength(0);
+    expect(payloadsOf(events, "tool.failed")).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        callId: "call-edit-forged",
+        code: "PERMISSION_DENIED",
+      }),
+    ]));
+    expect(provider.requests[1]?.input).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "program",
+        callId: "call-program-forged",
+      }),
+      expect.objectContaining({
+        type: "function_call_output",
+        callId: "call-edit-forged",
+        programId: "call-program-forged",
+        output: expect.stringContaining("PTC_CALL_DENIED"),
+      }),
+    ]));
+    expect(result.routeReceipt?.actual.fallbackReasons.join(" ")).toContain("PTC_CALL_DENIED");
+  });
+
+  test("direct routes cap provider and local read parallelism at one", async () => {
+    const provider = new MockProvider({
+      steps: [
+        {
+          toolCalls: [
+            { callId: "read-a", name: "fs.read", arguments: { path: "a.ts" } },
+            { callId: "read-b", name: "fs.read", arguments: { path: "b.ts" } },
+          ],
+        },
+        { text: "Done." },
+      ],
+      capabilities: { parallelToolCalls: true },
+    });
+    const { kernel, events } = harness({
+      steps: [],
+      provider,
+      inferencePolicy: new InferenceUtilityController(),
+      autoRoute: true,
+      phasePolicy: true,
+      parallelToolCalls: true,
+      programmaticPolicy: { enabled: true },
+      activeToolIds: ["fs.read"],
+      toolResults: {
+        "fs.read": { result: okResult("read"), text: "read" },
+      },
+      toolGraph: {
+        maxParallelReads: 8,
+        maxParallelTests: 2,
+        serializeMutations: true,
+        stableResultOrder: true,
+        maxNodes: 64,
+      },
+    });
+
+    const result = await kernel.runTurn("inspect two files", new AbortController().signal);
+
+    expect(provider.requests[0]?.parallelToolCalls).toBe(false);
+    const batches = payloadsOf(events, "tool.batch_started") as Array<{ callIds: string[] }>;
+    expect(batches.map((batch) => batch.callIds.length)).toEqual([1, 1]);
+    expect(result.routeReceipt).toMatchObject({
+      planned: { lane: "direct", maxParallelTools: 1 },
+      actual: { lane: "direct", parallelPeak: 1 },
+    });
+    const completed = payloadsOf(events, "turn.completed").at(-1) as {
+      routeReceipt?: { routeId?: string };
+    };
+    expect(completed.routeReceipt?.routeId).toBe(result.routeReceipt?.routeId);
   });
 });
 
