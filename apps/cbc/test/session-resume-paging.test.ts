@@ -299,6 +299,64 @@ describe("paged session resume", () => {
     }, "session-1")).toBeUndefined();
   });
 
+  test("round-trips a programmatic tool-calling tail through a resume snapshot", () => {
+    const model = serializeModel(emptyViewModel("session-1"));
+    const history = [
+      { callId: "prog_1", code: "await fs.read('a')", fingerprint: "fp", itemId: "item_prog", type: "program" },
+      {
+        argumentsText: "{\"path\":\"a\"}",
+        caller: { callerId: "prog_1", type: "program" },
+        callId: "call_1",
+        name: "fs.read",
+        programId: "prog_1",
+        type: "function_call",
+      },
+      {
+        caller: { callerId: "prog_1", type: "program" },
+        callId: "call_1",
+        output: "a",
+        programId: "prog_1",
+        type: "function_call_output",
+      },
+      { callId: "prog_1", itemId: "item_out", result: "{}", status: "completed", type: "program_output" },
+    ] as const;
+    const historyDigest = new Bun.CryptoHasher("sha256").update(JSON.stringify(history)).digest("hex");
+    const parsed = parseAgentSessionSnapshot({
+      agentSessionSnapshotVersion: 3,
+      model,
+      promptCapsule: {
+        history,
+        historyDigest,
+        serializedBytes: encoder.encode(JSON.stringify(history)).byteLength,
+      },
+      resumeView: { omittedCount: 0, omittedRanges: [], tailByteLimit: 768 * 1024, tailItemLimit: 48 },
+      turnCounter: 2,
+    }, "session-1");
+    expect(parsed?.promptHistory as unknown).toEqual(history);
+  });
+
+  test("rejects a program item whose replay identity is incomplete", () => {
+    const model = serializeModel(emptyViewModel("session-1"));
+    expect(parseAgentSessionSnapshot({
+      agentSessionSnapshotVersion: 1,
+      model,
+      promptHistory: [{ type: "program", itemId: "item_prog", callId: "prog_1", code: "x" }],
+      turnCounter: 1,
+    }, "session-1")).toBeUndefined();
+    expect(parseAgentSessionSnapshot({
+      agentSessionSnapshotVersion: 1,
+      model,
+      promptHistory: [{ callId: "prog_1", itemId: "i", result: "{}", status: "pending", type: "program_output" }],
+      turnCounter: 1,
+    }, "session-1")).toBeUndefined();
+    expect(parseAgentSessionSnapshot({
+      agentSessionSnapshotVersion: 1,
+      model,
+      promptHistory: [{ argumentsText: "{}", caller: { type: "agent" }, callId: "c", name: "fs.read", type: "function_call" }],
+      turnCounter: 1,
+    }, "session-1")).toBeUndefined();
+  });
+
   test("restoreEvent rejects malformed envelopes but accepts durable stream gaps", () => {
     expect(restoreEvent({ sequence: 1 }, "session-1")).toBeUndefined();
     expect(restoreEvent(storedEvent(3, 99, hash(2)), "session-1")?.sequence).toBe(99);

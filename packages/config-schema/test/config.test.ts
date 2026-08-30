@@ -6,6 +6,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  configEnumValues,
   configKeyInfo,
   defaultConfig,
   environmentLayer,
@@ -1074,5 +1075,37 @@ describe("Deep Plan", () => {
     const info = configKeyInfo("agent.deepPlan");
     expect(info?.status).toBe("wired");
     expect(info?.consumer).toContain("Deep Plan");
+  });
+});
+
+describe("productized OpenAI-first defaults (§6 P1-03, §8.4)", () => {
+  test("reasoning continuity accepts the whole §8.4 ladder", () => {
+    expect(defaultConfig().model.reasoning.continuity).toBe("adaptive");
+    expect(configEnumValues("model.reasoning.continuity")).toEqual([
+      "current-turn",
+      "all-turns",
+      "adaptive",
+    ]);
+
+    for (const value of ["current-turn", "all-turns", "adaptive"] as const) {
+      const merged = mergeConfig([
+        { source: "user", values: { "model.reasoning.continuity": value } },
+      ]);
+      expect(merged.config.model.reasoning.continuity).toBe(value);
+      expect(merged.issues.some((issue) =>
+        issue.path === "model.reasoning.continuity" && issue.severity === "error"
+      )).toBe(false);
+    }
+
+    const rejected = mergeConfig([
+      { source: "user", values: { "model.reasoning.continuity": "task-epoch" } },
+    ]);
+    expect(rejected.issues.some((issue) =>
+      issue.path === "model.reasoning.continuity" && issue.severity === "error"
+    )).toBe(true);
+  });
+
+  test("continuity stays experimental until a consumer clamps the epoch scope", () => {
+    expect(configKeyInfo("model.reasoning.continuity")?.status).toBe("experimental");
   });
 });

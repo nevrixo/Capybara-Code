@@ -29,6 +29,7 @@ import {
   type TurnResult,
 } from "@cbc/agent-kernel";
 import type { CbcConfig, ReasoningEffort } from "@cbc/config-schema";
+import { TurnBudgetController } from "@cbc/inference-domain";
 import { MemoryService } from "@cbc/memory-service";
 import { requestModeChange, TaskEpochManager, type EpochTransition, type InteractionMode, type ModeChangeSource } from "@cbc/session-domain";
 import {
@@ -323,15 +324,45 @@ function isSnapshotHistoryItem(value: unknown): value is ModelInputItem {
     case "function_call":
       return typeof value.callId === "string" &&
         typeof value.name === "string" &&
-        typeof value.argumentsText === "string";
+        typeof value.argumentsText === "string" &&
+        isSnapshotCallAncestry(value);
     case "function_call_output":
-      return typeof value.callId === "string" && typeof value.output === "string";
+      return typeof value.callId === "string" &&
+        typeof value.output === "string" &&
+        isSnapshotCallAncestry(value);
     case "reasoning":
       return typeof value.opaque === "string" &&
         (value.summaryText === undefined || typeof value.summaryText === "string");
+    case "compaction":
+      return typeof value.opaque === "string";
+    // §5.8 requires PTC state to survive resume. A snapshot tail routinely ends
+    // on a program pair, and rejecting those two kinds rejected the whole
+    // snapshot — losing the entire session rather than one item.
+    case "program":
+      return typeof value.itemId === "string" &&
+        typeof value.callId === "string" &&
+        typeof value.code === "string" &&
+        typeof value.fingerprint === "string";
+    case "program_output":
+      return typeof value.itemId === "string" &&
+        typeof value.callId === "string" &&
+        typeof value.result === "string" &&
+        (value.status === "completed" || value.status === "incomplete");
     default:
       return false;
   }
+}
+
+/** Program ancestry is what links a program-issued call back to its program. */
+function isSnapshotCallAncestry(value: Record<string, unknown>): boolean {
+  for (const field of ["callerId", "programId", "agentId"] as const) {
+    const supplied = value[field];
+    if (supplied !== undefined && typeof supplied !== "string") return false;
+  }
+  if (value.caller === undefined) return true;
+  return isRecord(value.caller) &&
+    value.caller.type === "program" &&
+    typeof value.caller.callerId === "string";
 }
 
 function isCompactionCapsule(value: unknown): value is CompactionCapsule {
@@ -1164,6 +1195,19 @@ export class AgentSession {
       premiumContextPolicy: options.config.model.context.premiumBandPolicy,
       phasePolicy: options.config.model.router.phasePolicy,
       commandClassification: options.config.agent.toolGraph.commandClassification,
+      // §5.18: `perf.budgetEnforcement` and `model.router.maxCostUsdPerTurn` were
+      // both recorded as wired, but the kernel only ever received the mode — no
+      // host constructed the ledger, so the guard had nothing to charge against
+      // and a turn could run past its cost ceiling unremarked. The controller is
+      // provider-neutral, so the ceiling is the one the router already publishes.
+      budgetController: new TurnBudgetController({
+        ceilingUsd: options.config.model.router.maxCostUsdPerTurn,
+        mode: options.config.perf.budgetEnforcement ?? "advisory",
+        reserveUsd: 0,
+      }),
+      ...(options.config.perf.budgetEnforcement !== undefined
+        ? { budgetEnforcement: options.config.perf.budgetEnforcement }
+        : {}),
       toolGraph: options.config.agent.toolGraph,
       cacheKey: (assembled) => this.#cacheKeyForPrompt(assembled),
       safetyIdentifier: stableDigest({ sessionId: options.sessionId, workspace: this.taskEpoch.current()?.workspaceIdentityDigest }),
@@ -4267,6 +4311,8 @@ function historyFromEvents(
   initial: readonly ModelInputItem[] = [],
 ): ModelInputItem[] {
   const history: ModelInputItem[] = [...initial];
+  /** callId -> owning programId, so a rebuilt output keeps its caller linkage. */
+  const programCallers = new Map<string, string>();
   for (const event of events) {
     const payload = isRecord(event.payload) ? event.payload : {};
     switch (event.kind) {
@@ -4336,11 +4382,18 @@ function historyFromEvents(
         const name = typeof payload.toolId === "string" ? payload.toolId : "";
         if (callId.length === 0 || name.length === 0) break;
         const args = payload.arguments;
+        const programId = typeof payload.programId === "string" ? payload.programId : undefined;
+        if (programId !== undefined) programCallers.set(callId, programId);
         history.push({
           type: "function_call",
           callId,
           name,
           argumentsText: typeof args === "string" ? args : JSON.stringify(args ?? {}),
+          // §5.8: a rebuilt program-issued call without its caller replays as a
+          // direct call, which the provider rejects against the program item.
+          ...(programId !== undefined
+            ? { programId, caller: { type: "program" as const, callerId: programId } }
+            : {}),
         });
         break;
       }
@@ -4354,7 +4407,39 @@ function historyFromEvents(
             : typeof payload.message === "string"
               ? payload.message
               : "tool call completed";
-        history.push({ type: "function_call_output", callId, output });
+        const programId = programCallers.get(callId);
+        history.push({
+          type: "function_call_output",
+          callId,
+          output,
+          ...(programId !== undefined
+            ? { programId, caller: { type: "program" as const, callerId: programId } }
+            : {}),
+        });
+        break;
+      }
+      case "program.started": {
+        const programId = typeof payload.programId === "string" ? payload.programId : "";
+        const itemId = typeof payload.itemId === "string" ? payload.itemId : "";
+        const code = typeof payload.code === "string" ? payload.code : "";
+        const fingerprint = typeof payload.fingerprint === "string" ? payload.fingerprint : "";
+        if (programId.length === 0 || itemId.length === 0 || fingerprint.length === 0) break;
+        history.push({ type: "program", itemId, callId: programId, code, fingerprint });
+        break;
+      }
+      case "program.completed":
+      case "program.failed": {
+        const programId = typeof payload.programId === "string" ? payload.programId : "";
+        const itemId = typeof payload.itemId === "string" ? payload.itemId : "";
+        const result = typeof payload.result === "string" ? payload.result : "";
+        if (programId.length === 0 || itemId.length === 0 || result.length === 0) break;
+        history.push({
+          type: "program_output",
+          itemId,
+          callId: programId,
+          result,
+          status: event.kind === "program.completed" ? "completed" : "incomplete",
+        });
         break;
       }
       default:

@@ -84,6 +84,7 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
   ["model.cache.minimumReuseProbability", { status: "wired", consumer: "agent.ts (cache planner)" }],
   ["model.cache.ttlMinutes", { status: "experimental", note: "cache entries do not expire by TTL yet" }],
   ["model.cache.recordReadWriteTokens", { status: "experimental", note: "cache token accounting is not journaled yet" }],
+  ["model.reasoning.continuity", { status: "experimental", note: "the epoch machinery picks the scope; this key does not override it yet" }],
   ["model.reasoning.", { status: "experimental", note: "reasoning continuity policy is fixed by the provider today" }],
 
   // ---- agent ----
@@ -103,6 +104,8 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
   ["agent.verification.falseCompletePolicy", { status: "experimental", note: "truthfulness currently uses the blocking policy unconditionally" }],
 
   ["agent.toolGraph.", { status: "wired", consumer: "agent-kernel ToolExecutionGraph" }],
+  ["agent.learning.strategyCapsules", { status: "experimental", note: "the §6.3 capsule lifecycle has no consumer yet; proposals are not produced" }],
+  ["agent.learning.minVerifiedObservations", { status: "experimental", note: "read once the capsule activation gate lands" }],
   ["agent.visibleCommentary", { status: "wired", consumer: "AgentSession event visibility + session reducer" }],
   ["agent.verification.", { status: "experimental", note: "the completion gate uses fixed policy today" }],
 
