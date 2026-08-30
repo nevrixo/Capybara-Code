@@ -232,6 +232,17 @@ export class OpenTuiView {
     return this.#renderer.height;
   }
 
+  /**
+   * The content object currently assigned to each painted row.
+   *
+   * A row the diff suppresses keeps the exact `StyledText` it already had, so
+   * object identity is what separates "repainted" from "skipped" — which is the
+   * only way a test can tell that a forced repaint really repainted.
+   */
+  get paintedRowContents(): readonly unknown[] {
+    return this.#rows.map((row) => row.content);
+  }
+
   onResize(listener: (columns: number, rows: number) => void): () => void {
     this.#renderer.on("resize", listener);
     return () => this.#renderer.off("resize", listener);
@@ -242,9 +253,8 @@ export class OpenTuiView {
     try {
       for (let index = 0; index < this.#rows.length; index += 1) {
         this.#rows[index]!.content = new StyledText([]);
-        this.#rowSignatures[index] = "";
-        this.#rowRevisions[index] = undefined;
       }
+      this.#invalidateRowCaches();
       this.#renderer.requestRender();
       this.#stdout.write("\u001B[2J\u001B[3J\u001B[H");
     } catch {
@@ -261,7 +271,23 @@ export class OpenTuiView {
   resume(): void {
     this.#resumeRenderer();
     this.#detachRendererInput();
+    // The native prompt wrote over the alternate screen while the renderer was
+    // suspended, so the row caches no longer describe what the terminal shows.
+    // Leaving them in place makes the next frame a no-op whenever it is
+    // semantically identical to the pre-prompt one — every row's revision still
+    // matches, `render` skips them all, and the card or picker that opened
+    // during the handoff stays invisible until an unrelated keystroke changes a
+    // row. Drop the caches so the forced repaint below actually redraws.
+    this.#invalidateRowCaches();
     this.#renderer.requestRender();
+  }
+
+  /** Forget what the terminal is showing, so the next frame repaints every row. */
+  #invalidateRowCaches(): void {
+    for (let index = 0; index < this.#rows.length; index += 1) {
+      this.#rowSignatures[index] = "";
+      this.#rowRevisions[index] = undefined;
+    }
   }
 
   destroy(): void {
