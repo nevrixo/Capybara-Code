@@ -37,6 +37,7 @@ export interface ProgramPolicy {
   readonly maxIntermediateBytes?: number;
   readonly allowLoops?: boolean;
   readonly maxLoopIterations?: number;
+  readonly maxRetries?: number;
   readonly failOpen?: false;
   readonly enabled: boolean;
   readonly maxToolCalls: number;
@@ -52,6 +53,7 @@ export const DEFAULT_PROGRAM_POLICY: ProgramPolicy = {
   maxIntermediateBytes: 4_194_304,
   allowLoops: false,
   maxLoopIterations: 0,
+  maxRetries: 1,
   failOpen: false,
   enabled: true,
   maxToolCalls: 24,
@@ -70,6 +72,7 @@ export interface ProgramPolicyDecision {
     | "mutation_denied"
     | "caller_missing"
     | "epoch_missing"
+    | "lineage_mismatch"
     | "invalid_arguments";
   readonly message: string;
   readonly normalizedToolId?: ProgramToolId;
@@ -78,13 +81,20 @@ export interface ProgramPolicyDecision {
 export function validateProgramToolCall(
   call: Partial<ProgramToolCall>,
   policy: ProgramPolicy = DEFAULT_PROGRAM_POLICY,
-  usage: { readonly callsUsed?: number; readonly parallelCalls?: number } = {},
+  usage: {
+    readonly callsUsed?: number;
+    readonly parallelCalls?: number;
+    readonly expectedCallerId?: string;
+    readonly expectedTaskEpochId?: string;
+  } = {},
 ): ProgramPolicyDecision {
   if (!policy.enabled) return { allowed: false, code: "disabled", message: "programmatic tool calling is disabled by policy" };
   if ((usage.callsUsed ?? 0) >= policy.maxToolCalls) return { allowed: false, code: "budget_exhausted", message: `PTC budget is capped at ${policy.maxToolCalls} calls` };
   if ((usage.parallelCalls ?? 0) >= policy.maxParallelCalls) return { allowed: false, code: "parallel_budget_exhausted", message: `PTC parallelism is capped at ${policy.maxParallelCalls} calls` };
   if (typeof call.callerId !== "string" || call.callerId.length === 0) return { allowed: false, code: "caller_missing", message: "PTC calls require callerId ancestry" };
   if (typeof call.taskEpochId !== "string" || call.taskEpochId.length === 0) return { allowed: false, code: "epoch_missing", message: "PTC calls require a taskEpochId" };
+  if (usage.expectedCallerId !== undefined && call.callerId !== usage.expectedCallerId) return { allowed: false, code: "lineage_mismatch", message: "PTC caller ancestry does not match the active program" };
+  if (usage.expectedTaskEpochId !== undefined && call.taskEpochId !== usage.expectedTaskEpochId) return { allowed: false, code: "lineage_mismatch", message: "PTC call belongs to a different task epoch" };
   if (typeof call.toolId !== "string") return { allowed: false, code: "unknown_tool", message: "PTC tool id is missing" };
   const allowlist = new Set(policy.allowedToolIds ?? policy.allowlist ?? PROGRAM_TOOL_ALLOWLIST);
   if (!(PROGRAM_TOOL_ALLOWLIST as readonly string[]).includes(call.toolId)) return { allowed: false, code: "unknown_tool", message: `'${call.toolId}' is not a known PTC tool` };
@@ -98,6 +108,68 @@ export interface ProgramOutput {
   readonly truncated: boolean;
   readonly bytes: number;
   readonly digest: string;
+}
+
+export interface ProgramEvidenceClaim {
+  readonly text: string;
+  readonly evidenceIds: readonly string[];
+  readonly paths?: readonly string[];
+}
+
+/** Structured result accepted from a completed hosted program. */
+export interface ProgramEvidenceResult {
+  readonly status: "complete" | "partial" | "failed";
+  readonly taskEpochId: string;
+  readonly workspaceIdentityDigest: string;
+  readonly claims: readonly ProgramEvidenceClaim[];
+  readonly missing: readonly string[];
+  readonly diagnostics: readonly string[];
+  readonly stats: {
+    readonly calls: number;
+    readonly parallelPeak: number;
+    readonly inputBytes: number;
+    readonly outputBytes: number;
+  };
+}
+
+export interface ProgramEvidenceDecision {
+  readonly accepted: boolean;
+  readonly errors: readonly string[];
+}
+
+/** Validate a program's reduced result before it can become model evidence. */
+export function validateProgramEvidenceResult(
+  value: unknown,
+  expected: { readonly taskEpochId: string; readonly workspaceIdentityDigest: string },
+): ProgramEvidenceDecision {
+  const errors: string[] = [];
+  if (!isRecord(value)) return { accepted: false, errors: ["program evidence result must be an object"] };
+  if (value.status !== "complete" && value.status !== "partial" && value.status !== "failed") errors.push("program evidence status is invalid");
+  if (value.taskEpochId !== expected.taskEpochId) errors.push("program evidence belongs to a different task epoch");
+  if (value.workspaceIdentityDigest !== expected.workspaceIdentityDigest) errors.push("program evidence belongs to a different workspace");
+  if (!validStringArray(value.missing, 256, 8_192)) errors.push("program evidence missing list is invalid");
+  if (!validStringArray(value.diagnostics, 256, 8_192)) errors.push("program evidence diagnostics are invalid");
+  if (!Array.isArray(value.claims) || value.claims.length > 256) {
+    errors.push("program evidence claims are invalid");
+  } else {
+    for (const claim of value.claims) {
+      if (!isRecord(claim) || typeof claim.text !== "string" || claim.text.length === 0 || claim.text.length > 8_192) {
+        errors.push("program evidence claim text is invalid");
+        continue;
+      }
+      if (!validStringArray(claim.evidenceIds, 256, 256) || claim.evidenceIds.length === 0) errors.push("program evidence claim requires bounded evidence ids");
+      if (claim.paths !== undefined && !validStringArray(claim.paths, 256, 4_096)) errors.push("program evidence claim paths are invalid");
+    }
+  }
+  if (!isRecord(value.stats)) {
+    errors.push("program evidence stats are missing");
+  } else {
+    for (const field of ["calls", "parallelPeak", "inputBytes", "outputBytes"] as const) {
+      const metric = value.stats[field];
+      if (typeof metric !== "number" || !Number.isSafeInteger(metric) || metric < 0) errors.push(`program evidence stats.${field} is invalid`);
+    }
+  }
+  return { accepted: errors.length === 0, errors };
 }
 
 /** Bound provider-produced output before it becomes an observation/evidence record. */
@@ -273,3 +345,12 @@ function stableDigest(value: unknown): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function validStringArray(value: unknown, maxItems: number, maxLength: number): value is readonly string[] {
+  return Array.isArray(value) && value.length <= maxItems && value.every((entry) =>
+    typeof entry === "string" && entry.length > 0 && entry.length <= maxLength
+  );
+}
