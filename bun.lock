@@ -24,13 +24,23 @@
       "dependencies": {
         "@cbc/app-protocol": "workspace:*",
         "@cbc/app-server": "workspace:*",
+        "@cbc/package-manager": "workspace:*",
         "@cbc/plugin-sdk": "workspace:*",
         "@cbc/protocol": "workspace:*",
       },
     },
+    "apps/capy-vscode": {
+      "name": "capybara-code-vscode",
+      "version": "0.1.0",
+      "dependencies": {
+        "@cbc/app-protocol": "workspace:*",
+        "@cbc/integration-core": "workspace:*",
+        "@cbc/sdk": "workspace:*",
+      },
+    },
     "apps/cbc": {
       "name": "capybara-code-dev",
-      "version": "0.1.1-alpha.14",
+      "version": "0.1.2-alpha.1",
       "bin": {
         "capy-dev": "./src/main.ts",
       },
@@ -40,6 +50,14 @@
       "version": "0.1.0",
       "bin": {
         "cbc-bench": "./src/cli.ts",
+      },
+    },
+    "packages/acp-adapter": {
+      "name": "@cbc/acp-adapter",
+      "version": "0.1.0",
+      "dependencies": {
+        "@cbc/app-protocol": "workspace:*",
+        "@cbc/integration-core": "workspace:*",
       },
     },
     "packages/agent-graph-domain": {
@@ -87,9 +105,32 @@
       "name": "@cbc/evals",
       "version": "0.1.0",
     },
+    "packages/github-action": {
+      "name": "@cbc/github-action",
+      "version": "0.1.0",
+      "dependencies": {
+        "@cbc/app-protocol": "workspace:*",
+        "@cbc/integration-core": "workspace:*",
+      },
+    },
     "packages/inference-domain": {
       "name": "@cbc/inference-domain",
       "version": "0.1.0",
+    },
+    "packages/integration-conformance": {
+      "name": "@cbc/integration-conformance",
+      "version": "0.1.0",
+      "dependencies": {
+        "@cbc/app-protocol": "workspace:*",
+        "@cbc/integration-core": "workspace:*",
+      },
+    },
+    "packages/integration-core": {
+      "name": "@cbc/integration-core",
+      "version": "0.1.0",
+      "dependencies": {
+        "@cbc/app-protocol": "workspace:*",
+      },
     },
     "packages/lsp-domain": {
       "name": "@cbc/lsp-domain",
@@ -108,6 +149,14 @@
       "dependencies": {
         "@cbc/context-engine": "workspace:*",
         "@cbc/protocol": "workspace:*",
+      },
+    },
+    "packages/package-manager": {
+      "name": "@cbc/package-manager",
+      "version": "0.1.0",
+      "dependencies": {
+        "@cbc/app-protocol": "workspace:*",
+        "@cbc/plugin-sdk": "workspace:*",
       },
     },
     "packages/permissions": {
@@ -147,6 +196,11 @@
     "packages/subagents": {
       "name": "@cbc/subagents",
       "version": "0.1.0",
+      "dependencies": {
+        "@cbc/agent-graph-domain": "workspace:*",
+        "@cbc/protocol": "workspace:*",
+        "@cbc/tool-registry": "workspace:*",
+      },
     },
     "packages/tool-registry": {
       "name": "@cbc/tool-registry",
@@ -161,6 +215,8 @@
     "@opentui/core",
   ],
   "packages": {
+    "@cbc/acp-adapter": ["@cbc/acp-adapter@workspace:packages/acp-adapter"],
+
     "@cbc/agent-graph-domain": ["@cbc/agent-graph-domain@workspace:packages/agent-graph-domain"],
 
     "@cbc/agent-kernel": ["@cbc/agent-kernel@workspace:packages/agent-kernel"],
@@ -179,13 +235,21 @@
 
     "@cbc/evals": ["@cbc/evals@workspace:packages/evals"],
 
+    "@cbc/github-action": ["@cbc/github-action@workspace:packages/github-action"],
+
     "@cbc/inference-domain": ["@cbc/inference-domain@workspace:packages/inference-domain"],
+
+    "@cbc/integration-conformance": ["@cbc/integration-conformance@workspace:packages/integration-conformance"],
+
+    "@cbc/integration-core": ["@cbc/integration-core@workspace:packages/integration-core"],
 
     "@cbc/lsp-domain": ["@cbc/lsp-domain@workspace:packages/lsp-domain"],
 
     "@cbc/mcp-client": ["@cbc/mcp-client@workspace:packages/mcp-client"],
 
     "@cbc/memory-service": ["@cbc/memory-service@workspace:packages/memory-service"],
+
+    "@cbc/package-manager": ["@cbc/package-manager@workspace:packages/package-manager"],
 
     "@cbc/permissions": ["@cbc/permissions@workspace:packages/permissions"],
 
@@ -268,6 +332,8 @@
     "bun-types": ["bun-types@1.3.14", "", { "dependencies": { "@types/node": "*" } }, "sha512-4N0ig0fEomHt5R0KCFWjovxow98rIoRwKolrYdCcknNwMekCXRnWEUvgu5soYV8QXtVsrUD8B95MBOZGPvr6KQ=="],
 
     "capybara-code-dev": ["capybara-code-dev@workspace:apps/cbc"],
+
+    "capybara-code-vscode": ["capybara-code-vscode@workspace:apps/capy-vscode"],
 
     "cbc-bench": ["cbc-bench@workspace:benchmarks/cbc-bench"],
 
