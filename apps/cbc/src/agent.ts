@@ -2982,6 +2982,26 @@ export class AgentSession {
     return this.#deepPlan.current();
   }
 
+  /**
+   * The active goal contract as a durable record, for the daemon's detach and
+   * resume path (§P1-04(d)). Undefined until a contract has been evaluated at
+   * least once: a contract with no verdict has nothing a resumed session could
+   * act on, and persisting one would only invite a resume that reports a goal
+   * it cannot describe the state of.
+   */
+  get goalContractRecord() {
+    return this.#goalContractRecord();
+  }
+
+  /**
+   * Restore a contract a previous process was pursuing. Returns false when the
+   * record is unusable, leaving this session contract-free rather than half
+   * adopting a goal whose budget it cannot trust.
+   */
+  hydrateGoalContract(raw: unknown): boolean {
+    return this.#goalContract.hydrate(raw);
+  }
+
   /** Persist a controller-side draft received through daemon or TUI transport. */
   updateDeepPlanQuestionnaireDraft(
     questionnaireId: string,
@@ -3271,6 +3291,10 @@ export class AgentSession {
    * a detached daemon reaches is the verdict a resumed session reaches — which
    * is what makes a stop condition trustworthy rather than advisory.
    */
+  #goalContractRecord() {
+    return this.#goalContract.toRecord();
+  }
+
   #evaluateGoalContract(report: CompletionReport): GoalEvaluation | undefined {
     if (this.#goalContract.current() === undefined) return undefined;
     this.#goalContractStartedAt ??= this.#options.host.now();
