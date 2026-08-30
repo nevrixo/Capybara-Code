@@ -23,6 +23,62 @@ export type VerificationImpactSignal =
   | "test"
   | "docs_only";
 
+/**
+ * One workspace member as its manifest describes it (§5.21's dependency-graph
+ * input). Parsing is the host's job — it owns the filesystem — but turning the
+ * manifests into an impact set is a pure decision, so it lives here where the
+ * plan can be tested without a repository.
+ */
+export interface WorkspacePackageManifest {
+  /** Repository-relative directory, e.g. `packages/protocol-ts`. */
+  readonly directory: string;
+  /** Manifest name, e.g. `@cbc/protocol`. */
+  readonly name: string;
+  /** Workspace dependency names this member declares. */
+  readonly dependencies: readonly string[];
+}
+
+/**
+ * Reverse the declared dependencies into `directory -> every directory that
+ * depends on it, transitively`.
+ *
+ * Transitive closure is the point. A change in `protocol-ts` reaches
+ * `agent-kernel` only through `provider-openai`, so a one-hop map would verify
+ * the direct importer and leave the actual consumer untested — the same blind
+ * spot a path-prefix guess has.
+ */
+export function workspaceConsumerGraph(
+  manifests: readonly WorkspacePackageManifest[],
+): ReadonlyMap<string, readonly string[]> {
+  const directoryByName = new Map<string, string>();
+  for (const manifest of manifests) directoryByName.set(manifest.name, manifest.directory);
+
+  const directConsumers = new Map<string, Set<string>>();
+  for (const manifest of manifests) {
+    for (const dependency of manifest.dependencies) {
+      const dependencyDirectory = directoryByName.get(dependency);
+      if (dependencyDirectory === undefined || dependencyDirectory === manifest.directory) continue;
+      const consumers = directConsumers.get(dependencyDirectory) ?? new Set<string>();
+      consumers.add(manifest.directory);
+      directConsumers.set(dependencyDirectory, consumers);
+    }
+  }
+
+  const graph = new Map<string, readonly string[]>();
+  for (const manifest of manifests) {
+    const reached = new Set<string>();
+    const queue = [...(directConsumers.get(manifest.directory) ?? [])];
+    while (queue.length > 0) {
+      const next = queue.pop();
+      if (next === undefined || reached.has(next) || next === manifest.directory) continue;
+      reached.add(next);
+      queue.push(...(directConsumers.get(next) ?? []));
+    }
+    graph.set(manifest.directory, Object.freeze([...reached].sort()));
+  }
+  return graph;
+}
+
 export interface VerificationChangeSet {
   readonly changedPaths: readonly string[];
   readonly addedPaths?: readonly string[];
@@ -36,6 +92,12 @@ export interface VerificationChangeSet {
   readonly reflectionPaths?: readonly string[];
   readonly riskLevel?: "low" | "medium" | "high" | "critical";
   readonly languageHints?: readonly ("typescript" | "rust" | "python" | "other")[];
+  /**
+   * §5.21's dependency-graph input: `package directory -> its consumers`, from
+   * `workspaceConsumerGraph`. Absent, the consumer tier can only fall back to the
+   * changed packages themselves, which verifies nobody downstream.
+   */
+  readonly packageConsumers?: ReadonlyMap<string, readonly string[]>;
 }
 
 export interface VerificationStepPlan {
@@ -123,9 +185,7 @@ export function planVerification(changeSet: VerificationChangeSet): Verification
   // the changed ones when a dependency graph is supplied, and to the impacted
   // packages themselves otherwise — never to the whole suite by default, which is
   // what made this tier indistinguishable from a full run.
-  // Without a dependency graph the impacted packages are the best available
-  // stand-in for their consumers; §5.21's graph input widens this.
-  const consumers = impactedPackages;
+  const consumers = consumersOf(impactedPackages, changeSet.packageConsumers);
   if (highRisk || impact.includes("cross_module") || impact.includes("dependency") || (changeSet.failedCommands?.length ?? 0) > 0 || (changeSet.reflectionPaths?.length ?? 0) > 0) {
     steps.push({
       id: "broader-tests",
@@ -225,6 +285,8 @@ export interface TurnVerificationContractInput {
   /** Paths a prior reflection blamed this turn (§5.21). */
   readonly reflectionPaths?: readonly string[];
   readonly languageHints?: VerificationChangeSet["languageHints"];
+  /** §5.21 dependency graph, from `workspaceConsumerGraph`. */
+  readonly packageConsumers?: VerificationChangeSet["packageConsumers"];
 }
 
 // Every mutation turn owns one contract that names the checks the turn must
@@ -241,6 +303,10 @@ export function buildTurnVerificationContract(
     ...(input.riskLevel === undefined ? {} : { riskLevel: input.riskLevel }),
     ...(input.failedCommands === undefined ? {} : { failedCommands: input.failedCommands }),
     ...(input.languageHints === undefined ? {} : { languageHints: input.languageHints }),
+    ...(input.packageConsumers === undefined ? {} : { packageConsumers: input.packageConsumers }),
+    // The kernel supplies these, and dropping them here made the widening they
+    // exist to trigger dead on the contract path.
+    ...(input.reflectionPaths === undefined ? {} : { reflectionPaths: input.reflectionPaths }),
   });
   const impactedPackages = impactedPackagesFor(changedPaths);
   const requiredChecks = plan.steps
@@ -304,6 +370,23 @@ export function describeUnmetRequiredChecks(
   return unmet
     .map((check) => (check.command === undefined ? check.id : `${check.id} (${check.command})`))
     .join(", ");
+}
+
+/**
+ * §5.21: widen the changed packages by the packages that depend on them. Without
+ * a graph the impacted packages are the only honest stand-in — a path-prefix
+ * guess cannot know that `agent-kernel` consumes `protocol-ts`.
+ */
+function consumersOf(
+  impactedPackages: readonly string[],
+  graph: ReadonlyMap<string, readonly string[]> | undefined,
+): string[] {
+  if (graph === undefined) return [...impactedPackages];
+  const scope = new Set<string>(impactedPackages);
+  for (const changed of impactedPackages) {
+    for (const consumer of graph.get(changed) ?? []) scope.add(consumer);
+  }
+  return [...scope].sort();
 }
 
 function impactedPackagesFor(paths: readonly string[]): string[] {

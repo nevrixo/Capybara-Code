@@ -14,6 +14,7 @@ import {
   planVerification,
   toLegacyVerificationCommand,
   verificationCommandDisplay,
+  workspaceConsumerGraph,
   type VerificationChangeSet,
 } from "../src/verification-planner.ts";
 
@@ -239,5 +240,115 @@ describe("buildTurnVerificationContract (§5.20)", () => {
     });
     expect(contract.requiredChecks.some((check) => check.command !== undefined && check.command.startsWith("bun test"))).toBe(false);
     expect(contract.reviewRequired).toBe(false);
+  });
+});
+
+describe("workspaceConsumerGraph (§5.21 dependency graph)", () => {
+  const MANIFESTS = [
+    { directory: "packages/protocol-ts", name: "@cbc/protocol", dependencies: [] },
+    { directory: "packages/provider-openai", name: "@cbc/provider", dependencies: ["@cbc/protocol"] },
+    {
+      directory: "packages/agent-kernel",
+      name: "@cbc/agent-kernel",
+      dependencies: ["@cbc/provider"],
+    },
+    { directory: "apps/cbc", name: "capybara-code", dependencies: ["@cbc/agent-kernel"] },
+    { directory: "packages/skills", name: "@cbc/skills", dependencies: [] },
+  ];
+
+  test("reverses declared dependencies transitively", () => {
+    const graph = workspaceConsumerGraph(MANIFESTS);
+    // protocol-ts reaches agent-kernel only through provider-openai, so a
+    // one-hop map would leave the real consumer untested.
+    expect(graph.get("packages/protocol-ts")).toEqual([
+      "apps/cbc",
+      "packages/agent-kernel",
+      "packages/provider-openai",
+    ]);
+    expect(graph.get("packages/agent-kernel")).toEqual(["apps/cbc"]);
+    expect(graph.get("apps/cbc")).toEqual([]);
+    expect(graph.get("packages/skills")).toEqual([]);
+  });
+
+  test("ignores dependencies on names outside the workspace", () => {
+    const graph = workspaceConsumerGraph([
+      { directory: "packages/a", name: "@cbc/a", dependencies: ["zod", "@cbc/missing"] },
+    ]);
+    expect(graph.get("packages/a")).toEqual([]);
+  });
+
+  test("a dependency cycle terminates instead of looping", () => {
+    const graph = workspaceConsumerGraph([
+      { directory: "packages/a", name: "@cbc/a", dependencies: ["@cbc/b"] },
+      { directory: "packages/b", name: "@cbc/b", dependencies: ["@cbc/a"] },
+    ]);
+    // A package is not its own consumer, so the cycle resolves to the other member.
+    expect(graph.get("packages/a")).toEqual(["packages/b"]);
+    expect(graph.get("packages/b")).toEqual(["packages/a"]);
+  });
+
+  test("a change in a dependency pulls its consumers into the tier-4 scope", () => {
+    const graph = workspaceConsumerGraph(MANIFESTS);
+    const plan = planVerification({
+      changedPaths: ["packages/protocol-ts/src/events.ts"],
+      riskLevel: "high",
+      packageConsumers: graph,
+    });
+    const consumer = plan.steps.find((step) => step.id === "broader-tests");
+    expect(verificationCommandDisplay(consumer!.command!)).toBe(
+      "bun test apps/cbc packages/agent-kernel packages/protocol-ts packages/provider-openai",
+    );
+  });
+
+  test("without a graph the consumer tier stays at the changed packages", () => {
+    const plan = planVerification({
+      changedPaths: ["packages/protocol-ts/src/events.ts"],
+      riskLevel: "high",
+    });
+    const consumer = plan.steps.find((step) => step.id === "broader-tests");
+    expect(verificationCommandDisplay(consumer!.command!)).toBe("bun test packages/protocol-ts");
+  });
+
+  test("a package nothing depends on does not widen (§5.24 low-risk edits)", () => {
+    const graph = workspaceConsumerGraph(MANIFESTS);
+    const plan = planVerification({
+      changedPaths: ["packages/skills/src/index.ts"],
+      riskLevel: "high",
+      packageConsumers: graph,
+    });
+    const consumer = plan.steps.find((step) => step.id === "broader-tests");
+    expect(verificationCommandDisplay(consumer!.command!)).toBe("bun test packages/skills");
+  });
+
+  test("the contract forwards both the graph and the reflection paths", () => {
+    const graph = workspaceConsumerGraph(MANIFESTS);
+    const contract = buildTurnVerificationContract({
+      changedPaths: ["packages/protocol-ts/src/events.ts"],
+      workspaceGeneration: 3,
+      // A reflection path alone widens past the focused tier; dropping it here
+      // made the widening the kernel supplies dead on the contract path.
+      reflectionPaths: ["packages/protocol-ts/src/events.ts"],
+      packageConsumers: graph,
+    });
+    const consumer = contract.requiredChecks.find((check) => check.id === "broader-tests");
+    // Not required at low risk, but it must be planned rather than absent.
+    expect(
+      planVerification({
+        changedPaths: ["packages/protocol-ts/src/events.ts"],
+        reflectionPaths: ["packages/protocol-ts/src/events.ts"],
+        packageConsumers: graph,
+      }).steps.some((step) => step.id === "broader-tests"),
+    ).toBe(true);
+    expect(consumer).toBeUndefined();
+
+    const highRisk = buildTurnVerificationContract({
+      changedPaths: ["packages/protocol-ts/src/events.ts"],
+      workspaceGeneration: 3,
+      riskLevel: "high",
+      packageConsumers: graph,
+    });
+    expect(
+      highRisk.requiredChecks.find((check) => check.id === "broader-tests")?.command,
+    ).toBe("bun test apps/cbc packages/agent-kernel packages/protocol-ts packages/provider-openai");
   });
 });
