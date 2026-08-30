@@ -157,3 +157,55 @@ describe("cbc-bench CLI wiring", () => {
     expect(errors.join("\n")).toContain("requires a paired result artifact");
   });
 });
+
+describe("§5.27 cohort selection", () => {
+  test("coverage reports the openai-native cohort instead of the release mix", async () => {
+    const lines: string[] = [];
+    const log = spyOn(console, "log").mockImplementation((value?: unknown) => {
+      lines.push(String(value));
+    });
+    cleanups.push(() => log.mockRestore());
+
+    expect(await cbcBench(["coverage", "--cohort", "openai-native"])).toBe(0);
+    const rendered = lines.join("\n");
+    expect(rendered).toContain("11 task(s) of 150 target");
+    // Eleven tasks are not the release distribution, and the report says so rather
+    // than presenting the cohort as the benchmark.
+    expect(rendered).toContain("below the §26.2 target");
+  });
+
+  test("an unknown cohort is refused before anything runs", async () => {
+    const errors: string[] = [];
+    const error = spyOn(console, "error").mockImplementation((value?: unknown) => {
+      errors.push(String(value));
+    });
+    cleanups.push(() => error.mockRestore());
+
+    expect(await cbcBench(["coverage", "--cohort", "nonsense"])).toBe(2);
+    expect(errors.join("\n")).toContain("--cohort must be one of release, openai-native");
+  });
+
+  test("a cohort task id is unreachable from the release cohort", async () => {
+    const errors: string[] = [];
+    const error = spyOn(console, "error").mockImplementation((value?: unknown) => {
+      errors.push(String(value));
+    });
+    cleanups.push(() => error.mockRestore());
+
+    // §5.27's tasks reuse the release categories, so the release cohort has to stay
+    // closed: a cohort id matching nothing here is what keeps its composition fixed.
+    expect(await cbcBench(["run", "--filter", "on-ptc-aggregation"])).toBe(2);
+    expect(errors.join("\n")).toContain("no task matches 'on-ptc-aggregation' in the release cohort");
+  });
+
+  test("the cohort flag is documented in the usage text", async () => {
+    const lines: string[] = [];
+    const log = spyOn(console, "log").mockImplementation((value?: unknown) => {
+      lines.push(String(value));
+    });
+    cleanups.push(() => log.mockRestore());
+
+    expect(await cbcBench(["help"])).toBe(0);
+    expect(lines.join("\n")).toContain("--cohort <id>");
+  });
+});

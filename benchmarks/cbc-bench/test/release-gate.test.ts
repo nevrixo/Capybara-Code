@@ -194,10 +194,26 @@ function makeRepositoryEvidence(
     categoryTargets: { ...CATEGORY_TARGETS },
     tasks: cohortTasks,
   };
+  const openAiNativeBody = {
+    taskCount: 1,
+    tasks: [{
+      id: "on-ptc-aggregation",
+      category: "repository_understanding" as const,
+      language: "typescript",
+      snapshot: "generated/on-ptc-aggregation",
+      snapshotKind: "generated" as const,
+      snapshotDigest: hash("on-ptc-aggregation"),
+      taskDigest: hash("on-ptc-aggregation:task"),
+    }],
+  };
   const cohort = {
     ...cohortBody,
     generatedAt: "2026-08-12T00:00:00.000Z",
     digest: hash(canonicalValue(cohortBody)),
+    openAiNativeCohort: {
+      ...openAiNativeBody,
+      digest: hash(canonicalValue(openAiNativeBody)),
+    },
   };
   const sourceTruth = {
     schemaVersion: "1.0" as const,

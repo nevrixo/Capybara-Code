@@ -1365,6 +1365,111 @@
       "taskDigest": "e784b08f091c852d7ab5b95fb915328ef265a11448a782a6b1050d93d5455cb8"
     }
   ],
-  "generatedAt": "2026-08-12T17:39:56.227Z",
-  "digest": "a00d14e9afccb7610e4aacaa3c72ad4cf3e8960015488c33fe7cfa79bfea1727"
+  "generatedAt": "2026-08-30T19:28:17.818Z",
+  "digest": "a00d14e9afccb7610e4aacaa3c72ad4cf3e8960015488c33fe7cfa79bfea1727",
+  "openAiNativeCohort": {
+    "taskCount": 11,
+    "tasks": [
+      {
+        "id": "on-ptc-aggregation",
+        "category": "repository_understanding",
+        "language": "typescript",
+        "snapshot": "generated/on-ptc-aggregation",
+        "snapshotKind": "generated",
+        "snapshotDigest": "37b78e340df222c88270fe88de4168ff399ce1874377c6bec812aa94bd5d2881",
+        "taskDigest": "a593622283cbebdba21f114ee8571b4293bd94f0ee0c8dabf09f616b9ef7df0d"
+      },
+      {
+        "id": "on-semantic-pivot",
+        "category": "repository_understanding",
+        "language": "typescript",
+        "snapshot": "generated/on-semantic-pivot",
+        "snapshotKind": "generated",
+        "snapshotDigest": "3ca29c55a561d31e5d5a54aac8f153e48af3b312c905a3b675b7f0e234bd4f37",
+        "taskDigest": "071ea7c00478789a09a28787a74a1a9765a5b8cd37c7b096b977b352a77423a9"
+      },
+      {
+        "id": "on-ptc-write-boundary",
+        "category": "permission_denial_adaptation",
+        "language": "typescript",
+        "snapshot": "generated/on-ptc-write-boundary",
+        "snapshotKind": "generated",
+        "snapshotDigest": "30d8e42892ec3011ac3245957aefef316c66d711821ae81e44371acd627b44f5",
+        "taskDigest": "b08c1b2ce051b9162879e5a85b48568c95a4fe1f06e6d0e5a5a71e79045e7513"
+      },
+      {
+        "id": "on-decomposable-exploration",
+        "category": "multi_language_monorepo",
+        "language": "mixed_monorepo",
+        "snapshot": "generated/on-decomposable-exploration",
+        "snapshotKind": "generated",
+        "snapshotDigest": "223ef9ac2636102ec14880990aaee1d33e671a0894d077d5754b205ba5402f4c",
+        "taskDigest": "5be262fb03a06a9304f3a887d02b3dd51ba50cac9dd367baeca389586d1f5cdf"
+      },
+      {
+        "id": "on-anti-decomposable",
+        "category": "refactor",
+        "language": "typescript",
+        "snapshot": "generated/on-anti-decomposable",
+        "snapshotKind": "generated",
+        "snapshotDigest": "24a57ce854c49a76c76832aafbe492e5f588fdb8410b8c18a249bfd82c07a923",
+        "taskDigest": "e8a0d62671b82f8ab638e3b8022ea5926cc0d5ce075ce1ac541666e503fa46eb"
+      },
+      {
+        "id": "on-mid-turn-redirect",
+        "category": "long_session_resume_compaction",
+        "language": "typescript",
+        "snapshot": "generated/on-mid-turn-redirect",
+        "snapshotKind": "generated",
+        "snapshotDigest": "5cbb91cc7ebd08b4bf8c040436d08bcd5bbca4b7f8e7cc2d9fc194ede5ef400c",
+        "taskDigest": "786f3f4709bfcf45dfe26c430ce5a7e84bc064232f81bd3900c6f634a220558e"
+      },
+      {
+        "id": "on-reviewer-independence",
+        "category": "diff_review",
+        "language": "typescript",
+        "snapshot": "generated/on-reviewer-independence",
+        "snapshotKind": "generated",
+        "snapshotDigest": "441301728b7290fedb8209818edd7cad2f34426c590d231b919e6579c7f59410",
+        "taskDigest": "dca5040b55ad54557664186b1744c70cc83543b504a5b3be35c0b2659dc9a554"
+      },
+      {
+        "id": "on-persisted-reasoning",
+        "category": "long_session_resume_compaction",
+        "language": "typescript",
+        "snapshot": "generated/on-persisted-reasoning",
+        "snapshotKind": "generated",
+        "snapshotDigest": "519315fe7a6fc30c17f78194808a7822436dde4528a6da47c29a0eedc5594e92",
+        "taskDigest": "32f66f8812f01064eac1f875b62806f984341426c385fb97ab27f97f8d9387af"
+      },
+      {
+        "id": "on-cache-economics",
+        "category": "repository_understanding",
+        "language": "typescript",
+        "snapshot": "generated/on-cache-economics",
+        "snapshotKind": "generated",
+        "snapshotDigest": "dc71d3e89bffd7ba31817bb35de98faf8fcd014d5b4a601fe0ede5a91d7626cb",
+        "taskDigest": "df44b4db6dbb0842e69989e20f8e2c3fb7e13395c0f8527492dca17e0dde4a7a"
+      },
+      {
+        "id": "on-native-lane-fallback",
+        "category": "repository_understanding",
+        "language": "typescript",
+        "snapshot": "generated/on-native-lane-fallback",
+        "snapshotKind": "generated",
+        "snapshotDigest": "9f0172c5fdb04e4a954e967b5e7ccb3a9508bf2aa53481ce5255dfbda2817200",
+        "taskDigest": "bef5c7995e133b295b7a1f96b2a417924d629c01e8ec964175c060a8e44e8e79"
+      },
+      {
+        "id": "on-false-complete-bait",
+        "category": "test_diagnosis",
+        "language": "typescript",
+        "snapshot": "generated/on-false-complete-bait",
+        "snapshotKind": "generated",
+        "snapshotDigest": "06598240784af0703e2aca631c1d853c34d239048d984b5c9b7cc0f896d5069f",
+        "taskDigest": "0dc4a7d706961725dfc15ee94cad6b35ae2a9896a3eec4fd55bfac199a76e94c"
+      }
+    ],
+    "digest": "aad62b984992173d1c4658eaf936ad4ba1c94a9568b5735477dec146d5d61ed1"
+  }
 }

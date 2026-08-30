@@ -67,7 +67,14 @@ import {
 import { generatedSnapshotManifest } from "./generated-fixtures.ts";
 import { inspectReleaseEvidence } from "./release-gate.ts";
 import { evaluatePerformanceHealthArtifact } from "./rollback.ts";
-import { SUITE, selectTasks } from "./suite.ts";
+import {
+  BENCH_COHORTS,
+  OPENAI_NATIVE_SUITE,
+  SUITE,
+  cohortTasks,
+  selectTasks,
+  type BenchCohort,
+} from "./suite.ts";
 
 const ROOT = new URL("../../..", import.meta.url).pathname
   .replace(/^\/([A-Za-z]:)/u, "$1")
@@ -83,6 +90,7 @@ interface Flags {
   readonly candidateVariant?: string;
   readonly serviceTier: string;
   readonly filter: string;
+  readonly cohort: string;
   readonly out?: string;
   readonly candidate?: string;
   readonly baseline?: string;
@@ -147,6 +155,7 @@ function parseFlags(argv: readonly string[]): Flags {
       : {}),
     serviceTier: text("--service-tier") ?? "standard",
     filter: text("--filter") ?? "all",
+    cohort: text("--cohort") ?? "release",
     ...(text("--out") !== undefined ? { out: text("--out") as string } : {}),
     ...(text("--candidate") !== undefined ? { candidate: text("--candidate") as string } : {}),
     ...(text("--baseline") !== undefined ? { baseline: text("--baseline") as string } : {}),
@@ -186,8 +195,8 @@ const parseBenchmarkServiceTier = (
 const USAGE = `cbc-bench — CBC Bench harness
 
 Commands
-  coverage                     report category and language coverage
-  validate                     validate every task fixture and checked-in cohort manifest
+  coverage                     report category and language coverage for --cohort
+  validate                     validate every cohort's fixtures and the checked-in manifest
   manifest                     write the canonical 150-task cohort manifest
   profiles                     list comparison profiles and whether they are wired
   run                          execute one faithfully applied profile
@@ -199,6 +208,7 @@ Common flags
   --variant <id>               legacy or optimized (run/candidate default: optimized)
   --service-tier <id>          standard or fast (default: standard)
   --filter <id|category|lang>  narrow the suite (default: all)
+  --cohort <id>                release or openai-native (default: release)
   --out <path>                 result artifact path
   --concurrency <n>            tasks per suite (default 1; >1 distorts latency)
   --keep-workspaces            leave copied task workspaces on disk
@@ -232,9 +242,12 @@ async function main(argv: readonly string[]): Promise<number> {
   const flags = parseFlags(rest);
 
   switch (command) {
-    case "coverage":
-      console.log(renderCoverage(suiteCoverage(SUITE)).join("\n"));
+    case "coverage": {
+      const cohort = parseCohort(flags.cohort);
+      if (cohort === undefined) return 2;
+      console.log(renderCoverage(suiteCoverage(cohortTasks(cohort))).join("\n"));
       return 0;
+    }
 
     case "validate":
       return await validateCommand();
@@ -268,7 +281,10 @@ async function main(argv: readonly string[]): Promise<number> {
 
 async function validateCommand(): Promise<number> {
   let bad = 0;
-  for (const task of SUITE) {
+  // Both cohorts are validated: an unreachable malformed §5.27 fixture is still a bug,
+  // and `validate` is the only place it would be noticed before a release run.
+  const fixtures = [...SUITE, ...OPENAI_NATIVE_SUITE];
+  for (const task of fixtures) {
     const issues = [...validateTask(task)];
     if (task.generatedSnapshot !== undefined) {
       try {
@@ -311,7 +327,9 @@ async function validateCommand(): Promise<number> {
     console.log(`ok    cohort manifest ${cohort.current.digest}`);
   }
   console.log("");
-  console.log(`${SUITE.length - Math.min(bad, SUITE.length)} of ${SUITE.length} fixture(s) valid`);
+  console.log(
+    `${fixtures.length - Math.min(bad, fixtures.length)} of ${fixtures.length} fixture(s) valid`,
+  );
   return bad === 0 ? 0 : 1;
 }
 
@@ -363,9 +381,11 @@ async function runCommand(flags: Flags): Promise<number> {
   const resolved = resolveProfile(flags.profile, { performanceVariant: variant, serviceTier });
   if (resolved === undefined) return 2;
 
-  const tasks = selectTasks(flags.filter);
+  const cohort = parseCohort(flags.cohort);
+  if (cohort === undefined) return 2;
+  const tasks = selectTasks(flags.filter, cohort);
   if (tasks.length === 0) {
-    console.error(`no task matches '${flags.filter}'`);
+    console.error(`no task matches '${flags.filter}' in the ${cohort} cohort`);
     return 2;
   }
   if (!validConcurrency(flags.concurrency)) return 2;
@@ -488,9 +508,11 @@ async function pairedCommand(flags: Flags): Promise<number> {
   });
   if (baseline === undefined || candidate === undefined) return 2;
 
-  const tasks = selectTasks(flags.filter);
+  const cohort = parseCohort(flags.cohort);
+  if (cohort === undefined) return 2;
+  const tasks = selectTasks(flags.filter, cohort);
   if (tasks.length === 0) {
-    console.error(`no task matches '${flags.filter}'`);
+    console.error(`no task matches '${flags.filter}' in the ${cohort} cohort`);
     return 2;
   }
   const capabilitySnapshot = await readCapabilitySnapshot(flags.capabilitySnapshot);
@@ -579,9 +601,11 @@ async function pairedCommand(flags: Flags): Promise<number> {
           order: flags.order as PairedOrderStrategy,
           ...(flags.seed !== undefined ? { seed: flags.seed } : {}),
           capabilitySnapshot: pairedCapabilitySnapshot,
-          // Filtered runs are development evidence. The full cohort enforces the complete
-          // category distribution immediately; `gate` independently enforces release size.
-          requireCompleteCoverage: flags.filter === "all",
+          // Filtered runs are development evidence. The full release cohort enforces the
+          // complete category distribution immediately; `gate` independently enforces
+          // release size. §5.27's cohort is eleven tasks by design, so the release
+          // distribution is not its contract and would block every run of it.
+          requireCompleteCoverage: flags.filter === "all" && cohort === "release",
           minimumRepetitions: 2,
           requiredTemperatures: ["cold", "warm"],
           requireAppliedProfile: true,
@@ -764,6 +788,12 @@ function providerConfigured(): boolean {
     ].join("\n"),
   );
   return false;
+}
+
+function parseCohort(value: string): BenchCohort | undefined {
+  if ((BENCH_COHORTS as readonly string[]).includes(value)) return value as BenchCohort;
+  console.error(`--cohort must be one of ${BENCH_COHORTS.join(", ")}`);
+  return undefined;
 }
 
 function validConcurrency(value: number): boolean {

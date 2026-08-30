@@ -47,3 +47,46 @@ describe("benchmark cohort manifest", () => {
     expect(errors).toContain("digest must be SHA-256 hex");
   });
 });
+
+describe("§5.27 cohort manifest", () => {
+  test("digests the second cohort under its own key without moving the release digest", async () => {
+    const manifest = await buildCohortManifest(BENCH);
+
+    expect(validateCohortManifestShape(manifest)).toEqual([]);
+    // The release identity is still exactly the 150 tasks: adding a cohort must not look
+    // like the release cohort changed.
+    expect(manifest.taskCount).toBe(150);
+    expect(manifest.tasks).toHaveLength(150);
+    expect(manifest.openAiNativeCohort.taskCount).toBe(11);
+    expect(manifest.openAiNativeCohort.digest).not.toBe(manifest.digest);
+
+    const releaseIds = new Set(manifest.tasks.map((task) => task.id));
+    for (const task of manifest.openAiNativeCohort.tasks) {
+      expect(releaseIds.has(task.id)).toBe(false);
+      expect(task.snapshotKind).toBe("generated");
+      expect(task.snapshotDigest).toMatch(/^[0-9a-f]{64}$/u);
+    }
+  });
+
+  test("shape validation rejects a tampered or colliding second cohort", async () => {
+    const manifest = await buildCohortManifest(BENCH);
+
+    expect(validateCohortManifestShape({
+      ...manifest,
+      openAiNativeCohort: { ...manifest.openAiNativeCohort, taskCount: 12 },
+    })).toContain("openAiNativeCohort tasks length must equal its taskCount");
+
+    const collided = {
+      ...manifest,
+      openAiNativeCohort: {
+        ...manifest.openAiNativeCohort,
+        tasks: [
+          { ...manifest.openAiNativeCohort.tasks[0]!, id: manifest.tasks[0]!.id },
+          ...manifest.openAiNativeCohort.tasks.slice(1),
+        ],
+      },
+    };
+    expect(validateCohortManifestShape(collided))
+      .toContain(`openAiNativeCohort task ${manifest.tasks[0]!.id} collides with a release cohort task`);
+  });
+});
