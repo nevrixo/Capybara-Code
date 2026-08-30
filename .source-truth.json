@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-30T17:07:35.666Z",
+  "generatedAt": "2026-08-30T19:29:07.091Z",
   "git": {
-    "commit": "8b751273c3310cec5931e1ee2af8adc00e0fcfb6",
+    "commit": "191295f735e0ece9b4a18cb349107c39a9234ee6",
     "dirty": true,
-    "dirtyHash": "7348670dc85dba58ca1293bd1797124868a0c6069358b234f5a43d93ee5ce244"
+    "dirtyHash": "867ac8445f1289e2bc598de62f25afe8c251b959a6ad20a32d7df5696f991582"
   },
   "roots": [
     "apps",
@@ -55,7 +55,7 @@
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
     "typescript": "5.9.3"
   },
-  "fileCount": 716,
+  "fileCount": 741,
   "historicalArtifacts": [],
   "files": [
     {
@@ -230,8 +230,8 @@
     },
     {
       "path": "apps/cbc/src/agent.ts",
-      "bytes": 202756,
-      "sha256": "96cb0c4449c00ac00d4f04b4e402775d4da1fb879a46ae037112f2c8ff6cf0cb"
+      "bytes": 227968,
+      "sha256": "e419b3e2635c69c29d78d44f100ec024b6477a54a24dd39bca9af068a08ded07"
     },
     {
       "path": "apps/cbc/src/approvals.ts",
@@ -240,8 +240,8 @@
     },
     {
       "path": "apps/cbc/src/args.ts",
-      "bytes": 19273,
-      "sha256": "07fc16427bbe16c3c02cf521b3d554a1ea266a4428e077e69d10ba518c4a71ca"
+      "bytes": 20788,
+      "sha256": "bdb5f3b69533822c45363d36b2de1e76a7efd9d2c6aab59fb5302110e61079f5"
     },
     {
       "path": "apps/cbc/src/auth-mode.ts",
@@ -260,8 +260,8 @@
     },
     {
       "path": "apps/cbc/src/command-spec.ts",
-      "bytes": 11433,
-      "sha256": "39b0f75dd4d50fd5ad6af6a12ae31c6dec7edf64f18e2b242eff92d6cb1e5870"
+      "bytes": 12744,
+      "sha256": "c4ebb3f90032d05c242afe7e6c134a5bb17da5dd1289c92dc882a29fd8c0f450"
     },
     {
       "path": "apps/cbc/src/commands/acp.ts",
@@ -275,8 +275,8 @@
     },
     {
       "path": "apps/cbc/src/commands/config.ts",
-      "bytes": 936,
-      "sha256": "291a967f20a0aa1215d83682c768e965b6a5c67f28db8df5bb8611ce5ad8585b"
+      "bytes": 3516,
+      "sha256": "31e9582f310708bde83221af5c1415bfd42305105156fa5a70534b0e1625f272"
     },
     {
       "path": "apps/cbc/src/commands/context.ts",
@@ -289,14 +289,24 @@
       "sha256": "26c1ae6a261ce2bb89072559893de46a4469661c5e88b5912b1161604a65cb00"
     },
     {
+      "path": "apps/cbc/src/commands/doctor.ts",
+      "bytes": 10721,
+      "sha256": "1e57dbf6da1bd89b855c190d038c445e56013446b2e775856d43256b7fbaa4f3"
+    },
+    {
       "path": "apps/cbc/src/commands/integrations.ts",
       "bytes": 6365,
       "sha256": "e930229ce70c441cafc4ac4372a3f95245c24166c554b3596f0d5570d69913cc"
     },
     {
       "path": "apps/cbc/src/commands/interactive.ts",
-      "bytes": 97729,
-      "sha256": "25e4a05c1599166b7351be85dbcf04f7610b438adb4fa4c5a027bbba2d3c2698"
+      "bytes": 99398,
+      "sha256": "c12414f5d2e7cf97bd6712783cb2166ddaa5acf135573ab200f27288151b39dd"
+    },
+    {
+      "path": "apps/cbc/src/commands/learn.ts",
+      "bytes": 6531,
+      "sha256": "407e23a1ef37dbfe6332e8241c9c17a56d1c9ae200ef71f1eb037f05d03dfc9e"
     },
     {
       "path": "apps/cbc/src/commands/model.ts",
@@ -475,8 +485,8 @@
     },
     {
       "path": "apps/cbc/src/router.ts",
-      "bytes": 5724,
-      "sha256": "550fb03f339aad490e1c5d3f3346ace086af69b60cbfae16c14853939415dcdd"
+      "bytes": 6102,
+      "sha256": "aed8bfca5612cadf5370d3275571a6b406eef285f2d6170873d3edc76f3127f4"
     },
     {
       "path": "apps/cbc/src/rules-store.ts",
@@ -510,8 +520,8 @@
     },
     {
       "path": "apps/cbc/src/slash.ts",
-      "bytes": 9905,
-      "sha256": "ac623473277b9b26ff12cc091c7665cdafaffc7ada54a0445d7e5f330307e56b"
+      "bytes": 10825,
+      "sha256": "29be559a74dfbfcd348a52d73946f3ad61074387e84656df82566bb3b9af65ab"
     },
     {
       "path": "apps/cbc/src/state.ts",
@@ -639,9 +649,24 @@
       "sha256": "44272f2568cc53075d5cb921cddec1e61a433b69a19aa03f56e960b73c848bfb"
     },
     {
+      "path": "apps/cbc/test/doctor.test.ts",
+      "bytes": 9114,
+      "sha256": "d5ff075ec77da444f9b408d555c9ca9a6b68f9e5228159cbd19394358d10ca8e"
+    },
+    {
+      "path": "apps/cbc/test/epoch-signals.test.ts",
+      "bytes": 12988,
+      "sha256": "1f0bed115fe628aed915fe0d6a24d9445dec3901be0228a7f9d62f73b71d16e3"
+    },
+    {
       "path": "apps/cbc/test/fake-runtime.ts",
       "bytes": 3996,
       "sha256": "3cc7833c0469cf482b1f563b11cde4a40d61f01f12239e2a914deef9295077fb"
+    },
+    {
+      "path": "apps/cbc/test/goal-contract-session.test.ts",
+      "bytes": 6143,
+      "sha256": "f426a689dc2b1cfd1a646c51c6b9bca0ff10dd87368a1d4aecb9ccbf026eb7a2"
     },
     {
       "path": "apps/cbc/test/independent-review-failure.test.ts",
@@ -662,6 +687,11 @@
       "path": "apps/cbc/test/interactive-persistence.test.ts",
       "bytes": 5401,
       "sha256": "2e890dc4b12ac91ffdea392168941e8a5940d1f8b23e192b2991781d9ae01ca3"
+    },
+    {
+      "path": "apps/cbc/test/learn-command.test.ts",
+      "bytes": 7429,
+      "sha256": "1b52d854192d188b5df09ada331ea3b9274c2c2636572a6eaede470bf318eb52"
     },
     {
       "path": "apps/cbc/test/lsp-call-hierarchy-bridge.test.ts",
@@ -815,8 +845,8 @@
     },
     {
       "path": "apps/cbc/test/session-resume-paging.test.ts",
-      "bytes": 10408,
-      "sha256": "6481765799cb7c50d8ed15dca250880be79f8ff3384ca3240cba030c8dd98feb"
+      "bytes": 12736,
+      "sha256": "0137b3c78117d6fa4b54c93d6438460c29efbe06c803706cc0b392207e5d806c"
     },
     {
       "path": "apps/cbc/test/session-worker-questionnaire.test.ts",
@@ -874,6 +904,11 @@
       "sha256": "7d846c4e7f16257fe57df253e38c910030f495c9077925ddd67a0be94bb25c56"
     },
     {
+      "path": "apps/cbc/test/turn-budget.test.ts",
+      "bytes": 4368,
+      "sha256": "09d4aaf654c998f7a1a52d231d5b0f3b05ddb842049278b4951733bbdc558892"
+    },
+    {
       "path": "apps/cbc/test/update-check.test.ts",
       "bytes": 25033,
       "sha256": "b648fb7fb445688de0e1fcd9704111428eb3563d737b4e37d767d2367cfeb0e8"
@@ -910,8 +945,8 @@
     },
     {
       "path": "benchmarks/cbc-bench/cohort-manifest.json",
-      "bytes": 54537,
-      "sha256": "879a3bfe8a753494a2e36ec1efc5139ea09986864a6dc37f8af0bca104b43e87"
+      "bytes": 59216,
+      "sha256": "477ee42745cdff7ff9fa85dd820871f1070bf649185f8ba5cd2ace5aee505a36"
     },
     {
       "path": "benchmarks/cbc-bench/package.json",
@@ -920,13 +955,13 @@
     },
     {
       "path": "benchmarks/cbc-bench/src/cli.ts",
-      "bytes": 32585,
-      "sha256": "4301e0a772e7c144fe4e41979be2a1bd14cffee81b81d4d7b950b5821e8edca0"
+      "bytes": 33882,
+      "sha256": "3fd2d8884363d812c093f1e4f63533654a9f904ff801e7b3f384c83903e131e4"
     },
     {
       "path": "benchmarks/cbc-bench/src/cohort-manifest.ts",
-      "bytes": 6704,
-      "sha256": "d65b22b343f8a414c4b36c6948455d95c40d31dce9876ca0909da63fb0ef4378"
+      "bytes": 9270,
+      "sha256": "84504ea2f9a138b41319e31edfaf7060aa78d4544858d9aecec51f3a237e9d58"
     },
     {
       "path": "benchmarks/cbc-bench/src/evidence.ts",
@@ -940,8 +975,8 @@
     },
     {
       "path": "benchmarks/cbc-bench/src/generated-fixtures.ts",
-      "bytes": 22407,
-      "sha256": "9589c54fb24af8fe2003e0e4722c8da23090ddb33c0869d217ff7d7d9ff38d5b"
+      "bytes": 39141,
+      "sha256": "973fdd8d5a081cd229ab8698acd431704535f97051591821e7567b42bbcff39e"
     },
     {
       "path": "benchmarks/cbc-bench/src/profile.ts",
@@ -960,8 +995,8 @@
     },
     {
       "path": "benchmarks/cbc-bench/src/suite.ts",
-      "bytes": 12944,
-      "sha256": "43dde48e6eaf485220a7ad22f670d9f80d283d9b45a065cba60808da5a7903bb"
+      "bytes": 20683,
+      "sha256": "5180b74231661d08569f64b4b462bd297432c0d41ad3dbccb3c20f2a4803e4a0"
     },
     {
       "path": "benchmarks/cbc-bench/tasks/bf-off-by-one/AGENTS.md",
@@ -985,13 +1020,13 @@
     },
     {
       "path": "benchmarks/cbc-bench/test/cli.test.ts",
-      "bytes": 5925,
-      "sha256": "a7dc3d3a2cfacc4dca80e778e1d537b7c8d15ae38ea0ff164157df51e8220a67"
+      "bytes": 8123,
+      "sha256": "d6ded42e41e30f933c0def416334023dd0d5e70f8831a4a239c59048163026b5"
     },
     {
       "path": "benchmarks/cbc-bench/test/cohort-manifest.test.ts",
-      "bytes": 1949,
-      "sha256": "14a0f5c1596c8d901dd9ad0e6499e8cf176866b4a1476e4cad04cee0ac720d03"
+      "bytes": 3695,
+      "sha256": "f2c07806a6d5ae2d610270776a95da185f48e93b66172bcdd72be7e5b48a2ce7"
     },
     {
       "path": "benchmarks/cbc-bench/test/external-adapter.test.ts",
@@ -1015,8 +1050,8 @@
     },
     {
       "path": "benchmarks/cbc-bench/test/release-gate.test.ts",
-      "bytes": 19330,
-      "sha256": "d37f0d4f17a99008859d4df5bdf7a302cd661c1e25d7f79826e4a779bffc4720"
+      "bytes": 20297,
+      "sha256": "8f3bf9e768f0ae7fc02003d222f8f2a659566f588a01dc19318701389e0b67b7"
     },
     {
       "path": "benchmarks/cbc-bench/test/repository-artifacts.test.ts",
@@ -1025,8 +1060,8 @@
     },
     {
       "path": "benchmarks/cbc-bench/test/suite.test.ts",
-      "bytes": 4594,
-      "sha256": "ba419ffc3cf77ca9a3ebad9f0404469761a50256994ff5aa02b79e513d7764a6"
+      "bytes": 7589,
+      "sha256": "287ea9c4b582a2d16a2439922507bee5aab94b30dedeebd655603c553974a7cb"
     },
     {
       "path": "benchmarks/cbc-bench/test/verification-scripts.test.ts",
@@ -1765,8 +1800,8 @@
     },
     {
       "path": "packages/agent-kernel/src/kernel.ts",
-      "bytes": 225669,
-      "sha256": "715eff80a4f0e2d595f2201922548c6ef1a59bd47925cadc2329bb9ee97a02f9"
+      "bytes": 260086,
+      "sha256": "7425b53db53f3dc30b40ef40886b99bf90c3b4eef5105d517a5c343b5e60f0cb"
     },
     {
       "path": "packages/agent-kernel/src/observation.ts",
@@ -1799,6 +1834,11 @@
       "sha256": "c36035a354ee92cf8363aff58132bfd9a2cb5719d6dc1508848c857cd2650bd8"
     },
     {
+      "path": "packages/agent-kernel/test/action-group-dispatch.test.ts",
+      "bytes": 8562,
+      "sha256": "c06b7d7452bf042ee33f26c15bced6de699641510b6901fac688cb7f3e028141"
+    },
+    {
       "path": "packages/agent-kernel/test/continuation-recovery.test.ts",
       "bytes": 4144,
       "sha256": "a1d13abb819893ff1e023f7b489c40fcc0a4fcac02b060af37e5c6ef71841c2a"
@@ -1810,13 +1850,18 @@
     },
     {
       "path": "packages/agent-kernel/test/kernel.test.ts",
-      "bytes": 169344,
-      "sha256": "04df4bc2beedadcb5206902747a693db6cbcdd251daeedcb2e38ab271fab8a87"
+      "bytes": 189583,
+      "sha256": "d91691e298fb7bd1bdc572887307e9a980318ff82f74d882450f61a3fa079f6a"
     },
     {
       "path": "packages/agent-kernel/test/patch-recovery.test.ts",
       "bytes": 850,
       "sha256": "3f05f7fa0812866eb39fe5f0c41ebb8368b940293bb100665063139a689b06a2"
+    },
+    {
+      "path": "packages/agent-kernel/test/prompt-budget.test.ts",
+      "bytes": 3904,
+      "sha256": "ea287af3e56bc0cde1388083165d90f6c5ca820e18bfd4cee9883d9c4bd22c88"
     },
     {
       "path": "packages/agent-kernel/test/risk.performance.test.ts",
@@ -1910,8 +1955,8 @@
     },
     {
       "path": "packages/config-schema/src/key-status.ts",
-      "bytes": 16881,
-      "sha256": "89d16516447de3f6ecf9080e1594c8ee0232b612b32f0277fd9c6296879c7577"
+      "bytes": 18112,
+      "sha256": "e930ccceb98b72b45f5fd5c78e895e292ad5f50a144b10dd5ef9f0e10779f516"
     },
     {
       "path": "packages/config-schema/src/performance-rollbacks.ts",
@@ -1920,8 +1965,8 @@
     },
     {
       "path": "packages/config-schema/src/schema.ts",
-      "bytes": 68702,
-      "sha256": "9a44e792dbfb15709115a158ce1dfb599736e73b0e296a4b61d9da43e3953a86"
+      "bytes": 71927,
+      "sha256": "97ec3b7d4e004c889abbc4dbcac76195b0dc9052b1c4ef09f9e27d9c16295727"
     },
     {
       "path": "packages/config-schema/src/toml.ts",
@@ -1930,8 +1975,13 @@
     },
     {
       "path": "packages/config-schema/test/config.test.ts",
-      "bytes": 40014,
-      "sha256": "3711e5864e601d29f52add5a537d973b50bc134e3f64d8c850cc10721f52a34e"
+      "bytes": 45215,
+      "sha256": "781d3a2e055a3a4923d3b4651fc2505e2fcb0d96de62102a57762e9b189ff4bb"
+    },
+    {
+      "path": "packages/config-schema/test/learning-config.test.ts",
+      "bytes": 3606,
+      "sha256": "fa1ee3b1206f84b84c77ed59ccd3f96a4467b3529c71931a17d9342cdad38bf6"
     },
     {
       "path": "packages/config-schema/test/performance-config.test.ts",
@@ -2060,8 +2110,8 @@
     },
     {
       "path": "packages/context-engine/src/verification-planner.ts",
-      "bytes": 10859,
-      "sha256": "96f035ec72f0b3ea59d3b53a5438ea17b88e33bcace52821e132f4990376c3a7"
+      "bytes": 12763,
+      "sha256": "a31f2a695a3be58c83bace18ea2f30ee9a8ec52c066019d3505b209166a3715f"
     },
     {
       "path": "packages/context-engine/test/compiler-v2.test.ts",
@@ -2107,6 +2157,11 @@
       "path": "packages/context-engine/test/scope.test.ts",
       "bytes": 7441,
       "sha256": "2a5de012f996717536d640ddae59b93381d6b3d78cbe4684c52ced1cfc84975e"
+    },
+    {
+      "path": "packages/context-engine/test/verification-planner.test.ts",
+      "bytes": 7817,
+      "sha256": "65c080043b98e06599c729bd0da48a10428d97a1d8e8c1ee224c5ad0d5ea4f53"
     },
     {
       "path": "packages/edit-domain/package.json",
@@ -2160,8 +2215,8 @@
     },
     {
       "path": "packages/evals/src/metrics.ts",
-      "bytes": 46269,
-      "sha256": "bba823704c3bfd6e64bddf3b386d876961c61b5477e0d65416b486dba538365a"
+      "bytes": 55814,
+      "sha256": "4add47368b112fe561cd4eac0f9840591715413080e53bc2c159a1be2f883082"
     },
     {
       "path": "packages/evals/src/paired.ts",
@@ -2175,23 +2230,23 @@
     },
     {
       "path": "packages/evals/src/scoring.ts",
-      "bytes": 20088,
-      "sha256": "12a83b90be48f701b4fde75ddb7f8c97023027973af8e9becf434a41bc9ddee0"
+      "bytes": 20683,
+      "sha256": "e2bc8eb1a9a9676796d3ff5d3e8bf332a72f90e7df12c647a8e4d7ace6265bd7"
     },
     {
       "path": "packages/evals/src/statistics.ts",
-      "bytes": 28515,
-      "sha256": "14edeaf2cf3a0ea8980764e5928d48b342601b35f022f6682cd26d77152dc98a"
+      "bytes": 42022,
+      "sha256": "88b686240f840e69d371af32f17a6aef43d7d267b361826396d8692ef14e04ed"
     },
     {
       "path": "packages/evals/src/task.ts",
-      "bytes": 14291,
-      "sha256": "583f8c399dfdafe6b9e6ca0518bb453d302cd40cd45b03e5f037b427b4cb85c6"
+      "bytes": 16747,
+      "sha256": "29c098f764858e8ac5a18ccc0344ae9fa06719f9fff4c74f4a6851b121075599"
     },
     {
       "path": "packages/evals/test/evals.test.ts",
-      "bytes": 42948,
-      "sha256": "57a20767368dcbf131038e7cbf2a1c27a9cfbc7b462d7bf021e3c47824ddbea1"
+      "bytes": 45160,
+      "sha256": "30f9de413f0cffeb794930137bb634e28deedebfc75c3f953040e108b9d37594"
     },
     {
       "path": "packages/evals/test/paired.test.ts",
@@ -2200,13 +2255,13 @@
     },
     {
       "path": "packages/evals/test/performance-metrics.test.ts",
-      "bytes": 5098,
-      "sha256": "b07801c5a26431094577d4d8473fe62e4f3376e66a311708ed1cf5e968790b3d"
+      "bytes": 9855,
+      "sha256": "ff1c379a6e817c3ffec41a6ac442e964b8d6f0ae76ee4a1273d2595dcb449ce8"
     },
     {
       "path": "packages/evals/test/statistics.test.ts",
-      "bytes": 8747,
-      "sha256": "c718282f8aaf218e4045bf5cfd5c0b244eec0fcf852891f9e0ab9150bca44156"
+      "bytes": 19039,
+      "sha256": "212602cfe2c48e0eb4d03c58fc00362323859f76ed803dd2a84a150fa97a6ba7"
     },
     {
       "path": "packages/github-action/README.md",
@@ -2489,14 +2544,24 @@
       "sha256": "8138e3707db5ddb048bfa854cd2392e23dae413891eab0cfc8cd56136e5d48cb"
     },
     {
+      "path": "packages/memory-service/src/capsule.ts",
+      "bytes": 24624,
+      "sha256": "e69f74bcfec9a33ae76e92af27e9dcdd4cbd1c99f4ea980b1f9481308ebcd470"
+    },
+    {
       "path": "packages/memory-service/src/index.ts",
-      "bytes": 410,
-      "sha256": "38fae8ec6c63de9091d7f2fcfae99de4470314f099bedf41c0831751facb80f0"
+      "bytes": 1234,
+      "sha256": "e325d1ddf9b7a1511cf9000d2bda0ab39aa6583e2082c19a33f80e9373fac093"
     },
     {
       "path": "packages/memory-service/src/service.ts",
-      "bytes": 9656,
-      "sha256": "e0c98819c8b6cf3d951404b939fd7d60142036cf11f9d6e84434acc5bf3d9b00"
+      "bytes": 14073,
+      "sha256": "d3e8b83c4a052982771d473486f59756546f5e933e1fe9409d8c17f90d84a447"
+    },
+    {
+      "path": "packages/memory-service/test/capsule.test.ts",
+      "bytes": 21172,
+      "sha256": "8500d8f470b214bf6f8f78f65a382e6020494af61675ecba2cb715ff53bd53dc"
     },
     {
       "path": "packages/memory-service/test/memory-service.test.ts",
@@ -2570,13 +2635,18 @@
     },
     {
       "path": "packages/permissions/src/policy.ts",
-      "bytes": 50407,
-      "sha256": "9f69ea39219906d1e4973487b0247110dcdca6d2b8e0d6729a3b7d70c8f13352"
+      "bytes": 53488,
+      "sha256": "cbce2c8a4b91b238b01dd88c0a80eef4cb4ec974cc82eba8cb47c6d6ddf378ee"
     },
     {
       "path": "packages/permissions/src/presets.ts",
       "bytes": 12424,
       "sha256": "52c89f690169094202592499f8662aeadb126229a32a7e66959313b482c385eb"
+    },
+    {
+      "path": "packages/permissions/test/action-groups.test.ts",
+      "bytes": 9004,
+      "sha256": "bd6d33dd35995d77906c5110e88166f3b88d68259cda0af077df04c961b59ac0"
     },
     {
       "path": "packages/permissions/test/command-lanes.performance.test.ts",
@@ -2604,6 +2674,11 @@
       "sha256": "121b7d13d24b022a0cc1bfe5aaa8638539faa89f1770cf632345f310342ae422"
     },
     {
+      "path": "packages/plugin-sdk/src/builtin-hooks.ts",
+      "bytes": 6411,
+      "sha256": "f1900e3eb147c91a41de68dc5cdae79d4ce265786c12b6e2e790cababca03f61"
+    },
+    {
       "path": "packages/plugin-sdk/src/circuit.ts",
       "bytes": 9326,
       "sha256": "53fb3cac1607faf64de5a8f5434dbd95b4ae1f02b3adb54501f9807e6bd0e952"
@@ -2625,8 +2700,8 @@
     },
     {
       "path": "packages/plugin-sdk/src/index.ts",
-      "bytes": 452,
-      "sha256": "7f71891717fa1a696c5ffd1a9a90ef5fee185a636bc968e78957a00519c47e0a"
+      "bytes": 488,
+      "sha256": "430c8e2a44698df55c75e2774191cf646d05d76847fb3ab1a352e79c4f102453"
     },
     {
       "path": "packages/plugin-sdk/src/lockfile.ts",
@@ -2730,8 +2805,8 @@
     },
     {
       "path": "packages/protocol-ts/src/events.ts",
-      "bytes": 43765,
-      "sha256": "6d83f834425020787adf8167518fdd807b6f1cc5fd6116eac179f91a8d0d3099"
+      "bytes": 44230,
+      "sha256": "49314fc2dde7d55e0fc3c3a48e4e799cb2c608edc27b79d3e0dfeb75f5dbadf9"
     },
     {
       "path": "packages/protocol-ts/src/index.ts",
@@ -2746,7 +2821,7 @@
     {
       "path": "packages/protocol-ts/test/protocol.test.ts",
       "bytes": 17193,
-      "sha256": "8b31ba7e4b19a577b8bdbc351fa949c27ae051a7a326819d772db2d0bf8889ca"
+      "sha256": "b77b31bd1abd17719a407c82bcbf3d3af02326c3466fe5786d62e9209df80717"
     },
     {
       "path": "packages/provider-openai/package.json",
@@ -2755,8 +2830,8 @@
     },
     {
       "path": "packages/provider-openai/src/capabilities.ts",
-      "bytes": 23351,
-      "sha256": "e468ebc5e89a75f8ae8706ab1f80ab689584e73a95a6d9bc332a29deeb0e1f22"
+      "bytes": 26395,
+      "sha256": "a20626fe34f00afa332ac3e7225b16a032f404e95176ffbb2a114b18fec59456"
     },
     {
       "path": "packages/provider-openai/src/capability-refresh.ts",
@@ -2775,18 +2850,18 @@
     },
     {
       "path": "packages/provider-openai/src/multi-agent.ts",
-      "bytes": 367,
-      "sha256": "d54e1e8377971348ae0d0c9fd6ccf206665a8650fe6d423b981ee42aa6d19274"
+      "bytes": 9722,
+      "sha256": "a4c590247d0d6c55253f9a31540e87a63ad85b6059587c16533479a85dae8026"
     },
     {
       "path": "packages/provider-openai/src/native-lanes.ts",
-      "bytes": 21283,
-      "sha256": "1ec1db453003239bd286c514adcaa8022086fc6dd1f4c0f6a22509ff680bde5d"
+      "bytes": 24818,
+      "sha256": "b2475c489ac6efdcffa1a891f5832843028b7a09dfa95eea4bdfc0fa9fcdc022"
     },
     {
       "path": "packages/provider-openai/src/openai.ts",
-      "bytes": 65966,
-      "sha256": "2c376f9499f46003c7eef7ee713c0b28ed3e2e6112463c74d49b46443244c7f0"
+      "bytes": 67111,
+      "sha256": "a4860457dd5184251b029e19b8ca56e402820f316db4a76f40830c4a413d6c74"
     },
     {
       "path": "packages/provider-openai/src/policy.ts",
@@ -2815,8 +2890,23 @@
     },
     {
       "path": "packages/provider-openai/src/utility.ts",
-      "bytes": 21530,
-      "sha256": "9e74ebea178c3c1409ac89dda8df648c968070ac3306b5d12c7eb44a750b01d6"
+      "bytes": 29027,
+      "sha256": "6fdd0c12abc7b178bcf538bac4cb8ab2d6eaf80c614d79b5461b79840d5a6b52"
+    },
+    {
+      "path": "packages/provider-openai/test/backend-conformance.test.ts",
+      "bytes": 8308,
+      "sha256": "3d5fcd7e5d5328667e0eb0830b06f358f3c4520756b769754f83415af30e5e2b"
+    },
+    {
+      "path": "packages/provider-openai/test/multi-agent.test.ts",
+      "bytes": 4328,
+      "sha256": "142b3144b4127e90d3c37e28e4b04d6f497313ab29b2a75bedf2651c60ea34c1"
+    },
+    {
+      "path": "packages/provider-openai/test/program-security.test.ts",
+      "bytes": 9034,
+      "sha256": "4fe0c5c9d485e4b071421fa9e0ef1499aec6672b334d3cdafe135b1a5848dbd3"
     },
     {
       "path": "packages/provider-openai/test/programmatic.test.ts",
@@ -2825,8 +2915,8 @@
     },
     {
       "path": "packages/provider-openai/test/provider.test.ts",
-      "bytes": 74896,
-      "sha256": "e69ebc8ad9ea834f7002acc2cd2b21cb0e67475114021a3dff855975b0621bb4"
+      "bytes": 85910,
+      "sha256": "f53f48beb1ed26f605bc2d9ecd7338a1b3f463946b1eaa80ee8c56b7efe8982e"
     },
     {
       "path": "packages/provider-openai/test/ptc-wire.test.ts",
@@ -2865,8 +2955,8 @@
     },
     {
       "path": "packages/sdk-python/capybara_code/generated.py",
-      "bytes": 10212,
-      "sha256": "91abff9bbb6b3b801216bb624b0e0e197da2aafe97f74fb901ba8cb53127d49c"
+      "bytes": 10261,
+      "sha256": "3ce570d16583893be7a4346466c642b9b9e03529d4b84c244c0e46a3dfef9b1e"
     },
     {
       "path": "packages/sdk-python/capybara_code/session.py",
@@ -2910,8 +3000,8 @@
     },
     {
       "path": "packages/sdk-typescript/src/generated.ts",
-      "bytes": 9795,
-      "sha256": "c913b3b9c74fb725b3a2f8717828e43d33c422b95ad1a49c5639cf02d627d201"
+      "bytes": 9840,
+      "sha256": "f91eb1c5a1e556574ddbfd965864e71e9b47748fec6500be54f793f367c571d7"
     },
     {
       "path": "packages/sdk-typescript/src/index.ts",
@@ -2965,18 +3055,23 @@
     },
     {
       "path": "packages/session-domain/src/epoch.ts",
-      "bytes": 12740,
-      "sha256": "dcdadcd12552f03d02d8fc8820d556d72b12e3a60d83a47057182239cf0c1884"
+      "bytes": 14049,
+      "sha256": "322aba9fc522a9c304ce3d4a0fb4534f3c5c53fcb889f45c200608ef5596cf45"
+    },
+    {
+      "path": "packages/session-domain/src/goal-contract.ts",
+      "bytes": 23203,
+      "sha256": "863e77e15f39df4f9d10f0b45a87b41dde777a1cbb3e5fe765a73bc72dc60f6e"
     },
     {
       "path": "packages/session-domain/src/index.ts",
-      "bytes": 495,
-      "sha256": "a4a05289fbd35777001af1596ee5ce2a97ab650b7ee40223e7513d3bcffc88f0"
+      "bytes": 531,
+      "sha256": "96bbcde115035b48f5e1bb52960e7256b7fa4cb9595c784d9dd9fc192f1552ac"
     },
     {
       "path": "packages/session-domain/src/journal.ts",
-      "bytes": 41388,
-      "sha256": "9ffbeafdfe8761c8df6e5fdecd8478a5abebf491e388ccefee7e117deb37a27c"
+      "bytes": 42642,
+      "sha256": "c71d70143dafb742ef58192e1d1c0e8fe6c72ac695b7f6a29ff3a05ca47764cf"
     },
     {
       "path": "packages/session-domain/src/mode.ts",
@@ -2995,8 +3090,8 @@
     },
     {
       "path": "packages/session-domain/src/reducer.ts",
-      "bytes": 95835,
-      "sha256": "d8b47a28cca759d9318b0091a354213539af4ef63f74a182a9fbe60d5709a69e"
+      "bytes": 97179,
+      "sha256": "bed4580b27e3cb2efce005cb6ed37193f6906a92bd466a81d2b12f94f87ff600"
     },
     {
       "path": "packages/session-domain/src/todo.ts",
@@ -3020,13 +3115,18 @@
     },
     {
       "path": "packages/session-domain/test/epoch.test.ts",
-      "bytes": 3737,
-      "sha256": "5bbf22a3795154a9d5ddd9b8dcaa2dffdff93aae714a3b20c523c83a9a1073c2"
+      "bytes": 4524,
+      "sha256": "bd37a2a8ef2bb8b176d1ddbd7a59968d12731a874901c5deb3be164b2cf73cdc"
     },
     {
       "path": "packages/session-domain/test/final-answer.test.ts",
       "bytes": 1086,
       "sha256": "ddc29a05f08a7da2c168b5221ea641e4fdaa910ead2f221242a012f156dd4ec0"
+    },
+    {
+      "path": "packages/session-domain/test/goal-contract.test.ts",
+      "bytes": 20055,
+      "sha256": "900100aa1b5cb5d71ee537ee673cf273073fc1b48a39b5687d7ca9b398fd0760"
     },
     {
       "path": "packages/session-domain/test/persistence.test.ts",
@@ -3124,14 +3224,24 @@
       "sha256": "410d94476b72c0c88f5eb1ed0b1aa439a71a792785906765ebe7ad05f0dc646c"
     },
     {
+      "path": "packages/subagents/src/hosted-scout-local.ts",
+      "bytes": 6130,
+      "sha256": "0bd124f9abe2b95f14125e9d25f2f586932ae12e55f0d0029a9b46cf99b35466"
+    },
+    {
+      "path": "packages/subagents/src/hosted-scout-provider.ts",
+      "bytes": 4313,
+      "sha256": "80bfea023da2fb2f9a3ba1e43b4aa603ac066ca2f1234b507d9b5670adc2fe8b"
+    },
+    {
       "path": "packages/subagents/src/hosted-scout.ts",
-      "bytes": 5480,
-      "sha256": "6bba064f8cb0f5e470e78232e216d15c5f6d77fc649477361f36d252d2c9cfe8"
+      "bytes": 12984,
+      "sha256": "7f28a3604df82d60c47e449764d96ed7894f393c8f14b93b149421cabe5ba50a"
     },
     {
       "path": "packages/subagents/src/index.ts",
-      "bytes": 857,
-      "sha256": "10c2e1019d9b1ba213dbad60bdd6a9217c75127c670799a88f70d557e47cd39e"
+      "bytes": 942,
+      "sha256": "6ffb8263e1f998cd978714e402dcb9ccd16468f34bf15ed3c8c5877cb16cbd13"
     },
     {
       "path": "packages/subagents/src/instance.ts",
@@ -3170,8 +3280,8 @@
     },
     {
       "path": "packages/subagents/test/hosted-scout.test.ts",
-      "bytes": 4663,
-      "sha256": "07539c3547c9bb049c77c29b2f1fc9150102f66d95821fcdd1dbdca5b87bb818"
+      "bytes": 20662,
+      "sha256": "c8736381dc5725c62d158e65f32359d22cd71bd26c66f2671129f1275d69049a"
     },
     {
       "path": "packages/subagents/test/subagents.test.ts",
@@ -3184,9 +3294,14 @@
       "sha256": "b8862f01dc7a365168256c1dae9758a749ea54149429f565f2b86071a83db9d4"
     },
     {
+      "path": "packages/tool-registry/src/action-groups.ts",
+      "bytes": 11054,
+      "sha256": "e216bff2f66e0b6775acdd2e94b705f3d41967bfe895d49d2e4aef17f940ff6d"
+    },
+    {
       "path": "packages/tool-registry/src/catalog.ts",
-      "bytes": 68165,
-      "sha256": "2d6358ae3f3d979916e5044cc1a4ace0cb4ff34ffc3c17f29f14d785c4d9d809"
+      "bytes": 69018,
+      "sha256": "a5eb25b04cafdba587139346f2e63b8510104c07ed2de5ac71c998d622843991"
     },
     {
       "path": "packages/tool-registry/src/discovery.ts",
@@ -3200,8 +3315,8 @@
     },
     {
       "path": "packages/tool-registry/src/index.ts",
-      "bytes": 6384,
-      "sha256": "3c2ff68bad8129203a636b7d1b6e6a4135e44b2e988031e2c08cf1fb00778293"
+      "bytes": 6420,
+      "sha256": "797e0a9af6611bf144298db810659d6ad95263aa988dce95792b0f033484227f"
     },
     {
       "path": "packages/tool-registry/src/recovery.ts",
@@ -3219,6 +3334,11 @@
       "sha256": "51f0164f577ee35a5658f3d5b550c194599a83b697c0aa7da4abff1a83fdd6c5"
     },
     {
+      "path": "packages/tool-registry/test/action-groups.test.ts",
+      "bytes": 8407,
+      "sha256": "686450665acc9ca86f48be2d42f28602a771084b7162b1ee45f2579379199734"
+    },
+    {
       "path": "packages/tool-registry/test/graph.test.ts",
       "bytes": 4209,
       "sha256": "a3321011b4fdea838305696d559fe577944e4c85bb63c18db69e328466cc38f5"
@@ -3230,8 +3350,8 @@
     },
     {
       "path": "packages/tool-registry/test/tools.test.ts",
-      "bytes": 48668,
-      "sha256": "9cbb4df3086142b78ba17335b008c87e28f07219c614a7b2c109b8e7e35703d1"
+      "bytes": 50231,
+      "sha256": "b3e5867ad1505e3a3ce27dd40b95ac19a13577bc55a7a32d5186999df58cebd7"
     },
     {
       "path": "packages/tool-registry/test/worktree-tools.test.ts",
@@ -3290,8 +3410,8 @@
     },
     {
       "path": "packages/tui-components/src/overlays.ts",
-      "bytes": 20984,
-      "sha256": "cb510fbe3a64a44bef95d30b45d6021f1f29158ffd3a4977c142421615fede87"
+      "bytes": 21414,
+      "sha256": "bd2c672b874cdd7ad7e8d57ca94ecfb61ed4ddcddcfb8674918e0c1cd15e2ace"
     },
     {
       "path": "packages/tui-components/src/questionnaire.ts",
@@ -3405,8 +3525,8 @@
     },
     {
       "path": "schemas/CHANGELOG.md",
-      "bytes": 15717,
-      "sha256": "1fd736515cda6d22ffbeac978d101c154fddc6b6f5fa848383b34da654b9ef7f"
+      "bytes": 17639,
+      "sha256": "ca2c71cfb0ef4414b946bec98e5b0d90eb82a686fc68bb2bbc05c6b7535be839"
     },
     {
       "path": "schemas/README.md",
@@ -3440,8 +3560,8 @@
     },
     {
       "path": "schemas/config/config.schema.json",
-      "bytes": 50630,
-      "sha256": "47038baa62bb2ec2dc257bcf1335046e9b747fb799453121145d2005b34c60cf"
+      "bytes": 51866,
+      "sha256": "b9f559c1f77d231ab26a8b2d10d3bd988ffe513b036d062180b4126436fa79dd"
     },
     {
       "path": "schemas/edit/plan.schema.json",
@@ -3455,8 +3575,8 @@
     },
     {
       "path": "schemas/events/event.schema.json",
-      "bytes": 16979,
-      "sha256": "2ce9920aff0c94cd7b79f77af53c616314a69f6fcc46fe25db7c00f442e733ba"
+      "bytes": 17010,
+      "sha256": "5636dd2ef6d7d47c7be2cf227cdc518e7ac4564dc79c149dc7609341cc27d03b"
     },
     {
       "path": "schemas/integration/action-result.schema.json",
@@ -3482,6 +3602,11 @@
       "path": "schemas/lsp/workspace-edit.schema.json",
       "bytes": 738,
       "sha256": "69b65e48d59e30d773eb30baab8d6246faa9afc9f676770ac336326d7b094e36"
+    },
+    {
+      "path": "schemas/memory/capsule.schema.json",
+      "bytes": 2348,
+      "sha256": "79fc0ccc9923d4610a1e183047d3893c601593ea77c607087b5dd107c6de0ebe"
     },
     {
       "path": "schemas/memory/record.schema.json",
@@ -3639,5 +3764,5 @@
       "sha256": "8391ee841757695b95ddefc5dfd0ac274ecc32a76d733f2193b0a02a605a83df"
     }
   ],
-  "digest": "49210cfdafa06a69dfa63b62db3ca251e48d189c4bfbae22fc90319d79ec2f81"
+  "digest": "aa158a8e2e5f3fd77151c293701021973347a9d7fce3620d73219fce23ec5dbb"
 }
