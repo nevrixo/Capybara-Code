@@ -1,5 +1,7 @@
 /** GPT‑5.6-native routing, intent budgets, context bands, and cache economics. */
 
+import { createHash } from "node:crypto";
+
 import {
   BUNDLED_CAPABILITY_MANIFEST,
   bundledCapability,
@@ -207,6 +209,7 @@ export type InferenceLane = "direct" | "program" | "hosted_scout" | "local_agent
 
 /** Provider-neutral routing plan emitted before request assembly. */
 export interface InferencePlan {
+  readonly routeId: string;
   readonly modelTier: "sol" | "terra" | "luna";
   readonly effort: ReasoningEffort;
   readonly mode: ReasoningMode;
@@ -217,6 +220,39 @@ export interface InferencePlan {
   readonly maxParallelTools: number;
   readonly maxCostUsd: number;
   readonly rationaleCodes: readonly string[];
+}
+
+export function inferenceRouteId(route: {
+  readonly model: string;
+  readonly capability: Pick<ModelCapabilitySnapshot, "digest">;
+  readonly effort: ReasoningEffort;
+  readonly mode: ReasoningMode;
+  readonly reasoningContext: "current_turn" | "all_turns";
+  readonly contextBand: ContextBand;
+  readonly lane: InferenceLane;
+  readonly maxAgents: number;
+  readonly maxParallelTools: number;
+  readonly maxCostUsd: number;
+  readonly outputTokens: number;
+  readonly context: Pick<ContextBandDecision, "allowed" | "premium">;
+  readonly reasonCode: string;
+}): string {
+  return "route-" + createHash("sha256").update(JSON.stringify([
+    route.model,
+    route.capability.digest,
+    route.effort,
+    route.mode,
+    route.reasoningContext,
+    route.contextBand,
+    route.lane,
+    route.maxAgents,
+    route.maxParallelTools,
+    route.maxCostUsd,
+    route.outputTokens,
+    route.context.allowed,
+    route.context.premium,
+    route.reasonCode,
+  ])).digest("hex").slice(0, 24);
 }
 
 export interface InferencePolicyInput {
@@ -365,13 +401,40 @@ export class InferenceUtilityController implements InferencePolicyPort {
         `effective generation budget (${output}) is below the ${MIN_REASONING_GENERATION_TOKENS}-token deep-reasoning recommendation`,
       );
     }
-    const lane: InferenceLane = input.lane ?? (input.intent === "program" ? "program" : input.intent === "review" && capability.native.hostedMultiAgent === "supported" ? "hosted_scout" : "direct");
+    const requestedLane: InferenceLane = input.lane ?? (input.intent === "program" ? "program" : "direct");
+    let lane = requestedLane;
+    if (lane === "program" && capability.native.programmaticToolCalling !== "supported") {
+      lane = "direct";
+      warnings.push("programmatic tool calling is unavailable for this backend; using direct tools");
+    }
+    if (lane === "hosted_scout" && capability.native.hostedMultiAgent !== "supported") {
+      lane = "direct";
+      warnings.push("hosted multi-agent is unavailable for this backend; using direct reasoning");
+    }
     const modelTier = capability.tier === "sol" || capability.tier === "terra" || capability.tier === "luna" ? capability.tier : inferTier(model);
     const reasoningContext = input.reasoningContext ?? (input.intent === "review" ? "current_turn" : "all_turns");
     const maxCostUsd = input.maxCostUsd ?? this.#maxCost;
     const reasonCode = `${input.intent}:${score >= 7 ? "deep" : score <= 2 ? "cheap" : "balanced"}`;
     const rationaleCodes = [reasonCode, lane, context.premium ? "premium-context" : "standard-context", ...warnings.map(() => "capability-warning")];
+    const maxAgents = lane === "hosted_scout" ? 3 : 0;
+    const maxParallelTools = lane === "program" ? 6 : 1;
+    const routeId = inferenceRouteId({
+      model,
+      capability,
+      effort: boundedEffort,
+      mode,
+      reasoningContext,
+      contextBand: context.band,
+      lane,
+      maxAgents,
+      maxParallelTools,
+      maxCostUsd,
+      outputTokens: output,
+      context,
+      reasonCode,
+    });
     return {
+      routeId,
       model,
       capability,
       intent: input.intent,
@@ -384,8 +447,8 @@ export class InferenceUtilityController implements InferencePolicyPort {
       reasoningContext,
       contextBand: context.band,
       lane,
-      maxAgents: lane === "hosted_scout" ? 3 : 0,
-      maxParallelTools: lane === "program" ? 6 : 1,
+      maxAgents,
+      maxParallelTools,
       maxCostUsd,
       rationaleCodes,
       ...(input.maxCostUsd !== undefined ? { estimatedCostCeilingUsd: input.maxCostUsd } : {}),
@@ -440,4 +503,3 @@ function requirePolicy(): { complexityScore: (features: ComplexityFeatures) => n
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
 }
-

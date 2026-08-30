@@ -162,7 +162,27 @@ describe("ChatGPT/Codex routing profile", () => {
       expect(decision.capability.contextWindow).toBe(400_000);
       expect(inputContextBudget(snapshotDescriptor(decision.capability))).toBe(272_000);
       expect(decision.context.allowed).toBe(false);
+      expect(decision.capability.native.programmaticToolCalling).toBe("unsupported");
+      expect(decision.lane).toBe("direct");
+      expect(decision.warnings.join(" ")).toContain("programmatic tool calling is unavailable");
     }
+  });
+
+  test("keeps the API-backed program lane executable when capability is supported", () => {
+    const policy = new InferenceUtilityController();
+    const input = {
+      intent: "program",
+      explicitModel: "gpt-5.6-sol",
+      contextTokens: 1_000,
+    } as const;
+    const decision = policy.decide(input);
+    expect(decision.capability.native.programmaticToolCalling).toBe("supported");
+    expect(decision.lane).toBe("program");
+    expect(decision.maxParallelTools).toBe(6);
+    expect(decision.routeId).toMatch(/^route-[0-9a-f]{24}$/u);
+    expect(policy.decide(input).routeId).toBe(decision.routeId);
+    expect(policy.decide({ ...input, reasoningContext: "current_turn" }).routeId)
+      .not.toBe(decision.routeId);
   });
 
   test("downgrades a pro child profile before it reaches the account backend", () => {
