@@ -277,6 +277,68 @@ export function createCapabilitySnapshot(
   return result;
 }
 
+/**
+ * §4.1/§4.2 backend identity.
+ *
+ * The two backends are not two configurations of one surface: `api-enhanced` is
+ * the public Responses API, and `chatgpt-compatible` is the ChatGPT/Codex
+ * account transport, which withholds a documented subset. Naming the profile is
+ * what lets a diagnostic say *why* a feature is off — without it, an
+ * unsupported native lane and a disabled one look identical to the user.
+ */
+export type OpenAiBackendProfile = "api-enhanced" | "chatgpt-compatible";
+
+export interface WithheldCapability {
+  readonly feature: string;
+  readonly reason: string;
+}
+
+export interface BackendProfileIdentity {
+  readonly profile: OpenAiBackendProfile;
+  /** Why this profile is the active one. */
+  readonly reason: string;
+  /** API-only surfaces this profile does not expose, each with its reason. */
+  readonly withheld: readonly WithheldCapability[];
+}
+
+/** The provenance label `chatGptCodexCapability` stamps on an account snapshot. */
+const CHATGPT_ACCOUNT_PROVENANCE = "chatgpt-codex-account";
+
+/**
+ * Derive the backend profile from a snapshot's own provenance rather than from a
+ * caller-supplied flag, so a snapshot that travelled through a merge or a cache
+ * still reports the backend it was actually observed on.
+ *
+ * Derived rather than stored: the snapshot digest is a build-stable identity
+ * (P0-11), and a field that only restates provenance would change every digest
+ * without adding information.
+ */
+export function backendProfileOf(snapshot: ModelCapabilitySnapshot): BackendProfileIdentity {
+  const provenance = snapshot.provenanceSources ?? (Array.isArray(snapshot.provenance) ? snapshot.provenance : []);
+  if (!provenance.includes(CHATGPT_ACCOUNT_PROVENANCE)) {
+    return {
+      profile: "api-enhanced",
+      reason: "the credential is an API key, so the public Responses API surface is available",
+      withheld: [],
+    };
+  }
+  const withheld: WithheldCapability[] = [
+    { feature: "programmaticToolCalling", reason: "the ChatGPT/Codex account transport does not expose the API-only program lane" },
+    { feature: "hostedMultiAgent", reason: "the ChatGPT/Codex account transport does not expose hosted agents" },
+    { feature: "reasoningMode.pro", reason: "the account backend has no reasoning.mode switch, so pro requests are downgraded to standard" },
+    { feature: "websocket", reason: "the account transport is HTTP-only; the WebSocket route is API-only" },
+    { feature: "previousResponse", reason: "previous-response continuity is API-only, so reasoning is replayed as input items instead" },
+    { feature: "nativeCompaction", reason: "provider-side compaction is API-only; local compaction covers the account backend" },
+    { feature: "serviceTier.fast", reason: "the fast service tier is API-only" },
+    { feature: "toolSearch", reason: "deferred tool search is API-only" },
+  ];
+  return {
+    profile: "chatgpt-compatible",
+    reason: "the credential is a ChatGPT/Codex account login, which reaches Codex through the account backend",
+    withheld,
+  };
+}
+
 /** Resolve aliases against the bundled manifest without contacting a provider. */
 export function bundledCapability(modelIdOrAlias: string): ModelCapabilitySnapshot | undefined {
   const needle = modelIdOrAlias.toLowerCase();

@@ -9,6 +9,8 @@ import { describe, expect, test } from "bun:test";
 
 import {
   BUNDLED_CAPABILITY_MANIFEST,
+  backendProfileOf,
+  bundledCapability,
   chatGptCodexCapability,
   snapshotDescriptor,
   InferenceUtilityController,
@@ -2061,5 +2063,40 @@ describe("ChatGPT account transport", () => {
       expect(model.maxOutputTokens).toBe(128_000);
     }
     expect(calls).toBe(0);
+  });
+});
+
+describe("backend profile identity (§4.1/§4.2, §6 P1-03)", () => {
+  test("an API-key snapshot is api-enhanced and withholds nothing", () => {
+    const identity = backendProfileOf(bundledCapability("gpt-5.6-sol")!);
+    expect(identity.profile).toBe("api-enhanced");
+    expect(identity.reason).toContain("API key");
+    expect(identity.withheld).toEqual([]);
+  });
+
+  test("an account snapshot is chatgpt-compatible and names why each surface is off", () => {
+    const identity = backendProfileOf(chatGptCodexCapability("gpt-5.6-sol")!);
+    expect(identity.profile).toBe("chatgpt-compatible");
+    expect(identity.reason).toContain("account");
+
+    // §P1-03 requires the *reason* a feature is unavailable, not just its
+    // absence: "off" alone leaves the user unable to tell a config choice from
+    // a backend limit.
+    const features = identity.withheld.map((entry) => entry.feature);
+    expect(features).toContain("programmaticToolCalling");
+    expect(features).toContain("hostedMultiAgent");
+    expect(features).toContain("websocket");
+    for (const entry of identity.withheld) {
+      expect(entry.reason.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("the profile is derived from provenance, so it survives a merge", () => {
+    // Derived rather than stored: the account snapshot keeps its provenance
+    // after the provider layer narrows its native set, so the profile does not
+    // silently revert to api-enhanced on a re-merge.
+    const account = chatGptCodexCapability("gpt-5.6-terra")!;
+    expect(account.provenanceSources).toContain("chatgpt-codex-account");
+    expect(backendProfileOf(account).profile).toBe("chatgpt-compatible");
   });
 });
