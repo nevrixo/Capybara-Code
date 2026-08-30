@@ -2876,6 +2876,11 @@ export class AgentSession {
     this.kernel.setModel(modelId);
     this.#options.config.model.default = modelId;
     this.#currentRoute = undefined;
+    // §5.11: a mid-session model switch is an epoch boundary. Without it the
+    // reset only happens at the next turn preamble, so a reasoning chain
+    // produced under the old model's capabilities can still be replayed to the
+    // new one on the same turn.
+    this.#announceEpochTransition(this.taskEpoch.transition({ modelId }));
   }
 
   /** Model the composer chrome and the next turn should advertise. */
