@@ -96,7 +96,7 @@ export interface EpochTransition {
   readonly previous?: TaskEpoch;
   readonly current: TaskEpoch;
   readonly reset: boolean;
-  readonly reason: EpochResetReason;
+  readonly reason: EpochResetReason | "unchanged";
 }
 
 export interface TaskEpochManagerOptions {
@@ -141,11 +141,14 @@ export class TaskEpochManager {
     })}` as TaskEpochId;
     const reviewerRequested = reason === "review_requested";
     const hypothesisInvalidated = reason === "hypothesis_invalidated" || reason === "assumption_invalidated" || reason === "reflection_requested";
-    const continuity: ReasoningScope["continuity"] = reviewerRequested || hypothesisInvalidated ? "current_turn" : "all_turns";
+    // Every non-initial epoch is an invalidation boundary. The diagnostic scope
+    // stays conservative for the first sample in that epoch; a later unchanged
+    // transition promotes it back to all-turn continuity.
+    const continuity: ReasoningScope["continuity"] = reason === "initial" ? "all_turns" : "current_turn";
     const scope: ReasoningScope = {
       taskEpochId: id,
       continuity,
-      goalStable: reason !== "goal_changed",
+      goalStable: reason !== "goal_changed" && reason !== "constraint_changed" && reason !== "priority_changed",
       hypothesisInvalidated,
       allTurnsContinuity: continuity === "all_turns",
       reviewerRequested,
@@ -199,9 +202,9 @@ export class TaskEpochManager {
           workspaceIdentityDigest: change.workspaceIdentityDigest ?? previous.workspaceIdentityDigest,
           toolsetDigest: change.toolsetDigest ?? previous.toolsetDigest,
           modelId: change.modelId ?? previous.modelId,
-          ...(change.constraintDigest !== undefined ? { constraintDigest: change.constraintDigest } : {}),
-          ...(change.assumptionDigest !== undefined ? { assumptionDigest: change.assumptionDigest } : {}),
-          ...(change.modelCapabilityDigest !== undefined ? { modelCapabilityDigest: change.modelCapabilityDigest } : {}),
+          constraintDigest: change.constraintDigest ?? previous.constraintDigest,
+          assumptionDigest: change.assumptionDigest ?? previous.assumptionDigest,
+          modelCapabilityDigest: change.modelCapabilityDigest ?? previous.modelCapabilityDigest,
           ...(change.now !== undefined ? { now: change.now } : {}),
         },
         reason,
@@ -212,13 +215,26 @@ export class TaskEpochManager {
     const current: TaskEpoch = {
       ...previous,
       goalDigest: change.goalDigest ?? previous.goalDigest,
+      constraintDigest: change.constraintDigest ?? previous.constraintDigest,
+      assumptionDigest: change.assumptionDigest ?? previous.assumptionDigest,
       policyDigest: change.policyDigest ?? previous.policyDigest,
       workspaceIdentityDigest: change.workspaceIdentityDigest ?? previous.workspaceIdentityDigest,
       toolsetDigest: change.toolsetDigest ?? previous.toolsetDigest,
       modelId: change.modelId ?? previous.modelId,
+      modelCapabilityDigest: change.modelCapabilityDigest ?? previous.modelCapabilityDigest,
+      reasoningScope: previous.reasoningScope.continuity === "current_turn"
+        ? {
+            ...previous.reasoningScope,
+            continuity: "all_turns",
+            goalStable: true,
+            hypothesisInvalidated: false,
+            allTurnsContinuity: true,
+            reviewerRequested: false,
+          }
+        : previous.reasoningScope,
     };
     this.#current = current;
-    return { previous, current, reset: false, reason: "initial" };
+    return { previous, current, reset: false, reason: "unchanged" };
   }
 
   invalidateHypothesis(now?: string): EpochTransition {
@@ -298,4 +314,3 @@ function shortDigest(value: unknown): string {
   });
   return createHash("sha256").update(text).digest("hex");
 }
-
