@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-30T14:46:55.879Z",
+  "generatedAt": "2026-08-30T15:31:03.974Z",
   "git": {
-    "commit": "37c0d553ca626ac1284526a0c84634902a8286b9",
-    "dirty": false,
-    "dirtyHash": "6004a1b31c71a6c0b5c015722aa1463a85672e3e0631931f4611c28b3ed8f0b3"
+    "commit": "c8d6f3854b8d1361a5038b14e154b6e82f4f2671",
+    "dirty": true,
+    "dirtyHash": "136bf396e3ba0529cda70f47d35631afbcf3ad7910615b484c85bf284258d152"
   },
   "roots": [
     "apps",
@@ -2730,8 +2730,8 @@
     },
     {
       "path": "packages/protocol-ts/src/events.ts",
-      "bytes": 42666,
-      "sha256": "8621bfa06d293ae8692df5f24e38b9dbc84c2663ff5f20890ce3bdd01df00d40"
+      "bytes": 43765,
+      "sha256": "6d83f834425020787adf8167518fdd807b6f1cc5fd6116eac179f91a8d0d3099"
     },
     {
       "path": "packages/protocol-ts/src/index.ts",
@@ -2865,8 +2865,8 @@
     },
     {
       "path": "packages/sdk-python/capybara_code/generated.py",
-      "bytes": 9987,
-      "sha256": "b635322a551211e1aff47ac288bec539affa4a61352a6289e012b236423455d0"
+      "bytes": 10212,
+      "sha256": "91abff9bbb6b3b801216bb624b0e0e197da2aafe97f74fb901ba8cb53127d49c"
     },
     {
       "path": "packages/sdk-python/capybara_code/session.py",
@@ -2910,8 +2910,8 @@
     },
     {
       "path": "packages/sdk-typescript/src/generated.ts",
-      "bytes": 9584,
-      "sha256": "b392709fb85d0406d44563d5bf1f028e860b54b91bacfceb0227baa097e66ea3"
+      "bytes": 9795,
+      "sha256": "c913b3b9c74fb725b3a2f8717828e43d33c422b95ad1a49c5639cf02d627d201"
     },
     {
       "path": "packages/sdk-typescript/src/index.ts",
@@ -3405,8 +3405,8 @@
     },
     {
       "path": "schemas/CHANGELOG.md",
-      "bytes": 14296,
-      "sha256": "4386166027bb07821933451b49762e56fa02f9affc01f3101f36bbf32dd0e371"
+      "bytes": 15717,
+      "sha256": "1fd736515cda6d22ffbeac978d101c154fddc6b6f5fa848383b34da654b9ef7f"
     },
     {
       "path": "schemas/README.md",
@@ -3455,8 +3455,8 @@
     },
     {
       "path": "schemas/events/event.schema.json",
-      "bytes": 16431,
-      "sha256": "f9debf4ea869a2905829321a5984e8983353e40d0788ef362b64c8056c4ea238"
+      "bytes": 16979,
+      "sha256": "2ce9920aff0c94cd7b79f77af53c616314a69f6fcc46fe25db7c00f442e733ba"
     },
     {
       "path": "schemas/integration/action-result.schema.json",
@@ -3639,5 +3639,5 @@
       "sha256": "8391ee841757695b95ddefc5dfd0ac274ecc32a76d733f2193b0a02a605a83df"
     }
   ],
-  "digest": "c3033c3ac66dba2aec391c76cf3eb42e9baf62e038798ed9fdc1904d9d21c788"
+  "digest": "7f9b72b60d77bb2f9da823421436de8022361bb95c8161c24261f86371e72aeb"
 }
