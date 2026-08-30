@@ -5,6 +5,8 @@ import { CliError, EXIT, type ExitCode } from "./exit.ts";
 import { acpCommand } from "./commands/acp.ts";
 import { authApi, authLogin, authLogout, authStatus } from "./commands/auth.ts";
 import { configSet } from "./commands/config.ts";
+import { doctorCommand } from "./commands/doctor.ts";
+import { learnCommand } from "./commands/learn.ts";
 import { skillsCommand } from "./commands/skills.ts";
 import { clientsCommand, githubCommand, integrationDoctor } from "./commands/integrations.ts";
 import { trustCommand } from "./commands/trust.ts";
@@ -76,6 +78,9 @@ async function dispatch(context: CommandContext, command: Command): Promise<Comm
     case "clients":
       return await clientsCommand(context, command.sub);
 
+    case "doctor":
+      return await doctorCommand(context, command.target);
+
     case "integration":
       return await integrationDoctor(context, command.target);
 
@@ -114,6 +119,9 @@ async function dispatch(context: CommandContext, command: Command): Promise<Comm
 
     case "skills":
       return await skillsCommand(context, command);
+
+    case "learn":
+      return await learnCommand(context, command);
 
     case "session-worker":
       return await sessionWorker(context, {

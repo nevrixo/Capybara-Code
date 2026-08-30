@@ -95,6 +95,13 @@ export const COMMAND_REGISTRY: readonly CommandSpec[] = [
     summary: "serve ACP v1 over stdio and attach it to the local daemon",
   },
   {
+    name: "doctor",
+    summary: "diagnose the active OpenAI backend, lanes, cache, and inert settings",
+    subcommands: [
+      { name: "openai", summary: "report each OpenAI feature and why a disabled one is off" },
+    ],
+  },
+  {
     name: "clients",
     summary: "inspect App Protocol clients and transport health",
     subcommands: [
@@ -262,6 +269,33 @@ export const COMMAND_REGISTRY: readonly CommandSpec[] = [
           { name: "--strict", kind: "boolean", summary: "treat compatibility warnings as failures" },
         ],
         positionals: [{ label: "<path>", required: true }],
+      },
+    ],
+  },
+  {
+    name: "learn",
+    summary: "review and decide evidence-backed strategy capsules",
+    subcommands: [
+      { name: "review", summary: "audit proposed, active, and contested capsules" },
+      {
+        name: "accept",
+        summary: "approve one capsule proposal",
+        positionals: [{ label: "<id>", required: true }],
+      },
+      {
+        name: "reject",
+        summary: "decline one capsule proposal",
+        positionals: [{ label: "<id>", required: true }],
+      },
+      {
+        name: "forget",
+        summary: "retire an active capsule, retaining its audit history",
+        positionals: [{ label: "<id>", required: true }],
+      },
+      {
+        name: "rollback",
+        summary: "restore a capsule to its previous revision",
+        positionals: [{ label: "<id>", required: true }],
       },
     ],
   },

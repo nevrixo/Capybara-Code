@@ -21,6 +21,7 @@ export type Command =
     }
   | { readonly kind: "acp" }
   | { readonly kind: "clients"; readonly sub: "list" | "doctor" }
+  | { readonly kind: "doctor"; readonly target: "openai" }
   | { readonly kind: "integration"; readonly sub: "doctor"; readonly target?: "vscode" | "acp" | "github" }
   | { readonly kind: "github"; readonly sub: "install" | "doctor" }
   | { readonly kind: "trust"; readonly showDiff: boolean }
@@ -94,6 +95,7 @@ export type Command =
   | { readonly kind: "config"; readonly sub: "set"; readonly path: string; readonly value: string }
   | { readonly kind: "skills"; readonly sub: "list" | "doctor"; readonly json: boolean }
   | { readonly kind: "skills"; readonly sub: "validate"; readonly path: string; readonly json: boolean; readonly strict: boolean }
+  | { readonly kind: "learn"; readonly sub: "review" | "accept" | "reject" | "forget" | "rollback"; readonly capsuleId?: string }
   | { readonly kind: "session-worker"; readonly sessionId?: string }
   | { readonly kind: "daemon"; readonly sub: "start" | "stop" | "status" | "logs" | "attach"; readonly sessionId?: string }
   | { readonly kind: "update"; readonly check?: boolean }
@@ -354,6 +356,15 @@ function buildSubcommand(
   if (commandName === "clients" && (subName === "list" || subName === "doctor")) {
     return { kind: "clients", sub: subName };
   }
+  if (commandName === "doctor") {
+    // A single named target rather than a bare `capy doctor`: the report is
+    // OpenAI-specific, and a targetless verb would have to guess which
+    // subsystem the user meant.
+    if (subName !== "openai") {
+      throw usageError("capy doctor target must be openai");
+    }
+    return { kind: "doctor", target: "openai" };
+  }
   if (commandName === "integration" && subName === "doctor") {
     const target = operands[0];
     if (target !== undefined && target !== "vscode" && target !== "acp" && target !== "github") {
@@ -471,6 +482,19 @@ function buildSubcommand(
       };
     }
   }
+  if (commandName === "learn") {
+    if (
+      subName === "review" || subName === "accept" || subName === "reject" ||
+      subName === "forget" || subName === "rollback"
+    ) {
+      const capsuleId = operands[0];
+      return {
+        kind: "learn",
+        sub: subName,
+        ...(capsuleId !== undefined ? { capsuleId } : {}),
+      };
+    }
+  }
   if (commandName === "daemon") {
     switch (subName) {
       case "start":
@@ -522,6 +546,7 @@ export const HELP_TEXT = [
   "  capy --no-daemon [prompt...]     keep execution inside this process",
   "",
   "Commands",
+  "  doctor openai                    diagnose the active OpenAI feature set",
   "  clients list|doctor              inspect App Protocol clients",
   "  integration doctor [target]      diagnose vscode, acp, or github",
   "  github install|doctor            manage GitHub Action integration",
@@ -546,6 +571,9 @@ export const HELP_TEXT = [
   "  skills list [--json]             list discovered Skills",
   "  skills doctor [--json]           explain discovery and rejection details",
   "  skills validate <path>           validate one SKILL.md",
+  "  learn review                     audit proposed strategy capsules",
+  "  learn accept|reject <id>         decide one capsule proposal",
+  "  learn forget|rollback <id>       retire or revert one capsule",
   "  update [--check]                 check for a newer release",
   "  version                          print the version",
   "  help [topic]                     show help",
