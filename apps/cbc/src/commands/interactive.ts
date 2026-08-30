@@ -61,6 +61,7 @@ import {
   type SettingsMenuChange,
   type SettingsMenuItem,
 } from "../tui.ts";
+import { applyLearnRequest } from "./learn.ts";
 import { ok, type CommandContext, type CommandResult } from "./context.ts";
 import { ensureTrust, trustLabel } from "../workspace-trust.ts";
 import { beginUpdateCheck, settleUpdateCheck } from "../update-check.ts";
@@ -1943,6 +1944,33 @@ async function handleSlash(
         return "continue";
       }
       return await handleOverlay(context, ui, boot, "memory");
+    }
+
+    case "learn": {
+      // §6.3 gates the whole family on agent.learning.strategyCapsules, and the
+      // capsule store lives inside the durable MemoryService, so both have to be
+      // on before a verb means anything.
+      const loaded = await context.config();
+      if (loaded.config.agent.learning.strategyCapsules === "off") {
+        ui.text("Strategy capsule learning is disabled. Set agent.learning.strategy_capsules to \"suggest\".");
+        return "continue";
+      }
+      const service = boot.session.memoryService;
+      if (service === undefined) {
+        ui.text("Durable memory is disabled. Enable experimental.durableMemory and memory.enabled.");
+        return "continue";
+      }
+      const action = intent.action ?? "review";
+      const outcome = applyLearnRequest(service, {
+        action,
+        ...(intent.argument !== undefined ? { argument: intent.argument } : {}),
+      });
+      if (action === "review" && outcome.ok) {
+        ui.openOverlay("memory", [...outcome.lines]);
+        return "continue";
+      }
+      for (const line of outcome.lines) ui.text(line);
+      return "continue";
     }
 
     case "compact": {

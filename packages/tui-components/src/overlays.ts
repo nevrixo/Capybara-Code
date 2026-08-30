@@ -129,6 +129,14 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: "/mcp", description: "show MCP server health" },
   { name: "/context", description: "inspect the context budget" },
   { name: "/memory", description: "inspect, forget, or resolve durable memory", args: [{ name: "action", values: ["inspect", "forget", "resolve"] }] },
+  {
+    name: "/learn",
+    description: "review, accept, reject, forget, or roll back strategy capsules",
+    args: [
+      { name: "action", values: ["review", "accept", "reject", "forget", "rollback"] },
+      { name: "capsule", hint: "capsule id" },
+    ],
+  },
   { name: "/graph", description: "inspect the durable agent graph" },
   { name: "/worktree", description: "inspect isolated writer worktrees" },
   {
