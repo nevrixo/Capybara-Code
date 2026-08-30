@@ -17,6 +17,47 @@ reasoning_effort = "medium"
 [model.reasoning]
 provider_summary = "auto"
 
+# Recommended profiles (§6 P1-03). A profile bundles three strategies — which
+# model answers, how the turn executes, and how wide its verification has to be —
+# so selecting one changes more than the model. Pick one with
+# \`capy model use profile:<name>\` or \`/model profile:<name>\`.
+#
+#   fast      terra/low   · direct first, small program budget · focused
+#   balanced  sol/medium  · program lane when eligible         · package
+#   deep      sol/high    · hosted read-only scout + local writer · independent review
+#   quality   sol/pro     · multi-agent only on a clean split  · independent review
+#
+# \`auto\` is the shipped default and stays there: the highest tier is promoted
+# only once a bench run shows it earns the cost, so no profile ships max effort.
+# A profile narrows what you set below; it never widens it.
+# [model]
+# profile = "auto"
+
+# Provider backend and transport (§8.4). \`transport\` and \`service_tier\` are wired.
+# \`profile\` is experimental: the backend is derived from the credential type, and
+# this key states an expectation rather than overriding it.
+# [provider.openai]
+# profile = "auto"
+# transport = "websocket"
+# service_tier = "standard"
+
+# Native lane budgets (§5.4, §8.4). The program lane is read-only; these are the
+# ceilings a single program call runs under. A selected profile can lower them.
+# [provider.openai.native]
+# programmatic_tool_calling = "read-only"
+# hosted_multi_agent = "read-only"
+# max_program_tool_calls = 24
+# max_program_parallel_calls = 6
+
+# Prompt caching (§8.4). \`mode\` is wired. \`breakpoint\` and \`ttl\` are experimental:
+# the planner always breaks at the stable prefix, and the provider pins the TTL to
+# 30m, so neither value is sent. \`capy config validate --explain\` lists every key
+# with its status rather than letting a no-op look wired.
+# [model.cache]
+# mode = "roi"
+# breakpoint = "stable-prefix"
+# ttl = "30m"
+
 [agent]
 permission_mode = "ask"
 interaction_mode = "build"
