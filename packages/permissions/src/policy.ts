@@ -8,8 +8,8 @@
 
 import { createHash } from "node:crypto";
 
-import type { RiskClass, ToolDefinition } from "@cbc/tool-registry";
-import { allowsBroadRule } from "@cbc/tool-registry";
+import type { ActionGroupId, RiskClass, ToolDefinition } from "@cbc/tool-registry";
+import { allowsBroadRule, expandActionGroupCall, isActionGroupId } from "@cbc/tool-registry";
 
 import {
   classifyCommand,
@@ -259,11 +259,64 @@ function canonicalize(value: unknown): unknown {
   return { $type: typeof value, $value: String(value) };
 }
 
+/**
+ * §6.5's load-bearing invariant: an action-group call is classified by the
+ * internal tool it expands to, never by the group.
+ *
+ * Every policy entry point resolves the action through here first, so a facade
+ * cannot merge two risk classes into one grant and cannot become a way to reach
+ * a tool the catalog withheld. A group call that does not resolve is refused
+ * outright rather than falling through to the unknown-tool baseline, because
+ * that baseline is a *permission* default — R3 with no per-tool cap — and a
+ * facade must never be the more permissive way to ask.
+ */
+export type ResolvedActionTarget =
+  | { readonly kind: "direct"; readonly action: ProposedAction }
+  | { readonly kind: "expanded"; readonly action: ProposedAction; readonly group: ActionGroupId }
+  | { readonly kind: "refused"; readonly reason: string };
+
+export function resolveActionTarget(
+  action: ProposedAction,
+  catalog: readonly ToolDefinition[],
+): ResolvedActionTarget {
+  if (!isActionGroupId(action.toolId)) return { kind: "direct", action };
+  const expansion = expandActionGroupCall(action.toolId, action.arguments);
+  if (!expansion.ok) return { kind: "refused", reason: expansion.reason };
+  const target = catalog.find((tool) => tool.id === expansion.toolId);
+  if (target === undefined) {
+    // The group's enum is built from the active catalog, so a target missing
+    // here means the tool was withheld — by an experimental gate, a subagent's
+    // narrowed catalog, or Plan mode. The facade must not widen that.
+    return {
+      kind: "refused",
+      reason: `'${expansion.toolId}' is not in this session's tool catalog`,
+    };
+  }
+  if (isActionGroupId(target.id)) {
+    return { kind: "refused", reason: `'${target.id}' is a group, not an internal tool` };
+  }
+  return {
+    kind: "expanded",
+    group: expansion.group,
+    action: {
+      ...action,
+      toolId: expansion.toolId,
+      arguments: expansion.arguments,
+      display: action.display,
+    },
+  };
+}
+
 /** Resolve the effective risk of an action, combining tool baseline + classifier. */
 export function assessRisk(
   action: ProposedAction,
   catalog: readonly ToolDefinition[],
 ): { risk: RiskClass; classification?: Classification; reasons: string[] } {
+  const target = resolveActionTarget(action, catalog);
+  // A group that cannot be resolved is the worst case, not the default one:
+  // R6 makes it unapprovable in bulk (§13.2) and forces `evaluate` to deny.
+  if (target.kind === "refused") return { risk: "R6", reasons: [target.reason] };
+  if (target.kind === "expanded") return assessRisk(target.action, catalog);
   const tool = catalog.find((t) => t.id === action.toolId);
   const baseline = tool?.defaultRisk ?? "R3";
   const reasons: string[] = [];
@@ -595,6 +648,8 @@ export interface ActionTraits {
 
 /** Derive one normalized action shape used by every policy branch. */
 export function deriveActionTraits(action: ProposedAction, catalog: readonly ToolDefinition[]): ActionTraits {
+  const target = resolveActionTarget(action, catalog);
+  if (target.kind === "expanded") return deriveActionTraits(target.action, catalog);
   const tool = catalog.find((t) => t.id === action.toolId);
   const assessed = assessRisk(action, catalog);
   const classification = assessed.classification;
@@ -630,6 +685,14 @@ export function evaluate(
   action: ProposedAction,
   context: PermissionContext,
 ): PermissionDecision {
+  const target = resolveActionTarget(action, context.catalog);
+  // The whole evaluation runs against the internal tool, so the stored rule, the
+  // action hash, and the approval card all name the tool that will actually run
+  // (§6.5). An unresolvable group never reaches a preset branch.
+  if (target.kind === "refused") {
+    return { kind: "deny", reason: `${action.toolId} did not resolve to an internal tool: ${target.reason}` };
+  }
+  if (target.kind === "expanded") return evaluate(target.action, context);
   const tool = context.catalog.find((t) => t.id === action.toolId);
   const assessed = assessRisk(action, context.catalog);
   const { risk, classification, reasons } = assessed;
