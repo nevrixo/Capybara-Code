@@ -256,3 +256,99 @@ describe("neutral external benchmark adapter", () => {
     }
   });
 });
+
+describe("§5.27 scripted follow-up prompts", () => {
+  test("forwards the follow-up to the adapter and requires a turn for each prompt", async () => {
+    const root = await mkdtemp(join(tmpdir(), "cbc-external-followup-"));
+    try {
+      const environment: BenchmarkEnvironment = {
+        root,
+        data: join(root, "data"),
+        cache: join(root, "cache"),
+        logs: join(root, "logs"),
+      };
+      await Promise.all([
+        mkdir(environment.data, { recursive: true }),
+        mkdir(environment.cache, { recursive: true }),
+        mkdir(environment.logs, { recursive: true }),
+      ]);
+      const sequencer = new EventSequencer(0);
+      const turns = [1, 2].map((turn) => createEvent(
+        sequencer,
+        "turn.completed",
+        { status: "completed" },
+        { sessionId: "external-session", turnId: "external-turn" },
+      ));
+      // A run that answered only the first prompt: one terminal turn for two prompts.
+      const script = join(root, "adapter.ts");
+      const body = (events: string, requireFollowUp: boolean): string => [
+        "const inputPath = Bun.argv[2];",
+        "const outputPath = Bun.argv[3];",
+        "const input = await Bun.file(inputPath).json();",
+        requireFollowUp
+          ? "if (!Array.isArray(input.task.followUpPrompts) || input.task.followUpPrompts.length !== 1) " +
+            "throw new Error('follow-up prompt was not forwarded to the adapter');"
+          : "",
+        "await Bun.write(outputPath, JSON.stringify({",
+        "  schemaVersion: '1.0',",
+        "  executionId: input.executionId,",
+        "  adapterId: input.adapter.id,",
+        "  adapterVersion: input.adapter.version,",
+        "  adapterManifestDigest: input.adapter.manifestDigest,",
+        "  capabilityDigest: input.capabilityDigest,",
+        "  taskId: input.task.id,",
+        "  profileId: input.profile.id,",
+        "  startedAtMs: 100,",
+        "  finishedAtMs: 400,",
+        "  exitCode: 0,",
+        `  events: ${events},`,
+        "}));",
+        "",
+      ].join("\n");
+
+      const applied = profile();
+      const redirectTask: BenchTask = {
+        ...TASK,
+        followUpPrompts: ["Change of plan: answer the other question instead."],
+      };
+      const run = async (source: string) => {
+        await writeFile(script, source, "utf8");
+        const adapter = parseExternalBenchmarkAdapter(
+          manifest({
+            id: "followup-external-runner",
+            program: process.execPath,
+            args: ["run", script, "{input}", "{output}"],
+          }),
+          applied,
+          CAPABILITY_DIGEST,
+        );
+        const runner = createExternalBenchmarkRunner({
+          benchmarkRoot: root,
+          executionProfile: resolveExecutionProfile(applied),
+          environment,
+          concurrency: 1,
+          keepWorkspaces: true,
+          adapter,
+        });
+        return await runner.execute({
+          task: redirectTask,
+          profile: applied,
+          workspace: root,
+          signal: new AbortController().signal,
+        });
+      };
+
+      // The adapter sees the follow-up, and both turns are accepted.
+      const execution = await run(body(JSON.stringify(turns), true));
+      expect(execution.events).toHaveLength(2);
+      expect(execution.events.every((event) => event.kind === "turn.completed")).toBe(true);
+
+      // An adapter that answered only the first prompt is rejected rather than scored:
+      // §5.27's redirect is not measured by a run that never received the redirect.
+      await expect(run(body(JSON.stringify([turns[0]]), false)))
+        .rejects.toThrow("exactly 2 terminal turn event(s)");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

@@ -111,6 +111,12 @@ async function cohortEntries(
         permissionMode: task.permissionMode,
         expectedApprovals: task.expectedApprovals,
         expectedStatus: task.expectedStatus,
+        // Spread conditionally rather than declared: canonicalValue emits a key whose
+        // value is undefined, so an unconditional field would change every release
+        // task's digest for a property none of them has.
+        ...(task.followUpPrompts !== undefined
+          ? { followUpPrompts: task.followUpPrompts }
+          : {}),
         snapshotDigest,
       })),
     });

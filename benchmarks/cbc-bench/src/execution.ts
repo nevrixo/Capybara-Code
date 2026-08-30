@@ -503,6 +503,11 @@ async function executeExternalTask(input: ExternalExecuteInput): Promise<TaskExe
       category: input.task.category,
       language: input.task.language,
       prompt: input.task.prompt,
+      // §5.27: an adapter that cannot script a follow-up must fail rather than answer
+      // the first prompt only, which is why the field is sent rather than dropped.
+      ...(input.task.followUpPrompts !== undefined
+        ? { followUpPrompts: input.task.followUpPrompts }
+        : {}),
       network: input.task.network,
       permissionMode: input.task.permissionMode,
       budget: input.task.budget,
@@ -551,6 +556,7 @@ async function executeExternalTask(input: ExternalExecuteInput): Promise<TaskExe
       input.adapter,
       input.task.id,
       input.profile.id,
+      1 + (input.task.followUpPrompts?.length ?? 0),
     );
     return {
       events: envelope.events,
@@ -572,6 +578,7 @@ function parseExternalTaskEnvelope(
   adapter: ExternalBenchmarkAdapter,
   expectedTaskId: string,
   expectedProfileId: string,
+  expectedTurns: number,
 ): Omit<ExternalTaskExecutionEnvelope, "events"> & { readonly events: readonly CbcEvent[] } {
   if (!isRecord(value) || value.schemaVersion !== "1.0") {
     throw new Error("external adapter output must be a schemaVersion 1.0 object");
@@ -640,8 +647,10 @@ function parseExternalTaskEnvelope(
     sessionId = event.sessionId;
     events.push(event);
   }
-  if (terminalTurns !== 1) {
-    throw new Error("external adapter CBC events must contain exactly one terminal turn event");
+  if (terminalTurns !== expectedTurns) {
+    throw new Error(
+      `external adapter CBC events must contain exactly ${expectedTurns} terminal turn event(s)`,
+    );
   }
 
   return {
@@ -667,6 +676,19 @@ interface ExecuteTaskInput {
   readonly environment: Record<string, string>;
 }
 
+/**
+  * Run one task, including any §5.27 scripted follow-up prompt.
+ *
+ * A redirect task is not expressible with a single prompt, so each follow-up is
+ * submitted as a further request against the same workspace once the previous one
+ * settles, and every turn's events are concatenated into one execution. The metrics
+ * derivation reads the last terminal turn, so the redirected goal is the one scored.
+ *
+ * Boundary worth stating plainly: this is a between-turn goal change, not an interrupt
+ * delivered while the model is mid-turn. §11.10's `interrupt_and_redirect` needs a
+ * submit handle the headless entry point does not expose, so a task measured this way
+ * proves the loop honors a superseding instruction, not that it can be interrupted.
+ */
 async function executeTask(input: ExecuteTaskInput): Promise<TaskExecution> {
   const events: CbcEvent[] = [];
   const transcript: string[] = [];
@@ -680,15 +702,21 @@ async function executeTask(input: ExecuteTaskInput): Promise<TaskExecution> {
   // Grant invocation-scoped trust without restoring the removed public trust command.
   context.setTrust("trusted-once");
 
+  const prompts = [input.task.prompt, ...(input.task.followUpPrompts ?? [])];
   const startedAtMs = Date.now();
   let exitCode = 1;
   try {
-    const result = await runHeadlessly(context, {
-      prompt: input.task.prompt,
-      signal: input.signal,
-      onEvent: (event) => events.push(event),
-    });
-    exitCode = result.code;
+    for (const prompt of prompts) {
+      const result = await runHeadlessly(context, {
+        prompt,
+        signal: input.signal,
+        onEvent: (event) => events.push(event),
+      });
+      exitCode = result.code;
+      // A failed or cancelled turn makes the follow-up meaningless: the redirect would
+      // be measured against a run that never reached the state it redirects from.
+      if (exitCode !== 0 || input.signal.aborted) break;
+    }
   } catch (error) {
     transcript.push(error instanceof Error ? error.stack ?? error.message : String(error));
   } finally {
