@@ -8,6 +8,7 @@ export * from "./lockfile.ts";
 export * from "./admission.ts";
 export * from "./authority.ts";
 export * from "./hooks.ts";
+export * from "./builtin-hooks.ts";
 export * from "./circuit.ts";
 export * from "./reentrancy.ts";
 export * from "./define.ts";
