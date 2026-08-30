@@ -2,10 +2,20 @@
 
 import { HELP_TEXT, type Command } from "./args.ts";
 import { CliError, EXIT, type ExitCode } from "./exit.ts";
+import { acpCommand } from "./commands/acp.ts";
 import { authApi, authLogin, authLogout, authStatus } from "./commands/auth.ts";
 import { configSet } from "./commands/config.ts";
 import { skillsCommand } from "./commands/skills.ts";
+import { clientsCommand, githubCommand, integrationDoctor } from "./commands/integrations.ts";
+import { trustCommand } from "./commands/trust.ts";
+import {
+  bootstrapPackages,
+  mapPackageCommandError,
+  packageCommand,
+  pluginCommand,
+} from "./commands/packages.ts";
 import { CommandContext, type CommandResult } from "./commands/context.ts";
+import { PackageRuntimeError } from "./package-runtime.ts";
 import { interactive } from "./commands/interactive.ts";
 import { daemonCommand } from "./commands/daemon.ts";
 import { sessionWorker } from "./commands/session-worker.ts";
@@ -13,6 +23,11 @@ import { modelRefresh } from "./commands/model.ts";
 import { run } from "./commands/run.ts";
 import { updateCommand } from "./commands/update.ts";
 import type { Host } from "./host.ts";
+import {
+  PackageInstallError,
+  PackageVerificationError,
+  UnsupportedPackageSourceError,
+} from "@cbc/package-manager";
 
 export interface RouteOptions {
   readonly host: Host;
@@ -50,8 +65,34 @@ async function dispatch(context: CommandContext, command: Command): Promise<Comm
       return await run(context, {
         ...(command.prompt !== undefined ? { prompt: command.prompt } : {}),
         ...(command.resultFile !== undefined ? { resultFile: command.resultFile } : {}),
+        ...(command.eventFile !== undefined ? { eventFile: command.eventFile } : {}),
+        ...(command.permissionPolicy !== undefined ? { permissionPolicy: command.permissionPolicy } : {}),
         ...(command.noDaemon === true ? { noDaemon: true } : {}),
       });
+
+    case "acp":
+      return await acpCommand(context);
+
+    case "clients":
+      return await clientsCommand(context, command.sub);
+
+    case "integration":
+      return await integrationDoctor(context, command.target);
+
+    case "github":
+      return await githubCommand(context, command.sub);
+
+    case "trust":
+      return await trustCommand(context, { showDiff: command.showDiff });
+
+    case "bootstrap":
+      return await bootstrapPackages(context, command);
+
+    case "package":
+      return await packageCommand(context, command);
+
+    case "plugin":
+      return await pluginCommand(context, command);
 
     case "auth":
       switch (command.sub) {
@@ -102,6 +143,19 @@ async function dispatch(context: CommandContext, command: Command): Promise<Comm
 
 /** Turn a thrown error into the stable CLI exit code. */
 export function report(context: CommandContext, error: unknown): ExitCode {
+  if (error instanceof PackageRuntimeError) {
+    return report(context, mapPackageCommandError(error));
+  }
+  if (error instanceof PackageInstallError) {
+    context.warn(JSON.stringify(error.receipt));
+    return report(context, new CliError(EXIT.failure, error.message));
+  }
+  if (
+    error instanceof PackageVerificationError
+    || error instanceof UnsupportedPackageSourceError
+  ) {
+    return report(context, new CliError(EXIT.config, error.message));
+  }
   if (error instanceof CliError) {
     context.warn("error: " + error.message);
     for (const line of error.detail) context.warn(line);

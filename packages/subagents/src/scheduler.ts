@@ -35,6 +35,7 @@ import {
   type ChildAgentResult,
 } from "./instance.ts";
 import {
+  DEFAULT_SUBAGENT_MAX_DEPTH,
   SUBAGENT_HARD_LIMITS,
   contextReservationForRole,
   roleDefinition,
@@ -78,6 +79,8 @@ export interface PathBaseline {
 }
 
 export interface SpawnOptions {
+  /** Session coordinator assigned id. Direct scheduler users may omit it. */
+  readonly agentId?: string;
   readonly role: SubagentRole;
   readonly task: AgentTask;
   /** Overrides the role's default profile, e.g. §15.2 "Sol/Terra based on task". */
@@ -87,6 +90,8 @@ export interface SpawnOptions {
   /** Baseline hashes for the lease scope. Required for a writer. */
   readonly baseline?: readonly PathBaseline[];
   readonly turnId?: string;
+  /** Coordinator-derived child ceiling; role defaults remain the upper bound. */
+  readonly budget?: Partial<AgentBudget>;
 }
 
 export type SpawnRejectionCode =
@@ -94,7 +99,11 @@ export type SpawnRejectionCode =
   | "DEPTH_EXCEEDED"
   | "WRITER_BUSY"
   | "LEASE_OVERLAP"
-  | "UNKNOWN_DEPENDENCY";
+  | "UNKNOWN_DEPENDENCY"
+  | "AUTHORITY_WIDENING"
+  | "BUDGET_EXCEEDED"
+  | "NODE_LIMIT"
+  | "FANOUT_LIMIT";
 
 export class SpawnRejected extends Error {
   readonly code: SpawnRejectionCode;
@@ -125,6 +134,12 @@ export interface SchedulerOptions {
   /** Depth of the *parent*. A root is 0, so its children are depth 1. */
   readonly parentDepth?: number;
   readonly parentAgentId?: string;
+  /** Effective session ceiling, clamped to the absolute hard maximum. */
+  readonly maxDepth?: number;
+  /** Session coordinator id allocator; avoids collisions across nested schedulers. */
+  readonly newAgentId?: () => string;
+  /** Parent authority ceiling. Nested schedulers may only narrow it. */
+  readonly permissionCeiling?: AgentPermissionScope;
   /** @deprecated Child registration is no longer capped per turn. */
   readonly maxChildrenPerTurn?: number;
   /** Maximum provider-running children. Overflow waits in a FIFO queue. */
@@ -268,10 +283,12 @@ export class SubagentScheduler {
     const depth = parentDepth + 1;
 
     // ---- SUB-007: depth 1 means a child may not spawn a child ----
-    if (depth > SUBAGENT_HARD_LIMITS.maxDepth) {
+    const maxDepth = this.#maxDepth();
+    if (depth > maxDepth) {
       throw new SpawnRejected(
         "DEPTH_EXCEEDED",
-        `delegation depth ${depth} exceeds the limit of ${SUBAGENT_HARD_LIMITS.maxDepth} (§15.7); a subagent may not spawn another subagent`,
+        "delegation depth " + depth + " exceeds the session limit of " + maxDepth +
+          " (hard maximum " + SUBAGENT_HARD_LIMITS.maxDepth + ")",
       );
     }
 
@@ -358,7 +375,10 @@ export class SubagentScheduler {
     }
 
     this.#counter += 1;
-    const id = `agent_${this.#counter}`;
+    const id = options.agentId ?? this.#options.newAgentId?.() ?? "agent_" + this.#counter;
+    if (this.#instances.has(id)) {
+      throw new SpawnRejected("INVALID_TASK", "subagent id already exists: " + id);
+    }
 
     const lease: WriterLease | undefined = definition.canWrite
       ? createLease({
@@ -374,20 +394,44 @@ export class SubagentScheduler {
         })
       : undefined;
 
+    const ceiling = this.#options.permissionCeiling;
     const permissions: AgentPermissionScope = {
-      canWrite: definition.canWrite,
-      canRunProcess: definition.canRunProcess,
-      allowedPaths: [...options.task.allowedPaths],
-      forbiddenPaths: [...options.task.forbiddenPaths],
+      canWrite: definition.canWrite && (ceiling?.canWrite ?? true),
+      canRunProcess: definition.canRunProcess && (ceiling?.canRunProcess ?? true),
+      allowedPaths: options.task.allowedPaths.length > 0
+        ? [...options.task.allowedPaths]
+        : [...(ceiling?.allowedPaths ?? [])],
+      forbiddenPaths: [...new Set([
+        ...options.task.forbiddenPaths,
+        ...(ceiling?.forbiddenPaths ?? []),
+      ])],
       // §15.2 Explore: no approval requests except restricted reads.
-      mayRequestApproval: definition.permissionClass !== "read",
+      mayRequestApproval:
+        definition.permissionClass !== "read"
+        && (ceiling?.mayRequestApproval ?? true),
     };
 
+    const requestedBudget = options.budget ?? {};
     const budget: AgentBudget = {
-      maxToolCalls: definition.maxToolCalls,
-      maxModelCalls: definition.maxModelCalls,
-      maxDurationMs: Math.min(options.task.deadlineMs, definition.maxDurationMs),
-      softContextTokens: definition.softContextTokens,
+      maxToolCalls: positiveFloor(
+        Math.min(definition.maxToolCalls, requestedBudget.maxToolCalls ?? definition.maxToolCalls),
+      ),
+      maxModelCalls: positiveFloor(
+        Math.min(definition.maxModelCalls, requestedBudget.maxModelCalls ?? definition.maxModelCalls),
+      ),
+      maxDurationMs: positiveFloor(
+        Math.min(
+          options.task.deadlineMs,
+          definition.maxDurationMs,
+          requestedBudget.maxDurationMs ?? definition.maxDurationMs,
+        ),
+      ),
+      softContextTokens: positiveFloor(
+        Math.min(
+          definition.softContextTokens,
+          requestedBudget.softContextTokens ?? definition.softContextTokens,
+        ),
+      ),
     };
 
     const instance: AgentInstance = {
@@ -448,6 +492,8 @@ export class SubagentScheduler {
       // when a delegated result looks wrong.
       modelProfile: instance.modelProfile,
       reservedContextTokens: reservationTokens,
+      ...(instance.parentId === undefined ? {} : { parentId: instance.parentId }),
+      depth: instance.depth,
       childCount: 0,
     }, id);
 
@@ -585,6 +631,13 @@ export class SubagentScheduler {
     return Number.isFinite(configured) && configured >= 1
       ? Math.min(Math.floor(configured), SUBAGENT_HARD_LIMITS.maxConcurrent)
       : SUBAGENT_HARD_LIMITS.maxConcurrent;
+  }
+
+  #maxDepth(): number {
+    const configured = this.#options.maxDepth ?? DEFAULT_SUBAGENT_MAX_DEPTH;
+    return Number.isFinite(configured) && configured >= 0
+      ? Math.min(Math.floor(configured), SUBAGENT_HARD_LIMITS.maxDepth)
+      : DEFAULT_SUBAGENT_MAX_DEPTH;
   }
 
   /**
@@ -984,3 +1037,7 @@ function toUpstreamResult(instance: AgentInstance, result: ChildAgentResult): Up
 // Preserve the package's historical public export while the shared path-scope
 // implementation now lives with the writer-lease glob matcher.
 export { overlappingGlobs };
+
+function positiveFloor(value: number): number {
+  return Math.max(1, Math.floor(value));
+}

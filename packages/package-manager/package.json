@@ -1,0 +1,16 @@
+{
+  "name": "@cbc/package-manager",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Deterministic signed package resolution, installation, rollback, and frozen bootstrap",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@cbc/app-protocol": "workspace:*",
+    "@cbc/plugin-sdk": "workspace:*"
+  }
+}

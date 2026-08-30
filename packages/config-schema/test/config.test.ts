@@ -195,7 +195,8 @@ describe("defaults (§21.4)", () => {
     expect(config.agent.permissionMode).toBe("ask");
 
     expect(config.subagents.maxConcurrent).toBe(3);
-    expect(config.subagents.maxDepth).toBe(1);
+    expect(config.subagents.maxDepth).toBe(2);
+    expect(config.subagents.writerPolicy).toBe("worktree-lease");
     expect("maxPerTurn" in config.subagents).toBe(false);
     expect(config.tools.activationLimit).toBe(10);
     // §23.5 / D-014: telemetry is off by default.
@@ -361,17 +362,29 @@ describe("precedence (§21.2)", () => {
   });
 });
 
-describe("legacy project config compatibility", () => {
-  test("project TOML inputs are ignored regardless of trust", () => {
-    for (const projectTrusted of [false, true]) {
-      const result = loadConfig({
-        projectToml: '[agent]\npermission_mode = "auto"\n',
-        projectTrusted,
-        env: {},
-      });
-      expect(result.config.agent.permissionMode).toBe("ask");
-      expect(result.provenance["agent.permissionMode"]).toBeUndefined();
-    }
+describe("trust-gated project config", () => {
+  test("project TOML is ignored while untrusted and applied with provenance after trust", () => {
+    const projectToml = "[agent.tool_graph]\nmax_parallel_reads = 2\n";
+    const untrusted = loadConfig({ projectToml, projectTrusted: false, env: {} });
+    expect(untrusted.config.agent.toolGraph.maxParallelReads).not.toBe(2);
+    expect(untrusted.provenance["agent.toolGraph.maxParallelReads"]).toBeUndefined();
+    expect(untrusted.issues.some((issue) => issue.source === "project" && issue.path === "project"))
+      .toBe(true);
+
+    const trusted = loadConfig({ projectToml, projectTrusted: true, env: {} });
+    expect(trusted.config.agent.toolGraph.maxParallelReads).toBe(2);
+    expect(trusted.provenance["agent.toolGraph.maxParallelReads"]).toBe("project");
+  });
+
+  test("project-local values override shared project values only after trust", () => {
+    const result = loadConfig({
+      projectToml: "[agent.tool_graph]\nmax_parallel_reads = 2\n",
+      projectLocalToml: "[agent.tool_graph]\nmax_parallel_reads = 3\n",
+      projectTrusted: true,
+      env: {},
+    });
+    expect(result.config.agent.toolGraph.maxParallelReads).toBe(3);
+    expect(result.provenance["agent.toolGraph.maxParallelReads"]).toBe("project-local");
   });
 
   test("project config may not set a credential field", () => {
@@ -400,6 +413,32 @@ describe("legacy project config compatibility", () => {
         (issue) => issue.path === "mcpServers.local.env" && issue.severity === "error",
       )).toBe(true);
     }
+  });
+
+  test("project config cannot replace personal model choices or user LSP servers", () => {
+    const merged = mergeConfig([
+      {
+        source: "user",
+        values: {
+          "model.default": "gpt-5.6-sol",
+          "model.reasoningEffort": "high",
+          "lspServers.typescript.command": "user-tsserver",
+        },
+      },
+      {
+        source: "project",
+        values: {
+          "model.default": "gpt-5.6-luna",
+          "model.reasoningEffort": "low",
+          "lspServers.typescript.command": "project-tsserver",
+        },
+      },
+    ]);
+    expect(merged.config.model.default).toBe("gpt-5.6-sol");
+    expect(merged.config.model.reasoningEffort).toBe("high");
+    expect(merged.config.lspServers.typescript?.command).toBe("user-tsserver");
+    expect(merged.issues.filter((issue) => issue.source === "project" && issue.severity === "error"))
+      .toHaveLength(3);
   });
 
   test("user MCP config may bind host environment variable names", () => {
@@ -511,7 +550,7 @@ describe("monotonic project policy (P0-02)", () => {
 
   test("semantic issues are attributed to the layer that set the value", () => {
     const merged = mergeConfig([
-      { source: "project", values: { "subagents.maxDepth": 3 } },
+      { source: "project", values: { "subagents.maxDepth": 4 } },
     ]);
     const issue = merged.issues.find((i) => i.path === "subagents.maxDepth");
     expect(issue?.source).toBe("project");
@@ -570,8 +609,8 @@ describe("validation (§21.7)", () => {
     expect(merged.config.agent.permissionMode).toBe("ask");
   });
 
-  test("delegation depth above 1 is rejected (§15.7)", () => {
-    const merged = mergeConfig([{ source: "user", values: { "subagents.maxDepth": 3 } }]);
+  test("delegation depth above the hard maximum of 3 is rejected", () => {
+    const merged = mergeConfig([{ source: "user", values: { "subagents.maxDepth": 4 } }]);
     expect(
       merged.issues.some((i) => i.path === "subagents.maxDepth" && i.severity === "error"),
     ).toBe(true);
@@ -884,7 +923,7 @@ describe("full load", () => {
     expect(result.config.permissions.rules[1]).toMatchObject({ decision: "deny" });
   });
 
-  test("legacy project permission rules are ignored", () => {
+  test("project allow rules are rejected rather than activated", () => {
     const result = loadConfig({
       projectToml: [
         "[[permissions.rules]]",
@@ -896,7 +935,11 @@ describe("full load", () => {
       env: {},
     });
     expect(result.config.permissions.rules).toEqual([]);
-    expect(result.issues).toEqual([]);
+    expect(result.issues.some((issue) =>
+      issue.path === "permissions.rules"
+      && issue.source === "project"
+      && issue.severity === "error"
+    )).toBe(true);
   });
 
   test("P0-02: projectWrite cannot weaken a user plan", () => {
@@ -986,5 +1029,47 @@ describe("token saving (§token-saving)", () => {
     const info = configKeyInfo("agent.tokenSaving");
     expect(info?.status).toBe("wired");
     expect(info?.consumer).toContain("saving controller");
+  });
+});
+
+describe("Deep Plan", () => {
+  test("defaults to off and accepts the user-owned enum", () => {
+    expect(loadConfig({ projectTrusted: true, env: {} }).config.agent.deepPlan).toBe("off");
+    for (const mode of ["off", "on"] as const) {
+      const loaded = loadConfig({
+        projectTrusted: true,
+        env: {},
+        userToml: `[agent]\ndeep_plan = "${mode}"\n`,
+      });
+      expect(loaded.config.agent.deepPlan).toBe(mode);
+      expect(loaded.provenance["agent.deepPlan"]).toBe("user");
+      expect(loaded.issues.filter((issue) => issue.severity === "error")).toHaveLength(0);
+    }
+  });
+
+  test("rejects invalid values and project overrides", () => {
+    const invalid = loadConfig({
+      projectTrusted: true,
+      env: {},
+      userToml: `[agent]\ndeep_plan = "always"\n`,
+    });
+    expect(invalid.config.agent.deepPlan).toBe("off");
+    expect(invalid.issues.some((issue) =>
+      issue.path === "agent.deepPlan" && issue.severity === "error"
+    )).toBe(true);
+
+    const project = mergeConfig([
+      { source: "project", values: { "agent.deepPlan": "on" } },
+    ]);
+    expect(project.config.agent.deepPlan).toBe("off");
+    expect(project.issues.some((issue) =>
+      issue.path === "agent.deepPlan" && issue.message.includes("user-only")
+    )).toBe(true);
+  });
+
+  test("is registered as a wired config key", () => {
+    const info = configKeyInfo("agent.deepPlan");
+    expect(info?.status).toBe("wired");
+    expect(info?.consumer).toContain("Deep Plan");
   });
 });

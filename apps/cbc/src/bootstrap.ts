@@ -45,6 +45,11 @@ import {
 import { APP_COMMAND_SCHEMA_VERSION } from "@cbc/app-protocol";
 import { AppServer } from "@cbc/app-server";
 import { CapybaraClient } from "@cbc/sdk";
+import {
+  parseCustomAgent,
+  resolveCustomAgents,
+  type CustomAgentDefinition,
+} from "@cbc/subagents";
 import type { SidebarService } from "@cbc/tui-components";
 
 import {
@@ -126,6 +131,8 @@ export interface Bootstrapped {
   readonly skillDiscoveryInput: SkillDiscoveryInput;
   /** Managed Python and TypeScript language-server lifecycle for this session. */
   readonly lspHost: LspHost;
+  /** Shared package/plugin state used by embedded and daemon worker surfaces. */
+  readonly packageRuntime: import("./package-runtime.ts").PackageRuntime;
   /** Loads and projects one immutable page preceding the resident session history. */
   readonly loadEarlierHistory?: () => Promise<readonly TimelineItem[] | undefined>;
   /** P0-15: shut down any MCP server children for this session. */
@@ -576,6 +583,48 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
         }
       : undefined;
 
+  const packageRuntime = await context.packages();
+  try {
+    warnings.push(...await packageRuntime.restoreAll());
+  } catch (error) {
+    warnings.push(
+      "package runtime state could not be restored: "
+      + (error instanceof Error ? error.message : String(error)),
+    );
+  }
+  const pluginRuntimeEnabled =
+    effective.experimental.pluginRuntime && effective.plugins.enabled;
+  const parsedCustomAgents: CustomAgentDefinition[] = [];
+  try {
+    for (const file of await packageRuntime.agentFiles()) {
+      const parsed = parseCustomAgent(file.text, {
+        path: file.path,
+        source: file.source,
+        trusted: file.source === "user"
+          || trust === "trusted-always"
+          || trust === "trusted-once",
+      });
+      for (const issue of parsed.issues) {
+        warnings.push(
+          "package agent " + file.path + ": " + issue.field + ": " + issue.message,
+        );
+      }
+      if (parsed.definition !== undefined) parsedCustomAgents.push(parsed.definition);
+    }
+  } catch (error) {
+    warnings.push(
+      "package agent definitions could not be loaded: "
+      + (error instanceof Error ? error.message : String(error)),
+    );
+  }
+  const customAgentResolution = resolveCustomAgents(parsedCustomAgents);
+  for (const shadowed of customAgentResolution.shadowed) {
+    warnings.push(
+      "package agent " + shadowed.name + " from " + shadowed.path
+      + " was shadowed by a higher-precedence definition",
+    );
+  }
+
   const session = new AgentSession({
     host: context.host,
     runtime,
@@ -598,6 +647,12 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
       ? { executableCapabilities }
       : {}),
     ...(sessionBridges !== undefined ? { bridges: sessionBridges } : {}),
+    ...(pluginRuntimeEnabled
+      ? { pluginInvoke: (input) => packageRuntime.invoke(input) }
+      : {}),
+    ...(customAgentResolution.agents.length === 0
+      ? {}
+      : { customAgents: customAgentResolution.agents }),
     ...(mcpHost !== undefined
       ? {
           mcpBridge: mcpHost.bridge,
@@ -654,7 +709,10 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
     cwd: context.host.cwd,
     workspacePath: context.workspacePath,
     nativeSkillsPath: context.paths.skills,
-    config: effective.skills,
+    config: {
+      ...effective.skills,
+      paths: [...effective.skills.paths, ...packageRuntime.skillRoots()],
+    },
   };
   const skillDiscovery = new SkillDiscoveryService({
     host: context.host,
@@ -801,6 +859,13 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
       worktrees: {
         list: async () => await runtime.listWorktrees(),
       },
+      plugins: {
+        list: () => ({ plugins: packageRuntime.plugins() }),
+      },
+      extensions: {
+        supportedMethods: packageRuntime.appMethods(),
+        dispatch: (input) => packageRuntime.dispatchApp(input),
+      },
     }),
     daemonId: "embedded_" + sessionId.replace(/[^a-zA-Z0-9_]/g, ""),
     serverVersion: context.version,
@@ -867,6 +932,7 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
     session,
     appClient,
     lspHost,
+    packageRuntime,
     runtime,
     sessionId,
     granted,

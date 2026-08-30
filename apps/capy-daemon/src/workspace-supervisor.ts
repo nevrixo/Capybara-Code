@@ -108,7 +108,11 @@ export class WorkspaceSupervisor {
     for (const session of this.#sessions.values()) {
       const state = session.state;
       if (state.attachedClients.length > 0) return false;
-      if (state.lifecycle === "running" || state.lifecycle === "waiting_approval") return false;
+      if (
+        state.lifecycle === "running" ||
+        state.lifecycle === "waiting_approval" ||
+        state.lifecycle === "waiting_user_input"
+      ) return false;
       if (state.pendingApprovalIds.length > 0) return false;
     }
     if (this.#pendingApprovals > 0 || this.#backgroundWork > 0) return false;

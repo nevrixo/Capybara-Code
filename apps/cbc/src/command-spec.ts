@@ -39,7 +39,11 @@ export const COMMAND_REGISTRY: readonly CommandSpec[] = [
   {
     name: "run",
     summary: "run headlessly",
-    flags: [{ name: "--result-file", kind: "value", summary: "write a machine-readable integration result" }],
+    flags: [
+      { name: "--result-file", kind: "value", summary: "write a machine-readable integration result" },
+      { name: "--event-file", kind: "value", summary: "read a validated integration trigger envelope" },
+      { name: "--permission-policy", kind: "value", summary: "deny-on-ask, allow-listed, or fail-on-ask" },
+    ],
     positionals: [{ label: "[prompt...]", required: false, variadic: true }],
   },
   {
@@ -83,6 +87,156 @@ export const COMMAND_REGISTRY: readonly CommandSpec[] = [
           { label: "<path>", required: true },
           { label: "<value>", required: true },
         ],
+      },
+    ],
+  },
+  {
+    name: "acp",
+    summary: "serve ACP v1 over stdio and attach it to the local daemon",
+  },
+  {
+    name: "clients",
+    summary: "inspect App Protocol clients and transport health",
+    subcommands: [
+      { name: "list", summary: "show the current client and inventory support" },
+      { name: "doctor", summary: "diagnose client roles, replay, and transport" },
+    ],
+  },
+  {
+    name: "integration",
+    summary: "diagnose first-party integration compatibility",
+    subcommands: [
+      {
+        name: "doctor",
+        summary: "diagnose VS Code, ACP, or GitHub integration",
+        positionals: [{ label: "[vscode|acp|github]", required: false }],
+      },
+    ],
+  },
+  {
+    name: "github",
+    summary: "install or diagnose GitHub automation",
+    subcommands: [
+      { name: "install", summary: "create a safe default GitHub Actions workflow" },
+      { name: "doctor", summary: "validate the repository GitHub workflow" },
+    ],
+  },
+  {
+    name: "trust",
+    summary: "inspect or approve the workspace project-control digest",
+    flags: [
+      { name: "--show-diff", kind: "boolean", summary: "print digest and capability changes without prompting" },
+    ],
+  },
+  {
+    name: "bootstrap",
+    summary: "reconstruct the declared package environment",
+    flags: [
+      { name: "--frozen", kind: "boolean", summary: "require packages.json and lockfile to match exactly" },
+      { name: "--offline", kind: "boolean", summary: "use only local sources and the immutable cache" },
+      { name: "--project", kind: "boolean", summary: "bootstrap project packages (default)" },
+      { name: "--user", kind: "boolean", summary: "bootstrap user packages" },
+    ],
+  },
+  {
+    name: "package",
+    summary: "manage signed packages and reproducible locks",
+    subcommands: [
+      {
+        name: "search",
+        summary: "search the configured signed registry",
+        positionals: [{ label: "<query>", required: true }],
+      },
+      {
+        name: "info",
+        summary: "inspect an installed package",
+        flags: packageListFlags(),
+        positionals: [{ label: "<id>", required: true }],
+      },
+      {
+        name: "add",
+        summary: "resolve, verify, lock, and activate a package",
+        flags: [
+          ...packageMutationFlags(),
+          { name: "--allow-unsigned-local", kind: "boolean", summary: "explicitly allow an unsigned path: development package" },
+          { name: "--grant-requested", kind: "boolean", summary: "explicitly grant the package's requested authority" },
+          { name: "--offline", kind: "boolean", summary: "forbid registry network access" },
+        ],
+        positionals: [{ label: "<source>", required: true }],
+      },
+      {
+        name: "remove",
+        summary: "remove a package and deactivate its plugins",
+        flags: packageMutationFlags(),
+        positionals: [{ label: "<id>", required: true }],
+      },
+      {
+        name: "update",
+        summary: "update one or all packages without widening grants",
+        flags: [
+          ...packageMutationFlags(),
+          { name: "--offline", kind: "boolean", summary: "forbid registry network access" },
+        ],
+        positionals: [{ label: "[id]", required: false }],
+      },
+      {
+        name: "verify",
+        summary: "verify package integrity without activation",
+        flags: [
+          ...packageMutationFlags(),
+          { name: "--allow-unsigned-local", kind: "boolean", summary: "explicitly allow an unsigned path: development package" },
+          { name: "--offline", kind: "boolean", summary: "forbid registry network access" },
+        ],
+        positionals: [{ label: "<source>", required: true }],
+      },
+      {
+        name: "list",
+        summary: "list installed packages",
+        flags: packageListFlags(),
+      },
+      {
+        name: "doctor",
+        summary: "verify lockfile and immutable cache consistency",
+        flags: packageListFlags(),
+        positionals: [{ label: "[id]", required: false }],
+      },
+      {
+        name: "publish",
+        summary: "validate a package for publication",
+        flags: [{ name: "--dry-run", kind: "boolean", summary: "validate only; perform no external write" }],
+        positionals: [{ label: "[path]", required: false }],
+      },
+      {
+        name: "init",
+        summary: "create a minimal Skill package",
+        positionals: [{ label: "[path]", required: false }],
+      },
+    ],
+  },
+  {
+    name: "plugin",
+    summary: "inspect and control installed plugin runtimes",
+    subcommands: [
+      { name: "list", summary: "list active plugins" },
+      {
+        name: "inspect",
+        summary: "inspect source, runtime, health, and authority",
+        positionals: [{ label: "<id>", required: true }],
+      },
+      {
+        name: "enable",
+        summary: "enable an installed plugin",
+        positionals: [{ label: "<id>", required: true }],
+      },
+      {
+        name: "disable",
+        summary: "disable an installed plugin",
+        positionals: [{ label: "<id>", required: true }],
+      },
+      {
+        name: "grants",
+        summary: "show requested and effective plugin grants",
+        positionals: [{ label: "<id>", required: true }],
       },
     ],
   },
@@ -147,6 +301,20 @@ export const COMMAND_REGISTRY: readonly CommandSpec[] = [
     positionals: [{ label: "[topic]", required: false }],
   },
 ];
+
+function packageMutationFlags(): readonly FlagSpec[] {
+  return [
+    { name: "--project", kind: "boolean", summary: "use project scope (default)" },
+    { name: "--user", kind: "boolean", summary: "use user scope" },
+  ];
+}
+
+function packageListFlags(): readonly FlagSpec[] {
+  return [
+    ...packageMutationFlags(),
+    { name: "--effective", kind: "boolean", summary: "show effective merged state (default)" },
+  ];
+}
 
 /** Find a command spec by name in the registry. */
 export function findCommand(name: string): CommandSpec | undefined {

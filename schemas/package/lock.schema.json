@@ -1,0 +1,77 @@
+{
+  "x-dialect": "json-schema-draft-2020-12",
+  "$id": "cbc:package/lock",
+  "title": "Capybara package request and lock files",
+  "oneOf": [
+    { "$ref": "#/$defs/requestFile" },
+    { "$ref": "#/$defs/lockFile" }
+  ],
+  "$defs": {
+    "requestFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "packages"],
+      "properties": {
+        "schemaVersion": { "const": "1.0" },
+        "packages": {
+          "type": "array",
+          "maxItems": 512,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source", "scope"],
+            "properties": {
+              "source": { "type": "string", "minLength": 1, "maxLength": 1024 },
+              "scope": { "type": "string", "enum": ["project", "user"] },
+              "grants": { "$ref": "cbc:package/manifest#/$defs/permissions" }
+            }
+          }
+        }
+      }
+    },
+    "lockFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "packages"],
+      "properties": {
+        "schemaVersion": { "const": "1.0" },
+        "packages": {
+          "type": "object",
+          "maxProperties": 512,
+          "additionalProperties": { "$ref": "#/$defs/lockEntry" }
+        }
+      }
+    },
+    "lockEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "source",
+        "sourceKind",
+        "packageDigest",
+        "manifestDigest",
+        "grants",
+        "contents"
+      ],
+      "properties": {
+        "version": { "type": "string", "minLength": 1 },
+        "source": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "sourceKind": { "type": "string", "enum": ["registry", "local-path"] },
+        "packageDigest": { "$ref": "cbc:package/manifest#/$defs/digest" },
+        "manifestDigest": { "$ref": "cbc:package/manifest#/$defs/digest" },
+        "signature": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["keyId", "verified"],
+          "properties": {
+            "keyId": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "verified": { "const": true }
+          }
+        },
+        "grants": { "$ref": "cbc:package/manifest#/$defs/permissions" },
+        "contents": { "$ref": "cbc:package/manifest#/$defs/contents" }
+      }
+    }
+  }
+}

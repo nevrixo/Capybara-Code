@@ -89,6 +89,7 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
   // ---- agent ----
   ["agent.permissionMode", { status: "wired", consumer: "agent.ts / approval flow" }],
   ["agent.tokenSaving", { status: "wired", consumer: "AgentSession saving controller → context, prompt, compaction, reporting" }],
+  ["agent.deepPlan", { status: "wired", consumer: "AgentSession → AgentKernel Deep Plan prompt and completion gate" }],
   ["agent.toolRecovery.mode", { status: "wired", consumer: "agent.ts → logical tool recovery runner" }],
   ["agent.toolRecovery.maxAttempts", { status: "wired", consumer: "agent.ts → logical tool recovery runner" }],
   ["agent.todo.autoProgress", { status: "wired", consumer: "agent.ts → TODO preflight activation" }],
@@ -109,7 +110,7 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
   ["subagents.maxConcurrent", { status: "wired", consumer: "subagent-bridge → scheduler" }],
   ["subagents.maxDepth", { status: "wired", consumer: "agent.ts / scheduler depth check" }],
   ["subagents.maxPerTurn", { status: "deprecated", note: "removed; child registration is unbounded and overflow queues" }],
-  ["subagents.writerPolicy", { status: "experimental", note: "exactly one writer is enforced by the scheduler constant" }],
+  ["subagents.writerPolicy", { status: "wired", consumer: "DelegationCoordinator and SubagentBridge writer preflight" }],
 
   // ---- tools ----
   ["tools.", { status: "experimental", note: "activation and inline-output limits are fixed in the tool layer today" }],

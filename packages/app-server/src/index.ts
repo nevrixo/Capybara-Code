@@ -7,17 +7,22 @@
  */
 
 import {
+  APP_CAPABILITY_SCHEMA_REVISION,
   APP_METHODS,
   APP_PROTOCOL_VERSION,
   AppProtocolError,
+  finalizeCapabilitySnapshot,
   negotiateAppProtocol,
   structuredError,
   validateCommandEnvelope,
+  type AppCapabilitySnapshot,
   type AppClientRole,
   type AppInitializeParams,
   type AppInitializeResult,
+  type AppMethodCapability,
   type AppMethod,
   type AppServerLimits,
+  type AppTransportKind,
   type CommandEnvelope,
   type EventCursor,
   type EventReplayResult,
@@ -51,6 +56,8 @@ export type AppJsonRpcResponse =
 export interface AppServerSubscription extends EventSubscription {}
 
 export interface AppServerBackend {
+  /** App methods this backend actually implements; absent names are unsupported. */
+  readonly supportedMethods?: readonly AppMethod[];
   registerClient(input: {
     readonly client: AppInitializeParams["client"];
     readonly seenAt: string;
@@ -106,6 +113,15 @@ export interface AppServerOptions {
   readonly daemonId: string;
   readonly serverVersion?: string;
   readonly capabilities?: Readonly<Record<string, boolean | string | number>>;
+  readonly transport?: AppTransportKind;
+  readonly disabledMethods?: Readonly<Partial<Record<AppMethod, string>>>;
+  readonly presentation?: Partial<{
+    readonly richDiff: boolean;
+    readonly inlineApprovals: boolean;
+    readonly taskTree: boolean;
+    readonly planReview: boolean;
+    readonly artifacts: boolean;
+  }>;
   readonly limits?: Partial<AppServerLimits>;
   readonly now?: () => string;
   readonly newConnectionId?: () => string;
@@ -114,6 +130,7 @@ export interface AppServerOptions {
 interface ConnectionContext {
   readonly client: AppInitializeParams["client"];
   readonly roles: readonly AppClientRole[];
+  readonly capabilitySnapshot: AppCapabilitySnapshot;
 }
 
 const DEFAULT_LIMITS: AppServerLimits = {
@@ -124,11 +141,23 @@ const DEFAULT_LIMITS: AppServerLimits = {
   maxSessionsPerSubscription: 1,
 };
 
+const BUILTIN_METHODS = new Set<AppMethod>([
+  "server.initialize",
+  "server.capabilities",
+  "server.ping",
+  "server.health",
+  "server.version",
+  "events.subscribe",
+  "events.unsubscribe",
+  "events.replay",
+  "events.ack",
+]);
+
 const OBSERVER_METHODS = new Set<AppMethod>([
   "server.capabilities", "server.ping", "server.health", "server.version", "server.logs.tail",
   "workspace.inspect", "workspace.list", "workspace.trust.get", "workspace.services",
   "session.list", "session.get", "session.attach", "session.detach", "session.ensure", "session.export",
-  "turn.get", "turn.list", "turn.wait",
+  "turn.get", "turn.list", "turn.wait", "turn.input.get",
   "events.subscribe", "events.unsubscribe", "events.replay", "events.ack", "events.getSnapshot",
   "approval.list", "approval.get",
   "graph.get", "graph.listNodes",
@@ -139,6 +168,7 @@ const OBSERVER_METHODS = new Set<AppMethod>([
   "edit.preview", "edit.getReceipt", "diff.get", "diff.getFile",
   "worktree.list", "worktree.get", "worktree.getProposal", "merge.preview",
   "plugin.list", "plugin.inspect", "plugin.grants",
+  "package.search", "package.inspect",
   "artifact.getMetadata", "artifact.read", "artifact.stream",
 ]);
 
@@ -146,6 +176,7 @@ const APPROVAL_METHODS = new Set<AppMethod>(["approval.resolve", "approval.cance
 const ADMIN_METHODS = new Set<AppMethod>([
   "workspace.trust.set",
   "plugin.install", "plugin.update", "plugin.enable", "plugin.disable", "plugin.resolveGrant",
+  "package.install", "package.remove", "package.update", "package.verify", "package.bootstrap",
 ]);
 
 /**
@@ -158,6 +189,10 @@ export class AppServer {
   readonly #daemonId: string;
   readonly #serverVersion: string;
   readonly #capabilities: Readonly<Record<string, boolean | string | number>>;
+  readonly #transport: AppTransportKind;
+  readonly #supportedMethods: ReadonlySet<AppMethod>;
+  readonly #disabledMethods: Readonly<Partial<Record<AppMethod, string>>>;
+  readonly #presentation: NonNullable<AppServerOptions["presentation"]>;
   readonly #limits: AppServerLimits;
   readonly #now: () => string;
   readonly #newConnectionId: () => string;
@@ -169,6 +204,10 @@ export class AppServer {
     this.#daemonId = requireOpaqueId("daemonId", options.daemonId);
     this.#serverVersion = options.serverVersion ?? "0.1.0";
     this.#capabilities = options.capabilities ?? {};
+    this.#transport = options.transport ?? "stdio";
+    this.#supportedMethods = supportedMethodSet(options.backend);
+    this.#disabledMethods = Object.freeze({ ...(options.disabledMethods ?? {}) });
+    this.#presentation = Object.freeze({ ...(options.presentation ?? {}) });
     this.#limits = validateLimits({ ...DEFAULT_LIMITS, ...options.limits });
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#newConnectionId = options.newConnectionId
@@ -251,13 +290,15 @@ export class AppServer {
     if (this.#connections.has(connectionId)) {
       throw appError("APP_CONNECTION_COLLISION", "internal", "connection id generator returned a duplicate");
     }
-    this.#connections.set(connectionId, { client: input.client, roles });
+    const capabilitySnapshot = this.#buildCapabilitySnapshot(roles, input.capabilities);
+    this.#connections.set(connectionId, { client: input.client, roles, capabilitySnapshot });
     return {
       protocolVersion,
       serverVersion: this.#serverVersion,
       daemonId: this.#daemonId,
       connectionId,
       capabilities: this.#capabilities,
+      capabilitySnapshot,
       limits: this.#limits,
     };
   }
@@ -267,8 +308,28 @@ export class AppServer {
     params: unknown,
     connection: ConnectionContext,
   ): Promise<unknown> {
+    const support = connection.capabilitySnapshot.methods[method];
+    if (support.state === "unsupported") {
+      throw appError(
+        "APP_METHOD_UNSUPPORTED",
+        "unavailable",
+        support.reason ?? method + " is not implemented by this host",
+      );
+    }
+    if (support.state === "disabled") {
+      throw appError(
+        "APP_METHOD_DISABLED",
+        "permission",
+        support.reason ?? method + " is disabled by host policy",
+      );
+    }
     if (method === "server.capabilities") {
-      return { capabilities: this.#capabilities, limits: this.#limits, roles: connection.roles };
+      return {
+        capabilities: this.#capabilities,
+        capabilitySnapshot: connection.capabilitySnapshot,
+        limits: this.#limits,
+        roles: connection.roles,
+      };
     }
     if (method === "server.ping") return { now: this.#now(), daemonId: this.#daemonId };
     if (method === "server.version") {
@@ -295,6 +356,74 @@ export class AppServer {
       params,
       clientId: connection.client.id,
       roles: connection.roles,
+    });
+  }
+
+  #buildCapabilitySnapshot(
+    roles: readonly AppClientRole[],
+    client: AppInitializeParams["capabilities"],
+  ): AppCapabilitySnapshot {
+    const methods = {} as Record<AppMethod, AppMethodCapability>;
+    for (const method of APP_METHODS) {
+      const requiresRole = capabilityRoleFor(method);
+      const disabledReason = this.#disabledMethods[method];
+      if (!this.#supportedMethods.has(method)) {
+        methods[method] = {
+          state: "unsupported",
+          reason: method + " is declared by the protocol but is not implemented by this host",
+          ...(requiresRole === undefined ? {} : { requiresRole }),
+        };
+      } else if (disabledReason !== undefined) {
+        methods[method] = {
+          state: "disabled",
+          reason: disabledReason,
+          ...(requiresRole === undefined ? {} : { requiresRole }),
+        };
+      } else if (requiresRole !== undefined && !roles.includes(requiresRole)) {
+        methods[method] = {
+          state: "read-only",
+          reason: "this connection does not have the " + requiresRole + " role",
+          requiresRole,
+        };
+      } else {
+        methods[method] = {
+          state: "available",
+          ...(requiresRole === undefined ? {} : { requiresRole }),
+        };
+      }
+    }
+
+    const enabled = (method: AppMethod): boolean => methods[method].state === "available";
+    const visible = (method: AppMethod): boolean => {
+      const state = methods[method].state;
+      return state === "available" || state === "read-only";
+    };
+    const hostRichDiff = this.#presentation.richDiff ?? visible("diff.get");
+    const hostInlineApprovals = this.#presentation.inlineApprovals ?? visible("approval.list");
+    const hostTaskTree = this.#presentation.taskTree
+      ?? (visible("graph.get") || visible("graph.listNodes"));
+    const hostPlanReview = this.#presentation.planReview ?? visible("edit.preview");
+    const hostArtifacts = this.#presentation.artifacts ?? visible("artifact.getMetadata");
+    return finalizeCapabilitySnapshot({
+      protocolVersion: APP_PROTOCOL_VERSION,
+      schemaRevision: APP_CAPABILITY_SCHEMA_REVISION,
+      serverVersion: this.#serverVersion,
+      transport: this.#transport,
+      methods,
+      events: {
+        replay: enabled("events.replay"),
+        ack: enabled("events.ack"),
+        snapshots: enabled("events.getSnapshot"),
+        maxBatchEvents: 10_000,
+        maxBatchBytes: this.#limits.maxResponseBytes,
+      },
+      presentation: {
+        richDiff: hostRichDiff && client.richDiff,
+        inlineApprovals: hostInlineApprovals && client.approvals,
+        taskTree: hostTaskTree && client.taskTree === true,
+        planReview: hostPlanReview && client.planReview === true,
+        artifacts: hostArtifacts && client.artifactStreaming,
+      },
     });
   }
 
@@ -470,6 +599,12 @@ function validateInitialize(params: unknown): AppInitializeParams {
       interactivePrompts: requireBoolean("capabilities.interactivePrompts", capabilities.interactivePrompts),
       artifactStreaming: requireBoolean("capabilities.artifactStreaming", capabilities.artifactStreaming),
       richDiff: requireBoolean("capabilities.richDiff", capabilities.richDiff),
+      ...(capabilities.taskTree === undefined
+        ? {}
+        : { taskTree: requireBoolean("capabilities.taskTree", capabilities.taskTree) }),
+      ...(capabilities.planReview === undefined
+        ? {}
+        : { planReview: requireBoolean("capabilities.planReview", capabilities.planReview) }),
     },
     ...(input.authentication === undefined
       ? {}
@@ -612,6 +747,27 @@ function roleFor(method: AppMethod): AppClientRole {
   if (APPROVAL_METHODS.has(method)) return "approval_resolver";
   if (ADMIN_METHODS.has(method)) return "administrator-local";
   return "controller";
+}
+
+function capabilityRoleFor(method: AppMethod): AppClientRole | undefined {
+  if (
+    method === "server.initialize"
+    || method === "server.capabilities"
+    || method === "server.ping"
+    || method === "server.health"
+    || method === "server.version"
+  ) {
+    return undefined;
+  }
+  return roleFor(method);
+}
+
+function supportedMethodSet(backend: AppServerBackend): ReadonlySet<AppMethod> {
+  const supported = new Set<AppMethod>(BUILTIN_METHODS);
+  if (backend.dispatch !== undefined) {
+    for (const method of backend.supportedMethods ?? []) supported.add(method);
+  }
+  return supported;
 }
 
 function requiresCommandEnvelope(method: AppMethod): boolean {

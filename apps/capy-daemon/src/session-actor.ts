@@ -10,6 +10,7 @@ export type SessionLifecycle =
   | "idle"
   | "running"
   | "waiting_approval"
+  | "waiting_user_input"
   | "paused"
   | "recovering"
   | "closed"
@@ -21,6 +22,8 @@ export type SessionCommandKind =
   | "attach_client"
   | "detach_client"
   | "resolve_approval"
+  | "mark_waiting_user_input"
+  | "resolve_user_input"
   | "steal_control"
   | "pause_session"
   | "resume_session"
@@ -53,6 +56,7 @@ export interface SessionActorState {
   readonly controlLease?: InteractiveLease;
   readonly lastJournalSequence: number;
   readonly pendingApprovalIds: readonly string[];
+  readonly pendingUserInputId?: string;
   readonly ownerEpoch: number;
 }
 
@@ -102,6 +106,15 @@ export type SessionCommand =
     readonly approvalId: string;
   }
   | {
+    readonly kind: "mark_waiting_user_input";
+    readonly questionnaireId: string;
+  }
+  | {
+    readonly kind: "resolve_user_input";
+    readonly clientId: string;
+    readonly questionnaireId: string;
+  }
+  | {
     readonly kind: "set_journal_sequence";
     readonly sequence: number;
   };
@@ -133,6 +146,7 @@ export class SessionActor {
   readonly #now: () => string;
   readonly #clients = new Map<string, AttachedClient>();
   readonly #pendingApprovalIds = new Set<string>();
+  #pendingUserInputId: string | undefined;
   #lifecycle: SessionLifecycle = "idle";
   #revision = 0;
   #activeTurnId: string | undefined;
@@ -203,11 +217,13 @@ export class SessionActor {
         this.#requireController(command.clientId);
         this.#lifecycle = "running";
         this.#activeTurnId = command.turnId;
+        this.#pendingUserInputId = undefined;
         this.#revision += 1;
         return;
       case "cancel_turn":
         this.#requireController(command.clientId);
         this.#activeTurnId = undefined;
+        this.#pendingUserInputId = undefined;
         this.#lifecycle = this.#pendingApprovalIds.size > 0 ? "waiting_approval" : "idle";
         this.#revision += 1;
         return;
@@ -227,7 +243,9 @@ export class SessionActor {
         return;
       case "resume_session":
         this.#requireController(command.clientId);
-        this.#lifecycle = this.#activeTurnId !== undefined ? "running" : "idle";
+        this.#lifecycle = this.#pendingUserInputId !== undefined
+          ? "waiting_user_input"
+          : this.#activeTurnId !== undefined ? "running" : "idle";
         this.#revision += 1;
         return;
       case "snapshot_session":
@@ -238,6 +256,7 @@ export class SessionActor {
         this.#closed = true;
         this.#clients.clear();
         this.#controlLease = undefined;
+        this.#pendingUserInputId = undefined;
         this.#revision += 1;
         return;
       case "mark_waiting_approval":
@@ -250,6 +269,29 @@ export class SessionActor {
         if (this.#lifecycle === "waiting_approval" && this.#pendingApprovalIds.size === 0) {
           this.#lifecycle = this.#activeTurnId !== undefined ? "running" : "idle";
         }
+        this.#revision += 1;
+        return;
+      case "mark_waiting_user_input":
+        if (
+          this.#pendingUserInputId === command.questionnaireId &&
+          this.#lifecycle === "waiting_user_input"
+        ) return;
+        this.#pendingUserInputId = command.questionnaireId;
+        this.#lifecycle = "waiting_user_input";
+        this.#revision += 1;
+        return;
+      case "resolve_user_input":
+        this.#requireController(command.clientId);
+        if (this.#pendingUserInputId !== command.questionnaireId) {
+          throw new SessionActorError(
+            "SESSION_USER_INPUT_MISMATCH",
+            "questionnaire does not match the pending user input",
+          );
+        }
+        this.#pendingUserInputId = undefined;
+        this.#lifecycle = this.#pendingApprovalIds.size > 0
+          ? "waiting_approval"
+          : this.#activeTurnId !== undefined ? "running" : "idle";
         this.#revision += 1;
         return;
       case "set_journal_sequence":
@@ -336,6 +378,9 @@ export class SessionActor {
       ...(this.#controlLease !== undefined ? { controlLease: this.#controlLease } : {}),
       lastJournalSequence: this.#lastJournalSequence,
       pendingApprovalIds: [...this.#pendingApprovalIds],
+      ...(this.#pendingUserInputId === undefined
+        ? {}
+        : { pendingUserInputId: this.#pendingUserInputId }),
       ownerEpoch: this.#ownerEpoch,
     };
   }

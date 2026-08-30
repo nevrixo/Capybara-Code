@@ -1,0 +1,108 @@
+{
+  "x-dialect": "json-schema-draft-2020-12",
+  "$id": "cbc:package/manifest",
+  "title": "Capybara package manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "version",
+    "capybara",
+    "contents",
+    "permissions",
+    "integrity"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}/[a-z0-9][a-z0-9._-]{0,63}$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+    },
+    "capybara": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "contents": { "$ref": "#/$defs/contents" },
+    "permissions": { "$ref": "#/$defs/permissions" },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["files", "packageDigest"],
+      "properties": {
+        "files": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 4096,
+          "additionalProperties": { "$ref": "#/$defs/digest" }
+        },
+        "packageDigest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["keyId", "algorithm", "value"],
+      "properties": {
+        "keyId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "algorithm": { "const": "ed25519" },
+        "value": { "type": "string", "minLength": 1, "maxLength": 4096 }
+      }
+    }
+  },
+  "$defs": {
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "contents": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "plugins": { "$ref": "#/$defs/pathList" },
+        "skills": { "$ref": "#/$defs/pathList" },
+        "agents": { "$ref": "#/$defs/pathList" },
+        "prompts": { "$ref": "#/$defs/pathList" },
+        "themes": { "$ref": "#/$defs/pathList" },
+        "hooks": { "$ref": "#/$defs/pathList" },
+        "schemas": { "$ref": "#/$defs/pathList" },
+        "assets": { "$ref": "#/$defs/pathList" }
+      }
+    },
+    "pathList": {
+      "type": "array",
+      "maxItems": 512,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/path" }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "events": { "$ref": "#/$defs/stringList" },
+        "tools": { "$ref": "#/$defs/stringList" },
+        "workspaceRead": { "$ref": "#/$defs/stringList" },
+        "workspaceWrite": { "$ref": "#/$defs/stringList" },
+        "networkDomains": { "$ref": "#/$defs/stringList" },
+        "credentials": { "$ref": "#/$defs/stringList" },
+        "artifacts": { "type": "string", "enum": ["none", "read-own", "create"] },
+        "sessionState": { "type": "string", "enum": ["none", "read", "write-own"] },
+        "memory": { "type": "string", "enum": ["none", "search", "propose"] },
+        "graph": { "type": "string", "enum": ["none", "observe", "propose-node"] }
+      }
+    },
+    "stringList": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+    }
+  }
+}

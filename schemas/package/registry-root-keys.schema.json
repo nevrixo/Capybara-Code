@@ -1,0 +1,23 @@
+{
+  "x-dialect": "json-schema-draft-2020-12",
+  "$id": "cbc:package/registry-root-keys",
+  "title": "Capybara package registry pinned root keys",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "keys"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "keys": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 32,
+        "maxLength": 16384
+      },
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+      }
+    }
+  }
+}

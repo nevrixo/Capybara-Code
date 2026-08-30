@@ -1,0 +1,28 @@
+name: Capybara Code
+description: Run Capybara Code from a validated GitHub event envelope
+author: Nevrixo
+inputs:
+  mode:
+    description: auto, review, or answer
+    required: false
+    default: auto
+  permission-policy:
+    description: deny-on-ask, allow-listed, or fail-on-ask
+    required: false
+    default: allow-listed
+  event-file:
+    description: Path to the GitHub event JSON file
+    required: false
+  result-file:
+    description: Path for the canonical action result
+    required: false
+    default: capy-result.json
+  capy-binary:
+    description: Absolute path to the packaged Capybara CLI (defaults to the Action bundle)
+    required: false
+runs:
+  using: node20
+  main: dist/index.js
+branding:
+  icon: code
+  color: brown

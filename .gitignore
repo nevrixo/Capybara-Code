@@ -19,6 +19,7 @@ venv/
 .env
 .env.*
 !.env.example
+.capybara/config.local.toml
 
 # Test output & test files
 coverage/

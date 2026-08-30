@@ -70,8 +70,11 @@ import {
   type ModelProvider,
 } from "@cbc/provider-openai";
 import {
+  assessDeepPlanReadiness,
   compact,
+  compactDeepPlanProjection,
   ContextPressureController,
+  DeepPlanController,
   evaluateContextPressure,
   PROMPT_CAPSULE_BYTE_LIMIT,
   PROMPT_CAPSULE_ITEM_LIMIT,
@@ -105,7 +108,11 @@ import {
   type SkillDefinition,
   type SkillFile,
 } from "@cbc/skills";
-import type { ChildRunContext, SubagentScheduler } from "@cbc/subagents";
+import type {
+  ChildRunContext,
+  CustomAgentDefinition,
+  SubagentScheduler,
+} from "@cbc/subagents";
 import { errorResult, nativeToolsForFeatures, okResult, ToolRegistry, globMatch, type ToolDefinition } from "@cbc/tool-registry";
 
 import type { GrantedRules } from "./approvals.ts";
@@ -121,6 +128,7 @@ import {
   workspaceChangeObserved,
   type Execution,
   type ToolBridges,
+  type ToolExecutorOptions,
   type ToolObservationAck,
   type ToolObservationEnvelope,
 } from "./tools.ts";
@@ -168,6 +176,9 @@ export interface AgentSessionOptions {
   readonly mcpBridge?: NonNullable<ToolBridges["mcp"]>;
   /** Resolved catalog risk shared by the root and every child normalizer. */
   readonly mcpHint?: McpHintResolver;
+  /** Isolated package plugin bridge shared by the root and every child executor. */
+  readonly pluginInvoke?: ToolExecutorOptions["pluginInvoke"];
+  readonly customAgents?: readonly CustomAgentDefinition[];
   readonly inferencePolicy?: InferencePolicyPort;
   /** Whether the utility router may replace the configured model per turn. */
   readonly autoRoute?: boolean;
@@ -564,6 +575,8 @@ export class AgentSession {
   readonly #readCache: ReadCache;
   /** Integrated token-saving controller (`agent.tokenSaving`). */
   readonly #tokenSaving: TokenSavingController;
+  /** Turn-scoped requirements ledger and questionnaire idempotency owner. */
+  readonly #deepPlan: DeepPlanController;
   /** Provider continuation was lost mid-turn; the next recovery sample is Off. */
   #tokenSavingContinuationRecovery = false;
   /** The most recently resolved plan, for `/status` and inspectors. */
@@ -586,6 +599,10 @@ export class AgentSession {
     this.#backgroundJobsReconciled = typeof options.runtime.jobStatus !== "function";
     this.#permissionPreset = options.config.permissions.preset;
     this.#tokenSaving = new TokenSavingController(options.config.agent.tokenSaving);
+    this.#deepPlan = new DeepPlanController({
+      mode: options.config.agent.deepPlan,
+      now: () => new Date(options.host.now()).toISOString(),
+    });
     this.#pluginHookBus = new PluginHookBus();
     const fullLspTools =
       options.config.experimental.fullLsp &&
@@ -794,6 +811,8 @@ export class AgentSession {
       provider: options.provider,
       approvals: options.approvals,
       ...(options.mcpHint !== undefined ? { mcpHint: options.mcpHint } : {}),
+      ...(options.pluginInvoke !== undefined ? { pluginInvoke: options.pluginInvoke } : {}),
+      ...(options.customAgents !== undefined ? { customAgents: options.customAgents } : {}),
       readCache,
       permissionContext: () => this.permissionContext(),
       promptInputs: () => this.promptInputs(),
@@ -881,10 +900,38 @@ export class AgentSession {
       host: options.host,
       nonInteractive: options.nonInteractive,
     });
+    const questionnaireBridge =
+      options.bridges?.askBatch ?? extensions.bridges.askBatch;
     const bridges: ToolBridges = {
       task: options.bridges?.task ?? this.#subagentBridge.execute,
       skill: options.bridges?.skill ?? extensions.bridges.skill,
       ask: options.bridges?.ask ?? extensions.bridges.ask,
+      askBatch: async (input, signal) => {
+        const opened = this.#deepPlan.openQuestionnaire(input);
+        if (opened.kind === "replay") return opened.result;
+        this.#emit("deep_plan.questionnaire_opened", {
+          questionnaireId: opened.questionnaire.questionnaireId,
+          resumed: opened.kind === "pending",
+          state: this.#deepPlan.current(),
+        }, this.#currentScope());
+        const result = await questionnaireBridge(
+          opened.questionnaire,
+          signal,
+          (answers, activeQuestionIndex) => {
+            this.#deepPlan.updateQuestionnaireDraft(
+              opened.questionnaire.questionnaireId,
+              answers,
+              activeQuestionIndex,
+            );
+            this.#emit("deep_plan.questionnaire_updated", {
+              questionnaireId: opened.questionnaire.questionnaireId,
+              activeQuestionIndex,
+              state: this.#deepPlan.current(),
+            }, this.#currentScope());
+          },
+        );
+        return this.resolveDeepPlanQuestionnaire(result);
+      },
       mcp: options.bridges?.mcp ?? options.mcpBridge ?? extensions.bridges.mcp,
       ...(options.bridges?.lsp !== undefined ? { lsp: options.bridges.lsp } : {}),
       todo: async (action) => this.#executeTodoWrite(action),
@@ -908,6 +955,7 @@ export class AgentSession {
       pluginRuntime:
         options.config.experimental.pluginRuntime &&
         options.config.plugins.enabled,
+      ...(options.pluginInvoke !== undefined ? { pluginInvoke: options.pluginInvoke } : {}),
       memoryScopes: {
         workspace: options.config.memory.workspaceEnabled,
         session: options.config.memory.sessionEnabled,
@@ -1141,6 +1189,20 @@ export class AgentSession {
       permissionContext: () => this.permissionContext(),
       promptInputs: () => this.promptInputs(),
       interactionMode: () => this.recorder.model.modeState.selected,
+      deepPlanMode: () => this.#options.config.agent.deepPlan,
+      deepPlanReadiness: () => {
+        const todo = this.#todoController.current();
+        const deep = assessDeepPlanReadiness(this.#deepPlan.current(), {
+          revision: todo.revision,
+          ...(todo.document === undefined ? {} : { document: todo.document }),
+        });
+        if (deep.bypassed !== undefined) return { ready: true, blockers: [] };
+        const plan = this.#todoController.readiness();
+        return {
+          ready: deep.ready && plan.ready,
+          blockers: [...plan.blockers, ...deep.blockers],
+        };
+      },
       todoState: () => {
         const items = [...this.#todoController.completionItems()];
         // An approved Plan is a digest-bound execution capability. If the model
@@ -1323,6 +1385,9 @@ export class AgentSession {
       this.#turnCounter = Math.max(this.#turnCounter, options.seed.turnCounter);
     }
     this.recorder.hydrate(events, options.finalPosition);
+    if (this.recorder.model.deepPlan !== undefined) {
+      this.#deepPlan.hydrate(this.recorder.model.deepPlan);
+    }
     this.#todoController.hydrate(this.recorder.model.todo);
     // The controller is the fail-closed authority for hydrated Plan state. Keep
     // the reducer/UI projection in lockstep when a snapshot contained malformed
@@ -2703,6 +2768,18 @@ export class AgentSession {
         text: result.code + ": " + result.message + "\nCurrent TODO state (use this expectedRevision and preserve item scope):\n" + JSON.stringify(recoveryState),
       };
     }
+    if (
+      this.recorder.model.modeState.selected === "plan" &&
+      this.#options.config.agent.deepPlan === "on" &&
+      result.state.document !== undefined
+    ) {
+      this.#deepPlan.notePlanWritten(result.state.revision);
+      this.#emit("deep_plan.plan_written", {
+        planRevision: result.state.revision,
+        answerRevision: this.#deepPlan.current().answerRevision,
+        state: this.#deepPlan.current(),
+      }, this.#currentScope());
+    }
     return {
       result: okResult(
         `TODO updated to revision ${result.state.revision}${ignoredBuildModeDocument ? "; Build mode ignored the structured Plan Contract field" : ""}`,
@@ -2728,9 +2805,41 @@ export class AgentSession {
     await this.#subagentBridge.cancelTask(taskId, reason);
   }
 
+  async cancelTaskResult(taskId: string, reason?: string) {
+    return await this.#subagentBridge.cancelTask(taskId, reason);
+  }
+
   /** Cancel all running subagents and abort their executions. */
   async cancelAllTasks(reason?: string): Promise<void> {
     await this.#subagentBridge.cancelAllTasks(reason);
+  }
+
+  taskGraphSnapshot() {
+    return this.#subagentBridge.coordinator.graph?.snapshot() ?? null;
+  }
+
+  taskInstances() {
+    return this.#subagentBridge.coordinator.list();
+  }
+
+  taskInstance(taskId: string) {
+    return this.#subagentBridge.coordinator.get(taskId);
+  }
+
+  async waitTask(taskId: string, signal?: AbortSignal) {
+    return await this.#subagentBridge.coordinator.wait("root", taskId, signal);
+  }
+
+  messageTask(taskId: string, kind: string, body?: unknown): void {
+    this.#subagentBridge.coordinator.send("root", taskId, { kind, body });
+  }
+
+  taskBudgetSnapshot() {
+    return this.#subagentBridge.coordinator.budgetSnapshot;
+  }
+
+  taskRecoveryReport() {
+    return this.#subagentBridge.coordinator.recoveryReport();
   }
 
   /** Apply an interactive effort choice to this session immediately. */
@@ -2767,6 +2876,70 @@ export class AgentSession {
       requestedLevel: this.#tokenSaving.requestedLevel,
       plan: this.#tokenSavingLastPlan,
     };
+  }
+
+  /** Deep Plan preference advertised by settings and captured by the next turn. */
+  get deepPlanMode(): "off" | "on" {
+    return this.#options.config.agent.deepPlan;
+  }
+
+  /** Read-only Deep Plan state for status, tests, and durable snapshot hooks. */
+  get deepPlanState() {
+    return this.#deepPlan.current();
+  }
+
+  /** Persist a controller-side draft received through daemon or TUI transport. */
+  updateDeepPlanQuestionnaireDraft(
+    questionnaireId: string,
+    answers: readonly import("@cbc/session-domain").DeepPlanAnswer[],
+    activeQuestionIndex: number,
+  ) {
+    const state = this.#deepPlan.updateQuestionnaireDraft(
+      questionnaireId,
+      answers,
+      activeQuestionIndex,
+    );
+    this.#emit("deep_plan.questionnaire_updated", {
+      questionnaireId,
+      activeQuestionIndex,
+      state,
+    }, this.#currentScope());
+    return state;
+  }
+
+  /** Resolve pending user input, including a replayed post-crash questionnaire. */
+  resolveDeepPlanQuestionnaire(
+    result: import("@cbc/session-domain").UserAskBatchResult,
+  ) {
+    if (this.#deepPlan.current().phase === "paused") {
+      this.#deepPlan.resume();
+      this.#emit("deep_plan.resumed", {
+        state: this.#deepPlan.current(),
+      }, this.#currentScope());
+    }
+    const completed = this.#deepPlan.completeQuestionnaire(result);
+    const eventKind: CbcEventKind =
+      completed.status === "submitted"
+        ? "deep_plan.questionnaire_answered"
+        : completed.status === "draft_now"
+          ? "deep_plan.draft_requested"
+          : completed.status === "cancelled"
+            ? "deep_plan.cancelled"
+            : "deep_plan.paused";
+    this.#emit(eventKind, {
+      questionnaireId: completed.questionnaireId,
+      status: completed.status,
+      state: this.#deepPlan.current(),
+    }, this.#currentScope());
+    return completed;
+  }
+
+  /** Apply a live Deep Plan preference; persistence remains the caller's job. */
+  setDeepPlan(mode: "off" | "on"): { from: "off" | "on"; to: "off" | "on" } | undefined {
+    const from = this.#options.config.agent.deepPlan;
+    if (from === mode) return undefined;
+    this.#options.config.agent.deepPlan = mode;
+    return { from, to: mode };
   }
 
   /**
@@ -3603,6 +3776,12 @@ export class AgentSession {
       }
     }
     const tokenSavingDirective = this.#tokenSavingDirectiveForPrompt();
+    const interactionMode =
+      this.recorder.model.modeState.activeTurn ?? this.recorder.model.modeState.selected;
+    const deepPlanState =
+      interactionMode === "plan" && this.#deepPlan.current().mode === "on"
+        ? compactDeepPlanProjection(this.#deepPlan.current())
+        : undefined;
     return {
       activeTools: this.registry.activeTools(),
       projectInstructions: backgroundJobActive ? [] : this.context.instructions,
@@ -3613,6 +3792,7 @@ export class AgentSession {
         ? { executableCapabilities: this.#executableCapabilities }
         : {}),
       ...(this.#taskDescription !== undefined ? { taskDescription: this.#taskDescription } : {}),
+      ...(deepPlanState === undefined ? {} : { deepPlanState }),
       ...(this.recorder.model.todo.items.length > 0 ? { plan: this.recorder.model.todo.items } : {}),
       ...(this.recorder.model.todo.items.length > 0 ||
         this.recorder.model.todo.document !== undefined ||
@@ -3627,7 +3807,7 @@ export class AgentSession {
           readiness: this.#todoController.readiness(),
         },
       } : {}),
-      interactionMode: this.recorder.model.modeState.activeTurn ?? this.recorder.model.modeState.selected,
+      interactionMode,
       ...(this.#compactState !== undefined ? { compactState: this.#compactState } : {}),
       contextGeneration: this.#contextPressure.generation,
       ...(contextProjection === undefined ? { repositoryContext } : { contextProjection }),
@@ -3761,6 +3941,40 @@ export class AgentSession {
       modelId: this.#options.config.model.default,
       workspaceIdentityDigest: this.#options.workspaceIdentityDigest ?? stableDigest(this.#options.workspacePath),
     });
+    const activeDeepPlanMode =
+      this.recorder.model.modeState.selected === "plan"
+        ? this.#options.config.agent.deepPlan
+        : "off";
+    this.#deepPlan.setMode(activeDeepPlanMode);
+    if (activeDeepPlanMode === "on") {
+      const prior = this.#deepPlan.current();
+      const resumePaused = prior.phase === "paused";
+      const continuingPlan =
+        prior.goalDigest !== undefined &&
+        (
+          prior.phase === "paused" ||
+          (
+            this.#todoController.current().document !== undefined &&
+            ["validating", "review_ready", "completed", "revising"].includes(prior.phase)
+          )
+        );
+      this.#deepPlan.beginTurn({
+        turnKey: `${epoch.current.id}:${this.#turnCounter + 1}`,
+        taskEpochId: epoch.current.id,
+        goalDigest: continuingPlan ? prior.goalDigest : stableDigest(prompt),
+        workspaceIdentityDigest: epoch.current.workspaceIdentityDigest,
+      });
+      if (resumePaused) {
+        this.#deepPlan.resume();
+        this.#emit("deep_plan.resumed", {
+          state: this.#deepPlan.current(),
+        }, this.#currentScope());
+      } else {
+        this.#emit("deep_plan.started", {
+          state: this.#deepPlan.current(),
+        }, this.#currentScope());
+      }
+    }
     if (epoch.reset) {
       this.kernel.resetProviderContinuation();
       this.#tokenSaving.resetDirectiveTracking();
@@ -3819,6 +4033,17 @@ export class AgentSession {
     let retainPlanExecution = false;
     try {
       result = await this.kernel.runTurn(prompt, signal);
+      if (
+        result.report.status === "completed" &&
+        this.recorder.model.modeState.selected === "plan" &&
+        activeDeepPlanMode === "on" &&
+        !["paused", "cancelled"].includes(this.#deepPlan.current().phase)
+      ) {
+        this.#deepPlan.markReviewReady();
+        this.#emit("deep_plan.completed", {
+          state: this.#deepPlan.current(),
+        }, this.#currentScope());
+      }
       // Cancelling stops the current turn, but it does not revoke the user's
       // digest-bound approval. Keep it for a follow-up "continue" request;
       // the next submit still validates that the Plan scope has not changed.

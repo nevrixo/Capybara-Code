@@ -11,6 +11,7 @@
  */
 
 import type { GraphState, NodeId } from "@cbc/agent-graph-domain";
+import type { GraphBudgetSnapshot } from "./budget-ledger.ts";
 
 export const GRAPH_SNAPSHOT_SCHEMA_VERSION = "1.0" as const;
 export const MAX_GRAPH_MAILBOX = 10_000;
@@ -30,6 +31,7 @@ export interface GraphPersistSnapshot {
   readonly schemaVersion: typeof GRAPH_SNAPSHOT_SCHEMA_VERSION;
   readonly state: GraphState | null;
   readonly mailbox: readonly GraphMailboxMessage[];
+  readonly budget?: GraphBudgetSnapshot;
 }
 
 export interface GraphSnapshotStore {
@@ -63,6 +65,7 @@ export class MemoryGraphStore implements GraphSnapshotStore {
       schemaVersion: GRAPH_SNAPSHOT_SCHEMA_VERSION,
       state: snapshot.state,
       mailbox: [...snapshot.mailbox],
+      ...(snapshot.budget === undefined ? {} : { budget: snapshot.budget }),
     };
   }
 }

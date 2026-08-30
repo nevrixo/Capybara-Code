@@ -7,6 +7,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { generateKeyPairSync } from "node:crypto";
 
 import { parseArgs, HELP_TEXT } from "../src/args.ts";
 import { commandNames } from "../src/command-spec.ts";
@@ -397,6 +398,22 @@ describe("parseArgs", () => {
       sub: "list",
       json: true,
     });
+    expect(parseArgs([
+      "run",
+      "--event-file",
+      "/events/trigger.json",
+      "--result-file",
+      "/results/capy.json",
+      "--permission-policy",
+      "allow-listed",
+    ]).command).toEqual({
+      kind: "run",
+      eventFile: "/events/trigger.json",
+      resultFile: "/results/capy.json",
+      permissionPolicy: "allow-listed",
+    });
+    expect(() => parseArgs(["run", "--permission-policy", "yolo", "fix"]))
+      .toThrow(/deny-on-ask, allow-listed, or fail-on-ask/);
     expect(parseArgs(["skills", "doctor"]).command).toEqual({
       kind: "skills",
       sub: "doctor",
@@ -416,12 +433,77 @@ describe("parseArgs", () => {
   test("version and help are commands rather than flags", () => {
     expect(parseArgs(["version"]).command).toEqual({ kind: "version" });
     expect(parseArgs(["help", "auth"]).command).toEqual({ kind: "help", topic: "auth" });
+    expect(parseArgs(["acp"]).command).toEqual({ kind: "acp" });
+    expect(parseArgs(["clients", "list"]).command).toEqual({ kind: "clients", sub: "list" });
+    expect(parseArgs(["clients", "doctor"]).command).toEqual({ kind: "clients", sub: "doctor" });
+    expect(parseArgs(["integration", "doctor", "vscode"]).command).toEqual({
+      kind: "integration",
+      sub: "doctor",
+      target: "vscode",
+    });
+    expect(parseArgs(["github", "install"]).command).toEqual({ kind: "github", sub: "install" });
+    expect(parseArgs(["trust", "--show-diff"]).command).toEqual({
+      kind: "trust",
+      showDiff: true,
+    });
+    expect(parseArgs(["bootstrap", "--frozen", "--offline"]).command).toEqual({
+      kind: "bootstrap",
+      frozen: true,
+      offline: true,
+      scope: "project",
+    });
+    expect(parseArgs([
+      "package",
+      "add",
+      "path:packages/example",
+      "--user",
+      "--allow-unsigned-local",
+    ]).command).toEqual({
+      kind: "package",
+      sub: "add",
+      source: "path:packages/example",
+      scope: "user",
+      allowUnsignedLocal: true,
+      grantRequested: false,
+      offline: false,
+    });
+    expect(parseArgs(["package", "list", "--effective"]).command).toEqual({
+      kind: "package",
+      sub: "list",
+      scope: "effective",
+    });
+    expect(parseArgs(["plugin", "disable", "acme/quality"]).command).toEqual({
+      kind: "plugin",
+      sub: "disable",
+      pluginId: "acme/quality",
+    });
+    expect(() => parseArgs(["package", "add", "path:x", "--project", "--user"]))
+      .toThrow(/only one/);
+    expect(() => parseArgs(["integration", "doctor", "unknown"])).toThrow(/vscode, acp, or github/);
     expect(() => parseArgs(["--version"])).toThrow(/unknown flag --version/);
     expect(() => parseArgs(["--help"])).toThrow(/unknown flag --help/);
   });
 
   test("the registry and help expose only the minimal public surface", () => {
-    expect(commandNames()).toEqual(["run", "auth", "model", "config", "skills", "daemon", "update", "version", "help"]);
+    expect(commandNames()).toEqual([
+      "run",
+      "auth",
+      "model",
+      "config",
+      "acp",
+      "clients",
+      "integration",
+      "github",
+      "trust",
+      "bootstrap",
+      "package",
+      "plugin",
+      "skills",
+      "daemon",
+      "update",
+      "version",
+      "help",
+    ]);
     for (const text of [
       "auth login",
       "auth api",
@@ -429,6 +511,12 @@ describe("parseArgs", () => {
       "auth logout",
       "model refresh",
       "config set",
+      "bootstrap",
+      "package search",
+      "package update",
+      "package verify",
+      "plugin list",
+      "plugin enable",
       "skills list",
       "skills doctor",
       "skills validate",
@@ -447,8 +535,6 @@ describe("parseArgs", () => {
       "session",
       "mcp",
       "lsp",
-      "init",
-      "trust",
       "completion",
       "permission",
       "--jsonl",
@@ -948,6 +1034,36 @@ describe("/resume candidate labels", () => {
     ]);
     expect(candidates.every((candidate) => !candidate.value.includes("ses_"))).toBe(true);
     expect(candidates.every((candidate) => candidate.detail === undefined)).toBe(true);
+  });
+});
+
+describe("signed package registry configuration", () => {
+  test("enables package.search only with an HTTPS URL and pinned public key", async () => {
+    const { publicKey } = generateKeyPairSync("ed25519");
+    const host = createFakeHost({
+      env: {
+        CAPYBARA_PACKAGE_REGISTRY: "https://registry.example/v1/",
+        CAPYBARA_PACKAGE_ROOT_KEYS_JSON: JSON.stringify({
+          schemaVersion: "1.0",
+          keys: {
+            "registry-root-2026": publicKey
+              .export({ format: "pem", type: "spki" })
+              .toString(),
+          },
+        }),
+      },
+    });
+    const context = new CommandContext({ host, version: host.version });
+    expect((await context.packages()).appMethods()).toContain("package.search");
+    await context.shutdown();
+  });
+
+  test("fails config when registry URL and pinned keys are incomplete", async () => {
+    const host = createFakeHost({
+      env: { CAPYBARA_PACKAGE_REGISTRY: "https://registry.example/v1/" },
+    });
+    const context = new CommandContext({ host, version: host.version });
+    await expect(context.packages()).rejects.toMatchObject({ code: EXIT.config });
   });
 });
 
@@ -1502,6 +1618,142 @@ describe("interactive UI (§6.2, §6.21)", () => {
     instance.resetSession(emptyViewModel("ses_replacement"));
     expect(await pending).toBe(-1);
     expect(instance.planApprovalActive).toBe(false);
+    instance.restore();
+  });
+
+  test("questionnaire focus submits a structured single-select answer", async () => {
+    const host = createFakeHost({ isTty: true, columns: 100, env: { NO_COLOR: "1" } });
+    const decision = decideRenderMode({ host, rendererAvailable: true });
+    const instance = new InteractiveUi({
+      host,
+      decision,
+      writer: new LineWriter(host, decision),
+      workspacePath: "/work/project",
+      version: "0.1.0-test",
+    });
+    const pending = instance.requestUserQuestionnaire({
+      questionnaireId: "cache-1",
+      reason: "Choose the cache layer",
+      questions: [{
+        id: "layer",
+        decisionKey: "cache.layer",
+        tab: "Layer",
+        question: "Where should values live?",
+        kind: "single_select",
+        required: true,
+        options: [{ id: "memory", label: "Memory" }, { id: "redis", label: "Redis" }],
+      }],
+    });
+    expect(instance.userAskActive).toBe(true);
+    instance.handleUserAskKey({ key: "down" });
+    instance.handleUserAskKey({ key: "enter" });
+    expect(await pending).toEqual({
+      questionnaireId: "cache-1",
+      status: "submitted",
+      answers: [{
+        questionId: "layer",
+        decisionKey: "cache.layer",
+        selectedOptionIds: ["redis"],
+      }],
+    });
+    expect(instance.userAskActive).toBe(false);
+    instance.restore();
+  });
+
+  test("questionnaire supports multi-select, text, required validation, and draft-now", async () => {
+    const host = createFakeHost({ isTty: true, columns: 100, env: { NO_COLOR: "1" } });
+    const decision = decideRenderMode({ host, rendererAvailable: true });
+    const instance = new InteractiveUi({
+      host,
+      decision,
+      writer: new LineWriter(host, decision),
+      workspacePath: "/work/project",
+      version: "0.1.0-test",
+    });
+    const pending = instance.requestUserQuestionnaire({
+      questionnaireId: "cache-2",
+      reason: "Choose behavior",
+      questions: [
+        {
+          id: "data",
+          decisionKey: "cache.data",
+          tab: "Data",
+          question: "What should be cached?",
+          kind: "multi_select",
+          required: true,
+          options: [{ id: "api", label: "API" }, { id: "query", label: "Query" }],
+        },
+        {
+          id: "failure",
+          decisionKey: "cache.failure",
+          tab: "Failure",
+          question: "Fallback behavior?",
+          kind: "text",
+          required: true,
+        },
+      ],
+    });
+    instance.handleUserAskKey({ key: "text", text: " " });
+    instance.handleUserAskKey({ key: "tab" });
+    instance.handleUserAskKey({ key: "ctrl+enter" });
+    expect(instance.userAskActive).toBe(true);
+    instance.handleUserAskKey({ key: "text", text: "원본으로 폴백" });
+    instance.handleUserAskKey({ key: "escape" });
+    instance.handleUserAskKey({ key: "down" });
+    instance.handleUserAskKey({ key: "enter" });
+    expect(await pending).toEqual({
+      questionnaireId: "cache-2",
+      status: "draft_now",
+      answers: [
+        {
+          questionId: "data",
+          decisionKey: "cache.data",
+          selectedOptionIds: ["api"],
+        },
+        {
+          questionId: "failure",
+          decisionKey: "cache.failure",
+          customText: "원본으로 폴백",
+        },
+      ],
+    });
+    instance.restore();
+  });
+
+  test("session reset cancels a questionnaire while preserving its draft result", async () => {
+    const host = createFakeHost({ isTty: true, columns: 100, env: { NO_COLOR: "1" } });
+    const decision = decideRenderMode({ host, rendererAvailable: true });
+    const instance = new InteractiveUi({
+      host,
+      decision,
+      writer: new LineWriter(host, decision),
+      workspacePath: "/work/project",
+      version: "0.1.0-test",
+    });
+    const pending = instance.requestUserQuestionnaire({
+      questionnaireId: "resume-1",
+      reason: "Resume safely",
+      questions: [{
+        id: "notes",
+        decisionKey: "notes",
+        tab: "Notes",
+        question: "Notes?",
+        kind: "text",
+        required: false,
+      }],
+    });
+    instance.handleUserAskKey({ key: "text", text: "draft" });
+    instance.resetSession(emptyViewModel("replacement"));
+    expect(await pending).toEqual({
+      questionnaireId: "resume-1",
+      status: "cancelled",
+      answers: [{
+        questionId: "notes",
+        decisionKey: "notes",
+        customText: "draft",
+      }],
+    });
+    expect(instance.userAskActive).toBe(false);
     instance.restore();
   });
 
@@ -4669,6 +4921,11 @@ describe("slash router", () => {
       setting: "todo",
       value: "clear",
     });
+    expect(parseSlash("/setting deepplan on")).toEqual({
+      kind: "setting",
+      setting: "deepplan",
+      value: "on",
+    });
   });
 
   test("/permissions yolo applies as a saved preference without changing other preset defaults", () => {
@@ -5380,6 +5637,86 @@ describe("extension bridges (P0-15)", () => {
     const ask = buildUserAskBridge({ host, nonInteractive: false });
     const answer = await ask("pick one", ["alpha", "beta"], new AbortController().signal);
     expect(answer).toBe("alpha");
+  });
+
+  test("user.ask_batch returns unavailable in headless mode without prompting", async () => {
+    const { buildUserAskBatchBridge } = await import("../src/extensions.ts");
+    const host = createFakeHost({ isTty: false });
+    const askBatch = buildUserAskBatchBridge({ host, nonInteractive: true });
+    const result = await askBatch({
+      questionnaireId: "cache-1",
+      reason: "Choose a cache",
+      questions: [{
+        id: "layer",
+        decisionKey: "cache.layer",
+        tab: "Layer",
+        question: "Where?",
+        kind: "single_select",
+        required: true,
+        options: [{ id: "memory", label: "Memory" }, { id: "redis", label: "Redis" }],
+      }],
+    }, new AbortController().signal);
+    expect(result).toEqual({
+      questionnaireId: "cache-1",
+      status: "unavailable",
+      answers: [],
+    });
+    expect(host.prompts).toHaveLength(0);
+  });
+
+  test("user.ask_batch uses serialized plain input and returns structured answers", async () => {
+    const { buildUserAskBatchBridge } = await import("../src/extensions.ts");
+    const host = createFakeHost({ isTty: true });
+    host.selections.push(0, 0);
+    const askBatch = buildUserAskBatchBridge({ host, nonInteractive: false });
+    const result = await askBatch({
+      questionnaireId: "cache-1",
+      reason: "Choose a cache",
+      questions: [{
+        id: "layer",
+        decisionKey: "cache.layer",
+        tab: "Layer",
+        question: "Where?",
+        kind: "single_select",
+        required: true,
+        options: [{ id: "memory", label: "Memory" }, { id: "redis", label: "Redis" }],
+      }],
+    }, new AbortController().signal);
+    expect(result).toEqual({
+      questionnaireId: "cache-1",
+      status: "submitted",
+      answers: [{
+        questionId: "layer",
+        decisionKey: "cache.layer",
+        selectedOptionIds: ["memory"],
+      }],
+    });
+  });
+
+  test("user.ask_batch executor emits authoritative structured JSON", async () => {
+    const host = createFakeHost();
+    const executor = new RuntimeToolExecutor({
+      runtime: { workspace: "/work/project" } as never,
+      host,
+      bridges: {
+        askBatch: async (input) => ({
+          questionnaireId: input.questionnaireId,
+          status: "draft_now",
+          answers: [],
+        }),
+      },
+    });
+    const execution = await executor.execute(
+      actionFor("user.ask_batch", {
+        questionnaireId: "cache-1",
+        reason: "Choose a cache",
+        questions: [],
+      }),
+      new AbortController().signal,
+    );
+    expect(execution.result.ok).toBe(true);
+    expect(execution.result.summary).toBe("user questionnaire draft_now");
+    expect(execution.text).toContain('"status":"draft_now"');
   });
 
   test("an MCP call without a connected server reports MCP_UNAVAILABLE, never fakes success", async () => {

@@ -226,6 +226,8 @@ class CapybaraClient:
                     "interactivePrompts": True,
                     "artifactStreaming": True,
                     "richDiff": True,
+                    "taskTree": True,
+                    "planReview": True,
                 },
             },
         )

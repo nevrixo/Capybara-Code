@@ -1,0 +1,74 @@
+{
+  "x-dialect": "json-schema-draft-2020-12",
+  "$id": "cbc:integration/client-capabilities",
+  "title": "App Capability Snapshot v2",
+  "description": "Connection-scoped method, event, and presentation support advertised by App Protocol servers.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocolVersion",
+    "schemaRevision",
+    "serverVersion",
+    "transport",
+    "methods",
+    "events",
+    "presentation",
+    "snapshotDigest"
+  ],
+  "properties": {
+    "protocolVersion": { "type": "string", "minLength": 1 },
+    "schemaRevision": { "const": "2.0" },
+    "serverVersion": { "type": "string", "minLength": 1 },
+    "transport": {
+      "type": "string",
+      "enum": ["local-socket", "named-pipe", "stdio"]
+    },
+    "methods": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["state"],
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": ["available", "read-only", "disabled", "unsupported"]
+          },
+          "reason": { "type": "string", "minLength": 1 },
+          "requiresRole": {
+            "type": "string",
+            "enum": ["observer", "controller", "approval_resolver", "administrator-local"]
+          }
+        }
+      }
+    },
+    "events": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["replay", "ack", "snapshots", "maxBatchEvents", "maxBatchBytes"],
+      "properties": {
+        "replay": { "type": "boolean" },
+        "ack": { "type": "boolean" },
+        "snapshots": { "type": "boolean" },
+        "maxBatchEvents": { "type": "integer", "minimum": 1 },
+        "maxBatchBytes": { "type": "integer", "minimum": 1024 }
+      }
+    },
+    "presentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["richDiff", "inlineApprovals", "taskTree", "planReview", "artifacts"],
+      "properties": {
+        "richDiff": { "type": "boolean" },
+        "inlineApprovals": { "type": "boolean" },
+        "taskTree": { "type": "boolean" },
+        "planReview": { "type": "boolean" },
+        "artifacts": { "type": "boolean" }
+      }
+    },
+    "snapshotDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    }
+  }
+}

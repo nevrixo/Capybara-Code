@@ -12,6 +12,7 @@ import type { SessionModeState } from "./mode.ts";
 import { createModeState } from "./mode.ts";
 import type { ContextUsageSnapshot } from "./context-usage.ts";
 import { reconcileContextUsageSnapshot } from "./context-usage.ts";
+import { parseDeepPlanState, type DeepPlanState } from "./deep-plan.ts";
 import { normalizePlanDocument, normalizeTodoItems, planDigest, sanitizeTodoText, todoTransitionAllowed, type PlanApproval, type PlanDocument, type PlanItem, type TodoListState, type TodoTransitionStep } from "./todo.ts";
 
 const MAX_THINKING_SUMMARY_CHARS = 4 * 1024;
@@ -25,6 +26,7 @@ export type TurnStatus =
   | "sampling"
   | "tool_selection"
   | "awaiting_approval"
+  | "waiting_user_input"
   | "executing"
   | "observing"
   | "verifying"
@@ -370,6 +372,7 @@ export interface LiveState {
     | "idle"
     | "working"
     | "awaiting_approval"
+    | "waiting_user_input"
     | "waiting_for_task"
     | "running_tests"
     | "complete"
@@ -452,6 +455,8 @@ export interface SessionViewModel {
   readonly cancelledTurns: number;
   /** Latest token-saving projection; absent until the feature reports once. */
   readonly tokenSaving?: TokenSavingViewState;
+  /** Durable Deep Plan ledger and pending questionnaire resume state. */
+  readonly deepPlan?: DeepPlanState | undefined;
 }
 
 export function emptyViewModel(sessionId: string, budgetTokens = 96_000): SessionViewModel {
@@ -1388,6 +1393,40 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
       break;
     }
 
+    case "deep_plan.started":
+    case "deep_plan.questionnaire_opened":
+    case "deep_plan.questionnaire_updated":
+    case "deep_plan.questionnaire_answered":
+    case "deep_plan.plan_written":
+    case "deep_plan.paused":
+    case "deep_plan.resumed":
+    case "deep_plan.draft_requested":
+    case "deep_plan.completed":
+    case "deep_plan.cancelled": {
+      const restored = parseDeepPlanState(payloadOf(event).state);
+      if (restored === undefined) break;
+      next.deepPlan = restored;
+      if (
+        event.kind === "deep_plan.questionnaire_opened" ||
+        event.kind === "deep_plan.questionnaire_updated"
+      ) {
+        next.turnStatus = "waiting_user_input";
+        next.live = {
+          kind: "waiting_user_input",
+          label: "Waiting for your Deep Plan answers",
+          interruptHint: "esc",
+        };
+      } else if (
+        event.kind === "deep_plan.questionnaire_answered" ||
+        event.kind === "deep_plan.draft_requested" ||
+        event.kind === "deep_plan.resumed"
+      ) {
+        next.turnStatus = "observing";
+        next.live = { kind: "working", label: "Working...", interruptHint: "esc" };
+      }
+      break;
+    }
+
     case "context.pressure_evaluated": {
       const p = payloadOf(event);
       const state = ["stable", "prepare", "compact", "emergency"].includes(String(p.state))
@@ -2124,6 +2163,7 @@ function cloneModel(model: SessionViewModel): Mutable<SessionViewModel> {
     todo: model.todo,
     modeState: model.modeState,
     ...(model.contextUsage === undefined ? {} : { contextUsage: model.contextUsage }),
+    ...(model.deepPlan === undefined ? {} : { deepPlan: model.deepPlan }),
     usage: model.usage,
     notices: model.notices,
     taskLive: model.taskLive,
@@ -2153,6 +2193,7 @@ function cloneEphemeralModel(model: SessionViewModel): Mutable<SessionViewModel>
     todo: model.todo,
     modeState: model.modeState,
     ...(model.contextUsage === undefined ? {} : { contextUsage: model.contextUsage }),
+    ...(model.deepPlan === undefined ? {} : { deepPlan: model.deepPlan }),
     usage: model.usage,
     notices: model.notices,
     taskLive: model.taskLive,

@@ -1,0 +1,65 @@
+{
+  "name": "capybara-code-vscode",
+  "displayName": "Capybara Code",
+  "description": "Attach VS Code to the safe Capybara Code runtime",
+  "version": "0.1.0",
+  "private": true,
+  "publisher": "nevrixo",
+  "type": "module",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "main": "./dist/extension.js",
+  "scripts": {
+    "build": "bun build src/extension.ts --target=node --external vscode --outdir dist"
+  },
+  "activationEvents": [
+    "onView:capybara.chat",
+    "onCommand:capybara.connect",
+    "onCommand:capybara.newSession"
+  ],
+  "contributes": {
+    "commands": [
+      { "command": "capybara.connect", "title": "Capybara: Connect to Daemon" },
+      { "command": "capybara.newSession", "title": "Capybara: New Session" },
+      { "command": "capybara.attachSelection", "title": "Capybara: Attach Selection" },
+      { "command": "capybara.cancelTurn", "title": "Capybara: Cancel Turn" },
+      { "command": "capybara.reviewLatestDiff", "title": "Capybara: Review Latest Diff" }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "capybara",
+          "title": "Capybara",
+          "icon": "resources/capybara.svg"
+        }
+      ]
+    },
+    "views": {
+      "capybara": [
+        { "id": "capybara.chat", "name": "Chat", "type": "webview" },
+        { "id": "capybara.status", "name": "Runtime Status" }
+      ]
+    },
+    "configuration": {
+      "title": "Capybara Code",
+      "properties": {
+        "capybara.daemonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Current-user Capybara daemon socket or named-pipe path."
+        },
+        "capybara.autoConnect": {
+          "type": "boolean",
+          "default": true,
+          "description": "Attach to a compatible local daemon when the Capybara view opens."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "@cbc/app-protocol": "workspace:*",
+    "@cbc/integration-core": "workspace:*",
+    "@cbc/sdk": "workspace:*"
+  }
+}

@@ -2,6 +2,9 @@
 
 export const SDK_PROTOCOL_VERSION = "1.0" as const;
 export const SDK_EVENT_SCHEMA_VERSION = "1.0" as const;
+export const SDK_CAPABILITY_SCHEMA_REVISION = "2.0" as const;
+export const SDK_METHOD_CAPABILITY_STATES = ["available","read-only","disabled","unsupported"] as const;
+export type SdkMethodCapabilityState = (typeof SDK_METHOD_CAPABILITY_STATES)[number];
 
 export const SDK_APP_METHODS = [
   "server.initialize",
@@ -35,6 +38,9 @@ export const SDK_APP_METHODS = [
   "turn.get",
   "turn.list",
   "turn.wait",
+  "turn.input.get",
+  "turn.input.update",
+  "turn.input.resolve",
   "events.subscribe",
   "events.unsubscribe",
   "events.replay",
@@ -94,6 +100,13 @@ export const SDK_APP_METHODS = [
   "plugin.disable",
   "plugin.grants",
   "plugin.resolveGrant",
+  "package.search",
+  "package.inspect",
+  "package.install",
+  "package.remove",
+  "package.update",
+  "package.verify",
+  "package.bootstrap",
   "artifact.getMetadata",
   "artifact.read",
   "artifact.stream",
@@ -161,6 +174,16 @@ export const SDK_EVENT_KINDS = [
   "token_saving.changed",
   "token_saving.policy_applied",
   "token_saving.relaxed",
+  "deep_plan.started",
+  "deep_plan.questionnaire_opened",
+  "deep_plan.questionnaire_updated",
+  "deep_plan.questionnaire_answered",
+  "deep_plan.plan_written",
+  "deep_plan.paused",
+  "deep_plan.resumed",
+  "deep_plan.draft_requested",
+  "deep_plan.completed",
+  "deep_plan.cancelled",
   "assistant.thinking",
   "model.capability_snapshot",
   "model.route_decided",

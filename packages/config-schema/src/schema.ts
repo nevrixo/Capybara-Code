@@ -3,13 +3,15 @@
  *
  * Product precedence, lowest to highest:
  *   1. built-in defaults
- *   2. the single global user config
- *   3. environment variables
- *   4. CLI flags
- *   5. interactive session override
+ *   2. global user config
+ *   3. trusted project shared config
+ *   4. trusted project-local config
+ *   5. environment variables
+ *   6. CLI flags
+ *   7. interactive session override
  *
- * Deprecated project source labels remain in `mergeConfig` only for source
- * compatibility. `loadConfig` never reads or applies a project configuration.
+ * Project layers are admitted by `loadConfig` only after workspace trust and are
+ * still constrained here by monotonic user-owned security ceilings.
  */
 
 import { configKeyInfo } from "./key-status.ts";
@@ -167,6 +169,7 @@ export interface ModelProfileConfig {
 }
 
 export type SavingLevel = "off" | "light" | "balanced" | "strong";
+export type DeepPlanMode = "off" | "on";
 export type ToolRecoveryMode = "off" | "safe" | "full";
 
 export interface ToolRecoveryConfig {
@@ -187,6 +190,8 @@ export interface AgentConfig {
   reviewMode?: ReviewMode;
   visibleCommentary: boolean;
   tokenSaving: SavingLevel;
+  /** User-owned conversational planning policy layered over Plan mode. */
+  deepPlan: DeepPlanMode;
   promptCompiler: "v1" | "v2";
   compoundTools: boolean;
   toolRecovery: ToolRecoveryConfig;
@@ -214,7 +219,7 @@ export interface PerformanceConfig {
 export interface SubagentsConfig {
   maxConcurrent: number;
   maxDepth: number;
-  writerPolicy: "single-lease";
+  writerPolicy: "single-lease" | "worktree-lease";
 }
 
 export interface ToolsConfig {
@@ -567,6 +572,7 @@ export function defaultConfig(): CbcConfig {
       reviewMode: "auto",
       visibleCommentary: true,
       tokenSaving: "off",
+      deepPlan: "off",
       promptCompiler: "v2",
       compoundTools: true,
       toolRecovery: { mode: "safe", maxAttempts: 3 },
@@ -588,8 +594,8 @@ export function defaultConfig(): CbcConfig {
     },
     subagents: {
       maxConcurrent: 3,
-      maxDepth: 1,
-      writerPolicy: "single-lease",
+      maxDepth: 2,
+      writerPolicy: "worktree-lease",
     },
     tools: {
       activationLimit: 10,
@@ -720,15 +726,15 @@ export function defaultConfig(): CbcConfig {
     agentGraph: {
       enabled: true,
       maxDepth: 3,
-      maxNodes: 10_000,
-      maxConcurrentNodes: 8,
-      maxConcurrentReaders: 8,
-      maxConcurrentWriters: 4,
-      maxAttemptsPerNode: 3,
+      maxNodes: 16,
+      maxConcurrentNodes: 6,
+      maxConcurrentReaders: 6,
+      maxConcurrentWriters: 1,
+      maxAttemptsPerNode: 2,
       checkpointEvents: 25,
       messageBytes: 65_536,
       recoveryPolicy: "safe-retry",
-      budget: { mode: "hard", maxCostUsd: 20, maxToolCalls: 1_000, maxWallClockMinutes: 120 },
+      budget: { mode: "hard", maxCostUsd: 4, maxToolCalls: 240, maxWallClockMinutes: 30 },
     },
     worktrees: {
       enabled: true,
@@ -856,6 +862,13 @@ const USER_ONLY_PROJECT_PREFIXES = [
   "memory.privacy.",
 ] as const;
 
+const USER_ONLY_PROJECT_PATHS = new Set([
+  "model.default",
+  "model.reasoningMode",
+  "model.reasoningEffort",
+  "agent.deepPlan",
+]);
+
 /**
  * Monotonic policy keys. The array runs strictest → most permissive; a project
  * layer may move the value left (stricter) but never right. A user who sets
@@ -927,6 +940,7 @@ const ENUMS: Record<string, readonly string[]> = {
   "provider.openai.transport": ["http_full", "http_previous", "websocket"],
   "provider.openai.serviceTier": ["standard", "fast"],
   "agent.tokenSaving": ["off", "light", "balanced", "strong"],
+  "agent.deepPlan": ["off", "on"],
   "agent.toolRecovery.mode": ["off", "safe", "full"],
   "perf.budgetEnforcement": ["shadow", "advisory", "hard"],
   "agent.promptCompiler": ["v1", "v2"],
@@ -941,7 +955,7 @@ const ENUMS: Record<string, readonly string[]> = {
   "agent.permissionMode": ["plan", "ask", "auto", "auto-review"],
   "agent.interactionMode": ["build", "plan"],
   "agent.reviewMode": ["off", "auto"],
-  "subagents.writerPolicy": ["single-lease"],
+  "subagents.writerPolicy": ["single-lease", "worktree-lease"],
   "permissions.projectWrite": ["plan", "ask", "auto"],
   "permissions.shell": ["deny", "ask", "safe-auto"],
   "permissions.network": ["deny", "ask", "allow"],
@@ -1021,11 +1035,15 @@ export function mergeConfig(
   // not rewrite a user-defined one — an overridden command/env would run the
   // user's credentials against a server the user never chose (§17).
   const userMcpServers = new Set<string>();
+  const userLspServers = new Set<string>();
   for (const layer of layers) {
     if (layer.source !== "user") continue;
     for (const key of Object.keys(layer.values)) {
       if (!hasUnsafePathSegment(key) && key.startsWith("mcpServers.")) {
         userMcpServers.add(key.split(".")[1] as string);
+      }
+      if (!hasUnsafePathSegment(key) && key.startsWith("lspServers.")) {
+        userLspServers.add(key.split(".")[1] as string);
       }
     }
   }
@@ -1132,7 +1150,10 @@ export function mergeConfig(
           }
           value = restrictiveRules;
         }
-        if (USER_ONLY_PROJECT_PREFIXES.some((prefix) => target.startsWith(prefix))) {
+        if (
+          USER_ONLY_PROJECT_PATHS.has(target)
+          || USER_ONLY_PROJECT_PREFIXES.some((prefix) => target.startsWith(prefix))
+        ) {
           issues.push({
             severity: "error",
             path: target,
@@ -1149,6 +1170,18 @@ export function mergeConfig(
               path: target,
               source: layer.source,
               message: `project config may not override the user-defined MCP server '${serverName}'`,
+            });
+            continue;
+          }
+        }
+        if (target.startsWith("lspServers.")) {
+          const serverName = target.split(".")[1] as string;
+          if (userLspServers.has(serverName)) {
+            issues.push({
+              severity: "error",
+              path: target,
+              source: layer.source,
+              message: "project config may not override the user-defined LSP server '" + serverName + "'",
             });
             continue;
           }
@@ -1473,7 +1506,7 @@ const INTEGER_CONSTRAINTS: Readonly<Record<string, IntegerConstraint>> = {
   "agent.toolGraph.maxParallelTests": { minimum: 1 },
   "agent.toolRecovery.maxAttempts": { minimum: 1, maximum: 5 },
   "subagents.maxConcurrent": { minimum: 1, maximum: 8 },
-  "subagents.maxDepth": { minimum: 0, maximum: 1 },
+  "subagents.maxDepth": { minimum: 0, maximum: 3 },
   "tools.activationLimit": { minimum: 1 },
   "tools.inlineOutputBytes": { minimum: 1_024 },
   "tools.inlineOutputLines": { minimum: 10 },
@@ -1699,12 +1732,12 @@ function validateSemantics(
       });
     }
   }
-  if (config.subagents.maxDepth > 1) {
+  if (config.subagents.maxDepth > 3) {
     issues.push({
       severity: "error",
       path: "subagents.maxDepth",
       source: sourceOf("subagents.maxDepth"),
-      message: "delegation depth is capped at 1",
+      message: "delegation depth is capped at the experimental hard maximum of 3",
     });
   }
   if (config.subagents.maxConcurrent < 1) {

@@ -6,7 +6,9 @@ import { stringWidth } from "@cbc/tui-components";
 import type { Runtime } from "./runtime.ts";
 import {
   readTrustStore,
+  withProjectControlTrust,
   withTrust,
+  writeProjectControlTrustStore,
   writeTrustStore,
 } from "./state.ts";
 import type { CommandContext } from "./commands/context.ts";
@@ -63,6 +65,7 @@ export async function ensureTrust(
     "3. Open read-only",
     "4. No, exit",
   ];
+  const projectSnapshot = await context.projectTrustSnapshot();
 
   const termWidth = Math.min(84, Math.max(54, (context.host.io.columns || 80) - 4));
   const innerWidth = termWidth - 6;
@@ -87,6 +90,14 @@ export async function ensureTrust(
   context.out(boxRow(""));
   context.out(boxRow("With your permission Capybara Code may execute files in this"));
   context.out(boxRow("folder. Executing untrusted code is unsafe."));
+  if (projectSnapshot.hasProjectControlFiles) {
+    context.out(boxRow(""));
+    context.out(boxRow(
+      "Project capabilities: " +
+        (projectSnapshot.requestedCapabilities.join(", ") || "configuration only"),
+    ));
+    context.out(boxRow("Trust digest: " + projectSnapshot.projectDigest.slice(0, 26) + "…"));
+  }
   context.out(boxRow(""));
   context.out(boxRow(""));
   context.out(bottomBorder);
@@ -106,10 +117,24 @@ export async function ensureTrust(
   if (decision === "exit") return "exit";
 
   const store = await context.trustStore();
+  const projectStore = await context.projectControlTrustStore();
   if (options.runtime !== undefined) {
     await options.runtime.writeTrust(decision);
     const refreshed = await readTrustStore(context.host, context.paths);
     context.setTrust(decision, refreshed);
+    if (decision === "trusted-always") {
+      const fingerprint = await context.host.fs.statIdentity?.(context.workspacePath);
+      if (fingerprint !== undefined && fingerprint.length > 0) {
+        const nextProjectStore = withProjectControlTrust(projectStore, {
+          path: context.workspacePath,
+          fingerprint,
+          decidedAt: new Date(context.host.now()).toISOString(),
+          project: projectSnapshot,
+        });
+        await writeProjectControlTrustStore(context.host, context.paths, nextProjectStore);
+        context.setProjectControlTrustStore(nextProjectStore);
+      }
+    }
   } else if (decision === "trusted-once") {
     context.setTrust("trusted-once", store);
   } else {
@@ -126,6 +151,16 @@ export async function ensureTrust(
       });
       await writeTrustStore(context.host, context.paths, next);
       context.setTrust(decision, next);
+      if (decision === "trusted-always") {
+        const nextProjectStore = withProjectControlTrust(projectStore, {
+          path: context.workspacePath,
+          fingerprint,
+          decidedAt: new Date(context.host.now()).toISOString(),
+          project: projectSnapshot,
+        });
+        await writeProjectControlTrustStore(context.host, context.paths, nextProjectStore);
+        context.setProjectControlTrustStore(nextProjectStore);
+      }
     }
   }
 

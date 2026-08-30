@@ -16,6 +16,7 @@ import {
 } from "@cbc/protocol";
 
 import { reduce, emptyViewModel, shouldPersist, type SessionViewModel } from "./reducer.ts";
+import { parseDeepPlanState } from "./deep-plan.ts";
 import { boundResidentViewModel, createSnapshotEnvelope } from "./persistence.ts";
 import { normalizePlanDocument, normalizeTodoItems, planDigest, sanitizeTodoText, type PlanApproval, type PlanDocument, type PlanItem, type TodoListState } from "./todo.ts";
 
@@ -574,6 +575,7 @@ export function serializeModel(model: SessionViewModel): Record<string, unknown>
     plan: model.plan,
     todo: model.todo,
     modeState: model.modeState,
+    ...(model.deepPlan === undefined ? {} : { deepPlan: model.deepPlan }),
     ...(model.contextUsage === undefined ? {} : { contextUsage: model.contextUsage }),
     ...(model.contextPressure === undefined ? {} : { contextPressure: model.contextPressure }),
     contextGeneration: model.contextGeneration,
@@ -640,6 +642,7 @@ export function deserializeModel(raw: unknown): SessionViewModel | undefined {
   const modeState = parseModeState(value.modeState, value.permissionMode);
   const todo = parseTodoState(value.todo, value.plan);
   const contextUsage = parseContextUsage(value.contextUsage);
+  const deepPlan = parseDeepPlanState(value.deepPlan);
   const base = emptyViewModel(value.sessionId);
   const changed = new Map<string, { additions: number; deletions: number }>();
   if (Array.isArray(value.changedFiles)) {
@@ -689,6 +692,7 @@ export function deserializeModel(raw: unknown): SessionViewModel | undefined {
     todo,
     plan: todo.items.map((item) => ({ ...item })),
     ...(contextUsage === undefined ? {} : { contextUsage }),
+    ...(deepPlan === undefined ? { deepPlan: undefined } : { deepPlan }),
     ...(pendingApproval !== undefined ? { pendingApproval } : { pendingApproval: undefined }),
   } as SessionViewModel;
 }

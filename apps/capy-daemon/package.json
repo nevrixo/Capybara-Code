@@ -9,6 +9,7 @@
   "dependencies": {
     "@cbc/app-protocol": "workspace:*",
     "@cbc/app-server": "workspace:*",
+    "@cbc/package-manager": "workspace:*",
     "@cbc/plugin-sdk": "workspace:*",
     "@cbc/protocol": "workspace:*"
   }

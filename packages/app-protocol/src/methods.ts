@@ -4,6 +4,7 @@ export const APP_METHODS = [
   "workspace.open", "workspace.inspect", "workspace.list", "workspace.close", "workspace.trust.get", "workspace.trust.set", "workspace.services",
   "session.create", "session.list", "session.get", "session.attach", "session.detach", "session.ensure", "session.fork", "session.pause", "session.resume", "session.close", "session.archive", "session.export", "session.recover",
   "turn.submit", "turn.cancel", "turn.get", "turn.list", "turn.wait",
+  "turn.input.get", "turn.input.update", "turn.input.resolve",
   "events.subscribe", "events.unsubscribe", "events.replay", "events.ack", "events.getSnapshot",
   "approval.list", "approval.get", "approval.resolve", "approval.cancel",
   "graph.get", "graph.listNodes", "graph.pause", "graph.resume", "graph.cancel",
@@ -13,6 +14,7 @@ export const APP_METHODS = [
   "edit.preview", "edit.apply", "edit.getReceipt", "diff.get", "diff.getFile",
   "worktree.list", "worktree.get", "worktree.getProposal", "worktree.discard", "merge.preview", "merge.apply", "merge.resolve",
   "plugin.list", "plugin.inspect", "plugin.install", "plugin.update", "plugin.enable", "plugin.disable", "plugin.grants", "plugin.resolveGrant",
+  "package.search", "package.inspect", "package.install", "package.remove", "package.update", "package.verify", "package.bootstrap",
   "artifact.getMetadata", "artifact.read", "artifact.stream", "artifact.export",
 ] as const;
 

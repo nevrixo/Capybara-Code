@@ -1,0 +1,163 @@
+{
+  "schemaVersion": "1.0",
+  "messages": [
+    {
+      "direction": "client-to-server",
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "server.initialize",
+      "params": {
+        "protocolVersion": "1.0",
+        "client": {
+          "id": "client_fixture",
+          "name": "Conformance Client",
+          "version": "1.0.0",
+          "kind": "sdk"
+        },
+        "capabilities": {
+          "eventStreaming": true,
+          "eventAck": true,
+          "approvals": true,
+          "interactivePrompts": false,
+          "artifactStreaming": true,
+          "richDiff": true,
+          "taskTree": true,
+          "planReview": true
+        }
+      }
+    },
+    {
+      "direction": "server-to-client",
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "protocolVersion": "1.0",
+        "serverVersion": "0.1.0",
+        "daemonId": "daemon_fixture",
+        "connectionId": "connection_fixture",
+        "capabilities": {
+          "eventStreaming": true
+        },
+        "capabilitySnapshot": {
+          "protocolVersion": "1.0",
+          "schemaRevision": "2.0",
+          "serverVersion": "0.1.0",
+          "transport": "stdio",
+          "methods": {
+            "events.replay": {
+              "state": "available",
+              "requiresRole": "observer"
+            },
+            "turn.submit": {
+              "state": "available",
+              "requiresRole": "controller"
+            }
+          },
+          "events": {
+            "replay": true,
+            "ack": true,
+            "snapshots": false,
+            "maxBatchEvents": 64,
+            "maxBatchBytes": 1048576
+          },
+          "presentation": {
+            "richDiff": true,
+            "inlineApprovals": true,
+            "taskTree": true,
+            "planReview": true,
+            "artifacts": true
+          },
+          "snapshotDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "limits": {
+          "maxRequestBytes": 1048576,
+          "maxResponseBytes": 6291456,
+          "maxSubscriptionsPerClient": 64,
+          "maxSessionsPerSubscription": 1
+        }
+      }
+    },
+    {
+      "direction": "client-to-server",
+      "jsonrpc": "2.0",
+      "id": 2,
+      "method": "events.replay",
+      "params": {
+        "subscriptionId": "subscription_fixture",
+        "after": {
+          "sessionId": "session_fixture",
+          "journalSequence": 0
+        }
+      }
+    },
+    {
+      "direction": "server-to-client",
+      "jsonrpc": "2.0",
+      "id": 2,
+      "result": {
+        "subscription": {
+          "id": "subscription_fixture",
+          "clientId": "client_fixture",
+          "sessionId": "session_fixture",
+          "state": "active",
+          "lastAckedSequence": 0
+        },
+        "cursor": {
+          "sessionId": "session_fixture",
+          "journalSequence": 2
+        },
+        "events": [
+          {
+            "schemaVersion": "1.0",
+            "sequence": 1,
+            "id": "event_1",
+            "timestamp": "2026-08-30T00:00:00.000Z",
+            "sessionId": "session_fixture",
+            "kind": "turn.started",
+            "level": "info",
+            "visibility": "session",
+            "durability": "journaled",
+            "payload": {
+              "turnId": "turn_fixture"
+            }
+          },
+          {
+            "schemaVersion": "1.0",
+            "sequence": 2,
+            "id": "event_2",
+            "timestamp": "2026-08-30T00:00:01.000Z",
+            "sessionId": "session_fixture",
+            "kind": "assistant.final",
+            "level": "info",
+            "visibility": "session",
+            "durability": "journaled",
+            "payload": {
+              "text": "done"
+            }
+          }
+        ],
+        "hasMore": false
+      }
+    },
+    {
+      "direction": "client-to-server",
+      "jsonrpc": "2.0",
+      "id": 3,
+      "method": "turn.submit",
+      "params": {
+        "command": {
+          "schemaVersion": "1.0",
+          "commandId": "command_fixture",
+          "idempotencyKey": "idempotency_fixture",
+          "correlationId": "correlation_fixture",
+          "clientId": "client_fixture",
+          "sessionId": "session_fixture",
+          "issuedAt": "2026-08-30T00:00:02.000Z",
+          "payload": {
+            "prompt": "continue"
+          }
+        }
+      }
+    }
+  ]
+}

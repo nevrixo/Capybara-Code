@@ -1297,6 +1297,70 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
     ),
   },
   {
+    id: "user.ask_batch",
+    title: "AskBatch",
+    description:
+      "Ask the user 1–4 related planning questions as one structured questionnaire. " +
+      "Use a stable questionnaireId for retry safety and a stable decisionKey for each product decision.",
+    source: "native",
+    defaultRisk: "R0",
+    maxRisk: "R0",
+    alwaysActive: true,
+    mutates: false,
+    network: false,
+    authority: "session_state",
+    idempotency: "reconcilable",
+    conflictKeys: (value) => {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
+      const id = (value as Record<string, unknown>).questionnaireId;
+      return typeof id === "string" ? [`questionnaire:${id}`] : [];
+    },
+    keywords: ["ask", "batch", "questionnaire", "clarify", "decision", "plan", "user"],
+    parameters: objectSchema(
+      {
+        questionnaireId: { type: "string", minLength: 1, maxLength: 200 },
+        reason: { type: "string", minLength: 1, maxLength: 1_200 },
+        questions: {
+          type: "array",
+          minItems: 1,
+          maxItems: 4,
+          items: objectSchema(
+            {
+              id: { type: "string", minLength: 1, maxLength: 120 },
+              decisionKey: { type: "string", minLength: 1, maxLength: 160 },
+              tab: { type: "string", minLength: 1, maxLength: 24 },
+              question: { type: "string", minLength: 1, maxLength: 1_200 },
+              kind: {
+                type: "string",
+                enum: ["single_select", "multi_select", "text"],
+              },
+              required: { type: "boolean" },
+              options: {
+                type: "array",
+                minItems: 2,
+                maxItems: 6,
+                items: objectSchema(
+                  {
+                    id: { type: "string", minLength: 1, maxLength: 120 },
+                    label: { type: "string", minLength: 1, maxLength: 120 },
+                    description: { type: "string", maxLength: 300 },
+                    recommended: { type: "boolean" },
+                  },
+                  ["id", "label"],
+                ),
+              },
+              allowCustom: { type: "boolean" },
+              revisitReason: { type: "string", minLength: 1, maxLength: 1_200 },
+            },
+            ["id", "decisionKey", "tab", "question", "kind", "required"],
+          ),
+        },
+        allowDraftNow: { type: "boolean", default: true },
+      },
+      ["questionnaireId", "reason", "questions"],
+    ),
+  },
+  {
     id: "task.search",
     title: "TaskSearch",
     description: "Discover subagent roles suited to a piece of work.",
@@ -1359,7 +1423,14 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
     ],
     parameters: objectSchema(
       {
-        role: { type: "string", enum: ["explore", "planner", "architect", "executor", "refactorer", "reviewer", "test"] },
+        // Runtime discovery owns the allowlist so trusted package-defined agent
+        // names can participate without weakening bridge-side role validation.
+        role: {
+          type: "string",
+          minLength: 1,
+          maxLength: 80,
+          pattern: "^[a-z0-9][a-z0-9-]*$",
+        },
         name: { type: "string", minLength: 1, maxLength: 80 },
         // §15.4: goal, constraints, and contract are mandatory (SUB-002).
         title: { type: "string", minLength: 1, maxLength: 80 },
@@ -1427,6 +1498,50 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
         collectContext: { type: "boolean", default: false },
       },
       [],
+    ),
+  },
+  {
+    id: "task.await",
+    title: "TaskAwait",
+    description: "Wait for a descendant task and collect only its structured result.",
+    source: "native",
+    defaultRisk: "R0",
+    maxRisk: "R0",
+    alwaysActive: false,
+    mutates: false,
+    network: false,
+    keywords: ["await", "wait", "join", "task", "subagent"],
+    parameters: objectSchema(
+      {
+        taskId: { type: "string", minLength: 1 },
+        collectContext: { type: "boolean", default: false },
+      },
+      ["taskId"],
+    ),
+  },
+  {
+    id: "task.message",
+    title: "TaskMessage",
+    description: "Send a bounded typed message to an ancestor or descendant task.",
+    source: "native",
+    defaultRisk: "R0",
+    maxRisk: "R0",
+    alwaysActive: false,
+    mutates: false,
+    network: false,
+    keywords: ["message", "instruct", "scope", "task", "subagent"],
+    parameters: objectSchema(
+      {
+        taskId: { type: "string", minLength: 1 },
+        kind: {
+          type: "string",
+          enum: ["instruction", "evidence", "status_request", "scope_narrow", "cancel_reason"],
+        },
+        text: { type: "string", maxLength: 32_768 },
+        ids: { type: "array", items: { type: "string" }, maxItems: 256 },
+        paths: { type: "array", items: { type: "string" }, maxItems: 256 },
+      },
+      ["taskId", "kind"],
     ),
   },
   {

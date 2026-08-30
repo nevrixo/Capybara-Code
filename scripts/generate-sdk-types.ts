@@ -9,7 +9,12 @@
 import { writeFileSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { APP_METHODS, APP_PROTOCOL_VERSION } from "@cbc/app-protocol";
+import {
+  APP_CAPABILITY_SCHEMA_REVISION,
+  APP_METHOD_CAPABILITY_STATES,
+  APP_METHODS,
+  APP_PROTOCOL_VERSION,
+} from "@cbc/app-protocol";
 import { ALL_EVENT_KINDS, EVENT_SCHEMA_VERSION } from "@cbc/protocol";
 
 const ROOT = new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
@@ -19,6 +24,9 @@ function tsSource(): string {
 
 export const SDK_PROTOCOL_VERSION = ${JSON.stringify(APP_PROTOCOL_VERSION)} as const;
 export const SDK_EVENT_SCHEMA_VERSION = ${JSON.stringify(EVENT_SCHEMA_VERSION)} as const;
+export const SDK_CAPABILITY_SCHEMA_REVISION = ${JSON.stringify(APP_CAPABILITY_SCHEMA_REVISION)} as const;
+export const SDK_METHOD_CAPABILITY_STATES = ${JSON.stringify([...APP_METHOD_CAPABILITY_STATES])} as const;
+export type SdkMethodCapabilityState = (typeof SDK_METHOD_CAPABILITY_STATES)[number];
 
 export const SDK_APP_METHODS = ${JSON.stringify([...APP_METHODS], null, 2)} as const;
 export type SdkAppMethod = (typeof SDK_APP_METHODS)[number];
@@ -35,6 +43,10 @@ function pySource(): string {
 
 PROTOCOL_VERSION = ${JSON.stringify(APP_PROTOCOL_VERSION)}
 EVENT_SCHEMA_VERSION = ${JSON.stringify(EVENT_SCHEMA_VERSION)}
+CAPABILITY_SCHEMA_REVISION = ${JSON.stringify(APP_CAPABILITY_SCHEMA_REVISION)}
+METHOD_CAPABILITY_STATES = (
+${[...APP_METHOD_CAPABILITY_STATES].map((state) => `    ${JSON.stringify(state)},`).join("\n")}
+)
 
 APP_METHODS = (
 ${methods}

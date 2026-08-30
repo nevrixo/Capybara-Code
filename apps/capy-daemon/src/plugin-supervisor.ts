@@ -67,6 +67,7 @@ interface ManagedPlugin {
   readonly spec: PluginWorkerSpec;
   readonly child?: ChildProcessWithoutNullStreams;
   readonly startedAt: number;
+  readonly enabled: boolean;
 }
 
 const DENY_ENV = new Set([
@@ -110,17 +111,63 @@ export class PluginSupervisor {
     if (this.#plugins.has(spec.pluginId)) {
       throw new PluginSupervisorError("PLUGIN_ALREADY_INSTALLED", "plugin already installed");
     }
-    this.#plugins.set(spec.pluginId, { spec, startedAt: this.#now() });
+    this.#plugins.set(spec.pluginId, { spec, startedAt: this.#now(), enabled: true });
   }
 
   list(): readonly string[] {
     return [...this.#plugins.keys()];
   }
 
+  inspect(pluginId: string): {
+    readonly spec: PluginWorkerSpec;
+    readonly enabled: boolean;
+    readonly startedAt: number;
+  } | undefined {
+    const managed = this.#plugins.get(pluginId);
+    if (managed === undefined) return undefined;
+    return {
+      spec: managed.spec,
+      enabled: managed.enabled,
+      startedAt: managed.startedAt,
+    };
+  }
+
+  uninstall(pluginId: string): PluginWorkerSpec | undefined {
+    const managed = this.#plugins.get(pluginId);
+    if (managed === undefined) return undefined;
+    managed.child?.kill("SIGTERM");
+    this.#plugins.delete(pluginId);
+    return managed.spec;
+  }
+
+  setEnabled(pluginId: string, enabled: boolean): void {
+    const managed = this.#plugins.get(pluginId);
+    if (managed === undefined) {
+      throw new PluginSupervisorError("PLUGIN_NOT_FOUND", "plugin is not installed");
+    }
+    if (!enabled) managed.child?.kill("SIGTERM");
+    const { child: _child, ...withoutChild } = managed;
+    this.#plugins.set(pluginId, { ...withoutChild, enabled });
+  }
+
+  health(pluginId: string): {
+    readonly status: "ready" | "disabled" | "missing";
+    readonly circuit: ReturnType<PluginCircuitBreaker["snapshot"]>;
+  } {
+    const managed = this.#plugins.get(pluginId);
+    return {
+      status: managed === undefined ? "missing" : managed.enabled ? "ready" : "disabled",
+      circuit: this.#circuit.snapshot(pluginId),
+    };
+  }
+
   async invoke(request: PluginInvokeRequest): Promise<PluginInvokeResult> {
     const managed = this.#plugins.get(request.pluginId);
     if (managed === undefined) {
       throw new PluginSupervisorError("PLUGIN_NOT_FOUND", "plugin is not installed");
+    }
+    if (!managed.enabled) {
+      throw new PluginSupervisorError("PLUGIN_DISABLED", "plugin is disabled");
     }
     if (request.proposedConstraints !== undefined) {
       const baseline = request.operation ?? defaultOperation();
@@ -192,7 +239,12 @@ export class PluginSupervisor {
     const timeoutMs = request.timeoutMs ?? this.#defaultTimeoutMs;
     const env = scrubEnv(process.env);
     const child = this.#spawnWorker(managed.spec, env);
-    this.#plugins.set(managed.spec.pluginId, { ...managed, child, startedAt: managed.startedAt });
+    this.#plugins.set(managed.spec.pluginId, {
+      ...managed,
+      child,
+      startedAt: managed.startedAt,
+      enabled: managed.enabled,
+    });
     const invokeStartedAt = this.#now();
 
     return await new Promise<unknown>((resolve, reject) => {

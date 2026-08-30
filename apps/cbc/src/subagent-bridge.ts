@@ -3,8 +3,8 @@
  *
  * The scheduler owns lifecycle and leases; this module supplies the missing host
  * piece: each child is a real AgentKernel with a scoped registry, provider, and
- * RuntimeToolExecutor. Keeping task.* out of the child registry makes delegation
- * depth one by construction.
+ * RuntimeToolExecutor. Child registries receive a subtree-scoped delegation
+ * facade while their depth remains below the configured session ceiling.
  */
 
 import {
@@ -42,7 +42,9 @@ import {
 } from "@cbc/tool-registry";
 import {
   SUBAGENT_ROLES,
+  DelegationCoordinator,
   SpawnRejected,
+  emptyChildResult,
   GraphAuthority,
   MemoryGraphStore,
   SubagentScheduler,
@@ -53,6 +55,7 @@ import {
   type AgentInstance,
   type ChildAgentResult,
   type ChildRunContext,
+  type CustomAgentDefinition,
   type GraphPersistSnapshot,
   type GraphSnapshotStore,
   type SubagentRole,
@@ -69,6 +72,7 @@ import {
   RuntimeToolExecutor,
   type Execution,
   type ToolBridges,
+  type ToolExecutorOptions,
   type ToolObservationEnvelope,
   type ToolObservationResult,
 } from "./tools.ts";
@@ -103,6 +107,8 @@ export interface SubagentBridgeOptions {
   ) => void;
   readonly bridges?: ToolBridges;
   readonly mcpHint?: McpHintResolver;
+  readonly pluginInvoke?: ToolExecutorOptions["pluginInvoke"];
+  readonly customAgents?: readonly CustomAgentDefinition[];
   /**
    * The read cache shared with the root executor. Forwarded to every child
    * executor so a child's re-read of a file the parent just read is a cache
@@ -152,6 +158,20 @@ export interface SubagentBridgeOptions {
   readonly contractHints?: () => readonly TaskContractHint[];
 }
 
+function ancestryFor(
+  instance: AgentInstance,
+  coordinator: DelegationCoordinator,
+): string[] {
+  const ancestry = [instance.id];
+  let parentId = instance.parentId;
+  while (parentId !== undefined && parentId !== "root") {
+    ancestry.unshift(parentId);
+    parentId = coordinator.get(parentId)?.parentId;
+  }
+  ancestry.unshift("root");
+  return ancestry;
+}
+
 function fileGraphStore(
   homeDir: string | undefined,
   sessionId: string,
@@ -191,8 +211,22 @@ function fileGraphStore(
   };
 }
 
+function renderNestedTaskTree(instances: readonly AgentInstance[]): string {
+  return instances
+    .slice()
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    .map((instance) => {
+      const indent = "  ".repeat(Math.max(0, instance.depth - 1));
+      const branch = instance.depth > 1 ? "└─ " : "";
+      return indent + branch + instance.id + " · " + instance.role + " · " + instance.state +
+        " · depth " + String(instance.depth);
+    })
+    .join("\n");
+}
+
 export class SubagentBridge {
   readonly scheduler: SubagentScheduler;
+  readonly coordinator: DelegationCoordinator;
   readonly #options: SubagentBridgeOptions;
   /**
    * §6.11 "stop waiting": an interruptible await per running child. The user
@@ -203,38 +237,62 @@ export class SubagentBridge {
 
   constructor(options: SubagentBridgeOptions) {
     this.#options = options;
-    this.scheduler = new SubagentScheduler({
-      ...(options.config.experimental.persistentAgentGraph && options.config.agentGraph.enabled
-        ? {
-            graph: new GraphAuthority({
-              sessionId: options.sessionId,
-              workspaceIdentityDigest: options.runtime.workspaceId ?? options.sessionId,
-              store: fileGraphStore(options.host.homeDir, options.sessionId, options.runtime.workspaceId ?? options.sessionId),
-              ...(options.now !== undefined ? { now: options.now } : {}),
-            }),
-          }
-        : {}),
-      ...(options.config.experimental.worktreeMultiAgent && options.config.worktrees.enabled
-        ? {
-            writerPartition: (task) =>
-              task.allowedPaths[0] === undefined ? `worktree:${task.goal.slice(0, 24)}` : `worktree:${task.allowedPaths[0]}`,
-          }
-        : {}),
-      emitter: {
-        emit: <T>(
-          kind: CbcEventKind,
-          payload: T,
-          eventOptions?: { turnId?: string; agentId?: string; callerId?: string; taskEpochId?: string; workspaceIdentityDigest?: string; visibility?: EventVisibility },
-        ) => options.emit(kind, payload, eventOptions),
+    const graph = options.config.experimental.persistentAgentGraph && options.config.agentGraph.enabled
+      ? new GraphAuthority({
+          sessionId: options.sessionId,
+          workspaceIdentityDigest: options.runtime.workspaceId ?? options.sessionId,
+          store: fileGraphStore(
+            options.host.homeDir,
+            options.sessionId,
+            options.runtime.workspaceId ?? options.sessionId,
+          ),
+          ...(options.now !== undefined ? { now: options.now } : {}),
+        })
+      : undefined;
+    this.coordinator = new DelegationCoordinator({
+      ...(graph === undefined ? {} : { graph }),
+      scheduler: {
+        ...(options.config.experimental.worktreeMultiAgent && options.config.worktrees.enabled
+          ? {
+              writerPartition: (task) =>
+                task.allowedPaths[0] === undefined
+                  ? "worktree:" + task.goal.slice(0, 24)
+                  : "worktree:" + task.allowedPaths[0],
+            }
+          : {}),
+        emitter: {
+          emit: <T>(
+            kind: CbcEventKind,
+            payload: T,
+            eventOptions?: { turnId?: string; agentId?: string; callerId?: string; taskEpochId?: string; workspaceIdentityDigest?: string; visibility?: EventVisibility },
+          ) => options.emit(kind, payload, eventOptions),
+        },
+        runner: (context) => this.#runChild(context),
+        parentContextTokens: options.config.model.softContextTokens,
+        maxConcurrent: Math.min(
+          options.config.subagents.maxConcurrent,
+          options.config.agentGraph.maxConcurrentNodes,
+        ),
+        enableContextReservations: options.config.perf.subagentContextReservations !== false,
+        ...(options.now !== undefined ? { now: options.now } : {}),
       },
-      runner: (context) => this.#runChild(context),
-      parentContextTokens: options.config.model.softContextTokens,
-      parentDepth: 0,
-      parentAgentId: "root",
-      maxConcurrent: options.config.subagents.maxConcurrent,
-      enableContextReservations: options.config.perf.subagentContextReservations !== false,
+      limits: {
+        maxDepth: Math.min(options.config.subagents.maxDepth, options.config.agentGraph.maxDepth),
+        maxChildrenPerNode: 4,
+        maxNodesPerTurn: options.config.agentGraph.maxNodes,
+        maxWriterNodes: options.config.agentGraph.maxConcurrentWriters,
+        messageBytes: options.config.agentGraph.messageBytes,
+      },
+      budget: {
+        maxToolCalls: options.config.agentGraph.budget.maxToolCalls,
+        maxModelCalls: Math.max(1, Math.floor(options.config.agentGraph.budget.maxToolCalls / 2)),
+        maxWallClockMs: options.config.agentGraph.budget.maxWallClockMinutes * 60_000,
+        maxContextTokens: options.config.model.softContextTokens * 4,
+        maxCostUsd: options.config.agentGraph.budget.maxCostUsd,
+      },
       ...(options.now !== undefined ? { now: options.now } : {}),
     });
+    this.scheduler = this.coordinator.rootScheduler;
   }
 
   /**
@@ -253,7 +311,7 @@ export class SubagentBridge {
   /** Cancel a running subagent immediately on user request (Esc). */
   async cancelTask(taskId: string, reason = "cancelled by user"): Promise<ChildAgentResult | undefined> {
     this.interruptAwait(taskId);
-    return this.scheduler.cancel(taskId, reason);
+    return this.coordinator.cancel("root", taskId, reason, true);
   }
 
   /** Cancel all active subagents immediately on user request (Esc). */
@@ -261,11 +319,12 @@ export class SubagentBridge {
     for (const taskId of Array.from(this.#awaitAborts.keys())) {
       this.interruptAwait(taskId);
     }
-    await this.scheduler.cancelAll(reason);
+    await this.coordinator.cancelAll(reason);
   }
 
   /** Await a child while both the turn and the interrupt key can end the wait. */
   async #awaitChild(
+    callerId: string,
     taskId: string,
     signal: AbortSignal,
   ): Promise<ChildAgentResult | undefined> {
@@ -274,16 +333,16 @@ export class SubagentBridge {
     this.#options.emit(
       "task.progress",
       { taskId, awaiting: true },
-      { agentId: "root" },
+      { agentId: callerId },
     );
     const combined = AbortSignal.any([signal, controller.signal]);
     try {
-      return await this.scheduler.await(taskId, combined);
+      return await this.coordinator.wait(callerId, taskId, combined);
     } finally {
       this.#options.emit(
         "task.progress",
         { taskId, awaiting: false },
-        { agentId: "root" },
+        { agentId: callerId },
       );
       if (this.#awaitAborts.get(taskId) === controller) {
         this.#awaitAborts.delete(taskId);
@@ -297,49 +356,82 @@ export class SubagentBridge {
   readonly execute = async (
     action: ProposedAction,
     signal: AbortSignal,
-  ): Promise<Execution> => {
+  ): Promise<Execution> => this.#executeFor("root", action, signal);
+
+  async #executeFor(
+    parentId: string,
+    action: ProposedAction,
+    signal: AbortSignal,
+  ): Promise<Execution> {
     const input = action.arguments as Record<string, unknown>;
     switch (action.toolId) {
       case "task.search":
         return this.#search(input);
       case "task.spawn":
-        return await this.#spawn(input, signal);
+        return await this.#spawn(parentId, input, signal);
       case "task.status":
-        return await this.#status(input, signal);
+        return await this.#status(parentId, input, signal);
+      case "task.await":
+        return await this.#status(parentId, { ...input, awaitCompletion: true }, signal);
+      case "task.message":
+        return this.#message(parentId, input);
       case "task.cancel":
-        return await this.#cancel(input);
+        return await this.#cancel(parentId, input);
       default:
         return {
           result: errorResult("INVALID_ARGUMENT", "the task bridge cannot execute " + action.toolId),
         };
     }
-  };
+  }
 
   #search(input: Record<string, unknown>): Execution {
     const query = typeof input.query === "string" ? input.query : "";
-    const candidates = searchAgents(query, { limit: 3 });
+    const customAgents = (this.#options.customAgents ?? []).map((agent) => ({
+      name: agent.name,
+      description: agent.description,
+      permissionClass: agent.permissionClass,
+      capabilities: [agent.baseRole, "package-defined"],
+    }));
+    const candidates = searchAgents(query, { limit: 3, customAgents });
+    const total = SUBAGENT_ROLES.length + customAgents.length;
     const text = renderAgentCandidates(query, candidates, {
-      total: SUBAGENT_ROLES.length,
-      active: this.scheduler.activeCount(),
+      total,
+      active: this.coordinator.activeCount(),
     }).join("\n");
     return {
       result: okResult("found " + candidates.length + " subagent role(s)", {
         query,
         candidates,
-        activeCount: this.scheduler.activeCount(),
-        totalCount: SUBAGENT_ROLES.length,
+        activeCount: this.coordinator.activeCount(),
+        totalCount: total,
       }),
       text,
     };
   }
 
-  async #spawn(input: Record<string, unknown>, signal: AbortSignal): Promise<Execution> {
-    const roleValue = input.role;
-    if (!isSubagentRole(roleValue)) {
+  async #spawn(
+    parentId: string,
+    input: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<Execution> {
+    const requestedRole = typeof input.role === "string" ? input.role : "";
+    const customAgent = this.#options.customAgents?.find(
+      (candidate) => candidate.name === requestedRole,
+    );
+    const roleValue = isSubagentRole(requestedRole)
+      ? requestedRole
+      : customAgent === undefined
+        ? undefined
+        : effectiveCustomAgentRole(customAgent);
+    if (roleValue === undefined) {
+      const available = [
+        ...SUBAGENT_ROLES,
+        ...(this.#options.customAgents ?? []).map((agent) => agent.name),
+      ];
       return {
         result: errorResult(
           "INVALID_ARGUMENT",
-          "unknown subagent role; choose one of " + SUBAGENT_ROLES.join(", "),
+          "unknown subagent role; choose one of " + available.join(", "),
         ),
       };
     }
@@ -384,9 +476,17 @@ export class SubagentBridge {
     const name = stringValue(input.name);
     const task = buildTask(
       {
-        title: title ?? roleValue + " task",
+        title: title ?? (customAgent?.name ?? roleValue) + " task",
         goal: stringValue(input.goal) ?? "",
-        context: stringList(input.context),
+        context: [
+          ...stringList(input.context),
+          ...(customAgent === undefined
+            ? []
+            : [
+                "Custom agent profile " + customAgent.name + ":\n"
+                + customAgent.instructions,
+              ]),
+        ],
         constraints: stringList(input.constraints),
         expectedOutput: stringList(input.expectedOutput),
         allowedPaths: stringList(input.allowedPaths),
@@ -400,14 +500,21 @@ export class SubagentBridge {
     );
 
     try {
-      const profileName = stringValue(input.modelProfile);
-      const handle = this.scheduler.spawn({
+      const requestedProfile = stringValue(input.modelProfile);
+      const profileName = requestedProfile === undefined || requestedProfile === "auto"
+        ? customAgent?.modelProfile
+        : requestedProfile;
+      const effectiveName = name ?? customAgent?.name;
+      const handle = this.coordinator.spawn(parentId, {
         role: roleValue,
         task,
         ...(profileName !== undefined && profileName !== "auto"
           ? { modelProfile: profileName }
           : {}),
-        ...(name !== undefined ? { name } : {}),
+        ...(effectiveName === undefined ? {} : { name: effectiveName }),
+        ...(customAgent === undefined
+          ? {}
+          : { budget: { maxToolCalls: customAgent.maxTools } }),
       });
 
       const detached = input.detached === true;
@@ -428,7 +535,7 @@ export class SubagentBridge {
         };
       }
 
-      const result = await this.#awaitChild(handle.id, signal);
+      const result = await this.#awaitChild(parentId, handle.id, signal);
       if (result === undefined) {
         return {
           result: okResult("subagent " + handle.id + " is still running", {
@@ -479,10 +586,14 @@ export class SubagentBridge {
     }
   }
 
-  async #status(input: Record<string, unknown>, signal: AbortSignal): Promise<Execution> {
+  async #status(
+    parentId: string,
+    input: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<Execution> {
     const taskId = stringValue(input.taskId);
     if (taskId !== undefined) {
-      const instance = this.scheduler.get(taskId);
+      const instance = this.coordinator.get(taskId);
       if (instance === undefined) {
         return {
           result: errorResult("NOT_FOUND", "no subagent exists with id " + taskId),
@@ -490,7 +601,7 @@ export class SubagentBridge {
       }
 
       if (input.awaitCompletion === true && !isTerminal(instance)) {
-        const result = await this.#awaitChild(taskId, signal);
+        const result = await this.#awaitChild(parentId, taskId, signal);
         if (result !== undefined) {
           const accepted = await this.#acceptHandoff(result, "await");
           const visibleResult = accepted ? { ...result, contextHandoffAccepted: true } : result;
@@ -529,19 +640,19 @@ export class SubagentBridge {
       };
     }
 
-    const instances = this.scheduler.list().map(serializeInstance);
+    const instances = this.coordinator.list(parentId).map(serializeInstance);
     return {
       result: okResult(
         instances.length + " subagent(s)",
         {
           tasks: instances,
-          activeCount: this.scheduler.activeCount(),
+          activeCount: this.coordinator.activeCount(),
         },
       ),
       text:
         instances.length === 0
           ? "No subagents have been started."
-          : instances.map((entry) => formatStatusEntry(entry)).join("\n"),
+          : renderNestedTaskTree(this.coordinator.list(parentId)),
     };
   }
 
@@ -553,21 +664,21 @@ export class SubagentBridge {
       return false;
     }
   }
-  async #cancel(input: Record<string, unknown>): Promise<Execution> {
+  async #cancel(parentId: string, input: Record<string, unknown>): Promise<Execution> {
     const taskId = stringValue(input.taskId);
     if (taskId === undefined) {
       return {
         result: errorResult("INVALID_ARGUMENT", "task.cancel requires taskId"),
       };
     }
-    const instance = this.scheduler.get(taskId);
+    const instance = this.coordinator.get(taskId);
     if (instance === undefined) {
       return {
         result: errorResult("NOT_FOUND", "no subagent exists with id " + taskId),
       };
     }
     const reason = stringValue(input.reason) ?? "cancelled by parent";
-    const result = await this.scheduler.cancel(taskId, reason);
+    const result = await this.coordinator.cancel(parentId, taskId, reason, true);
     return {
       result: okResult("cancelled subagent " + taskId, {
         taskId,
@@ -578,8 +689,51 @@ export class SubagentBridge {
     };
   }
 
+  #message(parentId: string, input: Record<string, unknown>): Execution {
+    const taskId = stringValue(input.taskId);
+    const kind = stringValue(input.kind);
+    if (taskId === undefined || kind === undefined) {
+      return {
+        result: errorResult("INVALID_ARGUMENT", "task.message requires taskId and kind"),
+      };
+    }
+    try {
+      this.coordinator.send(parentId, taskId, {
+        kind,
+        body: {
+          ...(stringValue(input.text) === undefined ? {} : { text: stringValue(input.text) }),
+          ids: stringList(input.ids),
+          paths: stringList(input.paths),
+        },
+      });
+      return {
+        result: okResult("message queued for " + taskId, { taskId, kind }),
+        text: "Queued " + kind + " message for " + taskId + ".",
+      };
+    } catch (error) {
+      return {
+        result: errorResult(
+          "PERMISSION_DENIED",
+          error instanceof Error ? error.message : "task message was rejected",
+        ),
+      };
+    }
+  }
+
   async #runChild(context: ChildRunContext): Promise<ChildAgentResult> {
     const instance = context.instance;
+    const canDelegate = instance.depth < Math.min(
+      this.#options.config.subagents.maxDepth,
+      this.#options.config.agentGraph.maxDepth,
+    );
+    const delegatedTaskTools = new Set([
+      "task.search",
+      "task.spawn",
+      "task.status",
+      "task.await",
+      "task.message",
+      "task.cancel",
+    ]);
     const childTools = nativeToolsForFeatures({
       editEngineV2: this.#options.config.experimental.editEngineV2,
       durableMemory:
@@ -591,13 +745,22 @@ export class SubagentBridge {
       worktreeMultiAgent:
         this.#options.config.experimental.worktreeMultiAgent &&
         this.#options.config.worktrees.enabled,
-    }).filter((tool) =>
-      !tool.id.startsWith("task.") &&
-      tool.id !== "todo.write" &&
-      (this.#options.config.agent.compoundTools ||
-        (tool.id !== "repo.investigate" && tool.id !== "verification.run_many")),
-    );
+      pluginRuntime:
+        this.#options.config.experimental.pluginRuntime &&
+        this.#options.config.plugins.enabled,
+      ...(this.#options.pluginInvoke !== undefined
+        ? { pluginInvoke: this.#options.pluginInvoke }
+        : {}),
+    }).filter((tool) => {
+      if (tool.id.startsWith("task.")) {
+        return canDelegate && delegatedTaskTools.has(tool.id);
+      }
+      return tool.id !== "todo.write" &&
+        (this.#options.config.agent.compoundTools ||
+          (tool.id !== "repo.investigate" && tool.id !== "verification.run_many"));
+    });
     const childRegistry = new ToolRegistry(childTools);
+    if (canDelegate) childRegistry.activate([...delegatedTaskTools]);
     const rootPermission = this.#options.permissionContext();
     const childInteractionMode = rootPermission.interactionMode ?? "build";
     childRegistry.setInteractionMode(childInteractionMode);
@@ -621,6 +784,9 @@ export class SubagentBridge {
     };
 
     const childBridges: ToolBridges = {
+      ...(canDelegate
+        ? { task: (action, signal) => this.#executeFor(instance.id, action, signal) }
+        : {}),
       ...(this.#options.bridges?.skill !== undefined
         ? { skill: this.#options.bridges.skill }
         : {}),
@@ -632,8 +798,32 @@ export class SubagentBridge {
         : {}),
     };
 
+    const writer = roleDefinition(instance.role).canWrite;
+    const isolatedWriterRequired = writer && (
+      instance.depth > 1 || this.#options.config.subagents.writerPolicy === "worktree-lease"
+    );
+    const failWriterPreflight = (detail: string): ChildAgentResult => {
+      try {
+        this.#options.onChildFinished?.(instance.id);
+      } catch {}
+      try {
+        childScope?.dispose();
+      } catch {}
+      return emptyChildResult(
+        "blocked",
+        "writer worktree isolation preflight failed: " + detail,
+      );
+    };
     let childRuntime = this.#options.runtime;
     let writerSidecar: { stop(): Promise<void> } | undefined;
+    if (isolatedWriterRequired && (
+      !this.#options.config.experimental.worktreeMultiAgent
+      || !this.#options.config.worktrees.enabled
+      || !this.#options.config.worktrees.runtimePerWorktree
+      || typeof this.#options.runtime.forkSidecar !== "function"
+    )) {
+      return failWriterPreflight("worktree runtime is unavailable");
+    }
     if (
       this.#options.config.experimental.worktreeMultiAgent &&
       this.#options.config.worktrees.enabled &&
@@ -655,8 +845,13 @@ export class SubagentBridge {
             writerSidecar = sidecar;
           }
         }
-      } catch {
-        // Partition isolation still holds even if Git worktree or sidecar spawn is refused.
+        if (isolatedWriterRequired && writerSidecar === undefined) {
+          return failWriterPreflight("worktree creation returned no isolated sidecar");
+        }
+      } catch (error) {
+        if (isolatedWriterRequired) {
+          return failWriterPreflight(error instanceof Error ? error.message : "worktree creation was refused");
+        }
       }
     }
 
@@ -813,7 +1008,22 @@ export class SubagentBridge {
           ...(stored.outputPath !== undefined ? { outputPath: stored.outputPath } : {}),
         };
       },
-      approvals: this.#options.approvals,
+      approvals: instance.depth > 1
+        ? {
+            request: async (request, signal) => {
+              this.#options.emit("approval.requested", {
+                ...request,
+                ancestry: ancestryFor(instance, this.coordinator),
+                escalatedTo: "root",
+              }, { agentId: instance.id });
+              return this.#options.approvals.request({
+                ...request,
+                display: "[" + ancestryFor(instance, this.coordinator).join(" > ") + "] " + request.display,
+                reason: request.reason + " (escalated from nested subagent)",
+              }, signal);
+            },
+          }
+        : this.#options.approvals,
       normalizer: new HostActionNormalizer({
         defaultCwd: ".",
         ...(childRuntime.capabilities?.networkDeny === undefined
@@ -1006,7 +1216,7 @@ export class SubagentBridge {
 
     try {
       const turn = await childKernel.runTurn(context.taskDescription, context.signal);
-      this.scheduler.recordChildUsage(instance.id, turn.usage.inputTokens);
+      this.coordinator.recordUsage(instance.id, turn.usage.inputTokens);
       let result = childResultFromTurn(turn);
       if (childScope !== undefined && childCapsule !== undefined) {
         const handoff = exportContextHandoff(childScope, {
@@ -1123,6 +1333,15 @@ function isSubagentRole(value: unknown): value is SubagentRole {
     typeof value === "string" &&
     (SUBAGENT_ROLES as readonly string[]).includes(value)
   );
+}
+
+function effectiveCustomAgentRole(agent: CustomAgentDefinition): SubagentRole {
+  const base = roleDefinition(agent.baseRole);
+  if (base.permissionClass === agent.permissionClass) return agent.baseRole;
+  if (agent.permissionClass === "read") return "reviewer";
+  if (agent.permissionClass === "process") return "test";
+  // parseCustomAgent already prevents widening a non-writer base to write.
+  return agent.baseRole;
 }
 
 function stringValue(value: unknown): string | undefined {

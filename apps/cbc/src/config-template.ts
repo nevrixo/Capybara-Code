@@ -21,6 +21,7 @@ provider_summary = "auto"
 permission_mode = "ask"
 interaction_mode = "build"
 review_mode = "auto"
+deep_plan = "off"
 
 [permissions]
 project_write = "auto"

@@ -26,7 +26,9 @@
         "approvals": { "type": "boolean" },
         "interactivePrompts": { "type": "boolean" },
         "artifactStreaming": { "type": "boolean" },
-        "richDiff": { "type": "boolean" }
+        "richDiff": { "type": "boolean" },
+        "taskTree": { "type": "boolean" },
+        "planReview": { "type": "boolean" }
       }
     },
     "initializeParams": {
@@ -81,6 +83,7 @@
         "daemonId",
         "connectionId",
         "capabilities",
+        "capabilitySnapshot",
         "limits"
       ],
       "properties": {
@@ -93,6 +96,9 @@
           "additionalProperties": {
             "type": ["boolean", "string", "number"]
           }
+        },
+        "capabilitySnapshot": {
+          "$ref": "cbc:integration/client-capabilities"
         },
         "limits": { "$ref": "#/$defs/serverLimits" }
       }

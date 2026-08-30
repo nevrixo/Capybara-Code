@@ -14,6 +14,7 @@ export type RecoveryClassification =
   | "safe_idle"
   | "interrupted_recoverable"
   | "waiting_approval"
+  | "waiting_user_input"
   | "blocked_reconciliation"
   | "failed_integrity";
 
@@ -23,6 +24,7 @@ export interface RecoveredSession {
   readonly classification: RecoveryClassification;
   readonly ownerEpoch: number;
   readonly pendingApprovalIds: readonly string[];
+  readonly pendingQuestionnaireId?: string;
 }
 
 export interface SessionRecoverySeed {
@@ -31,6 +33,7 @@ export interface SessionRecoverySeed {
   readonly lastJournalSequence?: number;
   readonly hadOpenTurn?: boolean;
   readonly pendingApprovalIds?: readonly string[];
+  readonly pendingQuestionnaireId?: string;
   readonly integrityOk?: boolean;
 }
 
@@ -108,6 +111,15 @@ export async function recoverDaemonState(options: RecoveryOptions): Promise<Reco
       for (const approvalId of seed.pendingApprovalIds ?? []) {
         await actor.dispatch({ kind: "mark_waiting_approval", approvalId });
       }
+    } else if (
+      typeof seed.pendingQuestionnaireId === "string" &&
+      seed.pendingQuestionnaireId.length > 0
+    ) {
+      classification = "waiting_user_input";
+      await actor.dispatch({
+        kind: "mark_waiting_user_input",
+        questionnaireId: seed.pendingQuestionnaireId,
+      });
     } else if (seed.hadOpenTurn === true) {
       classification = "interrupted_recoverable";
       interruptedTurns += 1;
@@ -126,6 +138,9 @@ export async function recoverDaemonState(options: RecoveryOptions): Promise<Reco
       classification,
       ownerEpoch: epoch,
       pendingApprovalIds: seed.pendingApprovalIds ?? [],
+      ...(seed.pendingQuestionnaireId === undefined
+        ? {}
+        : { pendingQuestionnaireId: seed.pendingQuestionnaireId }),
     });
   }
 

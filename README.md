@@ -26,9 +26,13 @@
 Capybara Code pairs GPT models with a purpose-built coding harness to improve reliability, execution precision, and development speed.
 
 - Terminal UI for interactive agent work
+- Deep Plan questionnaires with deterministic Plan-readiness gating
 - Isolated Rust execution sidecar
 - Transactional file mutations
 - Sub-agent orchestration
+- Durable recursive AgentGraph orchestration (stable depth 2, hard maximum 3)
+- First-party VS Code, ACP v1, and GitHub Actions integration surfaces
+- Trust-bound project configuration and reproducible signed packages
 - Model Context Protocol (MCP) integrations
 
 ## Install
@@ -92,6 +96,11 @@ capy "Explain the structure of this project"
 | Start the interactive UI | `capy` |
 | Start with a prompt | `capy [prompt...]` |
 | Run non-interactively | `capy run [prompt...]` |
+| Serve ACP v1 over stdio | `capy acp` |
+| Inspect client/replay health | `capy clients doctor` |
+| Diagnose integrations | `capy integration doctor [vscode\|acp\|github]` |
+| Install or diagnose GitHub automation | `capy github install` · `capy github doctor` |
+| Inspect or approve project trust | `capy trust --show-diff` · `capy trust` |
 | Sign in | `capy auth login [--device]` |
 | Authenticate with an API key | `capy auth api [--stdin]` |
 | Check or end a session | `capy auth status` · `capy auth logout [--all]` |
@@ -105,10 +114,21 @@ Use `/setting` in the TUI to update interactive settings, or use `capy config se
 
 - `Fast mode` toggles OpenAI Fast mode (`provider.openai.serviceTier`): priority processing at up to ~2.5x speed for a per-token premium. It is only honored by the API backend and stays off by default.
 - `1M context` toggles the premium context-band policy (`model.context.premiumBandPolicy`): off keeps bands utility-gated at the 272k pricing boundary; on admits bands up to the model's 1M window. Input above 272K is billed at premium rates for the whole request.
+- Deep Plan toggles agent.deepPlan for the next Plan message. When enabled, repository-backed investigation can open one tabbed batch of 1–4 material product decisions, retain drafts across daemon detach/resume, and withhold an early final until the structured Plan Contract reflects the answers. It stays off by default and never runs in Build mode.
 
-- Capybara Code creates a single global `config.toml` on first use; it does not read project-local Capybara configuration files.
+- Capybara Code creates a global `config.toml` on first use. A trusted workspace
+  may add `.capybara/config.toml` and a git-ignored
+  `.capybara/config.local.toml`; project values remain below environment/CLI
+  precedence and cannot weaken user security or supply-chain policy.
 - MCP and LSP service definitions stay visible in that file. Missing external executables are reported but never installed automatically.
-- Root agent turns run until completion or cancellation. Sub-agent budgets and process/protocol resource limits remain in place as safety boundaries.
+- Root agent turns run until completion or cancellation. Children may delegate
+  through a session-scoped facade to depth 2 by default (experimental maximum 3).
+  Node/fan-out/tool/time/cost budgets, monotonic child permissions, root-owned
+  approvals, subtree cancellation, and worktree-required writers remain hard
+  safety boundaries.
+- App Protocol initialization publishes a digest-bound capability snapshot.
+  Methods that exist in the schema but are not connected in the active backend
+  report `unsupported`; observer-only mutations report `read-only`.
 - Final responses are chat-first by default. Verified file changes and checks remain available as collapsed evidence; failures, permission blocks, and security-sensitive findings expand automatically.
 - `partial` is a machine status, not a failure label: the UI classifies it as success, attention, blocked, or failure based on the recorded evidence. Exit codes and `CompletionReport` remain compatible.
 - Local context compaction uses the next compiled request's projected pressure. It performs lossless output externalization before semantic compaction, preserves TODO/evidence capsules, and allows at most one recompile per provider sample. The original journal is never deleted.
@@ -125,9 +145,38 @@ attention_details = true
 compaction_policy = "adaptive"  # off | legacy | adaptive
 provider_compaction_mode = "auto" # off | auto | on
 emergency_ratio = 0.90
+
+[agent]
+deep_plan = "off"          # off | on
 ```
 
 Use `/compact` for an explicit compaction. It reports before/after usage and the preserved TODO/evidence counts.
+
+See [Deep Plan](docs/deep-plan.md) for questionnaire controls, pause/resume
+semantics, headless behavior, and the completion gate.
+
+## Packages and plugins
+
+Project requests live in <code>.capybara/packages.json</code>; exact versions,
+digests, signatures, contents, and grants live in
+<code>.capybara/packages.lock.json</code>. A frozen bootstrap refuses drift and
+re-verifies immutable cached bytes before activation.
+
+~~~bash
+capy package init packages/example
+capy package add path:packages/example --project --allow-unsigned-local
+capy package doctor
+capy bootstrap --frozen --offline
+~~~
+
+Unsigned local packages require an explicit flag. Package authority is empty by
+default; <code>--grant-requested</code> is explicit consent after reviewing the
+requested-versus-granted preview. In the TUI, <code>/plugins</code> supports
+search, install, update, remove, inspect, enable, disable, grants, and list.
+
+See [Package ecosystem and registry operations](docs/package-ecosystem.md) for
+the trust model, signed registry configuration, CI behavior, App methods, and
+key rotation/revocation procedure.
 
 ## Verification
 

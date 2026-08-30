@@ -60,6 +60,12 @@ describe("daemon crash recovery", () => {
           sessionId: "ses_idle",
           workspaceIdentityDigest: "ws_1",
         },
+        {
+          sessionId: "ses_question",
+          workspaceIdentityDigest: "ws_1",
+          pendingQuestionnaireId: "cache-round-1",
+          hadOpenTurn: true,
+        },
       ],
     });
     expect(recovered.recovered.find((session) => session.sessionId === "ses_approval")?.classification).toBe(
@@ -71,6 +77,10 @@ describe("daemon crash recovery", () => {
     expect(recovered.recovered.find((session) => session.sessionId === "ses_idle")?.classification).toBe(
       "safe_idle",
     );
+    expect(recovered.recovered.find((session) => session.sessionId === "ses_question")).toMatchObject({
+      classification: "waiting_user_input",
+      pendingQuestionnaireId: "cache-round-1",
+    });
   });
 
   test("reloads persisted session seeds and event-hub journals", async () => {

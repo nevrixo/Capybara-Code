@@ -18,18 +18,15 @@ import {
 import { normalizeConfigKeys, parseToml, type TomlIssue } from "./toml.ts";
 
 export interface LoadConfigInput {
-  /** Raw contents of the one global user config file, if it exists. */
+  /** Raw contents of the global user config file, if it exists. */
   readonly userToml?: string;
   readonly env: Record<string, string | undefined>;
   /** Already-parsed CLI flags as dotted paths. */
   readonly cliOverrides?: ConfigLayer;
   /** Interactive `/model`, `/mode`, `/effort` overrides. */
   readonly sessionOverrides?: ConfigLayer;
-  /** @deprecated Project configuration is ignored; retained for source compatibility. */
   readonly projectToml?: string;
-  /** @deprecated Project-local configuration is ignored. */
   readonly projectLocalToml?: string;
-  /** @deprecated Workspace trust no longer participates in configuration loading. */
   readonly projectTrusted?: boolean;
 }
 
@@ -37,15 +34,36 @@ export interface LoadConfigResult extends EffectiveConfig {
   readonly tomlIssues: Array<TomlIssue & { source: ConfigSource }>;
 }
 
-/** Assemble the effective configuration following global-only precedence. */
+/** Assemble the effective configuration with trust-gated project layers. */
 export function loadConfig(input: LoadConfigInput): LoadConfigResult {
   const tomlIssues: Array<TomlIssue & { source: ConfigSource }> = [];
   const layers: Array<{ source: ConfigSource; values: ConfigLayer }> = [];
+  const ignoredProjectIssues = [];
 
   if (input.userToml !== undefined) {
     const parsed = parseToml(input.userToml);
     tomlIssues.push(...parsed.issues.map((i) => ({ ...i, source: "user" as ConfigSource })));
     layers.push({ source: "user", values: normalizeConfigKeys(parsed.values) });
+  }
+
+  const projectInputs = [
+    ["project", input.projectToml],
+    ["project-local", input.projectLocalToml],
+  ] as const;
+  for (const [source, content] of projectInputs) {
+    if (content === undefined) continue;
+    if (input.projectTrusted !== true) {
+      ignoredProjectIssues.push({
+        severity: "warning" as const,
+        path: "project",
+        source,
+        message: source + " configuration is ignored until the workspace trust digest is approved",
+      });
+      continue;
+    }
+    const parsed = parseToml(content);
+    tomlIssues.push(...parsed.issues.map((issue) => ({ ...issue, source })));
+    layers.push({ source, values: normalizeConfigKeys(parsed.values) });
   }
 
   layers.push({ source: "environment", values: environmentLayer(input.env) });
@@ -67,5 +85,10 @@ export function loadConfig(input: LoadConfigInput): LoadConfigResult {
           cache: { ...merged.config.model.cache, ttlMinutes: 30 },
         },
       };
-  return { ...merged, config, tomlIssues };
+  return {
+    ...merged,
+    config,
+    issues: [...merged.issues, ...ignoredProjectIssues],
+    tomlIssues,
+  };
 }

@@ -38,6 +38,72 @@ does not fail validation, so nothing would catch it except a human reading this 
 
 ---
 
+## config · tools · events · app 1.0 — Deep Plan questionnaires
+
+Added the user-only agent.deepPlan = "off" | "on" setting, defaulting to
+"off". Deep Plan is a conversational policy layered over Plan mode; it does
+not add an execution mode or weaken Plan's read-only boundary.
+
+Added the strict, always-active user.ask_batch tool for one to four
+single-select, multi-select, or text questions. Stable questionnaireId and
+decisionKey fields provide retry idempotency and resolved-decision
+deduplication. The existing user.ask contract is unchanged.
+
+Added hidden journaled deep_plan.* events, including questionnaire draft
+checkpoints and Plan-answer revision binding. Added turn.input.get,
+turn.input.update, and turn.input.resolve App methods so a detached TUI can
+inspect or answer the questionnaire owned by a daemon session worker.
+Observers may inspect input; only a controller may update or resolve it.
+
+These are additive 1.x changes. Older event consumers skip the new kinds, and
+existing configs retain ordinary Plan behavior because Deep Plan defaults off.
+
+## app capability schema 2.0 — method support snapshot
+
+App Protocol initialization now includes a connection-scoped, digest-bound
+capability snapshot. It distinguishes implemented, role-limited, policy-disabled,
+and unsupported methods and negotiates event and presentation features with the
+client. The previous flat capability map remains available for 1.x clients.
+
+Added strict integration trigger and action-result schemas. Raw provider payloads
+remain outside the agent prompt; coordinators consume only the minimized envelope
+and validated receipt-backed result.
+
+## config · tools 1.0 — recursive durable AgentGraph
+
+The stable subagent depth default is now 2 with an absolute maximum of 3.
+AgentGraph defaults are bounded to 16 nodes, six concurrent nodes, one writer,
+240 tool calls, four dollars, and 30 minutes. Writer delegation defaults to
+worktree-lease and fails closed when an isolated runtime cannot be created.
+
+Added task.await and task.message to the native tool catalog. Nested agents receive
+only the subtree-scoped task facade while the coordinator persists mailbox and
+budget reservations with the graph snapshot.
+
+## config — trust-gated project layers
+
+Trusted workspaces may now contribute `.capybara/config.toml` and
+`.capybara/config.local.toml` between user and environment precedence. The existing
+monotonic project validator continues to reject credentials, yolo, user-owned
+supply-chain policy changes, allow rules, and user MCP overrides. Trust records bind
+the config, package, executable declaration, and requested-capability digests;
+digest changes fail closed and require a new trust decision.
+
+## package schema 1.0 — signed packages and frozen locks
+
+Added strict package manifest, request, and lock contracts for plugins, Skills,
+agents, prompts, themes, hooks, schemas, and assets. Registry entries require
+verified Ed25519 metadata; local unsigned sources require an explicit development
+opt-in. Every content path is digest-covered, grants only narrow, and postinstall
+or unknown fields fail closed.
+
+Added signed static registry index, artifact, and pinned-root-key schemas. The
+registry transport verifies canonical Ed25519 signatures, expiry, revocation,
+withdrawal, HTTPS confinement, exact artifact identity, and decompressed bounds.
+App Protocol now includes package search, inspect, install, remove, update,
+verify, and frozen bootstrap methods; generated TypeScript and Python method
+unions were updated. This is an additive 1.x change.
+
 ## events 1.0 — Skills catalog revision
 
 Added the journaled, hidden `skills.changed` event. It records the active Agent

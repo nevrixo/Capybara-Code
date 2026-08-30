@@ -19,6 +19,8 @@ export interface HostIo {
   stderr(text: string): void;
   /** Read all of stdin for credential import and other host-owned input flows. */
   readStdin(): Promise<string>;
+  /** Stream newline-delimited protocol input without buffering the whole process lifetime. */
+  readLines?(): AsyncIterable<string>;
   /** Prompt for a line. `masked` is required for a credential (§7.2, §9.3). */
   prompt(question: string, options?: { masked?: boolean }): Promise<string>;
   /** Present a choice list, returning the selected index or -1 for cancel. */
@@ -107,6 +109,8 @@ export interface CbcPaths {
   readonly agents: string;
   readonly skills: string;
   readonly trustStore: string;
+  /** Host-local project-control digest overlay; it can only narrow runtime trust. */
+  readonly projectTrustStore?: string;
   readonly approvalStore: string;
 }
 
@@ -183,6 +187,7 @@ export function resolvePaths(host: Pick<Host, "env" | "homeDir" | "platform" | "
     agents: join(configRoot, "agents"),
     skills: join(configRoot, "skills"),
     trustStore: join(dataRoot, "trust.json"),
+    projectTrustStore: join(dataRoot, "project-trust.json"),
     approvalStore: join(dataRoot, "approvals.json"),
   };
 }

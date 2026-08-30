@@ -65,7 +65,9 @@ export async function submitTurnOverApp(input: {
   readonly sessionId: string;
   readonly prompt: string;
   readonly signal: AbortSignal;
+  readonly idempotencyKey?: string;
 }): Promise<{
+  readonly turnId: string;
   readonly answer: string;
   readonly status: string;
   readonly report: unknown;
@@ -89,7 +91,9 @@ export async function submitTurnOverApp(input: {
   if (input.signal.aborted) onAbort();
   else input.signal.addEventListener("abort", onAbort, { once: true });
   try {
-    const handle = await session.submit(input.prompt);
+    const handle = await session.submit(input.prompt, {
+      ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
+    });
     const result = handle.receipt.result as {
       readonly answer?: string;
       readonly status?: string;
@@ -97,6 +101,7 @@ export async function submitTurnOverApp(input: {
       readonly presentation?: unknown;
     } | undefined;
     return {
+      turnId: handle.turnId,
       answer: typeof result?.answer === "string" ? result.answer : "",
       status: typeof result?.status === "string" ? result.status : handle.receipt.status,
       report: result?.report,

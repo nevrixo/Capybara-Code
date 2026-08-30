@@ -2,6 +2,13 @@
 
 PROTOCOL_VERSION = "1.0"
 EVENT_SCHEMA_VERSION = "1.0"
+CAPABILITY_SCHEMA_REVISION = "2.0"
+METHOD_CAPABILITY_STATES = (
+    "available",
+    "read-only",
+    "disabled",
+    "unsupported",
+)
 
 APP_METHODS = (
     "server.initialize",
@@ -35,6 +42,9 @@ APP_METHODS = (
     "turn.get",
     "turn.list",
     "turn.wait",
+    "turn.input.get",
+    "turn.input.update",
+    "turn.input.resolve",
     "events.subscribe",
     "events.unsubscribe",
     "events.replay",
@@ -94,6 +104,13 @@ APP_METHODS = (
     "plugin.disable",
     "plugin.grants",
     "plugin.resolveGrant",
+    "package.search",
+    "package.inspect",
+    "package.install",
+    "package.remove",
+    "package.update",
+    "package.verify",
+    "package.bootstrap",
     "artifact.getMetadata",
     "artifact.read",
     "artifact.stream",
@@ -160,6 +177,16 @@ EVENT_KINDS = (
     "token_saving.changed",
     "token_saving.policy_applied",
     "token_saving.relaxed",
+    "deep_plan.started",
+    "deep_plan.questionnaire_opened",
+    "deep_plan.questionnaire_updated",
+    "deep_plan.questionnaire_answered",
+    "deep_plan.plan_written",
+    "deep_plan.paused",
+    "deep_plan.resumed",
+    "deep_plan.draft_requested",
+    "deep_plan.completed",
+    "deep_plan.cancelled",
     "assistant.thinking",
     "model.capability_snapshot",
     "model.route_decided",

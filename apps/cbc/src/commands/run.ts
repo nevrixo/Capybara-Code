@@ -4,6 +4,11 @@ import { randomUUID } from "node:crypto";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { renderChatResponse, renderReport, type CompletionPresentation, type CompletionReport } from "@cbc/agent-kernel";
+import {
+  validateTriggerEnvelope,
+  type HeadlessPermissionPolicy,
+  type TriggerEnvelope,
+} from "@cbc/integration-core";
 import type { CbcEvent } from "@cbc/protocol";
 
 import { bootstrapSession, warmContext } from "../bootstrap.ts";
@@ -16,6 +21,9 @@ export interface RunArgs {
   readonly prompt?: string;
   /** Internal machine-readable result sink for repository-owned integrations. */
   readonly resultFile?: string;
+  /** Strict minimized integration envelope; raw provider payloads are rejected. */
+  readonly eventFile?: string;
+  readonly permissionPolicy?: HeadlessPermissionPolicy;
   /** Internal event tap used by repository-owned integrations such as cbc-bench. */
   readonly onEvent?: (event: CbcEvent) => void;
   /** Internal cancellation signal; the public CLI installs process signal handlers. */
@@ -27,6 +35,13 @@ interface FinalStatusPayload {
   readonly status: "completed" | "partial" | "failed" | "cancelled";
   readonly exitCode: number;
   readonly changedFiles: string[];
+  readonly turnId: string;
+  readonly summary: string;
+  readonly commitSha: null;
+  readonly evidenceIds: readonly string[];
+  readonly verification: readonly Readonly<Record<string, unknown>>[];
+  readonly annotations: readonly Readonly<Record<string, unknown>>[];
+  readonly artifacts: readonly Readonly<Record<string, unknown>>[];
   readonly tests?: { passed: number; failed: number; notRun: number };
   readonly risks?: string[];
   /** A category only; never serialize unredacted exception text into the result. */
@@ -34,12 +49,13 @@ interface FinalStatusPayload {
 }
 
 interface ResultFilePayload extends FinalStatusPayload {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: "1.0";
   readonly sessionId: string;
 }
 
 export async function run(context: CommandContext, args: RunArgs): Promise<CommandResult> {
-  const prompt = resolvePrompt(args);
+  const trigger = await resolveTrigger(args, context);
+  const prompt = resolvePrompt(args, trigger);
   const resultFile = resolveResultFile(args);
   const resultJournalFile = resolveResultJournalFile(resultFile);
 
@@ -49,7 +65,7 @@ export async function run(context: CommandContext, args: RunArgs): Promise<Comma
 
   const boot = await bootstrapSession({
     context,
-    headlessPolicy: "deny-on-ask",
+    headlessPolicy: args.permissionPolicy ?? "deny-on-ask",
     ...(args.noDaemon === true ? { noDaemon: true } : {}),
     ...(args.onEvent !== undefined ? { onEvent: (event) => args.onEvent?.(event) } : {}),
   });
@@ -78,6 +94,7 @@ export async function run(context: CommandContext, args: RunArgs): Promise<Comma
       sessionId: boot.sessionId,
       prompt,
       signal,
+      ...(trigger === undefined ? {} : { idempotencyKey: trigger.idempotencyKey }),
     });
     const result = boot.appClient ? boot.session.snapshotCompletionReport(submitted.answer) : undefined;
     const report = (submitted.report as CompletionReport | undefined) ?? result ?? boot.session.snapshotCompletionReport(submitted.answer);
@@ -86,7 +103,7 @@ export async function run(context: CommandContext, args: RunArgs): Promise<Comma
     // integrations can continue to call renderReport directly.
     finalText = renderChatResponse(report, submitted.answer, presentation === undefined ? {} : { presentation });
     code = exitForStatus(report.status);
-    payload = payloadFromReport(report, code);
+    payload = payloadFromReport(report, code, submitted.turnId, undefined, trigger);
   } catch (error) {
     if (controller !== undefined) {
       process.off("SIGINT", onSignal);
@@ -101,7 +118,9 @@ export async function run(context: CommandContext, args: RunArgs): Promise<Comma
     payload = payloadFromReport(
       boot.session.snapshotCompletionReport(finalText),
       code,
+      boot.session.viewModel.currentTurnId ?? "turn_failed",
       errorCategory(error),
+      trigger,
     );
 
     context.warn(finalText);
@@ -127,12 +146,21 @@ export async function run(context: CommandContext, args: RunArgs): Promise<Comma
 function payloadFromReport(
   report: CompletionReport,
   exitCode: number,
+  turnId: string,
   errorCategory?: string,
+  trigger?: TriggerEnvelope,
 ): FinalStatusPayload {
   return {
     status: report.status,
     exitCode,
     changedFiles: report.changedFiles.map((file) => file.path),
+    turnId,
+    summary: report.summary,
+    commitSha: null,
+    evidenceIds: [...(trigger?.evidenceRefs ?? [])],
+    verification: report.verification.map((step) => ({ ...step })),
+    annotations: [],
+    artifacts: [],
     tests: {
       passed: report.verification.filter((step) => step.status === "passed").length,
       failed: report.verification.filter((step) => step.status === "failed").length,
@@ -156,7 +184,7 @@ async function emitFinal(
   if (resultFile !== undefined) {
     try {
       await writeResultFile(resultFile, {
-        schemaVersion: 1,
+        schemaVersion: "1.0",
         sessionId: boot.sessionId,
         ...payload,
       });
@@ -215,11 +243,42 @@ function errorCategory(error: unknown): string {
   return "unhandled";
 }
 
-function resolvePrompt(args: RunArgs): string {
-  if (args.prompt === undefined || args.prompt.trim().length === 0) {
+function resolvePrompt(args: RunArgs, trigger: TriggerEnvelope | undefined): string {
+  if (trigger !== undefined && args.prompt !== undefined && args.prompt.trim().length > 0) {
+    throw new CliError(EXIT.usage, "capy run accepts either a prompt or --event-file, not both");
+  }
+  const prompt = trigger?.promptText ?? args.prompt;
+  if (prompt === undefined || prompt.trim().length === 0) {
     throw new CliError(EXIT.usage, "capy run needs a prompt", [
       "Try: capy run \"Fix the failing parser test\"",
     ]);
   }
-  return args.prompt.trim();
+  return prompt.trim();
+}
+
+async function resolveTrigger(
+  args: RunArgs,
+  context: CommandContext,
+): Promise<TriggerEnvelope | undefined> {
+  if (args.eventFile === undefined) return undefined;
+  const content = await context.host.fs.read(args.eventFile);
+  if (content === undefined) {
+    throw new CliError(EXIT.usage, "integration event file does not exist", [args.eventFile]);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    throw new CliError(EXIT.usage, "integration event file is not valid JSON");
+  }
+  let trigger: TriggerEnvelope;
+  try {
+    trigger = validateTriggerEnvelope(parsed);
+  } catch {
+    throw new CliError(EXIT.permission, "integration event envelope failed validation");
+  }
+  if (!trigger.trusted) {
+    throw new CliError(EXIT.permission, "untrusted integration triggers are denied in headless runs");
+  }
+  return trigger;
 }

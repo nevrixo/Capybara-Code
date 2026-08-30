@@ -1,0 +1,16 @@
+{
+  "name": "@cbc/acp-adapter",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "ACP v1 stdio adapter for the Capybara App Protocol runtime",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@cbc/app-protocol": "workspace:*",
+    "@cbc/integration-core": "workspace:*"
+  }
+}
