@@ -27,6 +27,58 @@ function sessionRuntime() {
 }
 
 describe("root TODO completion integration", () => {
+  test("an unfinished TODO keeps a differently worded follow-up in the same reasoning epoch", async () => {
+    const provider = new MockProvider({
+      steps: [
+        {
+          toolCalls: [{
+            callId: "todo-epoch-create",
+            name: "todo.write",
+            arguments: {
+              expectedRevision: 0,
+              reason: "track parser continuation",
+              items: [{
+                id: "parser-follow-up",
+                text: "finish parser follow-up",
+                status: "pending",
+                kind: "implementation",
+              }],
+            },
+          }],
+        },
+        { incompleteReason: "paused with unfinished TODO" },
+        { incompleteReason: "paused follow-up" },
+      ],
+    });
+    const events: CbcEvent[] = [];
+    let now = 500;
+    const session = new AgentSession({
+      host: { now: () => ++now } as never,
+      runtime: sessionRuntime() as never,
+      config: loadConfig({ projectTrusted: true, env: {} }).config,
+      workspacePath: "/work",
+      workspaceIdentityDigest: "e".repeat(64),
+      trust: "trusted-always",
+      sessionId: "todo-epoch-continuation",
+      provider,
+      approvals: { request: async () => ({ kind: "allow_once" as const }) },
+      granted: new GrantedRules(),
+      nonInteractive: false,
+      now: () => ++now,
+      onEvent: (event) => { events.push(event); },
+    });
+
+    await session.submit("Fix the parser", new AbortController().signal);
+    const firstEpochId = session.taskEpoch.requireCurrent().id;
+    await session.submit("Please continue with the remaining parser work", new AbortController().signal);
+
+    expect(session.taskEpoch.requireCurrent().id).toBe(firstEpochId);
+    expect(session.taskEpoch.scope().continuity).toBe("all_turns");
+    expect(provider.requests[2]?.reasoning.context).toBe("all_turns");
+    expect(events.filter((event) => event.kind === "reasoning.epoch_started")).toHaveLength(1);
+    expect(events.filter((event) => event.kind === "reasoning.epoch_reset")).toHaveLength(0);
+  });
+
   test("a real todo.write plan prevents a premature final until every item is done", async () => {
     const provider = new MockProvider({
       steps: [

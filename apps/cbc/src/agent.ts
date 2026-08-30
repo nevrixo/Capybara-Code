@@ -30,7 +30,7 @@ import {
 } from "@cbc/agent-kernel";
 import type { CbcConfig, ReasoningEffort } from "@cbc/config-schema";
 import { MemoryService } from "@cbc/memory-service";
-import { requestModeChange, TaskEpochManager, type InteractionMode, type ModeChangeSource } from "@cbc/session-domain";
+import { requestModeChange, TaskEpochManager, type EpochTransition, type InteractionMode, type ModeChangeSource } from "@cbc/session-domain";
 import {
   ContextEngine,
   MemoryBank,
@@ -1138,6 +1138,10 @@ export class AgentSession {
         metadata === undefined ? {} : { metadata },
       ),
       callerId: "root",
+      reasoningEpoch: () => {
+        const epoch = this.taskEpoch.requireCurrent();
+        return { ...epoch.reasoningScope, resetReason: epoch.resetReason };
+      },
       taskEpochId: () => this.taskEpoch.current()?.id,
       workspaceIdentityDigest: () => this.taskEpoch.current()?.workspaceIdentityDigest,
       ...(options.reasoningEffortLocked === true ? { reasoningEffortLocked: true } : {}),
@@ -1284,6 +1288,12 @@ export class AgentSession {
           correctiveAction: analysis.correctiveAction,
           paths: [...analysis.implicatedPaths],
         });
+        if (analysis.approachInvalid) {
+          this.#announceEpochTransition(this.taskEpoch.invalidateHypothesis());
+        }
+      },
+      onRedirect: () => {
+        this.#announceEpochTransition(this.taskEpoch.transition({ constraintChanged: true }));
       },
       // 짠12.5: when reflection abandons an approach, the runtime undoes what that
       // approach wrote. The kernel decides; only the runtime can decide per path
@@ -3936,8 +3946,14 @@ export class AgentSession {
     this.#tokenSavingContinuationRecovery = false;
     this.#emitTokenSavingPolicy(this.#tokenSavingResolve(this.#tokenSavingPhase()));
 
+    const previousEpoch = this.taskEpoch.current();
+    const continuingContract = this.#todoController.current().items.some(
+      (item) => item.status !== "done" && item.status !== "skipped",
+    );
     const epoch = this.taskEpoch.transition({
-      goalDigest: stableDigest(prompt),
+      goalDigest: continuingContract && previousEpoch !== undefined
+        ? previousEpoch.goalDigest
+        : stableDigest(prompt),
       modelId: this.#options.config.model.default,
       workspaceIdentityDigest: this.#options.workspaceIdentityDigest ?? stableDigest(this.#options.workspacePath),
     });
@@ -3975,17 +3991,7 @@ export class AgentSession {
         }, this.#currentScope());
       }
     }
-    if (epoch.reset) {
-      this.kernel.resetProviderContinuation();
-      this.#tokenSaving.resetDirectiveTracking();
-    }
-    this.#emit(this.#epochAnnounced ? "reasoning.epoch_reset" : "reasoning.epoch_started", {
-      taskEpochId: epoch.current.id,
-      generation: epoch.current.generation,
-      reason: epoch.reason,
-      workspaceIdentityDigest: epoch.current.workspaceIdentityDigest,
-    }, this.#currentScope());
-    this.#epochAnnounced = true;
+    this.#announceEpochTransition(epoch);
     // Routing is decided exactly once, inside the kernel (짠10.5). The kernel
     // emits `model.route_decided` / `model.capability_snapshot` /
     // `reasoning.context_effective` from that decision and hands it back to the
@@ -4063,6 +4069,20 @@ export class AgentSession {
       this.context.forgetReflections();
     }
     return result;
+  }
+
+  /** Journal only real epoch boundaries; unchanged follow-ups stay silent. */
+  #announceEpochTransition(transition: EpochTransition): void {
+    if (this.#epochAnnounced && !transition.reset) return;
+    if (transition.reset) this.#tokenSaving.resetDirectiveTracking();
+    this.#emit(this.#epochAnnounced ? "reasoning.epoch_reset" : "reasoning.epoch_started", {
+      taskEpochId: transition.current.id,
+      generation: transition.current.generation,
+      reason: transition.reason,
+      continuity: transition.current.reasoningScope.continuity,
+      workspaceIdentityDigest: transition.current.workspaceIdentityDigest,
+    }, this.#currentScope());
+    this.#epochAnnounced = true;
   }
 
   /** Emit an event that did not come from the kernel, e.g. a local notice. */
