@@ -27,6 +27,7 @@ import {
   type ReviewOutcome,
   type TokenSavingLevel,
   type TokenSavingPhase,
+  toModelSchema,
   type TurnResult,
 } from "@cbc/agent-kernel";
 import type { CacheMode, CbcConfig, ReasoningEffort } from "@cbc/config-schema";
@@ -110,10 +111,13 @@ import {
   type SkillDefinition,
   type SkillFile,
 } from "@cbc/skills";
-import type {
-  ChildRunContext,
-  CustomAgentDefinition,
-  SubagentScheduler,
+import {
+  HostedScoutCoordinator,
+  localHostedScoutTransport,
+  providerHostedScoutTransport,
+  type ChildRunContext,
+  type CustomAgentDefinition,
+  type SubagentScheduler,
 } from "@cbc/subagents";
 import { errorResult, nativeToolsForFeatures, okResult, ToolRegistry, globMatch, type ToolDefinition } from "@cbc/tool-registry";
 
@@ -606,6 +610,11 @@ export class AgentSession {
   readonly #contextScopes = new Map<string, AgentContextScope>();
   #rootContextScope!: AgentContextScope;
   readonly #subagentBridge: SubagentBridge;
+  /**
+   * §5.6 hosted scout subtree. Rebuilt when the epoch, route, or turn changes,
+   * because the ancestry its events must carry is scoped to all three.
+   */
+  #hostedScout: { readonly key: string; readonly coordinator: HostedScoutCoordinator } | undefined;
   readonly #readCache: ReadCache;
   /** Integrated token-saving controller (`agent.tokenSaving`). */
   readonly #tokenSaving: TokenSavingController;
@@ -685,7 +694,10 @@ export class AgentSession {
       initial: {
         goalDigest: "unassigned-goal",
         policyDigest: sessionPolicyDigest(options.config),
-        workspaceIdentityDigest: options.workspaceIdentityDigest ?? stableDigest(options.workspacePath),
+        workspaceIdentityDigest: stableDigest({
+          workspace: options.workspaceIdentityDigest ?? stableDigest(options.workspacePath),
+          generation: 0,
+        }),
         toolsetDigest: toolsetDigest(sessionTools),
         modelId: options.config.model.default,
       },
@@ -792,6 +804,10 @@ export class AgentSession {
           sessionId: options.sessionId,
           allowSessionFallback: options.config.memory.allowSessionFallback,
           confidenceThresholds: options.config.memory.confidence,
+          // §8.4 [agent.learning] drives the §6.3 capsule gates; the store
+          // enforces them, so the only wiring needed is handing the values over.
+          capsulePolicy: options.config.agent.learning.strategyCapsules,
+          minVerifiedObservations: options.config.agent.learning.minVerifiedObservations,
           resolveEvidence: (id) => {
             const record = this.context.evidence.get(id as `evidence-${string}`);
             if (record === undefined) return undefined;
@@ -1196,6 +1212,11 @@ export class AgentSession {
       maxOutputTokens: options.config.model.maxOutputTokens,
       promptCompiler: options.config.agent.promptCompiler,
       parallelToolCalls: options.config.agent.toolGraph.providerParallelTools,
+      // §5.15: the kernel keeps the hosted_scout lane only when a dispatcher can
+      // actually run the subtree. Reporting availability rather than handing over
+      // the coordinator keeps request construction on the session side, where the
+      // separate read-only request belongs.
+      hostedScoutDispatcher: { available: () => this.#hostedScoutCoordinator() !== undefined },
       programmaticPolicy: {
         enabled: options.config.provider.openai.native.programmaticToolCalling === "read-only",
         maxToolCalls: options.config.provider.openai.native.maxProgramToolCalls,
@@ -1601,7 +1622,10 @@ export class AgentSession {
       if (affected.length === 0) {
         this.#readCache.invalidateAll();
         if (!alreadyFenced) {
-          this.#invalidateWholeWorkspace(`${event.action.toolId} reported ${errorCode}`);
+          this.#invalidateWholeWorkspace(
+            `${event.action.toolId} reported ${errorCode}`,
+            { external: true },
+          );
         }
       } else {
         this.#readCache.invalidatePaths(affected.map((path) => this.#canonicalWorkspacePath(path)));
@@ -1656,6 +1680,9 @@ export class AgentSession {
       this.#workspaceGeneration += 1;
       this.#verificationInvalidatingGeneration = this.#workspaceGeneration;
       for (const path of event.action.reads ?? []) this.#recordPathMutation(path);
+      // The bytes moved without this session writing them, so §5.11 row 5
+      // applies: the evidence the model reasoned from no longer exists.
+      this.#noteExternalWorkspaceChange();
     }
     for (const evidenceId of result.invalidatedEvidenceIds) {
       this.#emit("context.evidence_invalidated", {
@@ -1992,7 +2019,7 @@ export class AgentSession {
 
   #invalidateWholeWorkspace(
     reason: string,
-    options: { readonly verificationNeutral?: boolean } = {},
+    options: { readonly verificationNeutral?: boolean; readonly external?: boolean } = {},
   ): void {
     this.#pendingRepositoryDeltaPaths.clear();
     this.#workspaceGeneration += 1;
@@ -2002,6 +2029,15 @@ export class AgentSession {
       this.#verificationInvalidatingGeneration = this.#workspaceGeneration;
     }
     this.#cacheKey = undefined;
+    // §5.11 rows 5-6 differ by authorship, not by blast radius. Losing the whole
+    // workspace view because a process this session ran wrote somewhere it did
+    // not declare is still our own change; only a change we did not make
+    // invalidates what the model reasoned from.
+    if (options.external === true) {
+      this.#noteExternalWorkspaceChange();
+    } else {
+      this.taskEpoch.observeWorkspace(this.#liveWorkspaceIdentityDigest());
+    }
     for (const [agentId, agentScope] of this.#contextScopes) {
       const invalidation = agentScope.engine.invalidateWorkspace(reason);
       const scope = agentId === "root"
@@ -2057,6 +2093,10 @@ export class AgentSession {
       this.#workspaceGeneration += 1;
       this.kernel.resetProviderContinuation(`workspace generation changed: ${reason}`);
       this.#verificationInvalidatingGeneration = this.#workspaceGeneration;
+      // §5.11 row 6: the epoch's workspace identity moves with the generation,
+      // but a path this session mutated is not a reason to discard its own
+      // reasoning about the change it just made.
+      this.taskEpoch.observeWorkspace(this.#liveWorkspaceIdentityDigest());
     }
     this.#recordPathMutation(path);
     this.#pendingRepositoryDeltaPaths.add(this.#canonicalWorkspacePath(path));
@@ -3308,6 +3348,9 @@ export class AgentSession {
     const evaluation = this.#goalContract.recordTurn({
       elapsedMs: Math.max(0, this.#options.host.now() - startedAt),
       ...(verified.length > 0 ? { satisfiedChecks: verified } : {}),
+      ...(this.#turnChangedPaths.size > 0
+        ? { changedPaths: [...this.#turnChangedPaths] }
+        : {}),
       ...(blocked !== undefined && blocked.length > 0 ? { blockedReason: blocked } : {}),
     }, this.#todoController.current());
     if (evaluation !== undefined) {
@@ -3319,6 +3362,9 @@ export class AgentSession {
         ...(evaluation.nextTodoId !== undefined ? { nextTodoId: evaluation.nextTodoId } : {}),
         statement: evaluation.statement,
         budgetRemaining: evaluation.budgetRemaining,
+        ...(evaluation.outOfScopePaths !== undefined
+          ? { outOfScopePaths: evaluation.outOfScopePaths }
+          : {}),
       } as never, this.#currentScope());
     }
     return evaluation;
@@ -3400,6 +3446,88 @@ export class AgentSession {
     return rendered.length <= limit
       ? rendered
       : rendered.slice(0, limit) + "\n\n[diff truncated at 64 KiB]";
+  }
+
+  /**
+   * §5.6/§5.15: build the hosted scout subtree for the current turn.
+   *
+   * The kernel deliberately cannot build this itself — the hosted scout is a
+   * *separate* read-only request, and the coordinator that admits it and
+   * revalidates its evidence capsule belongs to the session. Without this the
+   * kernel demoted every hosted_scout route to direct, so the lane existed only
+   * as a policy decision nothing could act on.
+   */
+  #hostedScoutCoordinator(): HostedScoutCoordinator | undefined {
+    const config = this.#options.config;
+    if (config.provider.openai.native.hostedMultiAgent !== "read-only") return undefined;
+    if (config.provider.openai.native.maxHostedAgents <= 0) return undefined;
+    const epoch = this.taskEpoch.current();
+    if (epoch === undefined) return undefined;
+    const turnId = this.recorder.model.currentTurnId;
+    if (turnId === undefined) return undefined;
+    const routeId = this.#currentRoute?.routeId;
+    if (routeId === undefined) return undefined;
+
+    const key = `${epoch.id}|${turnId}|${routeId}`;
+    if (this.#hostedScout?.key === key) return this.#hostedScout.coordinator;
+    const coordinator = new HostedScoutCoordinator({
+      policy: {
+        ...DEFAULT_HOSTED_SCOUT_POLICY,
+        maxAgents: config.provider.openai.native.maxHostedAgents,
+        maxConcurrentAgents: Math.min(3, config.provider.openai.native.maxHostedAgents),
+      },
+      taskEpochId: epoch.id,
+      workspaceIdentityDigest: epoch.workspaceIdentityDigest,
+      taskId: this.#taskDescription ?? turnId,
+      turnId,
+      routeId,
+      callerId: "root",
+      currentSequence: this.#workspaceGeneration,
+      transport: providerHostedScoutTransport({
+        execution: {
+          stream: (request, signal) => this.#options.provider.stream(request, signal),
+          // A scout's reads go through the same executor the root turn uses, so
+          // the permission layer and read cache still apply — the hosted lane is
+          // not a way around either.
+          callTool: async (call, signal) => {
+            const execution = await this.executor.execute({
+              callId: call.callId,
+              toolId: call.name,
+              arguments: safeToolArguments(call.argumentsText),
+              display: `${call.name} (hosted scout)`,
+            }, signal);
+            return JSON.stringify(execution.result);
+          },
+        },
+        model: this.#currentRoute?.model ?? config.model.default,
+        catalog: () => this.registry.activeToolsFor("plan").map((tool) => toModelSchema(tool)),
+        reasoningMode: config.model.reasoningMode,
+        reasoningEffort: config.model.reasoningEffort,
+      }),
+      // §5.8: a hosted failure continues the same task on the local subagent path.
+      fallback: localHostedScoutTransport({
+        runner: {
+          run: async (spawn) => {
+            const handle = this.subagents.spawn({ role: spawn.role, task: spawn.task });
+            return await this.subagents.await(handle.id, spawn.signal);
+          },
+        },
+        staleAfterSequence: this.#workspaceGeneration + 1,
+      }),
+      emitter: {
+        emit: (kind, payload, ancestry) => {
+          this.#emitKernelEvent(kind, payload, {
+            turnId: ancestry.turnId,
+            agentId: ancestry.agentId,
+            callerId: ancestry.callerId,
+            taskEpochId: ancestry.taskEpochId,
+            workspaceIdentityDigest: ancestry.workspaceIdentityDigest,
+          });
+        },
+      },
+    });
+    this.#hostedScout = { key, coordinator };
+    return coordinator;
   }
 
   /** Independent provider call over the bounded material above. */
@@ -4133,7 +4261,7 @@ export class AgentSession {
         ? previousEpoch.goalDigest
         : stableDigest(prompt),
       modelId: this.#options.config.model.default,
-      workspaceIdentityDigest: this.#options.workspaceIdentityDigest ?? stableDigest(this.#options.workspacePath),
+      workspaceIdentityDigest: this.#liveWorkspaceIdentityDigest(),
     });
     const activeDeepPlanMode =
       this.recorder.model.modeState.selected === "plan"
@@ -4251,6 +4379,33 @@ export class AgentSession {
     // contract has to say whether the goal can still proceed.
     this.#evaluateGoalContract(result.report);
     return result;
+  }
+
+  /**
+   * The epoch's live workspace identity (§5.11 row 6). Folding the generation
+   * into the startup digest is what makes a mutation visible to the epoch at
+   * all: the constructor's digest is a constant, so before this every turn
+   * re-sent the same startup identity no matter how much the workspace had
+   * moved underneath it.
+   */
+  #liveWorkspaceIdentityDigest(): string {
+    return stableDigest({
+      workspace: this.#options.workspaceIdentityDigest ?? stableDigest(this.#options.workspacePath),
+      generation: this.#workspaceGeneration,
+    });
+  }
+
+  /**
+   * §5.11 row 5: a change this session did not author. The evidence the model
+   * reasoned from was read before that change, so unlike a mutation of our own
+   * this cannot be absorbed by refreshing the identity — the reasoning built on
+   * those bytes has to be detached.
+   */
+  #noteExternalWorkspaceChange(): void {
+    this.#announceEpochTransition(this.taskEpoch.transition({
+      workspaceStale: true,
+      workspaceIdentityDigest: this.#liveWorkspaceIdentityDigest(),
+    }));
   }
 
   /**

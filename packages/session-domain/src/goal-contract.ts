@@ -111,6 +111,8 @@ export interface GoalProgress {
   readonly manualCriteriaMet?: readonly string[];
   readonly awaitingApproval?: boolean;
   readonly blockedReason?: string;
+  /** Paths the turn actually changed, checked against the declared scope. */
+  readonly changedPaths?: readonly string[];
 }
 
 export interface GoalEvaluation {
@@ -122,6 +124,13 @@ export interface GoalEvaluation {
   readonly nextTodoId?: string;
   /** A user-facing sentence naming the exact state (§P1-04(c)). */
   readonly statement: string;
+  /**
+   * Changed paths outside `allowedScope`. Reported, never enforced: the contract
+   * declares intent and the permission layer owns authority, so a scope drift
+   * has to be visible without becoming a second, weaker gate that could
+   * disagree with the real one.
+   */
+  readonly outOfScopePaths?: readonly string[];
   readonly budgetRemaining: {
     readonly turns: number;
     readonly wallTimeMs: number;
@@ -262,6 +271,10 @@ export function evaluateGoalContract(
   progress: GoalProgress,
 ): GoalEvaluation {
   const outstanding = outstandingCriteria(contract, todos, progress);
+  const outOfScope = (progress.changedPaths ?? []).filter(
+    (path) => !withinGoalScope(contract, path),
+  );
+  const scope = outOfScope.length > 0 ? { outOfScopePaths: outOfScope } : {};
   const remaining = {
     turns: Math.max(0, contract.budget.maxTurns - Math.max(0, progress.turnsUsed)),
     wallTimeMs: Math.max(0, contract.budget.wallTimeMs - Math.max(0, progress.elapsedMs)),
@@ -280,6 +293,7 @@ export function evaluateGoalContract(
       outstanding,
       remaining,
       "waiting for approval before the next step can run",
+      scope,
     );
   }
   if (remaining.wallTimeMs <= 0) {
@@ -289,6 +303,7 @@ export function evaluateGoalContract(
       outstanding,
       remaining,
       `stopped after ${Math.round(contract.budget.wallTimeMs / 1000)}s of wall time`,
+      scope,
     );
   }
   if (remaining.costUsd !== undefined && remaining.costUsd <= 0) {
@@ -298,6 +313,7 @@ export function evaluateGoalContract(
       outstanding,
       remaining,
       `stopped at the $${contract.budget.costUsd?.toFixed(2)} cost ceiling`,
+      scope,
     );
   }
   if (
@@ -310,6 +326,7 @@ export function evaluateGoalContract(
       outstanding,
       remaining,
       `stopped after ${progress.repeatedFailures} consecutive identical failures`,
+      scope,
     );
   }
   if (
@@ -322,6 +339,7 @@ export function evaluateGoalContract(
       outstanding,
       remaining,
       `stopped after ${progress.missedHeartbeats} missed heartbeats`,
+      scope,
     );
   }
   if (outstanding.length === 0 && contract.successCriteria.length > 0) {
@@ -331,6 +349,7 @@ export function evaluateGoalContract(
       outstandingCriteria: [],
       statement: `every success criterion for "${contract.goal}" is met`,
       budgetRemaining: remaining,
+      ...scope,
     };
   }
   if (remaining.turns <= 0) {
@@ -340,6 +359,7 @@ export function evaluateGoalContract(
       outstanding,
       remaining,
       `stopped at the ${contract.budget.maxTurns}-turn ceiling with ${outstanding.length} criteria open`,
+      scope,
     );
   }
 
@@ -353,6 +373,7 @@ export function evaluateGoalContract(
         ? `${outstanding.length} criteria open and no TODO left to advance them`
         : `working ${next.id}: ${next.text}`,
     budgetRemaining: remaining,
+    ...scope,
   };
 }
 
@@ -362,8 +383,9 @@ function stopped(
   outstandingCriteria: readonly string[],
   budgetRemaining: GoalEvaluation["budgetRemaining"],
   statement: string,
+  scope: { readonly outOfScopePaths?: readonly string[] } = {},
 ): GoalEvaluation {
-  return { status, stopReason, outstandingCriteria, statement, budgetRemaining };
+  return { status, stopReason, outstandingCriteria, statement, budgetRemaining, ...scope };
 }
 
 function outstandingCriteria(
@@ -515,6 +537,9 @@ function normalizeProgress(raw: unknown): GoalProgress {
       : {}),
     ...(Array.isArray(source.manualCriteriaMet)
       ? { manualCriteriaMet: sanitizeList(source.manualCriteriaMet) }
+      : {}),
+    ...(Array.isArray(source.changedPaths)
+      ? { changedPaths: sanitizeList(source.changedPaths, 256) }
       : {}),
     ...(source.awaitingApproval === true ? { awaitingApproval: true } : {}),
     ...(typeof source.blockedReason === "string"
