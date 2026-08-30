@@ -272,6 +272,10 @@ export class SessionActor {
         this.#revision += 1;
         return;
       case "mark_waiting_user_input":
+        if (
+          this.#pendingUserInputId === command.questionnaireId &&
+          this.#lifecycle === "waiting_user_input"
+        ) return;
         this.#pendingUserInputId = command.questionnaireId;
         this.#lifecycle = "waiting_user_input";
         this.#revision += 1;

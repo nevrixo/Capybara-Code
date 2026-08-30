@@ -367,6 +367,9 @@ export class CapybaraDaemon {
         "session.detach",
         "turn.submit",
         "turn.cancel",
+        "turn.input.get",
+        "turn.input.update",
+        "turn.input.resolve",
         "graph.get",
         "graph.listNodes",
         "task.get",
@@ -554,6 +557,63 @@ export class CapybaraDaemon {
           const located = findDaemonSession(daemon, sessionId);
           if (located === undefined) throw new Error("unknown session");
           return { ...located.actor.state };
+        }
+        if (input.method === "turn.input.get") {
+          const params = requireRecord(input.params);
+          const sessionId = requireString(params.sessionId);
+          const result = await daemon.workers.request(
+            sessionId,
+            "turn.input.get",
+            params,
+          );
+          const pending = isRecord(result) && isRecord(result.pending)
+            ? result.pending
+            : undefined;
+          const questionnaireId =
+            pending !== undefined && typeof pending.questionnaireId === "string"
+              ? pending.questionnaireId
+              : undefined;
+          const located = findDaemonSession(daemon, sessionId);
+          if (located !== undefined && questionnaireId !== undefined) {
+            await located.actor.dispatch({
+              kind: "mark_waiting_user_input",
+              questionnaireId,
+            });
+          }
+          return result;
+        }
+        if (
+          input.method === "turn.input.update" ||
+          input.method === "turn.input.resolve"
+        ) {
+          const command = appCommand(input.params);
+          return (await commands.execute(command, async () => {
+            const payload = requireRecord(command.payload);
+            const sessionId = requireString(command.sessionId ?? payload.sessionId);
+            const questionnaireId = requireString(payload.questionnaireId);
+            const result = await daemon.workers.request(
+              sessionId,
+              input.method,
+              payload,
+            );
+            if (input.method === "turn.input.resolve") {
+              const located = findDaemonSession(daemon, sessionId);
+              if (located !== undefined) {
+                if (located.actor.state.pendingUserInputId === undefined) {
+                  await located.actor.dispatch({
+                    kind: "mark_waiting_user_input",
+                    questionnaireId,
+                  });
+                }
+                await located.actor.dispatch({
+                  kind: "resolve_user_input",
+                  clientId: input.clientId,
+                  questionnaireId,
+                });
+              }
+            }
+            return completedReceipt(command, daemon.#now(), result);
+          })).receipt;
         }
         if (input.method === "turn.submit") {
           const command = appCommand(input.params);

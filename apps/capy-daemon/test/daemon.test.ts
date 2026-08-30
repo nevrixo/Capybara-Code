@@ -572,6 +572,15 @@ describe("default App backend session receipts", () => {
         },
         async request(_sessionId, method, params) {
           workerRequests.push({ method, params });
+          if (method === "turn.input.get") {
+            return {
+              pending: {
+                questionnaireId: "cache-round-1",
+                reason: "Choose cache behavior",
+                questions: [],
+              },
+            };
+          }
           return { method, params };
         },
       },
@@ -679,6 +688,61 @@ describe("default App backend session receipts", () => {
     });
     expect("result" in graph && (graph.result as { method: string }).method).toBe("graph.get");
 
+    const pendingInput = await daemon.dispatch(connectionId, {
+      jsonrpc: "2.0",
+      id: 711,
+      method: "turn.input.get",
+      params: { sessionId },
+    });
+    expect("result" in pendingInput && JSON.stringify(pendingInput.result)).toContain(
+      "cache-round-1",
+    );
+    const waitingSession = await daemon.dispatch(connectionId, {
+      jsonrpc: "2.0",
+      id: 712,
+      method: "session.get",
+      params: { sessionId },
+    });
+    expect("result" in waitingSession && (waitingSession.result as { lifecycle: string }).lifecycle)
+      .toBe("waiting_user_input");
+
+    const inputUpdate = await daemon.dispatch(connectionId, {
+      jsonrpc: "2.0",
+      id: 713,
+      method: "turn.input.update",
+      params: {
+        command: command("input-update", {
+          questionnaireId: "cache-round-1",
+          activeQuestionIndex: 0,
+          answers: [],
+        }, sessionId),
+      },
+    });
+    expect("result" in inputUpdate && (inputUpdate.result as { status: string }).status)
+      .toBe("completed");
+    const inputResolve = await daemon.dispatch(connectionId, {
+      jsonrpc: "2.0",
+      id: 714,
+      method: "turn.input.resolve",
+      params: {
+        command: command("input-resolve", {
+          questionnaireId: "cache-round-1",
+          status: "submitted",
+          answers: [],
+        }, sessionId),
+      },
+    });
+    expect("result" in inputResolve && (inputResolve.result as { status: string }).status)
+      .toBe("completed");
+    const resumedSession = await daemon.dispatch(connectionId, {
+      jsonrpc: "2.0",
+      id: 715,
+      method: "session.get",
+      params: { sessionId },
+    });
+    expect("result" in resumedSession && (resumedSession.result as { lifecycle: string }).lifecycle)
+      .toBe("running");
+
     const messaged = await daemon.dispatch(connectionId, {
       jsonrpc: "2.0",
       id: 72,
@@ -730,6 +794,9 @@ describe("default App backend session receipts", () => {
     );
     expect(workerRequests.map((entry) => entry.method)).toEqual([
       "graph.get",
+      "turn.input.get",
+      "turn.input.update",
+      "turn.input.resolve",
       "task.message",
       "package.inspect",
       "package.install",

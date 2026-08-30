@@ -339,6 +339,54 @@ describe("AppServer dispatch", () => {
     expect(backend.calls).toEqual([]);
   });
 
+  test("allows questionnaire inspection to observers but reserves answers for controllers", async () => {
+    const observer = server(["observer"]);
+    const observerConnection = await initialize(observer.app);
+    const inspected = await observer.app.dispatch(observerConnection, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "turn.input.get",
+      params: { sessionId: "ses_1" },
+    });
+    expect("result" in inspected).toBe(true);
+
+    const denied = await observer.app.dispatch(observerConnection, {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "turn.input.resolve",
+      params: {},
+    });
+    expect("error" in denied && denied.error.data.code).toBe("APP_ROLE_DENIED");
+
+    const controller = server(["observer", "controller"]);
+    const controllerConnection = await initialize(controller.app);
+    const accepted = await controller.app.dispatch(controllerConnection, {
+      jsonrpc: "2.0",
+      id: 4,
+      method: "turn.input.resolve",
+      params: {
+        command: {
+          schemaVersion: "1.0",
+          commandId: "cmd_input",
+          idempotencyKey: "key_input",
+          correlationId: "cor_input",
+          clientId: "client_tui",
+          issuedAt: T0,
+          sessionId: "ses_1",
+          payload: {
+            questionnaireId: "cache-round-1",
+            status: "submitted",
+            answers: [],
+          },
+        },
+      },
+    });
+    expect("result" in accepted).toBe(true);
+    expect(controller.backend.calls).toEqual([
+      { method: "turn.input.resolve", clientId: "client_tui" },
+    ]);
+  });
+
   test("session attach lifecycle methods do not require a command envelope", async () => {
     const { app, backend } = server(["observer", "controller"]);
     const connectionId = await initialize(app);

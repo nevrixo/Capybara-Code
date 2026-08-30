@@ -8,6 +8,11 @@
 import { createInterface } from "node:readline";
 
 import type { AppMethod } from "@cbc/app-protocol";
+import type {
+  DeepPlanAnswer,
+  UserAskBatchInput,
+  UserAskBatchResult,
+} from "@cbc/session-domain";
 
 import { bootstrapSession } from "../bootstrap.ts";
 import { EXIT } from "../exit.ts";
@@ -18,15 +23,59 @@ export interface SessionWorkerArgs {
   readonly resume?: string;
 }
 
+export interface PendingWorkerQuestionnaire {
+  readonly input: UserAskBatchInput;
+  readonly onDraftChange?: (
+    answers: readonly DeepPlanAnswer[],
+    activeQuestionIndex: number,
+  ) => void;
+  readonly resolve: (result: UserAskBatchResult) => void;
+}
+
 export async function sessionWorker(
   context: CommandContext,
   args: SessionWorkerArgs,
 ): Promise<CommandResult> {
+  const questionnaires = new Map<string, PendingWorkerQuestionnaire>();
   const boot = await bootstrapSession({
     context,
     noDaemon: true,
     ...(args.resume !== undefined ? { resume: args.resume } : {}),
     ...(args.sessionId !== undefined ? { resume: args.sessionId } : {}),
+    bridges: {
+      askBatch: async (input, signal, onDraftChange) => await new Promise<UserAskBatchResult>(
+        (resolve) => {
+          const prior = questionnaires.get(input.questionnaireId);
+          prior?.resolve({
+            questionnaireId: input.questionnaireId,
+            status: "cancelled",
+            answers: [],
+          });
+          let settled = false;
+          const finish = (result: UserAskBatchResult): void => {
+            if (settled) return;
+            settled = true;
+            signal.removeEventListener("abort", onAbort);
+            if (questionnaires.get(input.questionnaireId)?.resolve === finish) {
+              questionnaires.delete(input.questionnaireId);
+            }
+            resolve(result);
+          };
+          const onAbort = (): void => finish({
+            questionnaireId: input.questionnaireId,
+            status: "cancelled",
+            answers: [],
+          });
+          questionnaires.set(input.questionnaireId, {
+            input,
+            ...(onDraftChange === undefined ? {} : { onDraftChange }),
+            resolve: finish,
+          });
+          signal.addEventListener("abort", onAbort, { once: true });
+          if (signal.aborted) onAbort();
+        },
+      ),
+    },
   });
   const rl = createInterface({ input: process.stdin });
   const controllers = new Map<string, AbortController>();
@@ -41,10 +90,17 @@ export async function sessionWorker(
     }
     if (message.method === "session.close") {
       for (const controller of controllers.values()) controller.abort(new Error("session closed"));
+      for (const [questionnaireId, pendingQuestionnaire] of questionnaires) {
+        pendingQuestionnaire.resolve({
+          questionnaireId,
+          status: "cancelled",
+          answers: [],
+        });
+      }
       writeResponse(message.id, { closed: true });
       break;
     }
-    const work = dispatchWorkerMessage(boot, message, controllers).then(
+    const work = dispatchSessionWorkerMessage(boot, message, controllers, questionnaires).then(
       (result) => writeResponse(message.id, result),
       (error) => writeError(message.id, error),
     );
@@ -56,10 +112,11 @@ export async function sessionWorker(
   return ok();
 }
 
-async function dispatchWorkerMessage(
+export async function dispatchSessionWorkerMessage(
   boot: Awaited<ReturnType<typeof bootstrapSession>>,
   message: { readonly id?: string; readonly method?: string; readonly params?: Record<string, unknown> },
   controllers: Map<string, AbortController>,
+  questionnaires: Map<string, PendingWorkerQuestionnaire>,
 ): Promise<unknown> {
   const params = message.params ?? {};
   if (message.method === "turn.cancel") {
@@ -86,6 +143,60 @@ async function dispatchWorkerMessage(
     } finally {
       controllers.delete(turnId);
     }
+  }
+  if (message.method === "turn.input.get") {
+    return {
+      pending: boot.session.deepPlanState.pendingQuestionnaire,
+      state: boot.session.deepPlanState,
+    };
+  }
+  if (message.method === "turn.input.update") {
+    const questionnaireId = requiredString(params.questionnaireId, "questionnaireId");
+    const answers = deepPlanAnswers(params.answers);
+    const activeQuestionIndex =
+      typeof params.activeQuestionIndex === "number" &&
+      Number.isSafeInteger(params.activeQuestionIndex) &&
+      params.activeQuestionIndex >= 0
+        ? params.activeQuestionIndex
+        : 0;
+    const pendingQuestionnaire = questionnaires.get(questionnaireId);
+    if (pendingQuestionnaire?.onDraftChange !== undefined) {
+      pendingQuestionnaire.onDraftChange(answers, activeQuestionIndex);
+    } else {
+      boot.session.updateDeepPlanQuestionnaireDraft(
+        questionnaireId,
+        answers,
+        activeQuestionIndex,
+      );
+    }
+    return {
+      questionnaireId,
+      updated: true,
+      state: boot.session.deepPlanState,
+    };
+  }
+  if (message.method === "turn.input.resolve") {
+    const questionnaireId = requiredString(params.questionnaireId, "questionnaireId");
+    const status = params.status;
+    if (
+      status !== "submitted" &&
+      status !== "draft_now" &&
+      status !== "paused" &&
+      status !== "cancelled" &&
+      status !== "unavailable"
+    ) throw new Error("status is invalid");
+    const result: UserAskBatchResult = {
+      questionnaireId,
+      status,
+      answers: deepPlanAnswers(params.answers),
+    };
+    const pendingQuestionnaire = questionnaires.get(questionnaireId);
+    if (pendingQuestionnaire !== undefined) {
+      pendingQuestionnaire.resolve(result);
+      return { questionnaireId, accepted: true, continuationRequired: false };
+    }
+    boot.session.resolveDeepPlanQuestionnaire(result);
+    return { questionnaireId, accepted: true, continuationRequired: true };
   }
   if (message.method === "graph.get") {
     return {
@@ -149,6 +260,36 @@ async function dispatchWorkerMessage(
     });
   }
   throw Object.assign(new Error("method not found"), { code: -32601 });
+}
+
+function deepPlanAnswers(value: unknown): DeepPlanAnswer[] {
+  if (!Array.isArray(value)) throw new Error("answers must be an array");
+  return value.map((raw, index): DeepPlanAnswer => {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      throw new Error(`answers[${index}] must be an object`);
+    }
+    const answer = raw as Record<string, unknown>;
+    const questionId = requiredString(answer.questionId, `answers[${index}].questionId`);
+    const decisionKey = requiredString(answer.decisionKey, `answers[${index}].decisionKey`);
+    if (
+      answer.selectedOptionIds !== undefined &&
+      (!Array.isArray(answer.selectedOptionIds) ||
+        answer.selectedOptionIds.some((id) => typeof id !== "string"))
+    ) throw new Error(`answers[${index}].selectedOptionIds must be strings`);
+    if (answer.customText !== undefined && typeof answer.customText !== "string") {
+      throw new Error(`answers[${index}].customText must be a string`);
+    }
+    return {
+      questionId,
+      decisionKey,
+      ...(answer.selectedOptionIds === undefined
+        ? {}
+        : { selectedOptionIds: answer.selectedOptionIds as string[] }),
+      ...(typeof answer.customText === "string"
+        ? { customText: answer.customText }
+        : {}),
+    };
+  });
 }
 
 function writeResponse(id: string | undefined, result: unknown): void {

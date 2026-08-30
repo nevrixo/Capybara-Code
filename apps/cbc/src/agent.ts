@@ -930,21 +930,7 @@ export class AgentSession {
             }, this.#currentScope());
           },
         );
-        const completed = this.#deepPlan.completeQuestionnaire(result);
-        const eventKind: CbcEventKind =
-          completed.status === "submitted"
-            ? "deep_plan.questionnaire_answered"
-            : completed.status === "draft_now"
-              ? "deep_plan.draft_requested"
-              : completed.status === "cancelled"
-                ? "deep_plan.cancelled"
-                : "deep_plan.paused";
-        this.#emit(eventKind, {
-          questionnaireId: completed.questionnaireId,
-          status: completed.status,
-          state: this.#deepPlan.current(),
-        }, this.#currentScope());
-        return completed;
+        return this.resolveDeepPlanQuestionnaire(result);
       },
       mcp: options.bridges?.mcp ?? options.mcpBridge ?? extensions.bridges.mcp,
       ...(options.bridges?.lsp !== undefined ? { lsp: options.bridges.lsp } : {}),
@@ -2900,6 +2886,52 @@ export class AgentSession {
   /** Read-only Deep Plan state for status, tests, and durable snapshot hooks. */
   get deepPlanState() {
     return this.#deepPlan.current();
+  }
+
+  /** Persist a controller-side draft received through daemon or TUI transport. */
+  updateDeepPlanQuestionnaireDraft(
+    questionnaireId: string,
+    answers: readonly import("@cbc/session-domain").DeepPlanAnswer[],
+    activeQuestionIndex: number,
+  ) {
+    const state = this.#deepPlan.updateQuestionnaireDraft(
+      questionnaireId,
+      answers,
+      activeQuestionIndex,
+    );
+    this.#emit("deep_plan.questionnaire_updated", {
+      questionnaireId,
+      activeQuestionIndex,
+      state,
+    }, this.#currentScope());
+    return state;
+  }
+
+  /** Resolve pending user input, including a replayed post-crash questionnaire. */
+  resolveDeepPlanQuestionnaire(
+    result: import("@cbc/session-domain").UserAskBatchResult,
+  ) {
+    if (this.#deepPlan.current().phase === "paused") {
+      this.#deepPlan.resume();
+      this.#emit("deep_plan.resumed", {
+        state: this.#deepPlan.current(),
+      }, this.#currentScope());
+    }
+    const completed = this.#deepPlan.completeQuestionnaire(result);
+    const eventKind: CbcEventKind =
+      completed.status === "submitted"
+        ? "deep_plan.questionnaire_answered"
+        : completed.status === "draft_now"
+          ? "deep_plan.draft_requested"
+          : completed.status === "cancelled"
+            ? "deep_plan.cancelled"
+            : "deep_plan.paused";
+    this.#emit(eventKind, {
+      questionnaireId: completed.questionnaireId,
+      status: completed.status,
+      state: this.#deepPlan.current(),
+    }, this.#currentScope());
+    return completed;
   }
 
   /** Apply a live Deep Plan preference; persistence remains the caller's job. */

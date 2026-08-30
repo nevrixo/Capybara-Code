@@ -157,7 +157,7 @@ const OBSERVER_METHODS = new Set<AppMethod>([
   "server.capabilities", "server.ping", "server.health", "server.version", "server.logs.tail",
   "workspace.inspect", "workspace.list", "workspace.trust.get", "workspace.services",
   "session.list", "session.get", "session.attach", "session.detach", "session.ensure", "session.export",
-  "turn.get", "turn.list", "turn.wait",
+  "turn.get", "turn.list", "turn.wait", "turn.input.get",
   "events.subscribe", "events.unsubscribe", "events.replay", "events.ack", "events.getSnapshot",
   "approval.list", "approval.get",
   "graph.get", "graph.listNodes",

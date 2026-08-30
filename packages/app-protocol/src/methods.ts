@@ -4,6 +4,7 @@ export const APP_METHODS = [
   "workspace.open", "workspace.inspect", "workspace.list", "workspace.close", "workspace.trust.get", "workspace.trust.set", "workspace.services",
   "session.create", "session.list", "session.get", "session.attach", "session.detach", "session.ensure", "session.fork", "session.pause", "session.resume", "session.close", "session.archive", "session.export", "session.recover",
   "turn.submit", "turn.cancel", "turn.get", "turn.list", "turn.wait",
+  "turn.input.get", "turn.input.update", "turn.input.resolve",
   "events.subscribe", "events.unsubscribe", "events.replay", "events.ack", "events.getSnapshot",
   "approval.list", "approval.get", "approval.resolve", "approval.cancel",
   "graph.get", "graph.listNodes", "graph.pause", "graph.resume", "graph.cancel",

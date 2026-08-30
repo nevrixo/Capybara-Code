@@ -1058,12 +1058,15 @@ export class DeepPlanController {
     const result: UserAskBatchResult = { questionnaireId, status: raw.status, answers };
     const now = this.#now();
 
-    if (raw.status === "paused") {
+    if (raw.status === "paused" || raw.status === "unavailable") {
       this.#commit({
         ...this.#state,
         phase: "paused",
         pendingQuestionnaire: { ...pending, draftAnswers: answers },
-        pausedReason: "paused by user",
+        pausedReason:
+          raw.status === "paused"
+            ? "paused by user"
+            : "interactive input unavailable",
         questionnaireResults: this.#appendResult(result, now),
       });
       return cloneResult(result);
@@ -1110,9 +1113,7 @@ export class DeepPlanController {
       phase:
         raw.status === "cancelled"
           ? "cancelled"
-          : raw.status === "unavailable"
-            ? "paused"
-            : raw.status === "draft_now"
+          : raw.status === "draft_now"
               ? "drafting"
               : "investigating",
       pendingQuestionnaire: undefined,
@@ -1121,7 +1122,7 @@ export class DeepPlanController {
       questionnaireResults: this.#appendResult(result, now),
       answerRevision,
       draftNow: raw.status === "draft_now" || this.#state.draftNow,
-      pausedReason: raw.status === "unavailable" ? "interactive input unavailable" : undefined,
+      pausedReason: undefined,
     });
     return cloneResult(result);
   }
@@ -1138,7 +1139,7 @@ export class DeepPlanController {
         : this.#state.questionnaireResults.filter(
             (entry) =>
               entry.questionnaireId !== pending.questionnaireId ||
-              entry.result.status !== "paused",
+              (entry.result.status !== "paused" && entry.result.status !== "unavailable"),
           ),
     });
     return this.current();
