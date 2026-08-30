@@ -25,9 +25,11 @@ import {
   renderValidationErrors,
   schedule,
   validate,
+  withExecutionMetadata,
   type ProposedCall,
   type RiskClass,
 } from "../src/index.ts";
+import { PROGRAM_TOOL_ALLOWLIST } from "@cbc/provider-openai";
 
 describe("catalog completeness (§12.2)", () => {
   test("includes every P0 tool the PRD lists", () => {
@@ -1306,5 +1308,35 @@ describe("result envelope (§12.4, TOOL-005, TOOL-006)", () => {
     expect(result.summary).toContain("128 passed");
     // The artifact reference exposes an opaque id, not a path (§18.17).
     expect(result.artifacts![0]!.id.startsWith("art_")).toBe(true);
+  });
+});
+
+describe("programmatic and hosted-agent eligibility (§5.2)", () => {
+  test("agrees exactly with the enforced PTC allowlist", () => {
+    const enriched = NATIVE_TOOLS.map(withExecutionMetadata);
+    const flagged = enriched.filter((tool) => tool.canRunInProgram === true).map((tool) => tool.id);
+    // Two allowlists that disagree are worse than one: the kernel enforces the
+    // provider copy, so a catalog flag that says otherwise misleads its readers.
+    expect([...flagged].sort()).toEqual([...PROGRAM_TOOL_ALLOWLIST].sort());
+    expect(enriched.filter((tool) => tool.canRunInHostedAgent === true).map((tool) => tool.id).sort())
+      .toEqual([...PROGRAM_TOOL_ALLOWLIST].sort());
+  });
+
+  test("every eligible tool is a non-mutating, network-free R0 read", () => {
+    for (const tool of NATIVE_TOOLS.map(withExecutionMetadata)) {
+      if (tool.canRunInProgram !== true) continue;
+      expect(tool.mutates).toBe(false);
+      expect(tool.network).toBe(false);
+      expect(tool.defaultRisk).toBe("R0");
+      expect(tool.authority).toBe("read");
+    }
+  });
+
+  test("write, process, and credential tools stay ineligible", () => {
+    for (const id of ["fs.write", "fs.edit", "fs.delete", "process.run", "shell.run", "user.ask"]) {
+      const tool = NATIVE_TOOLS.map(withExecutionMetadata).find((entry) => entry.id === id);
+      expect(tool?.canRunInProgram ?? false).toBe(false);
+      expect(tool?.canRunInHostedAgent ?? false).toBe(false);
+    }
   });
 });

@@ -1887,6 +1887,37 @@ export function nativeToolsForFeatures(features: NativeToolFeatures = {}): ToolD
 }
 
 
+/**
+ * The read-only ids a hosted program or scout may call (PRD §5.2).
+ *
+ * The lane's own copy in `@cbc/provider-openai` is the gate the kernel enforces;
+ * this one exists because the catalog cannot depend on a provider adapter. They
+ * are pinned equal by test, because two allowlists that disagree are worse than
+ * one — the narrower list here silently contradicted the enforced one and was
+ * read by nothing, so a reader checking the flag learned the wrong answer.
+ *
+ * The `readOnlyLocal` conjunction stays: membership is the intent, but a tool
+ * that ever gains write, process, or network authority must lose the flag
+ * whether or not anyone remembers to edit this list.
+ */
+const PROGRAM_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
+  "fs.read",
+  "fs.read_many",
+  "fs.list",
+  "fs.glob",
+  "fs.search",
+  "git.status",
+  "git.diff",
+  "git.log",
+  "repo.investigate",
+  "lsp.diagnostics",
+  "lsp.symbols",
+  "lsp.references",
+  "lsp.definition",
+  "lsp.implementation",
+  "artifact.read",
+]);
+
 export function withExecutionMetadata(tool: ToolDefinition): ToolDefinition {
   const authority: ToolExecutionMetadata["authority"] = tool.authority ?? (tool.mutates
     ? "workspace_write"
@@ -1917,8 +1948,8 @@ export function withExecutionMetadata(tool: ToolDefinition): ToolDefinition {
     idempotency: tool.idempotency ?? idempotency,
     authority,
     conflictKeys: tool.conflictKeys ?? defaultConflictKeys,
-    canRunInProgram: tool.canRunInProgram ?? (readOnlyLocal && ["fs.read", "fs.read_many", "fs.list", "fs.glob", "fs.search", "git.status", "git.diff", "git.log"].includes(tool.id)),
-    canRunInHostedAgent: tool.canRunInHostedAgent ?? (readOnlyLocal && ["fs.read", "fs.read_many", "fs.list", "fs.glob", "fs.search", "git.status", "git.diff", "git.log"].includes(tool.id)),
+    canRunInProgram: tool.canRunInProgram ?? (readOnlyLocal && PROGRAM_TOOL_ALLOWLIST.has(tool.id)),
+    canRunInHostedAgent: tool.canRunInHostedAgent ?? (readOnlyLocal && PROGRAM_TOOL_ALLOWLIST.has(tool.id)),
     maxParallelism: tool.maxParallelism ?? maxParallelism,
     resultSchemaId: tool.resultSchemaId ?? `${tool.id}.result`,
     recovery,
