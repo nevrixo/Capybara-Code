@@ -123,6 +123,13 @@ export interface SubagentBridgeOptions {
    * none admitted exactly the same delegation.
    */
   readonly routeAgentCeiling?: () => number | undefined;
+  /**
+   * The root task epoch id (§5.9). A child never gets `all_turns` — the role gate
+   * decides that — but it does need the id, so a parent epoch reset invalidates
+   * a live child's provider continuation instead of leaving the child linked to
+   * responses produced under assumptions that no longer hold.
+   */
+  readonly taskEpochId?: () => string | undefined;
   readonly onWorkspacePotentiallyChanged?: (
     toolId: string,
     action?: ProposedAction,
@@ -1064,6 +1071,9 @@ export class SubagentBridge {
       commandClassification: this.#options.config.agent.toolGraph.commandClassification,
       promptCompiler: this.#options.config.agent.promptCompiler,
       autoReview: false,
+      ...(this.#options.taskEpochId !== undefined
+        ? { taskEpochId: this.#options.taskEpochId }
+        : {}),
       interactionMode: () => childInteractionMode,
       onRouteDecided: (route) => {
         childRoute = route;
