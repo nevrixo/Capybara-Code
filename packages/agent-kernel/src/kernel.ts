@@ -118,7 +118,7 @@ const PROGRAMMATIC_TOOL_IDS = new Set<string>(PROGRAM_TOOL_ALLOWLIST);
 // `@cbc/inference-domain` and is re-exported here for existing call sites.
 import type { AgentRole, WorkPhase, TurnBudgetController, BudgetEnforcementMode } from "@cbc/inference-domain";
 import { estimateTokens, type ContextPressureDecision } from "@cbc/session-domain";
-import { reprojectPromptContextDialogue } from "@cbc/context-engine";
+import { buildTurnVerificationContract, reprojectPromptContextDialogue } from "@cbc/context-engine";
 export type { AgentRole, WorkPhase };
 
 /**
@@ -665,6 +665,8 @@ export interface KernelOptions {
   readonly requiredVerificationCommands?: readonly { readonly command: string; readonly reason: string }[];
   /** Optional host classifier for required, diagnostic, and forbidden commands. */
   readonly verificationCommandKind?: (command: string) => "required" | "diagnostic" | "off_contract" | "not_verification";
+  /** Monotonic workspace baseline counter; the kernel owns no generation of its own. */
+  readonly workspaceGeneration?: () => number;
   /** Require at least one turn-local test, diff, or review result after mutation. */
   readonly completionRequiresFreshEvidence?: boolean;
   /** Whether missing fresh evidence blocks completion or remains a visible warning. */
@@ -811,6 +813,7 @@ export class AgentKernel {
 
   #changedFiles = new Map<string, { additions: number; deletions: number; purpose: string }>();
   #verification: CompletionReport["verification"] = [];
+  #verificationContract: ReturnType<typeof buildTurnVerificationContract> | undefined;
   #delegated: CompletionReport["delegatedTasks"] = [];
   #risks: string[] = [];
   #lastFailureSummary: string | undefined;
@@ -1193,6 +1196,7 @@ export class AgentKernel {
     this.#observations = [];
     this.#changedFiles.clear();
     this.#verification = [];
+    this.#verificationContract = undefined;
     this.#delegated = [];
     this.#risks = [];
     this.#lastFailureSummary = undefined;
@@ -4499,6 +4503,13 @@ export class AgentKernel {
       });
     }
 
+
+    this.#verificationContract = buildTurnVerificationContract({
+      changedPaths,
+      workspaceGeneration: this.#options.workspaceGeneration?.() ?? 0,
+      riskLevel: risk.level,
+      reviewRequired: shouldReview,
+    });
 
     const steps = planVerification({
       // `planVerification` returns no steps for an empty path list, so an
