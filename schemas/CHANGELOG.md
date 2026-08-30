@@ -333,3 +333,7 @@ Canonical Thinking text is bounded at 4 KiB for provider summaries and 64 KiB fo
   records the independent observation count and invalidators the §6.3 gates read.
 - Added the wired `[agent.learning]` configuration section (`strategy_capsules`,
   `min_verified_observations`) from §8.4.
+- Added the `goal.evaluated` event kind for the §P1-04 persistent goal contract. The
+  per-turn verdict is journaled because a re-attached session has to reconstruct why
+  a long-running goal stopped, rather than re-deriving it from a budget it can no
+  longer observe.

@@ -275,6 +275,7 @@
         "deep_plan.draft_requested",
         "deep_plan.completed",
         "deep_plan.cancelled",
+        "goal.evaluated",
         "assistant.thinking",
         "model.capability_snapshot",
         "model.route_decided",
