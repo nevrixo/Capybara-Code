@@ -42,6 +42,15 @@ type SchedulerBaseOptions = Omit<
 
 export interface DelegationCoordinatorOptions {
   readonly scheduler: SchedulerBaseOptions;
+  /**
+   * The current route's `maxAgents` (§5.15), read per spawn.
+   *
+   * The nested schedulers each enforce it too, but only over their own children;
+   * the route grants a ceiling for the whole turn, so the graph-wide count is the
+   * one that has to hold. Zero or undefined means the route imposes no ceiling of
+   * its own — the configured graph limits remain the boundary.
+   */
+  readonly routeAgentCeiling?: () => number | undefined;
   readonly graph?: GraphAuthority;
   readonly limits?: Partial<DelegationCoordinatorLimits>;
   readonly budget?: Partial<GraphBudgetLimits>;
@@ -69,6 +78,7 @@ export interface DelegationRecoveryItem {
 export class DelegationCoordinator {
   readonly graph: GraphAuthority | undefined;
   readonly rootScheduler: SubagentScheduler;
+  readonly #options: DelegationCoordinatorOptions;
   readonly #base: SchedulerBaseOptions;
   readonly #limits: DelegationCoordinatorLimits;
   readonly #ledger: GraphBudgetLedger;
@@ -81,6 +91,7 @@ export class DelegationCoordinator {
 
   constructor(options: DelegationCoordinatorOptions) {
     this.graph = options.graph;
+    this.#options = options;
     this.#base = options.scheduler;
     this.#now = options.now ?? (() => Date.now());
     this.#limits = Object.freeze({
@@ -166,6 +177,18 @@ export class DelegationCoordinator {
       throw new SpawnRejected(
         "NODE_LIMIT",
         "agent graph reached its per-turn node limit of " + this.#limits.maxNodesPerTurn,
+      );
+    }
+    // §5.15: the route's ceiling applies to the whole turn, so it is checked
+    // against the live graph rather than one scheduler's own children — a
+    // per-scheduler count would let a route that granted two agents run two per
+    // node instead of two in total.
+    const routeCeiling = this.#routeAgentCeiling();
+    if (routeCeiling !== undefined && this.activeCount() >= routeCeiling) {
+      throw new SpawnRejected(
+        "ROUTE_AGENT_LIMIT",
+        "the route for this turn allows at most " + routeCeiling +
+          " concurrent agent(s) and " + this.activeCount() + " are already live (§5.15)",
       );
     }
     const definition = roleDefinition(options.role);
@@ -316,6 +339,19 @@ export class DelegationCoordinator {
               : "manual-review" as const,
         })),
     );
+  }
+
+  /** The route ceiling, treating a broken or non-positive reader as "none". */
+  #routeAgentCeiling(): number | undefined {
+    let planned: number | undefined;
+    try {
+      planned = this.#options.routeAgentCeiling?.();
+    } catch {
+      return undefined;
+    }
+    if (planned === undefined || !Number.isFinite(planned)) return undefined;
+    const ceiling = Math.floor(planned);
+    return ceiling > 0 ? ceiling : undefined;
   }
 
   #schedulerFor(parentId: string, parent: AgentInstance | undefined): SubagentScheduler {

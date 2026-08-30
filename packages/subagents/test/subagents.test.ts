@@ -64,6 +64,7 @@ function makeOptions(
     parentDepth?: number;
     maxConcurrent?: number;
     maxChildrenPerTurn?: number;
+    routeAgentCeiling?: () => number | undefined;
     now?: () => number;
   },
 ) {
@@ -84,6 +85,9 @@ function makeOptions(
     ...(extras.maxConcurrent !== undefined ? { maxConcurrent: extras.maxConcurrent } : {}),
     ...(extras.maxChildrenPerTurn !== undefined
       ? { maxChildrenPerTurn: extras.maxChildrenPerTurn }
+      : {}),
+    ...(extras.routeAgentCeiling !== undefined
+      ? { routeAgentCeiling: extras.routeAgentCeiling }
       : {}),
     ...(extras.now !== undefined ? { now: extras.now } : {}),
   };
@@ -1404,5 +1408,48 @@ describe("writer lease overlap (§15.8, SUB-003)", () => {
     expect(overlappingGlobs(["src/a/**"], ["src/a/**"])).toHaveLength(1);
     expect(overlappingGlobs(["src/a/**"], ["src/b/**"])).toHaveLength(0);
     expect(overlappingGlobs(["docs/*.md"], ["src/index.ts"])).toHaveLength(0);
+  });
+});
+
+describe("the route's agent ceiling narrows scheduler admission (§5.15)", () => {
+  test("a spawn past the route's ceiling is refused with its own code", () => {
+    const { scheduler: sched } = scheduler(okRunner, { routeAgentCeiling: () => 1 });
+    sched.spawn({ role: "explore", task: exploreTask() });
+
+    let rejected: unknown;
+    try {
+      sched.spawn({ role: "explore", task: exploreTask({ title: "Second" }) });
+    } catch (error) {
+      rejected = error;
+    }
+
+    // A distinct code matters: "the route allows one agent" and "you are too
+    // deep" call for different responses from the caller.
+    expect(rejected).toBeInstanceOf(SpawnRejected);
+    expect((rejected as SpawnRejected).code).toBe("ROUTE_AGENT_LIMIT");
+  });
+
+  test("the route cannot widen the configured limits, only narrow them", () => {
+    const { scheduler: sched } = scheduler(okRunner, {
+      parentDepth: 2,
+      routeAgentCeiling: () => 8,
+    });
+
+    let rejected: unknown;
+    try {
+      sched.spawn({ role: "explore", task: exploreTask() });
+    } catch (error) {
+      rejected = error;
+    }
+
+    expect((rejected as SpawnRejected).code).toBe("DEPTH_EXCEEDED");
+  });
+
+  test("no ceiling leaves admission exactly as it was", () => {
+    const { scheduler: sched } = scheduler(okRunner, { routeAgentCeiling: () => 0 });
+
+    expect(() => sched.spawn({ role: "explore", task: exploreTask() })).not.toThrow();
+    expect(() => sched.spawn({ role: "explore", task: exploreTask({ title: "Second" }) }))
+      .not.toThrow();
   });
 });

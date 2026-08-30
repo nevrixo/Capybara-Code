@@ -30,6 +30,7 @@ function controlledHarness(options: {
   readonly maxDepth?: number;
   readonly maxToolCalls?: number;
   readonly graph?: GraphAuthority;
+  readonly routeAgentCeiling?: () => number | undefined;
 } = {}) {
   const resolvers = new Map<string, (result: ChildAgentResult) => void>();
   const runner = (context: ChildRunContext): Promise<ChildAgentResult> => new Promise((resolve) => {
@@ -40,6 +41,9 @@ function controlledHarness(options: {
   });
   const coordinator = new DelegationCoordinator({
     ...(options.graph === undefined ? {} : { graph: options.graph }),
+    ...(options.routeAgentCeiling === undefined
+      ? {}
+      : { routeAgentCeiling: options.routeAgentCeiling }),
     scheduler: {
       emitter: { emit() {} },
       runner,
@@ -204,5 +208,83 @@ describe("DelegationCoordinator recursive graph", () => {
     harness.finish(parent.id);
     harness.finish(sibling.id);
     await harness.coordinator.cancelAll("test cleanup");
+  });
+});
+
+describe("the route's agent ceiling is an execution contract (§5.15)", () => {
+  test("a route granting two agents admits two and refuses the third", () => {
+    const harness = controlledHarness({ routeAgentCeiling: () => 2 });
+    const facade = harness.coordinator.facade("root");
+    facade.spawn({ role: "explore", task: task("explore", "first exploration") });
+    facade.spawn({ role: "explore", task: task("explore", "second exploration") });
+
+    let rejected: unknown;
+    try {
+      facade.spawn({ role: "explore", task: task("explore", "third exploration") });
+    } catch (error) {
+      rejected = error;
+    }
+
+    expect(rejected).toBeInstanceOf(SpawnRejected);
+    expect((rejected as SpawnRejected).code).toBe("ROUTE_AGENT_LIMIT");
+    expect((rejected as SpawnRejected).message).toContain("at most 2");
+  });
+
+  test("the ceiling counts the whole graph, not one scheduler's own children", () => {
+    // A per-scheduler count would let a route that granted two agents run two
+    // per node, which is not the ceiling §5.15 describes.
+    const harness = controlledHarness({ routeAgentCeiling: () => 2 });
+    const first = harness.coordinator.facade("root").spawn({
+      role: "architect",
+      task: task("architect", "architecture"),
+    });
+    harness.coordinator.facade(first.id).spawn({
+      role: "explore",
+      task: task("explore", "nested exploration"),
+    });
+
+    expect(() => harness.coordinator.facade(first.id).spawn({
+      role: "explore",
+      task: task("explore", "one agent too many"),
+    })).toThrow(/at most 2/);
+  });
+
+  test("a completed agent releases its slot, because the ceiling is concurrency", async () => {
+    const harness = controlledHarness({ routeAgentCeiling: () => 1 });
+    const facade = harness.coordinator.facade("root");
+    const first = facade.spawn({ role: "explore", task: task("explore", "first exploration") });
+    expect(() => facade.spawn({ role: "explore", task: task("explore", "second exploration") }))
+      .toThrow(/at most 1/);
+
+    harness.finish(first.id);
+    await facade.wait(first.id);
+
+    expect(() => facade.spawn({ role: "explore", task: task("explore", "second exploration") }))
+      .not.toThrow();
+    await harness.coordinator.cancelAll("test cleanup");
+  });
+
+  test("zero is the absence of a route ceiling, not a ban on delegating", () => {
+    // Every non-hosted lane reports maxAgents 0. Reading that literally would
+    // have made local delegation impossible on the default route.
+    const harness = controlledHarness({ routeAgentCeiling: () => 0 });
+
+    expect(() => harness.coordinator.facade("root").spawn({
+      role: "explore",
+      task: task("explore", "unceilinged exploration"),
+    })).not.toThrow();
+  });
+
+  test("a throwing ceiling reader does not become a refusal to delegate", () => {
+    const harness = controlledHarness({
+      routeAgentCeiling: () => {
+        throw new Error("route unavailable");
+      },
+    });
+
+    expect(() => harness.coordinator.facade("root").spawn({
+      role: "explore",
+      task: task("explore", "resilient exploration"),
+    })).not.toThrow();
   });
 });

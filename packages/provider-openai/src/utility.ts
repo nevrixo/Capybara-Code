@@ -539,7 +539,10 @@ export class InferenceUtilityController implements InferencePolicyPort {
     const maxCostUsd = input.maxCostUsd ?? this.#maxCost;
     const reasonCode = `${input.intent}:${score >= 7 ? "deep" : score <= 2 ? "cheap" : "balanced"}`;
     const rationaleCodes = [reasonCode, lane, context.premium ? "premium-context" : "standard-context", ...warnings.map(() => "capability-warning")];
-    const maxAgents = lane === "hosted_scout" ? 3 : 0;
+    // §5.15 names one ceiling for the hosted *and* local schedulers, so both
+    // delegating lanes get it. A hosted subtree that falls back to local agents
+    // must not gain headroom by changing where the agents run.
+    const maxAgents = lane === "hosted_scout" || lane === "local_agent" ? 3 : 0;
     const maxParallelTools = lane === "program" ? 6 : 1;
     const verification = deriveVerificationLevel({
       intent: input.intent,

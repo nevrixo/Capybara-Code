@@ -117,6 +117,12 @@ export interface SubagentBridgeOptions {
   readonly readCache?: ReadCache;
   readonly onInvalidate?: (path: string) => void;
   readonly workspaceGeneration?: () => number;
+  /**
+   * The current route's `maxAgents` (§5.15). The router computed the ceiling but
+   * nothing read it, so a route that planned three agents and one that planned
+   * none admitted exactly the same delegation.
+   */
+  readonly routeAgentCeiling?: () => number | undefined;
   readonly onWorkspacePotentiallyChanged?: (
     toolId: string,
     action?: ProposedAction,
@@ -251,6 +257,9 @@ export class SubagentBridge {
       : undefined;
     this.coordinator = new DelegationCoordinator({
       ...(graph === undefined ? {} : { graph }),
+      ...(options.routeAgentCeiling !== undefined
+        ? { routeAgentCeiling: options.routeAgentCeiling }
+        : {}),
       scheduler: {
         ...(options.config.experimental.worktreeMultiAgent && options.config.worktrees.enabled
           ? {

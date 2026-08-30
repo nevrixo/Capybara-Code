@@ -867,6 +867,10 @@ export class AgentSession {
       runtime: options.runtime,
       config: options.config,
       selectedModel: () => this.#currentRoute?.model ?? options.config.model.default,
+      // §5.15: the route's own ceiling, read live so a phase re-route that widens
+      // or narrows it takes effect on the next spawn rather than on the next
+      // session.
+      routeAgentCeiling: () => this.#currentRoute?.maxAgents,
       inferencePolicy: this.inferencePolicy,
       provider: options.provider,
       approvals: options.approvals,

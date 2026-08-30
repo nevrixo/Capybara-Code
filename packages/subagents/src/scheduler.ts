@@ -103,7 +103,8 @@ export type SpawnRejectionCode =
   | "AUTHORITY_WIDENING"
   | "BUDGET_EXCEEDED"
   | "NODE_LIMIT"
-  | "FANOUT_LIMIT";
+  | "FANOUT_LIMIT"
+  | "ROUTE_AGENT_LIMIT";
 
 export class SpawnRejected extends Error {
   readonly code: SpawnRejectionCode;
@@ -144,6 +145,19 @@ export interface SchedulerOptions {
   readonly maxChildrenPerTurn?: number;
   /** Maximum provider-running children. Overflow waits in a FIFO queue. */
   readonly maxConcurrent?: number;
+  /**
+   * The current route's `maxAgents`, read per spawn (§5.15).
+   *
+   * A function rather than a number because the route is re-decided every turn
+   * and can change mid-turn on a phase re-route: a scheduler that captured the
+   * value at construction would enforce the first turn's ceiling forever.
+   *
+   * Zero means the route planned no agents of its own, which is what every
+   * non-hosted lane reports. That is the absence of a route ceiling, not a ban on
+   * delegation, so it leaves depth, fan-out, and the writer lease as the only
+   * admission boundaries; only a positive value narrows them.
+   */
+  readonly routeAgentCeiling?: () => number | undefined;
   /** Disable predictive p75 estimates while retaining actual usage accounting. */
   readonly enableContextReservations?: boolean;
   readonly leaseTtlMs?: number;
@@ -290,6 +304,21 @@ export class SubagentScheduler {
         "delegation depth " + depth + " exceeds the session limit of " + maxDepth +
           " (hard maximum " + SUBAGENT_HARD_LIMITS.maxDepth + ")",
       );
+    }
+
+    // ---- §5.15: the route's agent ceiling is an execution contract ----
+    // Checked before the task contract so a refusal names the ceiling that
+    // caused it rather than whichever task field happened to be weakest.
+    const routeCeiling = this.#routeAgentCeiling();
+    if (routeCeiling !== undefined) {
+      const live = this.activeCount();
+      if (live >= routeCeiling) {
+        throw new SpawnRejected(
+          "ROUTE_AGENT_LIMIT",
+          "the route for this turn allows at most " + routeCeiling +
+            " concurrent agent(s) and " + live + " are already live (§5.15)",
+        );
+      }
     }
 
     // ---- SUB-002: the contract is a precondition ----
@@ -631,6 +660,24 @@ export class SubagentScheduler {
     return Number.isFinite(configured) && configured >= 1
       ? Math.min(Math.floor(configured), SUBAGENT_HARD_LIMITS.maxConcurrent)
       : SUBAGENT_HARD_LIMITS.maxConcurrent;
+  }
+
+  /**
+   * The route's agent ceiling, or undefined when the route imposes none.
+   *
+   * A thrown or non-finite reader is treated as no ceiling: a broken host hook
+   * must not become an unexplained refusal to delegate.
+   */
+  #routeAgentCeiling(): number | undefined {
+    let planned: number | undefined;
+    try {
+      planned = this.#options.routeAgentCeiling?.();
+    } catch {
+      return undefined;
+    }
+    if (planned === undefined || !Number.isFinite(planned)) return undefined;
+    const ceiling = Math.floor(planned);
+    return ceiling > 0 ? ceiling : undefined;
   }
 
   #maxDepth(): number {
