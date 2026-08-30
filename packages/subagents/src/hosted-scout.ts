@@ -80,7 +80,15 @@ export class HostedScoutCoordinator {
   readonly #taskId: string;
   readonly #currentSequence: number | undefined;
   readonly #now: () => number;
+  /**
+   * §5.6 states two distinct limits, and one counter cannot be both. The used
+   * count is keyed to the task epoch — a new epoch is a new task, so it starts
+   * over — while the in-flight count is what makes "동시 실행 최대 3" a real
+   * concurrency ceiling rather than a lifetime total.
+   */
+  #epochId: string;
   #agentsUsed = 0;
+  #agentsInFlight = 0;
   #subtreeTokensUsed = 0;
   #subtreeStartedAt: number | undefined;
 
@@ -95,6 +103,7 @@ export class HostedScoutCoordinator {
     this.#taskId = options.taskId;
     this.#currentSequence = options.currentSequence;
     this.#now = options.now ?? (() => Date.now());
+    this.#epochId = options.taskEpochId;
   }
 
   get agentsUsed(): number {
@@ -111,19 +120,44 @@ export class HostedScoutCoordinator {
     return this.#subtreeStartedAt === undefined ? 0 : Math.max(0, this.#now() - this.#subtreeStartedAt);
   }
 
+  /** Hosted agents in flight right now, bounded by `maxConcurrentAgents`. */
+  get agentsInFlight(): number {
+    return this.#agentsInFlight;
+  }
+
   #usage(): HostedScoutUsage {
     return {
       agentsUsed: this.#agentsUsed,
+      agentsInFlight: this.#agentsInFlight,
       subtreeTokensUsed: this.#subtreeTokensUsed,
       subtreeElapsedMs: this.#subtreeElapsedMs(),
     };
   }
 
-  async run(input: Omit<HostedScoutRequest, "callerId" | "taskEpochId" | "workspaceIdentityDigest">, signal: AbortSignal): Promise<HostedScoutResult> {
+  /**
+   * A task epoch change means the scouts of the previous task are irrelevant, so
+   * their spend must not hold the new one's budget down. In-flight agents belong
+   * to the old epoch and are still counted: they are still consuming provider
+   * concurrency until they settle.
+   */
+  #rollEpoch(taskEpochId: string): void {
+    if (taskEpochId === this.#epochId) return;
+    this.#epochId = taskEpochId;
+    this.#agentsUsed = 0;
+    this.#subtreeTokensUsed = 0;
+    this.#subtreeStartedAt = undefined;
+  }
+
+  async run(
+    input: Omit<HostedScoutRequest, "callerId" | "taskEpochId" | "workspaceIdentityDigest">,
+    signal: AbortSignal,
+    taskEpochId: string = this.#taskEpochId,
+  ): Promise<HostedScoutResult> {
+    this.#rollEpoch(taskEpochId);
     const request: HostedScoutRequest = {
       ...input,
       callerId: this.#callerId,
-      taskEpochId: this.#taskEpochId,
+      taskEpochId,
       workspaceIdentityDigest: this.#workspaceIdentityDigest,
       taskId: this.#taskId,
     };
@@ -149,9 +183,11 @@ export class HostedScoutCoordinator {
     const deadline = new AbortController();
     const remainingMs = Math.max(1, this.#policy.maxSubtreeWallTimeMs - this.#subtreeElapsedMs());
     const timer = setTimeout(() => deadline.abort(), remainingMs);
+    this.#agentsInFlight += 1;
     try {
       return await this.#runAdmitted(request, admitted, AbortSignal.any([signal, deadline.signal]), deadline.signal);
     } finally {
+      this.#agentsInFlight -= 1;
       clearTimeout(timer);
     }
   }
@@ -192,7 +228,7 @@ export class HostedScoutCoordinator {
       if (signal.aborted) return { accepted: false, reason: "hosted scout cancelled" };
       const accepted = acceptHostedScoutReport(report, {
         callerId: this.#callerId,
-        taskEpochId: this.#taskEpochId,
+        taskEpochId: this.#epochId,
         workspaceIdentityDigest: this.#workspaceIdentityDigest,
         taskId: this.#taskId,
         ...(this.#currentSequence !== undefined ? { currentSequence: this.#currentSequence } : {}),

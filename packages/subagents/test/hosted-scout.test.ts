@@ -239,6 +239,69 @@ describe("hosted scout safety boundary", () => {
     expect(expired.reason).toContain("capped at 5ms");
   });
 
+  test("caps concurrency at three in flight and resets the used count per epoch", async () => {
+    // §5.6's "동시 실행 최대 3" is a concurrency ceiling. The old counter only ever
+    // incremented, so it was a lifetime total that happened to be spelled 3:
+    // four sequential scouts were refused even though only one ever ran, and four
+    // simultaneous ones were admitted before any of them had reported.
+    const release: Array<() => void> = [];
+    const coordinator = new HostedScoutCoordinator({
+      taskEpochId: "epoch-1",
+      taskId: "task-1",
+      callerId: "root",
+      workspaceIdentityDigest: "workspace-1",
+      policy: { ...DEFAULT_HOSTED_SCOUT_POLICY, maxAgents: 16, maxConcurrentAgents: 3 },
+      transport: {
+        spawn: (request) =>
+          new Promise((resolve) => {
+            release.push(() => resolve(report(request)));
+          }),
+      },
+    });
+
+    const inFlight = [
+      coordinator.run(scout("agent-1"), new AbortController().signal),
+      coordinator.run(scout("agent-2"), new AbortController().signal),
+      coordinator.run(scout("agent-3"), new AbortController().signal),
+    ];
+    await Promise.resolve();
+    expect(coordinator.agentsInFlight).toBe(3);
+
+    const fourth = await coordinator.run(scout("agent-4"), new AbortController().signal);
+    expect(fourth).toMatchObject({ accepted: false });
+    expect(fourth.reason).toContain("3 in flight");
+
+    for (const settle of release) settle();
+    expect((await Promise.all(inFlight)).every((result) => result.accepted)).toBe(true);
+    expect(coordinator.agentsInFlight).toBe(0);
+    expect(coordinator.agentsUsed).toBe(3);
+  });
+
+  test("keys the used count and subtree spend to the task epoch", async () => {
+    const coordinator = new HostedScoutCoordinator({
+      taskEpochId: "epoch-1",
+      taskId: "task-1",
+      callerId: "root",
+      workspaceIdentityDigest: "workspace-1",
+      policy: { ...DEFAULT_HOSTED_SCOUT_POLICY, maxAgents: 2 },
+      transport: { spawn: async (request) => report(request) },
+    });
+
+    expect((await coordinator.run(scout("agent-1"), new AbortController().signal)).accepted).toBe(true);
+    expect((await coordinator.run(scout("agent-2"), new AbortController().signal)).accepted).toBe(true);
+    const exhausted = await coordinator.run(scout("agent-3"), new AbortController().signal);
+    expect(exhausted.reason).toContain("capped at 2");
+    expect(coordinator.subtreeTokensUsed).toBe(240);
+
+    // A new epoch is a new task: the previous task's scouts must not hold its
+    // budget down. The cap was per-coordinator-instance, so a long session's
+    // second task got no hosted agents at all.
+    const next = await coordinator.run(scout("agent-4"), new AbortController().signal, "epoch-2");
+    expect(next.accepted).toBe(true);
+    expect(coordinator.agentsUsed).toBe(1);
+    expect(coordinator.subtreeTokensUsed).toBe(120);
+  });
+
   test("falls back once to a local read-only transport and revalidates evidence", async () => {
     const events: Array<{ kind: Parameters<HostedScoutEmitter["emit"]>[0]; payload: Record<string, unknown> }> = [];
     const coordinator = new HostedScoutCoordinator({
