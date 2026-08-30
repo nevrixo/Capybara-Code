@@ -88,6 +88,13 @@ export const COMMAND_REGISTRY: readonly CommandSpec[] = [
           { label: "<value>", required: true },
         ],
       },
+      {
+        name: "validate",
+        summary: "validate the merged configuration",
+        flags: [
+          { name: "--explain", kind: "boolean", summary: "print every key's status, consumer, and fallback" },
+        ],
+      },
     ],
   },
   {

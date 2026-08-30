@@ -4,7 +4,7 @@ import { HELP_TEXT, type Command } from "./args.ts";
 import { CliError, EXIT, type ExitCode } from "./exit.ts";
 import { acpCommand } from "./commands/acp.ts";
 import { authApi, authLogin, authLogout, authStatus } from "./commands/auth.ts";
-import { configSet } from "./commands/config.ts";
+import { configSet, configValidate } from "./commands/config.ts";
 import { doctorCommand } from "./commands/doctor.ts";
 import { learnCommand } from "./commands/learn.ts";
 import { skillsCommand } from "./commands/skills.ts";
@@ -115,7 +115,9 @@ async function dispatch(context: CommandContext, command: Command): Promise<Comm
       return await modelRefresh(context);
 
     case "config":
-      return await configSet(context, { path: command.path, value: command.value });
+      return command.sub === "validate"
+        ? await configValidate(context, { explain: command.explain })
+        : await configSet(context, { path: command.path, value: command.value });
 
     case "skills":
       return await skillsCommand(context, command);

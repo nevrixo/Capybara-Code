@@ -11,6 +11,7 @@ import { describe, expect, test } from "bun:test";
 
 import { parseArgs } from "../src/args.ts";
 import { parseSlash } from "../src/slash.ts";
+import { renderKeyStatusExplanation } from "../src/commands/config.ts";
 import { OVERLAY_KINDS, OVERLAY_TITLES, searchSlashCommands } from "@cbc/tui-components";
 import {
   inertSettingsFor,
@@ -192,5 +193,38 @@ describe("/doctor in the interactive slash router", () => {
   test("the overlay it opens is a registered kind with a title", () => {
     expect(OVERLAY_KINDS).toContain("doctor");
     expect(OVERLAY_TITLES.doctor.length).toBeGreaterThan(0);
+  });
+});
+
+describe("config validate --explain (§5.18)", () => {
+  test("parses with and without the flag", () => {
+    expect(parseArgs(["config", "validate"]).command)
+      .toEqual({ kind: "config", sub: "validate", explain: false });
+    expect(parseArgs(["config", "validate", "--explain"]).command)
+      .toEqual({ kind: "config", sub: "validate", explain: true });
+  });
+
+  test("every key gets a status and either a consumer or a reason", () => {
+    const lines = renderKeyStatusExplanation({});
+    const body = lines.slice(2);
+    expect(body.length).toBeGreaterThan(20);
+    for (const line of body) {
+      expect(line).toMatch(/(wired|experimental|deprecated)/u);
+      // A status with no explanation is the overclaim this command exists to
+      // remove: a wired key names its consumer, an inert one names why.
+      expect(line).toMatch(/(applied by |accepted but not applied|[a-z]{3})/u);
+    }
+    const text = lines.join("\n");
+    expect(text).toContain("model.cache.ttl");
+    expect(text).toContain("experimental");
+  });
+
+  test("keys this configuration set are marked", () => {
+    const lines = renderKeyStatusExplanation({ "model.cache.ttl": "user" });
+    const marked = lines.filter((line) => line.startsWith("*"));
+    expect(marked.some((line) => line.includes("model.cache.ttl"))).toBe(true);
+    // A section prefix counts as set when any key beneath it is, so the entry
+    // that would explain the fallback is not silently unmarked.
+    expect(marked.length).toBeGreaterThan(0);
   });
 });

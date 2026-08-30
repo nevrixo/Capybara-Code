@@ -93,6 +93,7 @@ export type Command =
   | { readonly kind: "auth"; readonly sub: "logout"; readonly all: boolean }
   | { readonly kind: "model"; readonly sub: "refresh" }
   | { readonly kind: "config"; readonly sub: "set"; readonly path: string; readonly value: string }
+  | { readonly kind: "config"; readonly sub: "validate"; readonly explain: boolean }
   | { readonly kind: "skills"; readonly sub: "list" | "doctor"; readonly json: boolean }
   | { readonly kind: "skills"; readonly sub: "validate"; readonly path: string; readonly json: boolean; readonly strict: boolean }
   | { readonly kind: "learn"; readonly sub: "review" | "accept" | "reject" | "forget" | "rollback"; readonly capsuleId?: string }
@@ -460,6 +461,9 @@ function buildSubcommand(
       };
     }
   }
+  if (commandName === "config" && subName === "validate") {
+    return { kind: "config", sub: "validate", explain: flags.has("--explain") };
+  }
   if (commandName === "config" && subName === "set") {
     return {
       kind: "config",
@@ -568,6 +572,7 @@ export const HELP_TEXT = [
   "  auth logout [--all]              drop stored credentials",
   "  model refresh                    refresh model capabilities",
   "  config set <path> <value>        set a user configuration value",
+  "  config validate [--explain]      check config and explain each key's status",
   "  skills list [--json]             list discovered Skills",
   "  skills doctor [--json]           explain discovery and rejection details",
   "  skills validate <path>           validate one SKILL.md",
