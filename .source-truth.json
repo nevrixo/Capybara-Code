@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-30T15:31:03.974Z",
+  "generatedAt": "2026-08-30T17:03:33.832Z",
   "git": {
-    "commit": "c8d6f3854b8d1361a5038b14e154b6e82f4f2671",
+    "commit": "0cfe568f9f954babe1b5f4b3b2f5b7ca79f4697f",
     "dirty": true,
-    "dirtyHash": "136bf396e3ba0529cda70f47d35631afbcf3ad7910615b484c85bf284258d152"
+    "dirtyHash": "3031d10c2a1fad9b183358b2fbcd4744705f76c5c1613ea4d09fced6e74372a5"
   },
   "roots": [
     "apps",
@@ -49,7 +49,7 @@
     "benchmarks/**/results/"
   ],
   "toolVersions": {
-    "bun": "1.3.10",
+    "bun": "1.3.14",
     "node": "v24.3.0",
     "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
@@ -1765,8 +1765,8 @@
     },
     {
       "path": "packages/agent-kernel/src/kernel.ts",
-      "bytes": 222429,
-      "sha256": "6763dab668bd3e69af51f0f9d154af3cc108cadf98dd6b5e81bc2e32dae762cb"
+      "bytes": 222957,
+      "sha256": "326c56d4bf472a0843415c922a1903cf71dfc5896bade129a634e7b7671110f5"
     },
     {
       "path": "packages/agent-kernel/src/observation.ts",
@@ -2060,8 +2060,8 @@
     },
     {
       "path": "packages/context-engine/src/verification-planner.ts",
-      "bytes": 7188,
-      "sha256": "5fbefc490f527edda433347ea2c6e562df2d6b1bc849fd8639437e9d8fd77ada"
+      "bytes": 10859,
+      "sha256": "96f035ec72f0b3ea59d3b53a5438ea17b88e33bcace52821e132f4990376c3a7"
     },
     {
       "path": "packages/context-engine/test/compiler-v2.test.ts",
@@ -2780,8 +2780,8 @@
     },
     {
       "path": "packages/provider-openai/src/native-lanes.ts",
-      "bytes": 20645,
-      "sha256": "ef5b5c326603f4d8f978b6b62cc868f91532999eb8481a5ae70b15a1b2aeb749"
+      "bytes": 21283,
+      "sha256": "1ec1db453003239bd286c514adcaa8022086fc6dd1f4c0f6a22509ff680bde5d"
     },
     {
       "path": "packages/provider-openai/src/openai.ts",
@@ -2820,8 +2820,8 @@
     },
     {
       "path": "packages/provider-openai/test/programmatic.test.ts",
-      "bytes": 4529,
-      "sha256": "ff80ad9f0266b48c31fb15c9cba0e61483ff2c02b1eb252a55f2e9ab77a16824"
+      "bytes": 5995,
+      "sha256": "34c87480a7d4db2d359dfc8f608bf3abdc391ea5e7f308cee056873ddfe1bcea"
     },
     {
       "path": "packages/provider-openai/test/provider.test.ts",
@@ -3639,5 +3639,5 @@
       "sha256": "8391ee841757695b95ddefc5dfd0ac274ecc32a76d733f2193b0a02a605a83df"
     }
   ],
-  "digest": "7f9b72b60d77bb2f9da823421436de8022361bb95c8161c24261f86371e72aeb"
+  "digest": "c046e9e4e91a4e0e52a299751a8f583f49d3041e80f03a4427fea08028409c02"
 }

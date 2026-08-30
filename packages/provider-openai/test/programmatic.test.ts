@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  PROGRAM_TOOL_ALLOWLIST,
   ProgrammaticToolLane,
+  validateProgramToolCall,
   type ProgramLaneRequest,
   type ProgramToolCall,
 } from "../src/programmatic.ts";
@@ -138,5 +140,48 @@ describe("incremental programmatic tool coordinator", () => {
       accepted: false,
       errors: ["program evidence belongs to a different task epoch"],
     });
+  });
+  // PRD §5.2 fixes the initial read-only surface a program may reduce over.
+  // Losing one of these silently narrows PTC back to plain file reads, which is
+  // exactly the fan-out the lane exists to collapse; gaining a mutation entry
+  // would breach the read-only guarantee the lane is built on.
+  test("carries the whole PRD read-only allowlist and nothing that mutates", () => {
+    expect([...PROGRAM_TOOL_ALLOWLIST]).toEqual([
+      "fs.read",
+      "fs.read_many",
+      "fs.list",
+      "fs.glob",
+      "fs.search",
+      "git.status",
+      "git.diff",
+      "git.log",
+      "repo.investigate",
+      "lsp.diagnostics",
+      "lsp.symbols",
+      "lsp.references",
+      "lsp.definition",
+      "lsp.implementation",
+      "artifact.read",
+    ]);
+
+    for (const toolId of PROGRAM_TOOL_ALLOWLIST) {
+      expect(validateProgramToolCall({
+        callId: `call_${toolId}`,
+        toolId,
+        arguments: {},
+        callerId: "call_prog_1",
+        taskEpochId: "epoch-1",
+      })).toMatchObject({ allowed: true, normalizedToolId: toolId });
+    }
+
+    for (const toolId of ["fs.write", "fs.edit", "fs.delete", "process.run", "shell.run", "user.ask", "lsp.rename_preview"]) {
+      expect(validateProgramToolCall({
+        callId: "call_denied",
+        toolId,
+        arguments: {},
+        callerId: "call_prog_1",
+        taskEpochId: "epoch-1",
+      }).allowed).toBe(false);
+    }
   });
 });

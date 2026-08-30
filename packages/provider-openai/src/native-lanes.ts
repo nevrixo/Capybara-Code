@@ -7,6 +7,16 @@
 
 import { createHash } from "node:crypto";
 
+/**
+ * The read-only tools a hosted program may call (PRD §5.2).
+ *
+ * Every entry is an R0, non-mutating, network-free read in the tool catalog:
+ * a program that reaches this list still cannot create a file, start a process,
+ * touch a credential, or ask for an approval. The aggregation-shaped reads
+ * (`lsp.*`, `repo.investigate`, `artifact.read`) are the ones a program can
+ * actually reduce — they are what turns a fan-out of model round trips into a
+ * single structured result.
+ */
 export const PROGRAM_TOOL_ALLOWLIST = [
   "fs.read",
   "fs.read_many",
@@ -16,6 +26,13 @@ export const PROGRAM_TOOL_ALLOWLIST = [
   "git.status",
   "git.diff",
   "git.log",
+  "repo.investigate",
+  "lsp.diagnostics",
+  "lsp.symbols",
+  "lsp.references",
+  "lsp.definition",
+  "lsp.implementation",
+  "artifact.read",
 ] as const;
 
 export type ProgramToolId = (typeof PROGRAM_TOOL_ALLOWLIST)[number];
