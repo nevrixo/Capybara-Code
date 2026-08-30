@@ -31,20 +31,50 @@ function writeCapable(role: string): boolean {
   return definition !== undefined && (definition.canWrite || definition.canRunProcess);
 }
 
+/** What a transport may report while a scout is still running (§5.7 progress). */
+export interface HostedScoutProgress {
+  readonly note: string;
+  readonly tokenUsage?: number;
+}
+
 export interface HostedScoutTransport {
-  spawn(request: HostedScoutRequest, signal: AbortSignal): Promise<HostedScoutReport>;
+  spawn(
+    request: HostedScoutRequest,
+    signal: AbortSignal,
+    progress?: (update: HostedScoutProgress) => void,
+  ): Promise<HostedScoutReport>;
+}
+
+export type HostedAgentEventKind =
+  | "hosted_agent.requested"
+  | "hosted_agent.spawned"
+  | "hosted_agent.progress"
+  | "hosted_agent.completed"
+  | "hosted_agent.cancelled"
+  | "hosted_agent.fallback_local"
+  | "hosted_agent.evidence_rejected";
+
+/**
+ * §5.7 requires every hosted-agent event to carry turnId, taskEpochId,
+ * workspaceIdentityDigest, and routeId. The first three belong on the envelope,
+ * where `validateEvent`'s v1.3 ancestry rule looks for them — plus the agentId
+ * and callerId that rule also demands — so they are passed separately from the
+ * payload rather than buried in it. routeId travels in the payload the way
+ * `native_lane.*` carries it.
+ */
+export interface HostedEventAncestry {
+  readonly turnId: string;
+  readonly agentId: string;
+  readonly callerId: string;
+  readonly taskEpochId: string;
+  readonly workspaceIdentityDigest: string;
 }
 
 export interface HostedScoutEmitter {
   emit(
-    kind:
-      | "hosted_agent.spawned"
-      | "hosted_agent.progress"
-      | "hosted_agent.completed"
-      | "hosted_agent.cancelled"
-      | "hosted_agent.fallback_local"
-      | "hosted_agent.evidence_rejected",
+    kind: HostedAgentEventKind,
     payload: Record<string, unknown>,
+    ancestry: HostedEventAncestry,
   ): void;
 }
 
@@ -58,6 +88,9 @@ export interface HostedScoutCoordinatorOptions {
   readonly taskEpochId: string;
   readonly callerId: string;
   readonly taskId: string;
+  readonly turnId: string;
+  /** The inference route the hosted lane was selected on (§5.7). */
+  readonly routeId: string;
   readonly currentSequence?: number;
   /** Injectable clock so the subtree deadline is testable without real waiting. */
   readonly now?: () => number;
@@ -78,6 +111,8 @@ export class HostedScoutCoordinator {
   readonly #taskEpochId: string;
   readonly #callerId: string;
   readonly #taskId: string;
+  readonly #turnId: string;
+  readonly #routeId: string;
   readonly #currentSequence: number | undefined;
   readonly #now: () => number;
   /**
@@ -101,6 +136,8 @@ export class HostedScoutCoordinator {
     this.#taskEpochId = options.taskEpochId;
     this.#callerId = options.callerId;
     this.#taskId = options.taskId;
+    this.#turnId = options.turnId;
+    this.#routeId = options.routeId;
     this.#currentSequence = options.currentSequence;
     this.#now = options.now ?? (() => Date.now());
     this.#epochId = options.taskEpochId;
@@ -123,6 +160,20 @@ export class HostedScoutCoordinator {
   /** Hosted agents in flight right now, bounded by `maxConcurrentAgents`. */
   get agentsInFlight(): number {
     return this.#agentsInFlight;
+  }
+
+  #ancestry(agentId: string): HostedEventAncestry {
+    return {
+      turnId: this.#turnId,
+      agentId,
+      callerId: this.#callerId,
+      taskEpochId: this.#epochId,
+      workspaceIdentityDigest: this.#workspaceIdentityDigest,
+    };
+  }
+
+  #emit(kind: HostedAgentEventKind, agentId: string, payload: Record<string, unknown>): void {
+    this.#emitter?.emit(kind, { routeId: this.#routeId, ...payload }, this.#ancestry(agentId));
   }
 
   #usage(): HostedScoutUsage {
@@ -161,11 +212,24 @@ export class HostedScoutCoordinator {
       workspaceIdentityDigest: this.#workspaceIdentityDigest,
       taskId: this.#taskId,
     };
+    // §5.7 declares hosted_agent.requested and it was never emitted, so a refused
+    // request left no trace at all: a policy denial returned silently and the
+    // journal showed a turn that had simply never asked for a scout.
+    this.#emit("hosted_agent.requested", request.agentId, {
+      role: request.role,
+      depth: request.depth,
+      requestedTools: request.requestedTools ?? [],
+    });
     if (writeCapable(request.role)) {
-      return { accepted: false, reason: `hosted agents cannot run the write-capable ${request.role} role` };
+      const reason = `hosted agents cannot run the write-capable ${request.role} role`;
+      this.#emit("hosted_agent.cancelled", request.agentId, { reason, code: "role_write_capable" });
+      return { accepted: false, reason };
     }
     const decision = validateHostedScoutRequest(request, this.#policy, this.#usage());
-    if (!decision.allowed) return { accepted: false, reason: decision.message };
+    if (!decision.allowed) {
+      this.#emit("hosted_agent.cancelled", request.agentId, { reason: decision.message, code: decision.code });
+      return { accepted: false, reason: decision.message };
+    }
     // The subtree clock starts at the first admitted scout, not at construction:
     // a coordinator built early in a turn must not burn its own deadline idling.
     this.#subtreeStartedAt ??= this.#now();
@@ -175,7 +239,11 @@ export class HostedScoutCoordinator {
     // own catalog could still have offered a writer tool the gate never admitted.
     const admitted: HostedScoutRequest = { ...request, requestedTools: decision.tools };
     this.#agentsUsed += 1;
-    this.#emitter?.emit("hosted_agent.spawned", { agentId: request.agentId, role: request.role, taskEpochId: request.taskEpochId });
+    this.#emit("hosted_agent.spawned", request.agentId, {
+      role: request.role,
+      hostedRole: decision.role,
+      admittedTools: decision.tools,
+    });
     // §5.6's subtree wall-time budget has to be a real deadline, the way
     // programmatic.ts bounds a program: without one, a provider that accepts the
     // request and never answers holds the turn open for as long as the caller
@@ -203,16 +271,13 @@ export class HostedScoutCoordinator {
     // An exhausted subtree deadline is a budget refusal, not a transport error:
     // retrying under it would spend a budget that is already gone.
     if (!signal.aborted && this.#fallback !== undefined) {
-      this.#emitter?.emit("hosted_agent.fallback_local", {
-        agentId: request.agentId,
-        reason: hosted.reason,
-      });
+      this.#emit("hosted_agent.fallback_local", request.agentId, { reason: hosted.reason });
       const local = await this.#attempt(this.#fallback, admitted, signal, deadline);
       if (local.accepted) return this.#complete(request.agentId, local);
-      this.#emitter?.emit("hosted_agent.cancelled", { agentId: request.agentId, reason: local.reason });
+      this.#emit("hosted_agent.cancelled", request.agentId, { reason: local.reason });
       return local;
     }
-    this.#emitter?.emit("hosted_agent.cancelled", { agentId: request.agentId, reason: hosted.reason });
+    this.#emit("hosted_agent.cancelled", request.agentId, { reason: hosted.reason });
     return hosted;
   }
 
@@ -223,7 +288,14 @@ export class HostedScoutCoordinator {
     deadline: AbortSignal,
   ): Promise<HostedScoutResult> {
     try {
-      const report = await transport.spawn(request, signal);
+      const report = await transport.spawn(request, signal, (update) => {
+        // §5.7's progress event: a scout that runs for a while was invisible
+        // between spawn and completion, so a stall looked identical to work.
+        this.#emit("hosted_agent.progress", request.agentId, {
+          note: update.note,
+          ...(update.tokenUsage !== undefined ? { tokenUsage: update.tokenUsage } : {}),
+        });
+      });
       if (deadline.aborted) return { accepted: false, reason: "hosted scout subtree wall-time budget exhausted" };
       if (signal.aborted) return { accepted: false, reason: "hosted scout cancelled" };
       const accepted = acceptHostedScoutReport(report, {
@@ -234,10 +306,7 @@ export class HostedScoutCoordinator {
         ...(this.#currentSequence !== undefined ? { currentSequence: this.#currentSequence } : {}),
       });
       if (!accepted.accepted) {
-        this.#emitter?.emit("hosted_agent.evidence_rejected", {
-          agentId: request.agentId,
-          reason: accepted.reason,
-        });
+        this.#emit("hosted_agent.evidence_rejected", request.agentId, { reason: accepted.reason });
         return { accepted: false, reason: accepted.reason };
       }
       this.#subtreeTokensUsed += Math.max(0, report.evidenceCapsule.tokenUsage ?? 0);
@@ -250,10 +319,10 @@ export class HostedScoutCoordinator {
 
   #complete(agentId: string, result: HostedScoutResult): HostedScoutResult {
     const report = result.report!;
-    this.#emitter?.emit("hosted_agent.completed", {
-      agentId,
+    this.#emit("hosted_agent.completed", agentId, {
       evidenceIds: report.evidenceCapsule.evidenceIds ?? [],
       claimCount: report.evidenceCapsule.claims?.length ?? 0,
+      subtreeTokensUsed: this.#subtreeTokensUsed,
     });
     return result;
   }

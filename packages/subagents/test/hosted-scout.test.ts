@@ -9,9 +9,12 @@ import {
   type HostedScoutRequest,
 } from "@cbc/provider-openai";
 
+import { createEvent, EventSequencer, validateEvent } from "@cbc/protocol";
+
 import {
   HostedScoutCoordinator,
-  type HostedScoutEmitter,
+  type HostedAgentEventKind,
+  type HostedEventAncestry,
 } from "../src/hosted-scout.ts";
 
 function validRequest(overrides: Partial<HostedScoutRequest> = {}): HostedScoutRequest {
@@ -112,6 +115,8 @@ describe("hosted scout safety boundary", () => {
     const coordinator = new HostedScoutCoordinator({
       taskEpochId: "epoch-1",
       taskId: "task-1",
+      turnId: "turn-1",
+      routeId: "route-1",
       callerId: "root",
       workspaceIdentityDigest: "workspace-1",
       transport: {
@@ -144,6 +149,8 @@ describe("hosted scout safety boundary", () => {
     const coordinator = new HostedScoutCoordinator({
       taskEpochId: "epoch-1",
       taskId: "task-1",
+      turnId: "turn-1",
+      routeId: "route-1",
       callerId: "root",
       workspaceIdentityDigest: "workspace-1",
       transport: {
@@ -170,6 +177,8 @@ describe("hosted scout safety boundary", () => {
     const defaulted = new HostedScoutCoordinator({
       taskEpochId: "epoch-1",
       taskId: "task-1",
+      turnId: "turn-1",
+      routeId: "route-1",
       callerId: "root",
       workspaceIdentityDigest: "workspace-1",
       transport: {
@@ -197,6 +206,8 @@ describe("hosted scout safety boundary", () => {
     const tokenBudget = new HostedScoutCoordinator({
       taskEpochId: "epoch-1",
       taskId: "task-1",
+      turnId: "turn-1",
+      routeId: "route-1",
       callerId: "root",
       workspaceIdentityDigest: "workspace-1",
       policy: { ...DEFAULT_HOSTED_SCOUT_POLICY, maxAgents: 8, maxSubtreeTokens: 200 },
@@ -217,6 +228,8 @@ describe("hosted scout safety boundary", () => {
     const stalled = new HostedScoutCoordinator({
       taskEpochId: "epoch-1",
       taskId: "task-1",
+      turnId: "turn-1",
+      routeId: "route-1",
       callerId: "root",
       workspaceIdentityDigest: "workspace-1",
       policy: { ...DEFAULT_HOSTED_SCOUT_POLICY, maxSubtreeWallTimeMs: 5 },
@@ -248,6 +261,8 @@ describe("hosted scout safety boundary", () => {
     const coordinator = new HostedScoutCoordinator({
       taskEpochId: "epoch-1",
       taskId: "task-1",
+      turnId: "turn-1",
+      routeId: "route-1",
       callerId: "root",
       workspaceIdentityDigest: "workspace-1",
       policy: { ...DEFAULT_HOSTED_SCOUT_POLICY, maxAgents: 16, maxConcurrentAgents: 3 },
@@ -281,6 +296,8 @@ describe("hosted scout safety boundary", () => {
     const coordinator = new HostedScoutCoordinator({
       taskEpochId: "epoch-1",
       taskId: "task-1",
+      turnId: "turn-1",
+      routeId: "route-1",
       callerId: "root",
       workspaceIdentityDigest: "workspace-1",
       policy: { ...DEFAULT_HOSTED_SCOUT_POLICY, maxAgents: 2 },
@@ -302,11 +319,71 @@ describe("hosted scout safety boundary", () => {
     expect(coordinator.subtreeTokensUsed).toBe(120);
   });
 
-  test("falls back once to a local read-only transport and revalidates evidence", async () => {
-    const events: Array<{ kind: Parameters<HostedScoutEmitter["emit"]>[0]; payload: Record<string, unknown> }> = [];
+  test("emits requested and progress, and every event passes the v1.3 ancestry rule", async () => {
+    // §5.7: all hosted_agent.* events must carry turnId/taskEpochId/
+    // workspaceIdentityDigest/routeId. Every event the coordinator used to emit
+    // would have failed validateEvent, and requested/progress were declared but
+    // never emitted at all — a denied scout left the journal with no record.
+    const emitted: Array<{ kind: HostedAgentEventKind; payload: Record<string, unknown>; ancestry: HostedEventAncestry }> = [];
+    const sequencer = new EventSequencer();
     const coordinator = new HostedScoutCoordinator({
       taskEpochId: "epoch-1",
       taskId: "task-1",
+      turnId: "turn-1",
+      routeId: "route-1",
+      callerId: "root",
+      workspaceIdentityDigest: "workspace-1",
+      transport: {
+        spawn: async (request, _signal, progress) => {
+          progress?.({ note: "read 12 files", tokenUsage: 40 });
+          return report(request);
+        },
+      },
+      emitter: {
+        emit: (kind, payload, ancestry) => emitted.push({ kind, payload, ancestry }),
+      },
+    });
+
+    expect((await coordinator.run(scout("agent-1"), new AbortController().signal)).accepted).toBe(true);
+    expect(emitted.map((event) => event.kind)).toEqual([
+      "hosted_agent.requested",
+      "hosted_agent.spawned",
+      "hosted_agent.progress",
+      "hosted_agent.completed",
+    ]);
+
+    for (const event of emitted) {
+      expect(event.payload.routeId).toBe("route-1");
+      expect(event.ancestry).toEqual({
+        turnId: "turn-1",
+        agentId: "agent-1",
+        callerId: "root",
+        taskEpochId: "epoch-1",
+        workspaceIdentityDigest: "workspace-1",
+      });
+      const envelope = createEvent(sequencer, event.kind, event.payload, {
+        sessionId: "session-1",
+        ...event.ancestry,
+      });
+      expect(validateEvent(envelope)).toEqual([]);
+    }
+
+    // A refusal is journaled rather than returning silently.
+    const denied = await coordinator.run(scout("agent-writer", { role: "executor" as HostedScoutRequest["role"] }), new AbortController().signal);
+    expect(denied.accepted).toBe(false);
+    expect(emitted.slice(4).map((event) => event.kind)).toEqual([
+      "hosted_agent.requested",
+      "hosted_agent.cancelled",
+    ]);
+  });
+
+  test("falls back once to a local read-only transport and revalidates evidence", async () => {
+    const events: Array<{ kind: HostedAgentEventKind; payload: Record<string, unknown> }> = [];
+    const coordinator = new HostedScoutCoordinator({
+      taskEpochId: "epoch-1",
+      taskId: "task-1",
+      turnId: "turn-1",
+      routeId: "route-1",
       callerId: "root",
       workspaceIdentityDigest: "workspace-1",
       transport: {
@@ -335,6 +412,7 @@ describe("hosted scout safety boundary", () => {
     expect(result.report?.evidenceCapsule.evidenceIds).toEqual(["ev-1"]);
     expect(coordinator.agentsUsed).toBe(1);
     expect(events.map((event) => event.kind)).toEqual([
+      "hosted_agent.requested",
       "hosted_agent.spawned",
       "hosted_agent.fallback_local",
       "hosted_agent.completed",
@@ -345,6 +423,8 @@ describe("hosted scout safety boundary", () => {
     const coordinator = new HostedScoutCoordinator({
       taskEpochId: "epoch-1",
       taskId: "task-1",
+      turnId: "turn-1",
+      routeId: "route-1",
       callerId: "root",
       workspaceIdentityDigest: "workspace-1",
       transport: { spawn: async () => { throw new Error("offline"); } },
