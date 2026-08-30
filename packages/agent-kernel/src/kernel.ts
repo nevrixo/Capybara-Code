@@ -3466,6 +3466,23 @@ export class AgentKernel {
     await this.#options.beforeToolExecute?.(action, signal);
   }
 
+  /**
+   * The task epoch a program's calls are bound to (§5.4).
+   *
+   * A host with no epoch provider supplies none, and passing the empty string
+   * to the lane trips its own `ancestry_missing` guard — which denied every
+   * legitimate program read rather than reporting that the lane could not be
+   * bound. The synchronized epoch id is always non-empty, so such a host gets
+   * one stable value and the lineage check still catches a call forged against
+   * a different epoch.
+   */
+  #programEpochId(): string {
+    const supplied = this.#readReasoningEpoch().taskEpochId;
+    return supplied !== undefined && supplied.length > 0
+      ? supplied
+      : this.#reasoningEpochId ?? "no-epoch";
+  }
+
   /** Revalidate provider-program calls before the ordinary permission path. */
   #programmaticDenials(
     calls: readonly PendingCall[],
@@ -3478,7 +3495,7 @@ export class AgentKernel {
       groups.set(call.programId, group);
     }
     const denied = new Map<string, { readonly code: string; readonly message: string }>();
-    const taskEpochId = this.#readReasoningEpoch().taskEpochId ?? "";
+    const taskEpochId = this.#programEpochId();
     for (const [programId, group] of groups) {
       const programCalls: Array<Partial<ProgramToolCall>> = group.map((call) => {
         let parsed: unknown;

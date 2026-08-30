@@ -4116,6 +4116,63 @@ describe("OpenAI programmatic read-only lane (P0-01/P0-03)", () => {
     expect(result.routeReceipt?.actual.fallbackReasons.join(" ")).toContain("PTC_CALL_DENIED");
   });
 
+  test("a program read is admitted when the host supplies no task epoch", async () => {
+    const provider = new InlineProvider(async function* (_request, _signal, callIndex) {
+      yield { type: "response.started", requestId: "ptc-noepoch-" + callIndex };
+      if (callIndex === 0) {
+        yield {
+          type: "response.item",
+          authoritative: true,
+          item: {
+            kind: "program",
+            itemId: "prog-noepoch",
+            callId: "call-program-noepoch",
+            code: "await tools.fs_read({ path: 'src/a.ts' });",
+            fingerprint: "opaque-program-state",
+          },
+        };
+        yield {
+          type: "tool.call.started",
+          callId: "call-read-noepoch",
+          name: "fs.read",
+          callerId: "call-program-noepoch",
+          programId: "call-program-noepoch",
+        };
+        yield {
+          type: "tool.call.completed",
+          call: {
+            callId: "call-read-noepoch",
+            name: "fs.read",
+            argumentsText: JSON.stringify({ path: "src/a.ts" }),
+            callerId: "call-program-noepoch",
+            programId: "call-program-noepoch",
+          },
+        };
+      } else {
+        yield { type: "text.delta", text: "Read it.", itemId: "final-" + callIndex, outputIndex: 0 };
+      }
+      yield { type: "response.completed", responseId: "ptc-noepoch-response-" + callIndex };
+    });
+    const { kernel, executed, events } = harness({
+      steps: [],
+      provider,
+      inferencePolicy: new InferenceUtilityController(),
+      autoRoute: true,
+      phasePolicy: true,
+      programmaticPolicy: { enabled: true, maxToolCalls: 8, maxParallelCalls: 2 },
+      activeToolIds: ["fs.read"],
+      toolResults: { "fs.read": { result: okResult("read"), text: "read" } },
+    });
+
+    const result = await kernel.runTurn("inspect via a program", new AbortController().signal);
+
+    // §5.4 binds a program to an epoch; a host without an epoch provider used to
+    // hit the lane's own ancestry guard and lose every legitimate read.
+    expect(executed.map((action) => action.toolId)).toEqual(["fs.read"]);
+    expect(payloadsOf(events, "tool.failed")).toHaveLength(0);
+    expect(result.routeReceipt?.actual.fallbackReasons.join(" ")).not.toContain("PTC_CALL_DENIED");
+  });
+
   test("direct routes cap provider and local read parallelism at one", async () => {
     const provider = new MockProvider({
       steps: [
