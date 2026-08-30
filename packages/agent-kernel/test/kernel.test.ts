@@ -3983,6 +3983,14 @@ describe("OpenAI programmatic read-only lane (P0-01/P0-03)", () => {
       planned: { lane: "program", maxParallelTools: 2 },
       actual: { lane: "program", parallelPeak: 0 },
     });
+    // §5.7: a reader must be able to tell the native lane was actually used,
+    // not merely planned, and join the event back to the route by routeId.
+    expect(payloadsOf(events, "native_lane.selected")[0]).toMatchObject({
+      routeId: routeEvent.routeId,
+      lane: "program",
+      maxParallelTools: 2,
+    });
+    expect(payloadsOf(events, "native_lane.fallback")).toHaveLength(0);
   });
 
   test("a disabled program lane falls back to direct request semantics", async () => {
@@ -4012,6 +4020,14 @@ describe("OpenAI programmatic read-only lane (P0-01/P0-03)", () => {
     expect(provider.requests[0]?.parallelToolCalls).toBe(false);
     expect(result.routeReceipt?.actual.fallbackReasons.join(" "))
       .toContain("programmatic lane is disabled");
+    // A silent demotion is the case the bench has to count, so the fallback
+    // names both lanes and the reason rather than only the resolved lane.
+    expect(payloadsOf(events, "native_lane.fallback")[0]).toMatchObject({
+      requestedLane: "program",
+      selectedLane: "direct",
+      reason: "programmatic lane is disabled or unsupported; using direct tools",
+    });
+    expect(payloadsOf(events, "native_lane.selected")).toHaveLength(0);
   });
 
   test("a forged program mutation is denied before the executor and replay keeps caller state", async () => {

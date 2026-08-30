@@ -31,6 +31,7 @@ import {
   selectEffort,
   type ComplexityFeatures,
   type GeneratedImageOutput,
+  type InferenceLane,
   type InferencePolicyDecision,
   type InferencePolicyPort,
   type ModelEvent,
@@ -883,6 +884,18 @@ export class AgentKernel {
   #routeParallelPeak = 0;
   #routeFallbackReasons: string[] = [];
   /**
+   * The native-lane admission outcome for the route currently being announced.
+   * `#decideRoute` resolves whether the provider-native lane the policy asked
+   * for is actually available, but it has no event sink; recording the outcome
+   * here lets `#emitRouteEvents` report the selection and any fallback in the
+   * same place the rest of the route is announced (PRD §5.7).
+   */
+  #pendingNativeLane: {
+    readonly requested: InferenceLane;
+    readonly selected: InferenceLane;
+    readonly reason?: string;
+  } | undefined;
+  /**
    * Actions the user allowed "for this turn" (§13.4). Keyed by the normalized
    * action hash, cleared when the turn ends: an `allow_turn` grant must apply to
    * the rest of the turn that asked for it and never leak into the next one.
@@ -1217,6 +1230,7 @@ export class AgentKernel {
     this.#routeEpoch = 0;
     this.#routeParallelPeak = 0;
     this.#routeFallbackReasons = [];
+    this.#pendingNativeLane = undefined;
     this.#turnAllowedActions.clear();
     this.#budgetNudged = false;
     this.#previousResponseFallbackUsed = false;
@@ -2209,6 +2223,9 @@ export class AgentKernel {
       previousRoute !== undefined &&
       previousRoute.routeId === nextRoute.routeId
     ) {
+      // Same route, so the lane outcome was already announced. Drop the
+      // re-decided outcome rather than let it leak into the next announcement.
+      this.#pendingNativeLane = undefined;
       return;
     }
     this.#routeEpoch += 1;
@@ -2222,6 +2239,10 @@ export class AgentKernel {
       to: { routeId: nextRoute.routeId, model: nextRoute.model, mode: nextRoute.mode, effort: nextRoute.effort, intent: nextRoute.intent, reasoningContext: nextRoute.reasoningContext },
       reason: contextChanged ? "reasoning epoch scope changed" : "phase-aware route reconciliation",
     });
+    // A phase reconciliation can change the lane as well as the model, so the
+    // native-lane outcome has to be reported here too — otherwise a mid-turn
+    // demotion to direct never appears in the journal.
+    this.#emitNativeLaneEvents(nextRoute, emit);
     try {
       this.#options.onRouteDecided?.(nextRoute, prompt);
     } catch {
@@ -2256,6 +2277,8 @@ export class AgentKernel {
     let executable = decision.reasoningContext === reasoningContext
       ? decision
       : { ...decision, reasoningContext };
+    const requestedLane = executable.lane;
+    let nativeFallbackReason: string | undefined;
     if (executable.lane === "program") {
       const programmaticAvailable =
         this.#programmaticPolicy.enabled &&
@@ -2272,19 +2295,20 @@ export class AgentKernel {
           ),
         };
       } else {
-        executable = this.#directRouteFallback(
-          executable,
-          "programmatic lane is disabled or unsupported; using direct tools",
-        );
+        nativeFallbackReason = "programmatic lane is disabled or unsupported; using direct tools";
+        executable = this.#directRouteFallback(executable, nativeFallbackReason);
       }
     } else if (executable.lane === "hosted_scout") {
       // Hosted scouts use a separate read-only request owned by AgentSession.
       // Until that dispatcher is injected, the kernel must not claim execution.
-      executable = this.#directRouteFallback(
-        executable,
-        "hosted scout dispatcher is unavailable; using direct reasoning",
-      );
+      nativeFallbackReason = "hosted scout dispatcher is unavailable; using direct reasoning";
+      executable = this.#directRouteFallback(executable, nativeFallbackReason);
     }
+    this.#pendingNativeLane = {
+      requested: requestedLane,
+      selected: executable.lane,
+      ...(nativeFallbackReason !== undefined ? { reason: nativeFallbackReason } : {}),
+    };
     return { ...executable, routeId: inferenceRouteId(executable) };
   }
 
@@ -2375,6 +2399,41 @@ export class AgentKernel {
       premium: route.context.premium,
       allowed: route.context.allowed,
       reason: route.context.reason,
+    });
+    this.#emitNativeLaneEvents(route, emit);
+  }
+
+  /**
+   * Report which provider-native lane the turn actually got (PRD §5.7).
+   *
+   * The route decision already names a lane, but a reader cannot tell from it
+   * whether the native lane was *used* or quietly demoted to direct — and a
+   * silent demotion is exactly the case the bench needs to count. Both events
+   * carry `routeId` alongside the envelope's turn and epoch identity so a
+   * receipt can be joined back to the decision that produced it.
+   */
+  #emitNativeLaneEvents(
+    route: InferencePolicyDecision,
+    emit: <T>(kind: CbcEventKind, payload: T) => void,
+  ): void {
+    const outcome = this.#pendingNativeLane;
+    this.#pendingNativeLane = undefined;
+    if (outcome === undefined || outcome.requested === "direct") return;
+    if (outcome.selected === outcome.requested) {
+      emit("native_lane.selected", {
+        routeId: route.routeId,
+        lane: outcome.selected,
+        model: route.model,
+        maxAgents: route.maxAgents,
+        maxParallelTools: route.maxParallelTools,
+      });
+      return;
+    }
+    emit("native_lane.fallback", {
+      routeId: route.routeId,
+      requestedLane: outcome.requested,
+      selectedLane: outcome.selected,
+      reason: outcome.reason ?? "native lane was unavailable",
     });
   }
 
