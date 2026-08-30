@@ -100,14 +100,15 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
 
   ["agent.promptCompiler", { status: "wired", consumer: "agent-kernel compiled prompt hot path" }],
   ["agent.compoundTools", { status: "wired", consumer: "agent.ts native compound tool activation" }],
+  ["agent.actionSurface", { status: "wired", consumer: "agent.ts action-group surface composition" }],
   ["agent.verification.reviewPolicy", { status: "wired", consumer: "agent-kernel risk-based completion review" }],
   ["agent.verification.independentReviewRiskThreshold", { status: "wired", consumer: "agent-kernel change-risk review threshold" }],
   ["agent.verification.completionRequiresFreshEvidence", { status: "experimental", note: "completion currently enforces fresh evidence unconditionally" }],
   ["agent.verification.falseCompletePolicy", { status: "experimental", note: "truthfulness currently uses the blocking policy unconditionally" }],
 
   ["agent.toolGraph.", { status: "wired", consumer: "agent-kernel ToolExecutionGraph" }],
-  ["agent.learning.strategyCapsules", { status: "experimental", note: "the §6.3 capsule lifecycle has no consumer yet; proposals are not produced" }],
-  ["agent.learning.minVerifiedObservations", { status: "experimental", note: "read once the capsule activation gate lands" }],
+  ["agent.learning.strategyCapsules", { status: "wired", consumer: "AgentSession MemoryService CapsuleStore policy; /learn gate" }],
+  ["agent.learning.minVerifiedObservations", { status: "wired", consumer: "CapsuleStore activation threshold" }],
   ["agent.visibleCommentary", { status: "wired", consumer: "AgentSession event visibility + session reducer" }],
   ["agent.verification.", { status: "experimental", note: "the completion gate uses fixed policy today" }],
 
@@ -160,6 +161,8 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
   ["provider.openai.native.programmaticToolCalling", { status: "wired", consumer: "AgentSession → AgentKernel read-only PTC lane" }],
   ["provider.openai.native.maxProgramToolCalls", { status: "wired", consumer: "AgentKernel ProgrammaticToolLane call budget" }],
   ["provider.openai.native.maxProgramParallelCalls", { status: "wired", consumer: "AgentKernel route and ToolExecutionGraph parallel ceiling" }],
+  ["provider.openai.native.hostedMultiAgent", { status: "wired", consumer: "AgentSession HostedScoutCoordinator → AgentKernel hosted_scout lane" }],
+  ["provider.openai.native.maxHostedAgents", { status: "wired", consumer: "HostedScoutPolicy per-epoch agent cap and concurrency ceiling" }],
   ["provider.openai.native.", { status: "experimental", note: "native lanes are read-only; the toggles feed the policy digest only" }],
   ["perf.", { status: "wired", consumer: "AgentSession performance event sampling" }],
 

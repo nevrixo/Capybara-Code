@@ -763,7 +763,13 @@ describe("config key status (P1-04)", () => {
     expect(configKeyInfo("model.router.strategy")?.status).toBe("wired");
     expect(configKeyInfo("provider.openai.native.programmaticToolCalling")?.status).toBe("wired");
     expect(configKeyInfo("provider.openai.native.maxProgramToolCalls")?.status).toBe("wired");
-    expect(configKeyInfo("provider.openai.native.hostedMultiAgent")?.status).toBe("experimental");
+    // §5.6's hosted lane now has a real consumer, so the catch-all no longer
+    // describes these two keys — setting them changes what runs.
+    expect(configKeyInfo("provider.openai.native.hostedMultiAgent")?.status).toBe("wired");
+    expect(configKeyInfo("provider.openai.native.hostedMultiAgent")?.consumer).toContain("HostedScoutCoordinator");
+    expect(configKeyInfo("provider.openai.native.maxHostedAgents")?.status).toBe("wired");
+    // The section catch-all still covers the keys that remain digest-only.
+    expect(configKeyInfo("provider.openai.native.maxProgramParallelCalls")?.status).toBe("wired");
   });
 
   test("a wired key names its consumer", () => {
@@ -1156,5 +1162,37 @@ describe("productized OpenAI-first defaults (§6 P1-03, §8.4)", () => {
     expect(rejected.issues.some((issue) =>
       issue.path === "provider.openai.profile" && issue.severity === "error"
     )).toBe(true);
+  });
+});
+
+describe("action surface gate (§6.5, §6.6)", () => {
+  test("the action surface is off by default", () => {
+    // §6.6 removes one group at a time with a bench re-run between, so this must
+    // never be on without someone asking for it.
+    expect(defaultConfig().agent.actionSurface).toEqual([]);
+    expect(configKeyInfo("agent.actionSurface")?.status).toBe("wired");
+  });
+
+  test("groups are enabled one at a time", () => {
+    const merged = mergeConfig([
+      { source: "user", values: { "agent.actionSurface": ["change"] } },
+    ]);
+    expect(merged.config.agent.actionSurface).toEqual(["change"]);
+    expect(merged.issues.some((issue) => issue.path === "agent.actionSurface" && issue.severity === "error")).toBe(false);
+  });
+
+  test("an unknown group name is an error, not a silently ignored value", () => {
+    // A typo that was tolerated would leave the surface off while the operator
+    // believed the ablation was running.
+    const rejected = mergeConfig([
+      { source: "user", values: { "agent.actionSurface": ["change", "mutate"] } },
+    ]);
+    expect(rejected.issues.some((issue) =>
+      issue.path === "agent.actionSurface" && issue.severity === "error"
+    )).toBe(true);
+    const wrongType = mergeConfig([
+      { source: "user", values: { "agent.actionSurface": "change" } },
+    ]);
+    expect(wrongType.issues.some((issue) => issue.path === "agent.actionSurface")).toBe(true);
   });
 });
