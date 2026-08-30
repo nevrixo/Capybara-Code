@@ -779,6 +779,8 @@ export interface RouteExecutionReceipt {
     readonly outputTokens: number;
     /** Capacity the route held back from the input budget (§5.14). */
     readonly outputReserveTokens: number;
+    /** How wide the route planned this turn's verification to be (§5.14). */
+    readonly verificationLevel: string;
     readonly reasons: readonly string[];
   };
   readonly actual: {
@@ -2207,6 +2209,7 @@ export class AgentKernel {
         maxParallelTools: route.maxParallelTools,
         outputTokens: route.outputTokens,
         outputReserveTokens: route.outputReserveTokens,
+        verificationLevel: route.verificationLevel,
         reasons: [...route.rationaleCodes, ...route.warnings],
       },
       actual: {
@@ -2479,6 +2482,21 @@ export class AgentKernel {
       ...(this.#profileVerificationFloor() !== undefined
         ? { profileFloor: this.#profileVerificationFloor()! }
         : {}),
+      // §5.17's deterministic features. The policy can derive nothing about the
+      // turn's shape on its own — it sees one prompt, not the loop — so the
+      // kernel supplies the phase it is in, the mode it is running under, and
+      // whether a mutation has already landed. Without these the derivation ran
+      // entirely on its own safe defaults and every turn got the same level.
+      phase,
+      interactionMode: this.#activeInteractionMode,
+      // Sent only once a mutation has actually landed. At turn start nothing has,
+      // and claiming `false` there would assert a fact the kernel cannot know —
+      // §5.17 resolves that ambiguity upward, and the phase already carries the
+      // genuinely read-only case.
+      ...(this.#workspaceMutated ? { mutatesWorkspace: true } : {}),
+      ...(this.#routeChangeRisk() !== undefined
+        ? { changeRisk: this.#routeChangeRisk()! }
+        : {}),
       contextTokens: prompt.inputTokens,
       configuredMaxOutputTokens: this.#options.maxOutputTokens ?? 32_000,
       needsReasoningSummary: (this.#options.reasoningSummary ?? "auto") === "auto",
@@ -2534,6 +2552,23 @@ export class AgentKernel {
       ...(nativeFallbackReason !== undefined ? { reason: nativeFallbackReason } : {}),
     };
     return { ...executable, routeId: inferenceRouteId(executable) };
+  }
+
+  /**
+   * The assessed risk of what the turn has changed *so far* (§5.17).
+   *
+   * Undefined until something is actually changed: routing an untouched
+   * workspace through the risk model would report the "no resolved paths" score
+   * of a mutation that never happened. A later phase re-route sees the real
+   * paths, which is the point of re-deciding per phase.
+   */
+  #routeChangeRisk(): ChangeRiskLevel | undefined {
+    if (!this.#workspaceMutated && this.#changedFiles.size === 0) return undefined;
+    return assessChangeRisk({
+      files: [...this.#changedFiles.entries()].map(([path, file]) => ({ path, ...file })),
+      workspaceMutated: this.#workspaceMutated,
+      externalSideEffect: this.#externalSideEffectApplied,
+    }).level;
   }
 
   #directRouteFallback(
@@ -2727,6 +2762,10 @@ export class AgentKernel {
       maxAgents: route.maxAgents,
       maxParallelTools: route.maxParallelTools,
       maxCostUsd: route.maxCostUsd,
+      // §5.19 counts required-field mismatches between this event and the
+      // receipt, so a field the receipt reports has to be announced here too.
+      verificationLevel: route.verificationLevel,
+      outputReserveTokens: route.outputReserveTokens,
       phase: this.#phase,
       routeEpoch: this.#routeEpoch,
       rationaleCodes: route.rationaleCodes,

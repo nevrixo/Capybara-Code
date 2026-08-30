@@ -4867,6 +4867,68 @@ describe("route execution receipt reports execution, not the plan (§5.16)", () 
     expect(result.routeReceipt?.actual.lane).toBe("program");
   });
 
+  test("the route event and the receipt agree on every field both report (§5.19)", async () => {
+    const { kernel, events } = harness({
+      steps: [{ text: "Done." }],
+      inferencePolicy: new InferenceUtilityController(),
+      autoRoute: true,
+    });
+
+    const result = await kernel.runTurn("answer briefly", new AbortController().signal);
+
+    const decided = payloadsOf(events, "model.route_decided")[0] as Record<string, unknown>;
+    const planned = result.routeReceipt?.planned as Record<string, unknown> | undefined;
+    expect(planned).toBeDefined();
+    // The criterion is zero mismatches, which is only checkable for the fields
+    // both sides carry — so every shared key is compared rather than sampled.
+    for (const field of ["lane", "maxAgents", "maxParallelTools", "verificationLevel", "outputReserveTokens"]) {
+      expect(decided[field]).toBe(planned![field]);
+    }
+  });
+
+  test("the kernel's phase and mutation state reach the route (§5.17)", async () => {
+    // The policy sees one prompt, not the loop. Without the kernel supplying the
+    // phase, the mode, and whether a mutation landed, the derivation ran entirely
+    // on its own safe defaults and every turn received the same level.
+    const reading = await harness({
+      steps: [{ text: "Read it." }],
+      inferencePolicy: new InferenceUtilityController(),
+      autoRoute: true,
+      phasePolicy: true,
+    }).kernel.runTurn("inspect how sessions are stored", new AbortController().signal);
+
+    const provider = new MockProvider({
+      steps: [
+        { toolCalls: [{ callId: "edit-1", name: "fs.edit", arguments: { path: "src/auth/session.ts" } }] },
+        { text: "Changed the credential path." },
+      ],
+    });
+    const changing = await harness({
+      steps: [],
+      provider,
+      inferencePolicy: new InferenceUtilityController(),
+      autoRoute: true,
+      phasePolicy: true,
+      activeToolIds: ["fs.edit"],
+      toolResults: {
+        "fs.edit": {
+          result: okResult("edited src/auth/session.ts", {
+            path: "src/auth/session.ts",
+            additions: 40,
+            deletions: 12,
+          }),
+          text: "edited",
+        },
+      },
+    }).kernel.runTurn("fix the session credential handling", new AbortController().signal);
+
+    // A read-only investigation earns the focused contract; a turn that edited a
+    // credential path must not be levelled the same way.
+    expect(reading.routeReceipt?.planned.verificationLevel).toBe("focused");
+    expect(changing.routeReceipt?.planned.verificationLevel).not.toBe("focused");
+    expect(changing.routeReceipt?.planned.verificationLevel).not.toBe("package");
+  });
+
   test("the receipt is announced as its own event with the decision's routeId", async () => {
     const { kernel, events } = harness({
       steps: [{ text: "Done." }],
