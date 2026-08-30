@@ -188,7 +188,8 @@ export type ModelInputItem =
   | { type: "function_call"; itemId?: string; callId: string; name: string; argumentsText: string; caller?: ModelToolCaller; callerId?: string; programId?: string; agentId?: string }
   | { type: "function_call_output"; itemId?: string; callId: string; output: string; caller?: ModelToolCaller; callerId?: string; programId?: string; agentId?: string }
   | { type: "reasoning"; opaque: string; summaryText?: string }
-  | { type: "compaction"; opaque: string };
+  | { type: "compaction"; opaque: string }
+  | ModelProgramInputItem;
 
 /** Provider-owned PTC output items accepted only for exact stateless replay. */
 export type ModelProgramInputItem =
@@ -272,7 +273,7 @@ export const nativeCompactionThreshold = calculateNativeCompactionThreshold;
 export interface ModelRequest {
   readonly requestId: string;
   readonly model: string;
-  readonly input: Array<ModelInputItem | ModelProgramInputItem>;
+  readonly input: ModelInputItem[];
   readonly tools: ModelToolSchema[];
   /** Optional per-request hosted-tool override. Omitted uses the provider defaults. */
   readonly hostedTools?: readonly HostedTool[];

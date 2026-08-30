@@ -839,7 +839,12 @@ export function assemblePrompt(inputs: PromptInputs, options: { readonly version
     messages: 0,
   };
   for (const item of materializedHistory) {
-    if (item.type === "function_call" || item.type === "function_call_output") {
+    if (
+      item.type === "function_call" ||
+      item.type === "function_call_output" ||
+      item.type === "program" ||
+      item.type === "program_output"
+    ) {
       itemCounts.tool_io += 1;
     } else {
       itemCounts.messages += 1;
@@ -863,10 +868,19 @@ export function assemblePrompt(inputs: PromptInputs, options: { readonly version
       layerTokens.L6_repository_context,
     system_tools: layerTokens.L1_tool_semantics,
     tool_io: materializedHistory
-      .filter((item) => item.type === "function_call" || item.type === "function_call_output")
+      .filter((item) =>
+        item.type === "function_call" ||
+        item.type === "function_call_output" ||
+        item.type === "program" ||
+        item.type === "program_output"
+      )
       .reduce((sum, item) => sum + estimateItemSize(item), 0),
     messages: materializedHistory
-      .filter((item) => item.type === "message" || item.type === "reasoning")
+      .filter((item) =>
+        item.type === "message" ||
+        item.type === "reasoning" ||
+        item.type === "compaction"
+      )
       .reduce((sum, item) => sum + estimateItemSize(item), 0) + layerTokens.L8_user_input,
   }, exactTotal);
 
@@ -947,6 +961,10 @@ function estimateItemSize(item: ModelInputItem): number {
     case "reasoning":
     case "compaction":
       return item.opaque.length;
+    case "program":
+      return item.code.length + item.fingerprint.length;
+    case "program_output":
+      return item.result.length;
   }
 }
 
