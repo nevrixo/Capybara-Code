@@ -84,7 +84,40 @@ export interface CapsuleStoreSnapshot {
 
 export interface CapsuleStoreOptions {
   readonly now?: () => string;
+  /**
+   * §6.3's "최소 2~3개의 독립된 검증 궤적" floor, read from
+   * agent.learning.minVerifiedObservations. Three is the §8.4 default; the
+   * store's own floor is two, because a single trajectory is not a pattern.
+   */
+  readonly minVerifiedObservations?: number;
 }
+
+export interface CapsuleActivationRefused {
+  readonly activated: false;
+  readonly reasons: readonly string[];
+  readonly capsule: StrategyCapsule;
+}
+
+export interface CapsuleActivated {
+  readonly activated: true;
+  readonly capsule: StrategyCapsule;
+}
+
+export type CapsuleActivationResult = CapsuleActivated | CapsuleActivationRefused;
+
+export interface CapsuleActivationOptions {
+  readonly reason?: string;
+}
+
+export interface CapsuleRecallOptions {
+  readonly scopes?: readonly CapsuleScope[];
+  readonly kinds?: readonly CapsuleKind[];
+  readonly now?: string;
+}
+
+/** The store's own floor, independent of what config asks for. */
+export const MIN_VERIFIED_OBSERVATIONS_FLOOR = 2;
+export const DEFAULT_MIN_VERIFIED_OBSERVATIONS = 3;
 
 /**
  * Deterministic in-memory capsule store. The snapshot is the persistence
@@ -94,10 +127,19 @@ export class CapsuleStore {
   readonly #capsules = new Map<`capsule-${string}`, StrategyCapsule>();
   readonly #transitions: CapsuleTransition[] = [];
   readonly #now: () => string;
+  readonly #minVerifiedObservations: number;
   #sequence = 0;
 
   constructor(options: CapsuleStoreOptions = {}) {
     this.#now = options.now ?? (() => new Date().toISOString());
+    this.#minVerifiedObservations = Math.max(
+      MIN_VERIFIED_OBSERVATIONS_FLOOR,
+      Math.floor(options.minVerifiedObservations ?? DEFAULT_MIN_VERIFIED_OBSERVATIONS),
+    );
+  }
+
+  get minVerifiedObservations(): number {
+    return this.#minVerifiedObservations;
   }
 
   get size(): number {
@@ -192,6 +234,73 @@ export class CapsuleStore {
     this.#capsules.set(id, capsule);
     this.#record("absent", capsule, "evidence-backed capsule proposed");
     return Object.freeze({ accepted: true, action: "proposed", capsule });
+  }
+
+  /**
+   * §6.3 activation. Refused unless the capsule has accumulated
+   * `minVerifiedObservations` independent verified trajectories — a strategy
+   * seen once is a coincidence, and the PRD asks for two to three before the
+   * harness is allowed to act on it. `approved` is the caller's assertion that
+   * a user said yes; the scope gate that requires it lands with the approval
+   * hop, and is enforced here so no path can activate workspace or user scope
+   * without one.
+   */
+  activate(id: `capsule-${string}`, options: CapsuleActivationOptions = {}): CapsuleActivationResult {
+    const capsule = this.#capsules.get(id);
+    if (capsule === undefined) throw new Error(`unknown strategy capsule: ${id}`);
+    const reasons: string[] = [];
+    if (capsule.status === "forgotten") reasons.push("a forgotten capsule cannot be reactivated");
+    if (capsule.status === "contested") reasons.push("a contested capsule must be resolved before activation");
+    if (capsule.observedCount < this.#minVerifiedObservations) {
+      reasons.push(
+        `capsule needs ${this.#minVerifiedObservations} independent verified observations, has ${capsule.observedCount}`,
+      );
+    }
+    if (reasons.length > 0) {
+      return Object.freeze({ activated: false, reasons: sortedUnique(reasons), capsule });
+    }
+    if (capsule.status === "active") return Object.freeze({ activated: true, capsule });
+
+    const activated = freezeCapsule({
+      ...capsule,
+      status: "active",
+      updatedAt: this.#now(),
+      revision: capsule.revision + 1,
+    });
+    this.#capsules.set(id, activated);
+    this.#record(capsule.status, activated, options.reason ?? "capsule activated");
+    return Object.freeze({ activated: true, capsule: activated });
+  }
+
+  /** §6.3 `/learn reject`: the user declines a proposal outright. */
+  reject(id: `capsule-${string}`, reason = "capsule rejected by the user"): StrategyCapsule {
+    const capsule = this.#capsules.get(id);
+    if (capsule === undefined) throw new Error(`unknown strategy capsule: ${id}`);
+    const rejected = freezeCapsule({
+      ...capsule,
+      status: "forgotten",
+      updatedAt: this.#now(),
+      revision: capsule.revision + 1,
+    });
+    this.#capsules.set(id, rejected);
+    this.#record(capsule.status, rejected, reason);
+    return rejected;
+  }
+
+  /**
+   * The recall surface. Only `active` capsules are ever returned: a proposal is
+   * a suggestion awaiting a decision, and a contested or forgotten capsule is
+   * excluded per §6.3. Expiry is honoured on read, as MemoryBank does.
+   */
+  recall(options: CapsuleRecallOptions = {}): readonly StrategyCapsule[] {
+    const now = options.now ?? this.#now();
+    return Object.freeze(this.all().filter((capsule) => {
+      if (capsule.status !== "active") return false;
+      if (capsule.expiresAt !== undefined && capsule.expiresAt <= now) return false;
+      if (options.scopes !== undefined && !options.scopes.includes(capsule.scope)) return false;
+      if (options.kinds !== undefined && !options.kinds.includes(capsule.kind)) return false;
+      return true;
+    }));
   }
 
   snapshot(): CapsuleStoreSnapshot {

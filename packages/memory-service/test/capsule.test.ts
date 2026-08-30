@@ -150,3 +150,77 @@ describe("CapsuleStore proposal entry (§6.2, §6.3)", () => {
     expect(CapsuleStore.fromSnapshot(poisoned).size).toBe(0);
   });
 });
+
+describe("CapsuleStore activation gate (§6.3)", () => {
+  test("a single verified trajectory never activates", () => {
+    const { store } = storeFixture();
+    const proposed = store.propose(proposal({ routeIds: ["route-1"] }));
+    expect(proposed.accepted).toBe(true);
+    if (!proposed.accepted) return;
+
+    const result = store.activate(proposed.capsule.id);
+    expect(result.activated).toBe(false);
+    if (!result.activated) {
+      expect(result.reasons.join(" ")).toContain("independent verified observations");
+    }
+    expect(store.get(proposed.capsule.id)?.status).toBe("proposed");
+    expect(store.recall()).toEqual([]);
+  });
+
+  test("activation succeeds once the configured threshold is reached", () => {
+    const { store } = storeFixture();
+    const first = store.propose(proposal({ routeIds: ["route-1"] }));
+    store.propose(proposal({ routeIds: ["route-2"], evidenceIds: ["ev-2"] }));
+    expect(first.accepted).toBe(true);
+    if (!first.accepted) return;
+
+    // Default threshold is three, so two trajectories are still short.
+    expect(store.activate(first.capsule.id).activated).toBe(false);
+
+    store.propose(proposal({ routeIds: ["route-3"], evidenceIds: ["ev-3"] }));
+    const result = store.activate(first.capsule.id);
+    expect(result.activated).toBe(true);
+    if (!result.activated) return;
+    expect(result.capsule.status).toBe("active");
+    expect(store.recall().map((capsule) => capsule.id)).toEqual([first.capsule.id]);
+  });
+
+  test("the threshold comes from config but never drops below two", () => {
+    const lenient = new CapsuleStore({ minVerifiedObservations: 1, now: () => "2026-01-01T00:00:00.000Z" });
+    expect(lenient.minVerifiedObservations).toBe(2);
+    const proposed = lenient.propose(proposal({ routeIds: ["route-1"] }));
+    expect(proposed.accepted).toBe(true);
+    if (!proposed.accepted) return;
+    expect(lenient.activate(proposed.capsule.id).activated).toBe(false);
+
+    const strict = new CapsuleStore({ minVerifiedObservations: 5 });
+    expect(strict.minVerifiedObservations).toBe(5);
+  });
+
+  test("a rejected capsule is forgotten and cannot be reactivated", () => {
+    const store = new CapsuleStore({ minVerifiedObservations: 2, now: () => "2026-01-01T00:00:00.000Z" });
+    store.propose(proposal({ routeIds: ["route-1"] }));
+    const second = store.propose(proposal({ routeIds: ["route-2"], evidenceIds: ["ev-2"] }));
+    expect(second.accepted).toBe(true);
+    if (!second.accepted) return;
+
+    const rejected = store.reject(second.capsule.id);
+    expect(rejected.status).toBe("forgotten");
+    const retry = store.activate(second.capsule.id);
+    expect(retry.activated).toBe(false);
+    if (!retry.activated) expect(retry.reasons.join(" ")).toContain("forgotten");
+    expect(store.recall()).toEqual([]);
+  });
+
+  test("an expired active capsule drops out of recall", () => {
+    const store = new CapsuleStore({ minVerifiedObservations: 2, now: () => "2026-01-01T00:00:00.000Z" });
+    store.propose(proposal({ routeIds: ["route-1"], expiresAt: "2026-02-01T00:00:00.000Z" }));
+    const second = store.propose(proposal({ routeIds: ["route-2"], evidenceIds: ["ev-2"] }));
+    expect(second.accepted).toBe(true);
+    if (!second.accepted) return;
+    expect(store.activate(second.capsule.id).activated).toBe(true);
+
+    expect(store.recall({ now: "2026-01-15T00:00:00.000Z" })).toHaveLength(1);
+    expect(store.recall({ now: "2026-03-01T00:00:00.000Z" })).toEqual([]);
+  });
+});
