@@ -38,6 +38,26 @@ does not fail validation, so nothing would catch it except a human reading this 
 
 ---
 
+## config · tools · events · app 1.0 — Deep Plan questionnaires
+
+Added the user-only agent.deepPlan = "off" | "on" setting, defaulting to
+"off". Deep Plan is a conversational policy layered over Plan mode; it does
+not add an execution mode or weaken Plan's read-only boundary.
+
+Added the strict, always-active user.ask_batch tool for one to four
+single-select, multi-select, or text questions. Stable questionnaireId and
+decisionKey fields provide retry idempotency and resolved-decision
+deduplication. The existing user.ask contract is unchanged.
+
+Added hidden journaled deep_plan.* events, including questionnaire draft
+checkpoints and Plan-answer revision binding. Added turn.input.get,
+turn.input.update, and turn.input.resolve App methods so a detached TUI can
+inspect or answer the questionnaire owned by a daemon session worker.
+Observers may inspect input; only a controller may update or resolve it.
+
+These are additive 1.x changes. Older event consumers skip the new kinds, and
+existing configs retain ordinary Plan behavior because Deep Plan defaults off.
+
 ## app capability schema 2.0 — method support snapshot
 
 App Protocol initialization now includes a connection-scoped, digest-bound

@@ -271,6 +271,7 @@
         "merge.apply",
         "merge.resolve",
         "user.ask",
+        "user.ask_batch",
         "task.search",
         "task.spawn",
         "task.status",

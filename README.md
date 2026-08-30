@@ -26,6 +26,7 @@
 Capybara Code pairs GPT models with a purpose-built coding harness to improve reliability, execution precision, and development speed.
 
 - Terminal UI for interactive agent work
+- Deep Plan questionnaires with deterministic Plan-readiness gating
 - Isolated Rust execution sidecar
 - Transactional file mutations
 - Sub-agent orchestration
@@ -107,6 +108,7 @@ Use `/setting` in the TUI to update interactive settings, or use `capy config se
 
 - `Fast mode` toggles OpenAI Fast mode (`provider.openai.serviceTier`): priority processing at up to ~2.5x speed for a per-token premium. It is only honored by the API backend and stays off by default.
 - `1M context` toggles the premium context-band policy (`model.context.premiumBandPolicy`): off keeps bands utility-gated at the 272k pricing boundary; on admits bands up to the model's 1M window. Input above 272K is billed at premium rates for the whole request.
+- Deep Plan toggles agent.deepPlan for the next Plan message. When enabled, repository-backed investigation can open one tabbed batch of 1–4 material product decisions, retain drafts across daemon detach/resume, and withhold an early final until the structured Plan Contract reflects the answers. It stays off by default and never runs in Build mode.
 
 - Capybara Code creates a global `config.toml` on first use. A trusted workspace
   may add `.capybara/config.toml` and a git-ignored
@@ -137,9 +139,15 @@ attention_details = true
 compaction_policy = "adaptive"  # off | legacy | adaptive
 provider_compaction_mode = "auto" # off | auto | on
 emergency_ratio = 0.90
+
+[agent]
+deep_plan = "off"          # off | on
 ```
 
 Use `/compact` for an explicit compaction. It reports before/after usage and the preserved TODO/evidence counts.
+
+See [Deep Plan](docs/deep-plan.md) for questionnaire controls, pause/resume
+semantics, headless behavior, and the completion gate.
 
 ## Packages and plugins
 
