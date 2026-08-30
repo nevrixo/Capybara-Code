@@ -468,3 +468,66 @@ describe("semantic change type and public surfaces (§5.21)", () => {
     expect(cosmetic.requiredChecks.map((check) => check.id)).not.toContain("broader-tests");
   });
 });
+
+describe("route verificationLevel as a floor (§5.15)", () => {
+  test("a planned package level requires the package tier a small change would skip", () => {
+    const ids = stepIds(["packages/a/src/x.ts"], { verificationLevel: "package" });
+    expect(ids).toContain("package-tests");
+    const plan = planVerification({
+      changedPaths: ["packages/a/src/x.ts"],
+      verificationLevel: "package",
+    });
+    expect(plan.steps.find((step) => step.id === "package-tests")?.required).toBe(true);
+    expect(plan.requiredCoverage).toContain("package_tests");
+  });
+
+  test("a planned integration level requires the consumer tier", () => {
+    const plan = planVerification({
+      changedPaths: ["packages/a/src/x.ts"],
+      verificationLevel: "integration",
+    });
+    expect(plan.steps.find((step) => step.id === "broader-tests")?.required).toBe(true);
+    expect(plan.requiredCoverage).toContain("broader_tests");
+  });
+
+  test("a planned independent_review level requires the reviewer at any risk level", () => {
+    const plan = planVerification({
+      changedPaths: ["packages/a/src/x.ts"],
+      riskLevel: "low",
+      verificationLevel: "independent_review",
+    });
+    expect(plan.steps.find((step) => step.id === "independent-review")?.required).toBe(true);
+    const contract = buildTurnVerificationContract({
+      changedPaths: ["packages/a/src/x.ts"],
+      workspaceGeneration: 1,
+      riskLevel: "low",
+      verificationLevel: "independent_review",
+    });
+    expect(contract.reviewRequired).toBe(true);
+  });
+
+  test("a planned focused level does not narrow what impact already widened", () => {
+    // The floor raises; it never lowers. A high-risk change keeps its reviewer
+    // even when the route only planned a focused check.
+    const ids = stepIds(["packages/permissions/src/policy.ts"], {
+      riskLevel: "critical",
+      verificationLevel: "focused",
+    });
+    expect(ids).toContain("broader-tests");
+    expect(ids).toContain("independent-review");
+  });
+
+  test("a planned level overrides a cosmetic narrowing", () => {
+    const ids = stepIds(["packages/a/src/x.ts"], {
+      semanticChange: "cosmetic",
+      verificationLevel: "integration",
+    });
+    expect(ids).toContain("broader-tests");
+  });
+
+  test("an unrecognized level imposes no floor", () => {
+    const ids = stepIds(["packages/a/src/x.ts"], { verificationLevel: "something-else" });
+    expect(ids).not.toContain("package-tests");
+    expect(ids).not.toContain("broader-tests");
+  });
+});

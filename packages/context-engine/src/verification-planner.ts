@@ -121,6 +121,16 @@ export interface VerificationChangeSet {
   readonly riskLevel?: "low" | "medium" | "high" | "critical";
   readonly languageHints?: readonly ("typescript" | "rust" | "python" | "other")[];
   /**
+   * §5.15: the verification width the route decision planned. It is a FLOOR, not
+   * a replacement — impact may always widen past it, but a planned integration
+   * check may not be narrowed away by a change that merely looks small, which is
+   * the point of the router naming a level the contract is measured against.
+   *
+   * Declared as an open string so the planner does not depend on the provider
+   * package; an unrecognized value imposes no floor.
+   */
+  readonly verificationLevel?: string;
+  /**
    * §5.21 semantic change type. The host derives it from the diff it already
    * has; the plan only decides what it means. `cosmetic` is the one value that
    * narrows rather than widens, so it is trusted only when nothing else in the
@@ -176,10 +186,17 @@ export function planVerification(changeSet: VerificationChangeSet): Verification
   // when nothing else in the change set argues for widening. Trusting it over a
   // moved export or a prior failure would turn §5.21's cheapest input into a way
   // to skip verification.
+  // §5.15: the route's planned width is a floor on the tiers the plan must reach.
+  const level = changeSet.verificationLevel;
+  const floorRequiresPackage =
+    level === "package" || level === "integration" || level === "independent_review";
+  const floorRequiresConsumers = level === "integration" || level === "independent_review";
+  const floorRequiresReview = level === "independent_review";
   const cosmeticOnly =
     impact.includes("cosmetic") &&
     !highRisk &&
     !reachesConsumers &&
+    !floorRequiresPackage &&
     (changeSet.failedCommands?.length ?? 0) === 0 &&
     (changeSet.reflectionPaths?.length ?? 0) === 0;
   const languages = new Set(changeSet.languageHints ?? paths.map(languageForPath));
@@ -219,7 +236,8 @@ export function planVerification(changeSet: VerificationChangeSet): Verification
   if (
     packageCommand !== undefined &&
     !cosmeticOnly &&
-    (highRisk ||
+    (floorRequiresPackage ||
+      highRisk ||
       impact.includes("cross_module") ||
       impact.includes("dependency") ||
       impact.includes("config") ||
@@ -228,7 +246,7 @@ export function planVerification(changeSet: VerificationChangeSet): Verification
     steps.push({
       id: "package-tests",
       tier: 2,
-      required: highRisk,
+      required: highRisk || floorRequiresPackage,
       command: packageCommand,
       covers: ["package_tests"],
       escalate: "the change reaches past the edited files into their own packages",
@@ -242,7 +260,8 @@ export function planVerification(changeSet: VerificationChangeSet): Verification
   const consumers = consumersOf(impactedPackages, changeSet.packageConsumers);
   if (
     !cosmeticOnly &&
-    (highRisk ||
+    (floorRequiresConsumers ||
+      highRisk ||
       impact.includes("cross_module") ||
       impact.includes("dependency") ||
       (changeSet.failedCommands?.length ?? 0) > 0 ||
@@ -251,7 +270,7 @@ export function planVerification(changeSet: VerificationChangeSet): Verification
     steps.push({
       id: "broader-tests",
       tier: 3,
-      required: highRisk,
+      required: highRisk || floorRequiresConsumers,
       command: consumerCommandFor(consumers, languages),
       covers: ["broader_tests", ...(consumers.length > 0 ? ["affected_consumers"] : [])],
       escalate: "impact or prior failure justifies widening beyond focused tests",
@@ -275,7 +294,7 @@ export function planVerification(changeSet: VerificationChangeSet): Verification
     covers: ["evidence_freshness"],
     reason: "re-check that every captured verification result still matches the final workspace state",
   });
-  if (highRisk) {
+  if (highRisk || floorRequiresReview) {
     steps.push({
       id: "independent-review",
       tier: 4,
@@ -352,6 +371,8 @@ export interface TurnVerificationContractInput {
   readonly semanticChange?: VerificationChangeSet["semanticChange"];
   /** §5.21 public API / schema / config surfaces this change moved. */
   readonly publicSurface?: VerificationChangeSet["publicSurface"];
+  /** §5.15: the verification width the route planned, as a floor on the tiers. */
+  readonly verificationLevel?: VerificationChangeSet["verificationLevel"];
 }
 
 // Every mutation turn owns one contract that names the checks the turn must
@@ -371,6 +392,7 @@ export function buildTurnVerificationContract(
     ...(input.packageConsumers === undefined ? {} : { packageConsumers: input.packageConsumers }),
     ...(input.semanticChange === undefined ? {} : { semanticChange: input.semanticChange }),
     ...(input.publicSurface === undefined ? {} : { publicSurface: input.publicSurface }),
+    ...(input.verificationLevel === undefined ? {} : { verificationLevel: input.verificationLevel }),
     // The kernel supplies these, and dropping them here made the widening they
     // exist to trigger dead on the contract path.
     ...(input.reflectionPaths === undefined ? {} : { reflectionPaths: input.reflectionPaths }),

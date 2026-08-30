@@ -5413,6 +5413,13 @@ export class AgentKernel {
       ...(this.#reflectionImplicatedPaths().length > 0
         ? { reflectionPaths: this.#reflectionImplicatedPaths() }
         : {}),
+      // §5.15: the route already decided how wide this turn's verification has to
+      // be. Passing it as a floor is what closes the mapping — until now the
+      // contract's only risk input was the change itself, so a route that planned
+      // an integration check could be satisfied by a focused one.
+      ...(this.#turnRoute?.verificationLevel !== undefined
+        ? { verificationLevel: this.#turnRoute.verificationLevel }
+        : {}),
     });
     // §5.20 requires the contract to be an observable turn artifact, not a
     // private field: the checks it names are what the completion gate below
