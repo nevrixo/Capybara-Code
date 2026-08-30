@@ -55,6 +55,18 @@ function report(request: HostedScoutRequest): HostedScoutReport {
   };
 }
 
+function scout(agentId: string, overrides: Partial<HostedScoutRequest> = {}): Omit<HostedScoutRequest, "callerId" | "taskEpochId" | "workspaceIdentityDigest"> {
+  return {
+    role: "explore",
+    agentId,
+    taskId: "task-1",
+    depth: 0,
+    prompt: "Inspect routing.",
+    requestedTools: ["fs.read"],
+    ...overrides,
+  };
+}
+
 describe("hosted scout safety boundary", () => {
   test("rejects forged roles, missing identity, and policy attempts to widen the catalog", () => {
     expect(validateHostedScoutRequest({
@@ -176,6 +188,55 @@ describe("hosted scout safety boundary", () => {
     }, new AbortController().signal);
     expect(seen[1]).toEqual([...DEFAULT_HOSTED_SCOUT_POLICY.allowlistedTools]);
     expect(seen[1]).not.toContain("fs.edit");
+  });
+
+  test("bounds the subtree by tokens and by wall time, not just per agent", async () => {
+    // §5.6 budgets the whole scout subtree. A per-agent token ceiling alone lets
+    // a sequence of individually cheap scouts run without bound, and gives a
+    // provider that never answers no deadline at all.
+    const tokenBudget = new HostedScoutCoordinator({
+      taskEpochId: "epoch-1",
+      taskId: "task-1",
+      callerId: "root",
+      workspaceIdentityDigest: "workspace-1",
+      policy: { ...DEFAULT_HOSTED_SCOUT_POLICY, maxAgents: 8, maxSubtreeTokens: 200 },
+      transport: { spawn: async (request) => report(request) },
+    });
+    const first = await tokenBudget.run(scout("agent-1"), new AbortController().signal);
+    expect(first.accepted).toBe(true);
+    expect(tokenBudget.subtreeTokensUsed).toBe(120);
+    const second = await tokenBudget.run(scout("agent-2"), new AbortController().signal);
+    expect(second.accepted).toBe(true);
+    expect(tokenBudget.subtreeTokensUsed).toBe(240);
+    const third = await tokenBudget.run(scout("agent-3"), new AbortController().signal);
+    expect(third).toMatchObject({ accepted: false });
+    expect(third.reason).toContain("subtree is capped at 200 tokens");
+
+    // A provider that accepts and never answers is cut off by the deadline.
+    let clock = 0;
+    const stalled = new HostedScoutCoordinator({
+      taskEpochId: "epoch-1",
+      taskId: "task-1",
+      callerId: "root",
+      workspaceIdentityDigest: "workspace-1",
+      policy: { ...DEFAULT_HOSTED_SCOUT_POLICY, maxSubtreeWallTimeMs: 5 },
+      now: () => clock,
+      transport: {
+        spawn: (_request, signal) =>
+          new Promise((_resolve, reject) => {
+            signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+          }),
+      },
+      fallback: { spawn: async (request) => report(request) },
+    });
+    const stalledResult = await stalled.run(scout("agent-stalled"), new AbortController().signal);
+    expect(stalledResult).toMatchObject({ accepted: false });
+    expect(stalledResult.reason).toContain("wall-time budget exhausted");
+
+    // Once the subtree clock is past the budget, the gate refuses admission.
+    clock = 10_000;
+    const expired = await stalled.run(scout("agent-late"), new AbortController().signal);
+    expect(expired.reason).toContain("capped at 5ms");
   });
 
   test("falls back once to a local read-only transport and revalidates evidence", async () => {

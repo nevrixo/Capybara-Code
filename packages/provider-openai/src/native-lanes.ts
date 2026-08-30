@@ -242,8 +242,18 @@ export function resolveHostedRole(role: unknown): HostedRole | undefined {
 export interface HostedScoutPolicy {
   readonly enabled: boolean;
   readonly maxAgents: number;
+  /** §5.6: at most this many hosted agents in flight at one time. */
+  readonly maxConcurrentAgents: number;
   readonly maxDepth: number;
   readonly maxTokensPerAgent: number;
+  /**
+   * §5.6 budgets the scout *subtree*, not just each agent in it. A per-agent
+   * token ceiling alone lets a sequence of individually cheap scouts run without
+   * bound, and gives a stalled provider no deadline at all — the way
+   * `ProgramPolicy.maxWallTimeMs` bounds a program, these bound the subtree.
+   */
+  readonly maxSubtreeTokens: number;
+  readonly maxSubtreeWallTimeMs: number;
   readonly allowlistedTools: readonly string[];
   readonly allowShell: false;
   readonly allowApplyPatch: false;
@@ -254,8 +264,11 @@ export interface HostedScoutPolicy {
 export const DEFAULT_HOSTED_SCOUT_POLICY: HostedScoutPolicy = {
   enabled: true,
   maxAgents: 3,
+  maxConcurrentAgents: 3,
   maxDepth: 1,
   maxTokensPerAgent: 16_000,
+  maxSubtreeTokens: 48_000,
+  maxSubtreeWallTimeMs: 120_000,
   allowlistedTools: PROGRAM_TOOL_ALLOWLIST,
   allowShell: false,
   allowApplyPatch: false,
@@ -276,11 +289,22 @@ export interface HostedScoutRequest {
   readonly requestedTools?: readonly string[];
 }
 
+/**
+ * What the subtree has already spent. The gate owns the *limits* but cannot see
+ * the running totals, so the coordinator supplies them on every admission.
+ */
+export interface HostedScoutUsage {
+  readonly agentsUsed?: number;
+  readonly agentsInFlight?: number;
+  readonly subtreeTokensUsed?: number;
+  readonly subtreeElapsedMs?: number;
+}
+
 export interface HostedScoutDecision {
   readonly allowed: boolean;
   /** The hosted class the requested role was narrowed to. Absent on refusal. */
   readonly role?: HostedRole;
-  readonly code: "allowed" | "disabled" | "agent_budget" | "depth_budget" | "token_budget" | "role_invalid" | "agent_missing" | "caller_missing" | "epoch_missing" | "workspace_missing" | "tool_denied" | "prompt_invalid";
+  readonly code: "allowed" | "disabled" | "agent_budget" | "concurrency_budget" | "subtree_token_budget" | "subtree_wall_time_budget" | "depth_budget" | "token_budget" | "role_invalid" | "agent_missing" | "caller_missing" | "epoch_missing" | "workspace_missing" | "tool_denied" | "prompt_invalid";
   readonly message: string;
   readonly tools: readonly string[];
 }
@@ -288,10 +312,13 @@ export interface HostedScoutDecision {
 export function validateHostedScoutRequest(
   request: Partial<HostedScoutRequest>,
   policy: HostedScoutPolicy = DEFAULT_HOSTED_SCOUT_POLICY,
-  usage: { readonly agentsUsed?: number } = {},
+  usage: HostedScoutUsage = {},
 ): HostedScoutDecision {
   if (!policy.enabled) return { allowed: false, code: "disabled", message: "hosted scouts are disabled by policy", tools: [] };
   if ((usage.agentsUsed ?? 0) >= policy.maxAgents) return { allowed: false, code: "agent_budget", message: `hosted scouts are capped at ${policy.maxAgents}`, tools: [] };
+  if ((usage.agentsInFlight ?? 0) >= policy.maxConcurrentAgents) return { allowed: false, code: "concurrency_budget", message: `hosted scouts are capped at ${policy.maxConcurrentAgents} in flight`, tools: [] };
+  if ((usage.subtreeTokensUsed ?? 0) >= policy.maxSubtreeTokens) return { allowed: false, code: "subtree_token_budget", message: `the hosted scout subtree is capped at ${policy.maxSubtreeTokens} tokens`, tools: [] };
+  if ((usage.subtreeElapsedMs ?? 0) >= policy.maxSubtreeWallTimeMs) return { allowed: false, code: "subtree_wall_time_budget", message: `the hosted scout subtree is capped at ${policy.maxSubtreeWallTimeMs}ms`, tools: [] };
   const hostedRole = resolveHostedRole(request.role);
   if (hostedRole === undefined) return { allowed: false, code: "role_invalid", message: "hosted agents are restricted to the read-only explore, architect, and reviewer roles", tools: [] };
   if (typeof request.agentId !== "string" || request.agentId.length === 0) return { allowed: false, code: "agent_missing", message: "hosted scouts require an agentId", tools: [] };
