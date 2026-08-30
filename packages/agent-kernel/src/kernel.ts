@@ -42,6 +42,7 @@ import {
   type ModelUsage,
   type ProviderError,
   type ProviderTurnSession,
+  type ProgramLaneRequest,
   type ProgramPolicy,
   type ProgramToolCall,
   type ReasoningContextScope,
@@ -801,6 +802,10 @@ export interface TurnResult {
  */
 interface ProgramRuntimeState {
   callsUsed: number;
+  /** Bytes of program output already accepted, against §5.4's intermediate budget. */
+  intermediateBytes: number;
+  /** `callsUsed` as of the batch currently being admitted, so execution re-admits identically. */
+  batchSeed: number;
   readonly startedAt: number;
   /** Whether `program.started` was already reported for this program (§5.7). */
   announced: boolean;
@@ -3779,11 +3784,43 @@ export class AgentKernel {
     }, emit);
   }
 
+  /**
+   * The §5.4 lane request for one paused batch of a program.
+   *
+   * Every budget the lane can enforce is supplied here. The wall clock and the
+   * accumulated output bytes were previously omitted, which made those gates
+   * short-circuit as undefined — the policy existed but never applied to
+   * anything. The same request is used for admission and for the coordinated
+   * execution that follows it, so the two cannot disagree about what was allowed.
+   */
+  #programLaneRequest(
+    programId: string,
+    state: ProgramRuntimeState,
+    taskEpochId: string,
+    calls: readonly Partial<ProgramToolCall>[],
+  ): ProgramLaneRequest {
+    return {
+      programId,
+      callerId: programId,
+      taskEpochId,
+      calls,
+      callsUsed: state.batchSeed,
+      intermediateBytes: state.intermediateBytes,
+      elapsedMs: Math.max(0, this.#now() - state.startedAt),
+    };
+  }
+
   /** The live accounting record for a program, created on first sight. */
   #programState(programId: string): ProgramRuntimeState {
     const existing = this.#programs.get(programId);
     if (existing !== undefined) return existing;
-    const created: ProgramRuntimeState = { announced: false, callsUsed: 0, startedAt: this.#now() };
+    const created: ProgramRuntimeState = {
+      announced: false,
+      batchSeed: 0,
+      callsUsed: 0,
+      intermediateBytes: 0,
+      startedAt: this.#now(),
+    };
     this.#programs.set(programId, created);
     return created;
   }
@@ -3828,13 +3865,10 @@ export class AgentKernel {
           ...(call.callerId !== undefined ? { callerId: call.callerId } : {}),
         }, emit);
       }
-      const admission = this.#programmaticLane.admit({
-        programId,
-        callerId: programId,
-        taskEpochId,
-        calls: programCalls,
-        callsUsed: state.callsUsed,
-      });
+      state.batchSeed = state.callsUsed;
+      const admission = this.#programmaticLane.admit(
+        this.#programLaneRequest(programId, state, taskEpochId, programCalls),
+      );
       const unscoped = admission.denied.filter((entry) => entry.callId === undefined);
       let admitted = 0;
       for (const call of group) {
@@ -3863,6 +3897,219 @@ export class AgentKernel {
       state.callsUsed += admitted;
     }
     return denied;
+  }
+
+  /**
+   * Execute one admitted program batch through the incremental coordinator (§5.4).
+   *
+   * The coordinator has existed since the lane landed and had no production call
+   * site: the shipped runtime was the admission gate alone, which is the one-shot
+   * allowlist the PRD asks to replace. It is the only place the per-program
+   * wall-time, parallel, intermediate-byte, and retry budgets are applied, so
+   * without it those four budgets were policy fields nothing read.
+   *
+   * Execution authority is not widened by this. Every call still passes schema
+   * validation and the permission classifier before the executor sees it, exactly
+   * as a direct call does — the coordinator decides how many run at once and for
+   * how long, never whether a tool may run at all.
+   */
+  async #runProgramCalls(
+    calls: readonly PendingCall[],
+    budget: BudgetState,
+    signal: AbortSignal,
+    emit: <T>(kind: CbcEventKind, payload: T) => void,
+    machine: TurnStateMachine,
+  ): Promise<"done" | "cancelled"> {
+    const taskEpochId = this.#programEpochId();
+    const byProgram = new Map<string, PendingCall[]>();
+    for (const call of calls) {
+      if (call.programId === undefined) continue;
+      const group = byProgram.get(call.programId) ?? [];
+      group.push(call);
+      byProgram.set(call.programId, group);
+    }
+    for (const [programId, group] of byProgram) {
+      if (signal.aborted) return "cancelled";
+      const state = this.#programState(programId);
+      const runnable: ProgramToolCall[] = [];
+      for (const call of group) {
+        if (budget.toolCalls >= this.#limits.maxToolCalls) {
+          this.#appendToolOutput(call, TOOL_BUDGET_WRAP_UP_PROMPT);
+          machine.tryApply("observed");
+          continue;
+        }
+        budget.toolCalls += 1;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(call.argumentsText) as unknown;
+        } catch {
+          parsed = undefined;
+        }
+        runnable.push({
+          callId: call.callId,
+          toolId: call.name,
+          arguments: typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+            ? parsed as Record<string, unknown>
+            : {},
+          callerId: call.callerId ?? programId,
+          taskEpochId,
+        });
+      }
+      if (runnable.length === 0) continue;
+      const byCallId = new Map(group.map((call) => [call.callId, call]));
+      const result = await this.#programmaticLane.run(
+        this.#programLaneRequest(programId, state, taskEpochId, runnable),
+        {
+          execute: async (call, callSignal) => {
+            const pending = byCallId.get(call.callId);
+            if (pending === undefined) throw new Error("the program call is no longer pending");
+            return await this.#executeProgramCall(pending, call, callSignal, emit, machine);
+          },
+        },
+        { signal, now: this.#now },
+      );
+      for (const output of result.outputs) {
+        const pending = byCallId.get(output.callId);
+        if (pending === undefined) continue;
+        state.intermediateBytes += output.output.bytes;
+        this.#appendToolOutput(pending, output.output.text);
+        this.#programEvent("program.tool_call_completed", programId, {
+          callId: output.callId,
+          toolId: pending.name,
+          bytes: output.output.bytes,
+          truncated: output.output.truncated,
+        }, emit);
+        machine.tryApply("result");
+      }
+      const answered = new Set(result.outputs.map((output) => output.callId));
+      for (const failure of result.denied) {
+        const pending = failure.callId === undefined ? undefined : byCallId.get(failure.callId);
+        if (pending === undefined || answered.has(pending.callId)) continue;
+        answered.add(pending.callId);
+        const text = "PTC_CALL_DENIED: " + pending.name + " was not executed (" + failure.code + "): " + failure.message;
+        this.#risks.push(text);
+        if (!this.#routeFallbackReasons.includes(text)) this.#routeFallbackReasons.push(text);
+        emit("tool.failed", {
+          callId: pending.callId,
+          toolId: pending.name,
+          code: "PERMISSION_DENIED",
+          message: failure.message,
+        });
+        this.#programEvent("program.tool_call_denied", programId, {
+          callId: pending.callId,
+          toolId: pending.name,
+          code: failure.code,
+          message: failure.message,
+        }, emit);
+        this.#appendToolOutput(pending, text);
+        machine.tryApply("observed");
+      }
+      // A budget stop that scoped no call still has to be told to the model, or
+      // the program resumes believing it may keep going.
+      for (const failure of result.denied.filter((entry) => entry.callId === undefined)) {
+        const text = "PTC_PROGRAM_STOPPED (" + failure.code + "): " + failure.message;
+        this.#risks.push(text);
+        if (!this.#routeFallbackReasons.includes(text)) this.#routeFallbackReasons.push(text);
+        this.#programEvent("program.failed", programId, {
+          code: failure.code,
+          reason: failure.message,
+          calls: state.callsUsed,
+        }, emit);
+      }
+      for (const call of group) {
+        if (answered.has(call.callId)) continue;
+        const text = "PTC_CALL_NOT_EXECUTED: " + call.name + " was not executed (" + result.reason + ").";
+        emit("tool.failed", {
+          callId: call.callId,
+          toolId: call.name,
+          code: "INTERNAL",
+          message: result.reason,
+        });
+        this.#appendToolOutput(call, text);
+        machine.tryApply("observed");
+      }
+    }
+    return signal.aborted ? "cancelled" : "done";
+  }
+
+  /** One program-issued call, through the same validation and permission path. */
+  async #executeProgramCall(
+    pending: PendingCall,
+    call: ProgramToolCall,
+    signal: AbortSignal,
+    emit: <T>(kind: CbcEventKind, payload: T) => void,
+    machine: TurnStateMachine,
+  ): Promise<string> {
+    const validation = this.#options.registry.validateCall(
+      pending.name,
+      pending.argumentsText,
+      this.#activeInteractionMode,
+    );
+    if (!validation.ok) {
+      machine.tryApply("invalid_schema");
+      throw new Error(renderValidationErrors(pending.name, [...validation.errors]));
+    }
+    const args = validation.value as Record<string, unknown>;
+    const action = this.#options.normalizer.normalize(call.callId, pending.name, args);
+    const decision = this.#evaluateAction(action, actionHash(action));
+    // A program never gets to raise an approval prompt: §5.2 denies the
+    // approval-request tools outright, so anything short of `allow` is a refusal.
+    if (decision.kind !== "allow") {
+      machine.tryApply("denied");
+      throw new Error(
+        decision.kind === "deny"
+          ? decision.reason
+          : "a program-issued call may not request an approval",
+      );
+    }
+    machine.tryApply("allowed");
+    await this.#beforeToolExecute(action, signal);
+    emit("tool.started", {
+      callId: call.callId,
+      toolId: pending.name,
+      arguments: args,
+      display: action.display,
+      programId: call.callerId,
+    });
+    const startedAt = this.#now();
+    const execution = await this.#executeTool(action, signal, emit);
+    const durationMs = execution.durationMs ?? this.#now() - startedAt;
+    const observation = await normalizeObservation(
+      {
+        toolId: pending.name,
+        callId: call.callId,
+        result: execution.result,
+        ...(execution.text !== undefined ? { text: execution.text } : {}),
+        ...(execution.exitCode !== undefined ? { exitCode: execution.exitCode } : {}),
+        durationMs,
+      },
+      {
+        ...(this.#options.executor.spill
+          ? { spill: this.#options.executor.spill.bind(this.#options.executor) }
+          : {}),
+      },
+    );
+    this.#observations.push(observation);
+    if (!execution.result.ok) {
+      const message = execution.result.error?.message ?? execution.result.summary;
+      emit("tool.failed", {
+        callId: call.callId,
+        toolId: pending.name,
+        code: execution.result.error?.code ?? "INTERNAL",
+        message,
+        durationMs,
+      });
+      if (this.#options.selfCorrection !== false) this.#pendingFailures.push(observation);
+      throw new Error(message);
+    }
+    emit("tool.completed", {
+      callId: call.callId,
+      toolId: pending.name,
+      summary: execution.result.summary,
+      durationMs,
+      artifacts: observation.artifacts.map((artifact) => artifact.id),
+    });
+    return observation.text;
   }
 
   async #runPendingCalls(
@@ -3917,9 +4164,22 @@ export class AgentKernel {
       });
       this.#appendToolOutput(call, text);
     }
-    const executableCalls = calls.filter(
+    const survived = calls.filter(
       (call) => !programmaticDenials.has(call.callId) && !groupRefusals.has(call.callId),
     );
+    // §5.4: an admitted program batch runs through the incremental coordinator, so
+    // its wall-time, parallel, byte, and retry budgets bind on real execution
+    // rather than existing only as policy fields. Direct calls keep the tool graph.
+    const programCalls = this.#programmaticPolicy.enabled
+      ? survived.filter((call) => call.programId !== undefined)
+      : [];
+    if (programCalls.length > 0) {
+      const outcome = await this.#runProgramCalls(programCalls, budget, signal, emit, machine);
+      if (outcome === "cancelled") return "cancelled";
+    }
+    const executableCalls = programCalls.length === 0
+      ? survived
+      : survived.filter((call) => call.programId === undefined);
     const pendingById = new Map(executableCalls.map((call) => [call.callId, call]));
     const routeParallel = this.#turnRoute?.maxParallelTools;
     const configuredGraph = this.#options.toolGraph ?? {};
