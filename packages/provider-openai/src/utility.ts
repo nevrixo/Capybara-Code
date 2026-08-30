@@ -239,6 +239,13 @@ export interface VerificationLevelInput {
   /** Compiled input as a fraction of the usable context window. */
   readonly inputPressure?: number;
   readonly complexity?: ComplexityFeatures;
+  /**
+   * The floor the active profile asks for (§P1-03). A profile can only ask for
+   * *more* verification than the facts imply, never less: a Deep profile that
+   * could lower a critical-risk turn to focused would let a preset override a
+   * safety judgement, which is the one thing a preset must not do.
+   */
+  readonly profileFloor?: VerificationLevel;
 }
 
 export interface VerificationLevelDecision {
@@ -266,7 +273,12 @@ export function deriveVerificationLevel(input: VerificationLevelInput): Verifica
   // Plan mode applies nothing, so there is no change whose blast radius a wider
   // level could cover; a package run there is pure cost.
   if (input.interactionMode === "plan" && input.mutatesWorkspace !== true) {
-    return { level: "focused", codes: ["verify:plan-mode"] };
+    // A profile floor still applies: a reviewer profile in Plan mode should get
+    // its review, and the floor is the only thing here a user chose explicitly.
+    const floor = input.profileFloor;
+    return floor !== undefined && VERIFICATION_RANK[floor] > VERIFICATION_RANK["focused"]
+      ? { level: floor, codes: ["verify:plan-mode", "verify:profile-floor"] }
+      : { level: "focused", codes: ["verify:plan-mode"] };
   }
   const mutates = input.mutatesWorkspace ?? (readOnlyPhase ? false : undefined);
   if (mutates === false) {
@@ -299,6 +311,7 @@ export function deriveVerificationLevel(input: VerificationLevelInput): Verifica
   // package-local check no longer describes what it could have broken.
   if ((input.inputPressure ?? 0) >= 0.8) raise("integration", "verify:input-pressure");
   if (input.intent === "review") raise("independent_review", "verify:review-intent");
+  if (input.profileFloor !== undefined) raise(input.profileFloor, "verify:profile-floor");
   codes.push(`verify:${level}`);
   return { level, codes };
 }
@@ -379,6 +392,8 @@ export interface InferencePolicyInput {
   readonly reserveOutputTokens?: number;
   readonly capability?: ModelCapabilitySnapshot;
   readonly lane?: InferenceLane;
+  /** The active profile's verification floor (§P1-03); raises, never lowers. */
+  readonly profileFloor?: VerificationLevel;
   readonly reasoningContext?: "current_turn" | "all_turns";
   readonly autoReviewHighSeverity?: boolean;
   readonly evalJustified?: boolean;
@@ -552,6 +567,7 @@ export class InferenceUtilityController implements InferencePolicyPort {
       ...(input.changeRisk !== undefined ? { changeRisk: input.changeRisk } : {}),
       inputPressure: inputPressure(input.contextTokens, capability, input.reserveOutputTokens),
       ...(input.complexity !== undefined ? { complexity: input.complexity } : {}),
+      ...(input.profileFloor !== undefined ? { profileFloor: input.profileFloor } : {}),
     });
     const routeId = inferenceRouteId({
       model,

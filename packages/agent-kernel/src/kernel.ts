@@ -634,6 +634,12 @@ export interface KernelOptions {
   readonly onProviderContextError?: () => void | Promise<void>;
   /** §10.4 features for adaptive effort selection. */
   readonly complexity?: () => ComplexityFeatures;
+  /**
+   * The verification floor the active §P1-03 profile asks for. Supplied as a
+   * callback because a profile can change mid-session, and a value captured at
+   * construction would keep applying the one the session started with.
+   */
+  readonly profileVerificationFloor?: () => "focused" | "package" | "integration" | "independent_review" | undefined;
   readonly inferencePolicy?: InferencePolicyPort;
   /**
    * Called once per turn with the routing decision, after the route events are
@@ -696,6 +702,13 @@ export interface KernelOptions {
   readonly verificationCommandKind?: (command: string) => "required" | "diagnostic" | "off_contract" | "not_verification";
   /** Monotonic workspace baseline counter; the kernel owns no generation of its own. */
   readonly workspaceGeneration?: () => number;
+  /**
+   * §5.21 dependency graph: `package directory -> the directories that depend on
+   * it`, from `workspaceConsumerGraph`. Reading manifests is the host's job, so
+   * the kernel only asks for the result. Absent, the consumer tier falls back to
+   * the changed packages and nobody downstream is verified.
+   */
+  readonly packageConsumers?: () => ReadonlyMap<string, readonly string[]> | undefined;
   /** Require at least one turn-local test, diff, or review result after mutation. */
   readonly completionRequiresFreshEvidence?: boolean;
   /** Whether missing fresh evidence blocks completion or remains a visible warning. */
@@ -2463,6 +2476,9 @@ export class AgentKernel {
       explicitEffort: this.#currentEffort,
       ...(this.#options.reasoningMode !== undefined ? { explicitMode: this.#options.reasoningMode } : {}),
       ...(this.#options.complexity !== undefined ? { complexity: this.#options.complexity() } : {}),
+      ...(this.#profileVerificationFloor() !== undefined
+        ? { profileFloor: this.#profileVerificationFloor()! }
+        : {}),
       contextTokens: prompt.inputTokens,
       configuredMaxOutputTokens: this.#options.maxOutputTokens ?? 32_000,
       needsReasoningSummary: (this.#options.reasoningSummary ?? "auto") === "auto",
@@ -2658,6 +2674,17 @@ export class AgentKernel {
       eligible: true,
       reason: "policy, budgets, capability, and the read-only allowlist all admit the program lane",
     };
+  }
+
+  #profileVerificationFloor(): "focused" | "package" | "integration" | "independent_review" | undefined {
+    try {
+      return this.#options.profileVerificationFloor?.();
+    } catch {
+      // A failing host callback must not decide the verification level. Falling
+      // through to the derived level is the safe direction: the facts still
+      // raise it, the profile just stops raising it further.
+      return undefined;
+    }
   }
 
   #sampleIntent(userInput: string, phase: WorkPhase = this.#phase): import("@cbc/provider-openai").SampleIntent {
@@ -5344,6 +5371,7 @@ export class AgentKernel {
       riskReasons: risk.reasons,
     });
 
+    const consumerGraph = this.#options.packageConsumers?.();
     // §5.20 puts the contract before the turn's checks, not after them. Built
     // below the review dispatch it could only record a decision already made;
     // built here its reviewRequired is an *input* to that decision, so a route
@@ -5366,6 +5394,9 @@ export class AgentKernel {
       ...(this.#turnRoute?.verificationLevel !== undefined
         ? { verificationLevel: this.#turnRoute.verificationLevel }
         : {}),
+      // §5.21: a change in package A has to pull in the packages that depend on A,
+      // and only the host can read the manifests that say which those are.
+      ...(consumerGraph !== undefined ? { packageConsumers: consumerGraph } : {}),
     });
     const shouldReview = this.#options.autoReview === true &&
       ((this.#options.reviewPolicy ?? "always") === "always" ||
