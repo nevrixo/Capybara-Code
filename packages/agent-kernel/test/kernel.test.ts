@@ -4319,6 +4319,87 @@ describe("OpenAI programmatic read-only lane (P0-01/P0-03)", () => {
     expect(payloadsOf(events, "program.failed")).toHaveLength(0);
   });
 
+  test("a coordinated program batch is bounded by output bytes and wall time", async () => {
+    const programCall = (callId: string, path: string) => ({
+      callId,
+      name: "fs.read",
+      argumentsText: JSON.stringify({ path }),
+      callerId: "call-program-bounded",
+      programId: "call-program-bounded",
+    });
+    const provider = new InlineProvider(async function* (_request, _signal, callIndex) {
+      yield { type: "response.started", requestId: "ptc-bounded-" + callIndex };
+      if (callIndex === 0) {
+        yield {
+          type: "response.item",
+          authoritative: true,
+          item: {
+            kind: "program",
+            itemId: "prog-bounded",
+            callId: "call-program-bounded",
+            code: "for (const p of paths) await tools.fs_read({ path: p });",
+            fingerprint: "opaque-program-state",
+          },
+        };
+        for (const call of [programCall("call-big", "big.ts"), programCall("call-slow", "slow.ts")]) {
+          yield { type: "tool.call.started", callId: call.callId, name: call.name, callerId: call.callerId, programId: call.programId };
+          yield { type: "tool.call.completed", call };
+        }
+      } else if (callIndex === 1) {
+        const call = programCall("call-late", "late.ts");
+        yield { type: "tool.call.started", callId: call.callId, name: call.name, callerId: call.callerId, programId: call.programId };
+        yield { type: "tool.call.completed", call };
+      } else {
+        yield { type: "text.delta", text: "Bounded.", itemId: "final-" + callIndex, outputIndex: 0 };
+      }
+      yield { type: "response.completed", responseId: "ptc-bounded-response-" + callIndex };
+    });
+    const { kernel, events } = harness({
+      steps: [],
+      provider,
+      inferencePolicy: new InferenceUtilityController(),
+      autoRoute: true,
+      phasePolicy: true,
+      programmaticPolicy: {
+        enabled: true,
+        maxToolCalls: 8,
+        // Serial execution keeps the two calls in a deterministic order, so the
+        // wall clock is spent by the slow one and not by a race between them.
+        maxParallelCalls: 1,
+        maxOutputBytes: 64,
+        maxWallTimeMs: 100,
+        maxRetries: 0,
+      },
+      activeToolIds: ["fs.read"],
+      toolResults: {
+        "fs.read": async (action) => {
+          if (action.arguments.path === "slow.ts") await new Promise((resolve) => setTimeout(resolve, 300));
+          return { result: okResult("x".repeat(4_096)), text: "x".repeat(4_096) };
+        },
+      },
+    });
+
+    const result = await kernel.runTurn("read every path from one program", new AbortController().signal);
+
+    // §5.4: the coordinator bounds an admitted program's output, so a program read
+    // cannot inject an unbounded observation the way a raw one can.
+    expect(payloadsOf(events, "program.tool_call_completed")).toEqual([
+      expect.objectContaining({ callId: "call-big", bytes: 64, truncated: true }),
+    ]);
+    const replayed = provider.requests[1]?.input.find(
+      (item) => item.type === "function_call_output" && item.callId === "call-big",
+    );
+    expect((replayed as { output?: string } | undefined)?.output?.length).toBe(64);
+    // ...and the wall clock is a real budget: the slow read is cut off, and the
+    // program's next batch is refused because its budget is already spent.
+    const denials = payloadsOf(events, "program.tool_call_denied") as Array<{ callId?: string; code?: string }>;
+    expect(denials).toEqual([
+      expect.objectContaining({ callId: "call-slow" }),
+      expect.objectContaining({ callId: "call-late", code: "wall_time_budget" }),
+    ]);
+    expect(result.routeReceipt?.actual.fallbackReasons.join(" ")).toContain("wall_time_budget");
+  });
+
   test("direct routes cap provider and local read parallelism at one", async () => {
     const provider = new MockProvider({
       steps: [
