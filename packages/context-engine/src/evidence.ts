@@ -309,19 +309,31 @@ export class EvidenceLedger {
     const selection = this.select(options.evidence);
     const references = selection.records.map(({ id, kind, locator, digest }) => ({ id, kind, locator, digest }));
     const createdAt = this.#now();
+    const createdAtMs = Date.parse(createdAt);
+    const claims = options.claims.map((claim) => claim.slice(0, 2_000));
+    if (!Number.isFinite(createdAtMs)) {
+      throw new Error("evidence capsule creation time must be a valid timestamp");
+    }
+    if (options.expiresAt !== undefined && (
+      !Number.isFinite(Date.parse(options.expiresAt)) ||
+      Date.parse(options.expiresAt) <= createdAtMs
+    )) {
+      throw new Error("evidence capsule expiry must be a valid time after creation");
+    }
     const digest = stableDigest({
       workspaceIdentityDigest: this.#workspaceIdentityDigest,
       references,
-      claims: options.claims,
+      claims,
       sourceAgentId: options.sourceAgentId,
       createdAt,
+      expiresAt: options.expiresAt,
     });
     return {
       capsuleId: `capsule-${digest}` as `capsule-${string}`,
       ...(this.#workspaceIdentityDigest !== undefined ? { workspaceIdentityDigest: this.#workspaceIdentityDigest } : {}),
       evidenceIds: references.map((reference) => reference.id as `evidence-${string}`),
       references,
-      claims: options.claims.map((claim) => claim.slice(0, 2_000)),
+      claims,
       sourceAgentId: options.sourceAgentId,
       createdAt,
       ...(options.expiresAt !== undefined ? { expiresAt: options.expiresAt } : {}),
@@ -336,6 +348,7 @@ export class EvidenceLedger {
       claims: capsule.claims,
       sourceAgentId: capsule.sourceAgentId,
       createdAt: capsule.createdAt,
+      expiresAt: capsule.expiresAt,
     });
     if (capsule.digest !== expectedDigest) {
       return { records: [], omitted: capsule.evidenceIds.length, rejected: [{ id: capsule.capsuleId, reason: "capsule digest mismatch" }] };
@@ -345,8 +358,15 @@ export class EvidenceLedger {
     if (referenceIds.length !== evidenceIds.length || referenceIds.some((id, index) => id !== evidenceIds[index])) {
       return { records: [], omitted: capsule.evidenceIds.length, rejected: [{ id: capsule.capsuleId, reason: "capsule evidence references mismatch" }] };
     }
-    if (capsule.expiresAt !== undefined && capsule.expiresAt <= (options.now ?? this.#now())) {
-      return { records: [], omitted: capsule.evidenceIds.length, rejected: [{ id: capsule.capsuleId, reason: "capsule expired" }] };
+    if (capsule.expiresAt !== undefined) {
+      const expiresAt = Date.parse(capsule.expiresAt);
+      const now = Date.parse(options.now ?? this.#now());
+      if (!Number.isFinite(expiresAt) || !Number.isFinite(now)) {
+        return { records: [], omitted: capsule.evidenceIds.length, rejected: [{ id: capsule.capsuleId, reason: "capsule expiry is invalid" }] };
+      }
+      if (expiresAt <= now) {
+        return { records: [], omitted: capsule.evidenceIds.length, rejected: [{ id: capsule.capsuleId, reason: "capsule expired" }] };
+      }
     }
     if (this.#workspaceIdentityDigest !== undefined && capsule.workspaceIdentityDigest !== undefined && capsule.workspaceIdentityDigest !== this.#workspaceIdentityDigest) {
       return { records: [], omitted: capsule.evidenceIds.length, rejected: [{ id: capsule.capsuleId, reason: "capsule workspace identity mismatch" }] };
@@ -397,4 +417,3 @@ export function evidenceDigest(value: unknown): string {
 }
 
 const stableDigest = evidenceDigest;
-
