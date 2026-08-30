@@ -96,6 +96,19 @@ export interface PairedTaskStatistic {
   readonly payloadReduction?: number;
   /** One minus candidate/baseline provider-request count. */
   readonly providerRequestReduction?: number;
+  /** §5.29: one minus candidate/baseline input tokens. */
+  readonly inputTokenReduction?: number;
+  /** §5.29: one minus candidate/baseline redundant reads. */
+  readonly redundantReadReduction?: number;
+  /**
+   * §5.28 PTC fallback rate for the candidate, averaged over repetitions. Only tasks
+   * whose candidate actually attempted a program lane contribute: a task that never
+   * reached the lane would otherwise pull the rate towards zero and hide a real one.
+   */
+  readonly candidatePtcFallbackRate?: number;
+  /** §5.28 parallel peak and idle wait for the candidate, as medians. */
+  readonly candidateMedianParallelPeak: number;
+  readonly candidateMedianIdleWaitMs: number;
   readonly candidatePreProviderP95Ms: number;
 }
 
@@ -125,6 +138,12 @@ export interface PairedComparisonStatistics {
   readonly successfulCostRatio?: ConfidenceInterval;
   readonly payloadReduction?: ConfidenceInterval;
   readonly providerRequestReduction?: ConfidenceInterval;
+  readonly inputTokenReduction?: ConfidenceInterval;
+  readonly redundantReadReduction?: ConfidenceInterval;
+  /** Undefined when no candidate run attempted a program lane at all. */
+  readonly ptcFallbackRate?: ConfidenceInterval;
+  readonly parallelPeak: ConfidenceInterval;
+  readonly idleWaitMs: ConfidenceInterval;
   readonly preProviderLocalP95Ms: ConfidenceInterval;
   readonly categoryQuality: readonly CategoryQualityDelta[];
   readonly criticalSafety: CriticalSafetyStatistics;
@@ -280,6 +299,33 @@ export function analyzePairedStatistics(
     bootstrap,
     (sample) => mean(sample.map((task) => task.providerRequestReduction!)),
   );
+  const inputTokenReduction = optionalConfidenceInterval(
+    taskStatistics.filter((task) => task.inputTokenReduction !== undefined),
+    bootstrap,
+    (sample) => mean(sample.map((task) => task.inputTokenReduction!)),
+  );
+  const redundantReadReduction = optionalConfidenceInterval(
+    taskStatistics.filter((task) => task.redundantReadReduction !== undefined),
+    bootstrap,
+    (sample) => mean(sample.map((task) => task.redundantReadReduction!)),
+  );
+  // Scoped to tasks that attempted the lane, so §5.29's "eligible PTC" qualifier is
+  // honored by the denominator rather than by a separate cohort filter downstream.
+  const ptcFallbackRate = optionalConfidenceInterval(
+    taskStatistics.filter((task) => task.candidatePtcFallbackRate !== undefined),
+    bootstrap,
+    (sample) => mean(sample.map((task) => task.candidatePtcFallbackRate!)),
+  );
+  const parallelPeak = confidenceInterval(
+    taskStatistics,
+    bootstrap,
+    (sample) => percentile(sample.map((task) => task.candidateMedianParallelPeak), 0.5),
+  );
+  const idleWaitMs = confidenceInterval(
+    taskStatistics,
+    bootstrap,
+    (sample) => percentile(sample.map((task) => task.candidateMedianIdleWaitMs), 0.95),
+  );
   const preProviderLocalP95Ms = confidenceInterval(
     taskStatistics,
     bootstrap,
@@ -351,6 +397,11 @@ export function analyzePairedStatistics(
     ...(successfulCostRatio !== undefined ? { successfulCostRatio } : {}),
     ...(payloadReduction !== undefined ? { payloadReduction } : {}),
     ...(providerRequestReduction !== undefined ? { providerRequestReduction } : {}),
+    ...(inputTokenReduction !== undefined ? { inputTokenReduction } : {}),
+    ...(redundantReadReduction !== undefined ? { redundantReadReduction } : {}),
+    ...(ptcFallbackRate !== undefined ? { ptcFallbackRate } : {}),
+    parallelPeak,
+    idleWaitMs,
     preProviderLocalP95Ms,
     categoryQuality,
     criticalSafety,
@@ -505,6 +556,17 @@ export function renderPairedStatistics(statistics: PairedComparisonStatistics): 
   if (statistics.providerRequestReduction !== undefined) {
     lines.push(`request reduction     ${formatInterval(statistics.providerRequestReduction, "%")}`);
   }
+  if (statistics.inputTokenReduction !== undefined) {
+    lines.push(`input token reduction ${formatInterval(statistics.inputTokenReduction, "%")}`);
+  }
+  if (statistics.redundantReadReduction !== undefined) {
+    lines.push(`redundant read redn   ${formatInterval(statistics.redundantReadReduction, "%")}`);
+  }
+  if (statistics.ptcFallbackRate !== undefined) {
+    lines.push(`ptc fallback rate     ${formatInterval(statistics.ptcFallbackRate, "%")}`);
+  }
+  lines.push(`parallel peak         ${formatInterval(statistics.parallelPeak, "x")}`);
+  lines.push(`idle wait p95         ${formatInterval(statistics.idleWaitMs, "ms")}`);
   lines.push(`critical safety       ${statistics.criticalSafety.total}`);
   return lines;
 }
@@ -537,6 +599,21 @@ function summarizeTask(
       ? [1 - pair.candidate.cost.providerRequests / pair.baseline.cost.providerRequests]
       : []
   );
+  const inputTokenReductions = pairs.flatMap((pair) =>
+    pair.baseline.cost.inputTokens > 0
+      ? [1 - pair.candidate.cost.inputTokens / pair.baseline.cost.inputTokens]
+      : []
+  );
+  // A baseline that read nothing twice has no redundancy to reduce, so the pair is
+  // excluded rather than scored as a perfect reduction.
+  const redundantReadReductions = pairs.flatMap((pair) =>
+    pair.baseline.behavior.redundantReads > 0
+      ? [1 - pair.candidate.behavior.redundantReads / pair.baseline.behavior.redundantReads]
+      : []
+  );
+  const ptcFallbackRates = pairs
+    .filter((pair) => attemptedProgramLane(pair.candidate))
+    .map((pair) => pair.candidate.route.ptcFallbackRate);
 
   const baselineSuccessRate = mean(baselineSuccess);
   const candidateSuccessRate = mean(candidateSuccess);
@@ -566,6 +643,23 @@ function summarizeTask(
     ...(requestReductions.length > 0
       ? { providerRequestReduction: mean(requestReductions) }
       : {}),
+    ...(inputTokenReductions.length > 0
+      ? { inputTokenReduction: mean(inputTokenReductions) }
+      : {}),
+    ...(redundantReadReductions.length > 0
+      ? { redundantReadReduction: mean(redundantReadReductions) }
+      : {}),
+    ...(ptcFallbackRates.length > 0
+      ? { candidatePtcFallbackRate: mean(ptcFallbackRates) }
+      : {}),
+    candidateMedianParallelPeak: percentile(
+      pairs.map((pair) => Math.max(0, pair.candidate.route.parallelPeak)),
+      0.5,
+    ),
+    candidateMedianIdleWaitMs: percentile(
+      pairs.map((pair) => Math.max(0, pair.candidate.route.idleWaitMs)),
+      0.5,
+    ),
     candidatePreProviderP95Ms: percentile(
       pairs.map((pair) => Math.max(0, pair.candidate.cost.preProviderLocalMs)),
       0.95,
@@ -620,6 +714,20 @@ function groupByCategory<T extends { readonly category: TaskCategory }>(values: 
   return [...groups.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([, group]) => group);
+}
+
+/**
+ * Whether a run's candidate actually reached for a program lane.
+ *
+ * §5.29 scopes its fallback target to "eligible PTC" work, and a run that never tried
+ * the lane is not evidence either way. A started program, a program-lane fallback, or a
+ * plan naming the lane all count as an attempt.
+ */
+function attemptedProgramLane(metrics: RunMetrics): boolean {
+  const route = metrics.route;
+  return route.programsStarted > 0 ||
+    route.programLaneFallbacks > 0 ||
+    route.programCalls > 0;
 }
 
 function successful(metrics: RunMetrics): boolean {

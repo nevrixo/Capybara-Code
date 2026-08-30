@@ -4,6 +4,7 @@ import {
   analyzePairedStatistics,
   canonicalComparisonTarget,
   evaluateStatisticalGate,
+  renderPairedStatistics,
   type ComparisonTarget,
   type RunMetrics,
   type StatisticalRun,
@@ -23,6 +24,12 @@ function metrics(input: {
   readonly invisibleSideEffects?: number;
   readonly unsupportedClaims?: readonly string[];
   readonly statusMatched?: boolean;
+  readonly inputTokens?: number;
+  readonly redundantReads?: number;
+  readonly parallelPeak?: number;
+  readonly idleWaitMs?: number;
+  readonly programsStarted?: number;
+  readonly ptcFallbackRate?: number;
 }): RunMetrics {
   const passed = input.passed ?? true;
   const statusMatched = input.statusMatched ?? true;
@@ -45,7 +52,7 @@ function metrics(input: {
       failedToolCalls: 0,
       schemaErrors: 0,
       filesRead: 1,
-      redundantReads: 0,
+      redundantReads: input.redundantReads ?? 0,
       approvalsRequested: [],
       approvalsGranted: 0,
       approvalsDenied: 0,
@@ -83,7 +90,7 @@ function metrics(input: {
       reviewCalls: 0,
       reviewInputBytes: 0,
       provisionalContextTurns: 0,
-      inputTokens: 100,
+      inputTokens: input.inputTokens ?? 100,
       cachedInputTokens: 0,
       cacheWriteTokens: 0,
       outputTokens: 10,
@@ -97,19 +104,19 @@ function metrics(input: {
       plannedMaxAgents: 0,
       plannedMaxParallelTools: 0,
       agentsSpawned: 0,
-      parallelPeak: 0,
-      idleWaitMs: 0,
+      parallelPeak: input.parallelPeak ?? 0,
+      idleWaitMs: input.idleWaitMs ?? 0,
       laneSelections: 0,
       laneFallbacks: 0,
       programLaneFallbacks: 0,
       fallbackReasons: [],
-      programsStarted: 0,
+      programsStarted: input.programsStarted ?? 0,
       programsCompleted: 0,
       programsFailed: 0,
       programCalls: 0,
       programCallsAdmitted: 0,
       programCallsDenied: 0,
-      ptcFallbackRate: 0,
+      ptcFallbackRate: input.ptcFallbackRate ?? 0,
     },
     context: {
       packsCompiled: 1,
@@ -178,6 +185,12 @@ function fixture(
             requests: variant === "baseline" ? 8 : 4,
             costUsd: variant === "baseline" ? 1 : 1.02,
             preProviderMs: variant === "baseline" ? 300 : 100,
+            inputTokens: variant === "baseline" ? 1_000 : 600,
+            redundantReads: variant === "baseline" ? 10 : 4,
+            parallelPeak: variant === "baseline" ? 1 : 3,
+            idleWaitMs: variant === "baseline" ? 500 : 100,
+            programsStarted: variant === "candidate" ? 1 : 0,
+            ptcFallbackRate: variant === "candidate" ? 0.02 : 0,
           });
           return {
             taskId: task.id,
@@ -281,5 +294,39 @@ describe("paired statistical evidence", () => {
     expect(statistics.taskCount).toBe(0);
     expect(statistics.unpairedObservations).toBe(1);
     expect(evaluateStatisticalGate(statistics).status).toBe("failed");
+  });
+});
+
+describe("route and redundant-read aggregation", () => {
+  test("aggregates input token, redundant read, fallback, parallel peak, and idle wait", () => {
+    const statistics = fixture("capybara_baseline");
+
+    expect(statistics.inputTokenReduction?.estimate).toBeCloseTo(0.4, 8);
+    expect(statistics.redundantReadReduction?.estimate).toBeCloseTo(0.6, 8);
+    expect(statistics.ptcFallbackRate?.estimate).toBeCloseTo(0.02, 8);
+    expect(statistics.parallelPeak.estimate).toBe(3);
+    expect(statistics.idleWaitMs.estimate).toBe(100);
+    expect(renderPairedStatistics(statistics)).toEqual(expect.arrayContaining([
+      expect.stringContaining("redundant read redn"),
+      expect.stringContaining("ptc fallback rate"),
+    ]));
+  });
+
+  test("omits the PTC fallback rate when no candidate reached a program lane", () => {
+    const statistics = fixture("capybara_baseline", 2.5, ({ variant, value }) =>
+      variant === "candidate"
+        ? { ...value, route: { ...value.route, programsStarted: 0, programCalls: 0 } }
+        : value);
+
+    expect(statistics.ptcFallbackRate).toBeUndefined();
+    expect(renderPairedStatistics(statistics).some((line) => line.includes("ptc fallback rate")))
+      .toBe(false);
+  });
+
+  test("excludes a pair whose baseline had no redundant read to reduce", () => {
+    const statistics = fixture("capybara_baseline", 2.5, ({ variant, value }) =>
+      variant === "baseline" ? { ...value, behavior: { ...value.behavior, redundantReads: 0 } } : value);
+
+    expect(statistics.redundantReadReduction).toBeUndefined();
   });
 });
