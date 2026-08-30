@@ -252,6 +252,19 @@ export class TaskEpochManager {
     return true;
   }
 
+  /**
+   * §5.11 row 6: after this session's own mutation the epoch's workspace
+   * identity is refreshed in place rather than reset. The workspace did change,
+   * but the model is the reason it changed, so its reasoning still holds; only
+   * a change it did not author invalidates the premises it reasoned from.
+   */
+  observeWorkspace(digest: string): boolean {
+    const current = this.#current;
+    if (current === undefined || current.workspaceIdentityDigest === digest) return false;
+    this.#current = { ...current, workspaceIdentityDigest: digest };
+    return true;
+  }
+
   invalidateHypothesis(now?: string): EpochTransition {
     return this.transition({ hypothesisInvalidated: true, ...(now !== undefined ? { now } : {}) });
   }

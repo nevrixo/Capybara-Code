@@ -2,12 +2,12 @@ import { describe, expect, test } from "bun:test";
 
 import { loadConfig } from "@cbc/config-schema";
 import { bundledCapability, MockProvider } from "@cbc/provider-openai";
-import type { CbcEvent } from "@cbc/protocol";
+import { RuntimeRpcError, type CbcEvent } from "@cbc/protocol";
 
 import { AgentSession } from "../src/agent.ts";
 import { GrantedRules } from "../src/approvals.ts";
 
-function sessionRuntime(read?: () => Promise<never>) {
+function sessionRuntime(read?: (path: string) => Promise<never>) {
   return {
     workspace: "/work",
     read: read ?? (async () => ({
@@ -32,7 +32,7 @@ interface Harness {
   readonly provider: MockProvider;
 }
 
-function harness(sessionId: string, provider: MockProvider, read?: () => Promise<never>): Harness {
+function harness(sessionId: string, provider: MockProvider, read?: (path: string) => Promise<never>): Harness {
   const events: CbcEvent[] = [];
   let now = 500;
   const session = new AgentSession({
@@ -141,5 +141,122 @@ describe("epoch invalidation signals", () => {
     expect(events.filter((event) => event.kind === "reasoning.epoch_started")).toHaveLength(1);
     expect(resetReasons(events)).toEqual([]);
     expect(session.taskEpoch.requireCurrent().resetReason).toBe("goal_changed");
+  });
+
+  test("an externally reported stale read marks the epoch stale", async () => {
+    const provider = new MockProvider({
+      steps: [
+        {
+          toolCalls: [{
+            callId: "stale-read",
+            name: "fs.read",
+            arguments: { path: "src/parser.ts" },
+          }],
+        },
+        { text: "recovered against the new bytes" },
+      ],
+    });
+    let attempts = 0;
+    const { session, events } = harness("epoch-workspace-stale", provider, async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new RuntimeRpcError({
+          code: -32603,
+          message: "stale read",
+          data: {
+            taxonomy: "PATH_CHANGED",
+            retryable: true,
+            path: "src/parser.ts",
+            generationBefore: 0,
+            generationAfter: 0,
+          },
+        });
+      }
+      return {
+        path: "src/parser.ts",
+        binary: false,
+        checksum: "b".repeat(64),
+        rendered: "<file path='src/parser.ts'>fresh</file>",
+      } as never;
+    });
+
+    await session.submit("Read the parser", new AbortController().signal);
+
+    // §5.11 row 5: the bytes moved without this session writing them, so the
+    // reasoning built on the pre-change read cannot carry forward.
+    const stale = events.find((event) =>
+      event.kind === "reasoning.epoch_reset" &&
+      (event.payload as { reason: string }).reason === "workspace_stale"
+    );
+    expect(stale).toBeDefined();
+    expect((stale?.payload as { continuity: string }).continuity).toBe("current_turn");
+  });
+
+  test("this session's own mutation advances the workspace identity without a stale reset", async () => {
+    const provider = new MockProvider({
+      steps: [
+        {
+          toolCalls: [{
+            callId: "own-mutation",
+            name: "shell.run",
+            arguments: { script: "touch src/parser.ts", timeoutMs: 1_000 },
+          }],
+        },
+        { text: "mutated the parser" },
+        { text: "second turn" },
+      ],
+    });
+    let now = 8_000;
+    const events: CbcEvent[] = [];
+    const session = new AgentSession({
+      host: { now: () => ++now } as never,
+      runtime: {
+        ...sessionRuntime(),
+        async issueCapability(params: Record<string, unknown>) {
+          return {
+            id: "cap-own", sessionId: "epoch-workspace-own",
+            callId: params.callId ?? "own-mutation", actionHash: "a".repeat(64),
+            workspaceId: "work", operation: "shell.run", resources: ["."],
+            network: "deny" as const, expiresAtMs: Number.MAX_SAFE_INTEGER,
+            singleUse: true as const,
+          };
+        },
+        run: async () => ({
+          state: "exited", exitCode: 0, display: "touch src/parser.ts", durationMs: 1,
+          stdout: "", stderr: "", warnings: [], truncated: false,
+          stdoutBytes: 0, stderrBytes: 0, jobId: "job-own",
+        }),
+        glob: async () => ({ entries: [], truncated: false }),
+        gitDiff: async () => ({ files: [] }),
+      } as never,
+      config: loadConfig({ projectTrusted: true, env: {} }).config,
+      workspacePath: "/work",
+      workspaceIdentityDigest: "e".repeat(64),
+      trust: "trusted-always",
+      sessionId: "epoch-workspace-own",
+      provider,
+      approvals: { request: async () => ({ kind: "allow_once" as const }) },
+      granted: new GrantedRules(),
+      nonInteractive: false,
+      now: () => ++now,
+      onEvent: (event) => { events.push(event); },
+    });
+    session.registry.activate(["shell.run"]);
+    const startupIdentity = session.taskEpoch.requireCurrent().workspaceIdentityDigest;
+
+    await session.submit("Touch the parser", new AbortController().signal);
+    const afterMutation = session.taskEpoch.requireCurrent();
+    expect(session.workspaceGeneration).toBeGreaterThan(0);
+
+    // The mutation is ours, so §5.11 row 6 refreshes identity in place: the
+    // reasoning that produced it still holds.
+    expect(resetReasons(events)).not.toContain("workspace_stale");
+
+    // ...and the next turn must carry the identity the mutation advanced, not
+    // the constant startup digest the transition used to re-send every turn.
+    await session.submit("Now update the tests", new AbortController().signal);
+    expect(session.taskEpoch.requireCurrent().workspaceIdentityDigest)
+      .toBe(afterMutation.workspaceIdentityDigest);
+    expect(afterMutation.workspaceIdentityDigest).not.toBe(startupIdentity);
   });
 });
