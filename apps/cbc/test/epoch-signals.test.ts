@@ -7,15 +7,15 @@ import type { CbcEvent } from "@cbc/protocol";
 import { AgentSession } from "../src/agent.ts";
 import { GrantedRules } from "../src/approvals.ts";
 
-function sessionRuntime() {
+function sessionRuntime(read?: () => Promise<never>) {
   return {
     workspace: "/work",
-    read: async () => ({
+    read: read ?? (async () => ({
       path: "ignored",
       binary: false,
       checksum: "a".repeat(64),
       rendered: "",
-    }),
+    })),
     appendEvents: async (params: { events?: unknown[] }) => ({
       appended: params.events?.length ?? 0,
       lastSequence: params.events?.length ?? 0,
@@ -32,12 +32,12 @@ interface Harness {
   readonly provider: MockProvider;
 }
 
-function harness(sessionId: string, provider: MockProvider): Harness {
+function harness(sessionId: string, provider: MockProvider, read?: () => Promise<never>): Harness {
   const events: CbcEvent[] = [];
   let now = 500;
   const session = new AgentSession({
     host: { now: () => ++now } as never,
-    runtime: sessionRuntime() as never,
+    runtime: sessionRuntime(read) as never,
     config: loadConfig({ projectTrusted: true, env: {} }).config,
     workspacePath: "/work",
     workspaceIdentityDigest: "e".repeat(64),
@@ -99,5 +99,47 @@ describe("epoch invalidation signals", () => {
     expect(after.id).not.toBe(before.id);
     expect(after.toolsetDigest).not.toBe(before.toolsetDigest);
     expect(resetReasons(events)).toContain("toolset_changed");
+  });
+
+  test("a permission preset switch resets the epoch", async () => {
+    const provider = new MockProvider({ steps: [{ text: "first" }, { text: "second" }] });
+    const { session, events } = harness("epoch-policy-changed", provider);
+    await session.submit("Fix the parser", new AbortController().signal);
+    const before = session.taskEpoch.requireCurrent();
+
+    session.setPermissionPreset("read");
+
+    const after = session.taskEpoch.requireCurrent();
+    expect(after.id).not.toBe(before.id);
+    expect(after.policyDigest).not.toBe(before.policyDigest);
+    expect(resetReasons(events)).toContain("policy_changed");
+  });
+
+  test("a plain tool failure does not reset the epoch", async () => {
+    const provider = new MockProvider({
+      steps: [
+        {
+          toolCalls: [{
+            callId: "read-missing",
+            name: "fs.read",
+            arguments: { path: "does/not/exist.ts" },
+          }],
+        },
+        { text: "recovered without abandoning the approach" },
+      ],
+    });
+    const { session, events } = harness("epoch-tool-failure", provider, async () => {
+      throw new Error("ENOENT: no such file");
+    });
+
+    await session.submit("Read the missing file", new AbortController().signal);
+
+    expect(events.some((event) => event.kind === "tool.failed")).toBe(true);
+    // The turn's opening goal is journaled as epoch_started. A tool that simply
+    // failed is an ordinary correction, not an abandoned approach, so nothing
+    // may add a hypothesis_invalidated reset on top of it.
+    expect(events.filter((event) => event.kind === "reasoning.epoch_started")).toHaveLength(1);
+    expect(resetReasons(events)).toEqual([]);
+    expect(session.taskEpoch.requireCurrent().resetReason).toBe("goal_changed");
   });
 });
