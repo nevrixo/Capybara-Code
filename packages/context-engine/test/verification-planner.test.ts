@@ -172,6 +172,22 @@ describe("buildTurnVerificationContract (§5.20)", () => {
     ]);
   });
 
+  test("a tool-backed check names its tool, and a state-settled one names none", () => {
+    const contract = buildTurnVerificationContract({
+      changedPaths: ["packages/a/src/x.ts"],
+      workspaceGeneration: 1,
+    });
+    const byId = new Map(contract.requiredChecks.map((check) => [check.id, check]));
+    // The §5.20 shape declares `tool` and nothing ever populated it, so a reader
+    // could not tell a dispatched check from one settled out of runtime state.
+    expect(byId.get("revision-match")?.tool).toBe("fs.read_many");
+    expect(byId.get("diff-integrity")?.tool).toBe("git.diff");
+    expect(byId.get("focused-tests")?.tool).toBeUndefined();
+    expect(byId.get("focused-tests")?.command).toBe("bun test");
+    expect(byId.get("todo-consistency")?.tool).toBeUndefined();
+    expect(byId.get("todo-consistency")?.command).toBeUndefined();
+  });
+
   test("normalizes windows separators and de-duplicates changed paths", () => {
     const contract = buildTurnVerificationContract({
       changedPaths: ["packages\\a\\src\\x.ts", "packages/a/src/x.ts", ""],

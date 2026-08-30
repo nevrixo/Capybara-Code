@@ -109,8 +109,6 @@ export function workspaceConsumerGraph(
 
 export interface VerificationChangeSet {
   readonly changedPaths: readonly string[];
-  readonly addedPaths?: readonly string[];
-  readonly deletedPaths?: readonly string[];
   readonly failedCommands?: readonly string[];
   /**
    * Paths a prior reflection blamed for a failure this turn (§5.21). A file the
@@ -152,7 +150,14 @@ export interface VerificationStepPlan {
   readonly tier: VerificationTier;
   readonly required: boolean;
   readonly command?: VerificationCommand;
+  /**
+   * The tool that satisfies this step when it is not a shell command. A step with
+   * neither a command nor a tool is settled from state the runtime already holds
+   * (TODO consistency, evidence freshness) rather than by being dispatched.
+   */
+  readonly tool?: string;
   readonly covers: readonly string[];
+  /** Why this step was added beyond the focused tier, when it was. */
   readonly escalate?: string;
   readonly reason: string;
 }
@@ -162,13 +167,12 @@ export interface VerificationPlan {
   readonly impact: readonly VerificationImpactSignal[];
   readonly requiredCoverage: readonly string[];
   readonly steps: readonly VerificationStepPlan[];
-  readonly partialIfMissing: boolean;
 }
 
 export function planVerification(changeSet: VerificationChangeSet): VerificationPlan {
   const paths = [...new Set(changeSet.changedPaths.map((path) => path.replaceAll("\\", "/")).filter(Boolean))];
   if (paths.length === 0) {
-    return { version: "2", impact: [], requiredCoverage: [], steps: [], partialIfMissing: false };
+    return { version: "2", impact: [], requiredCoverage: [], steps: [] };
   }
   const impact = impactSignals(changeSet, paths);
   // §5.21: a moved public surface is a consumer problem by definition — the
@@ -205,6 +209,7 @@ export function planVerification(changeSet: VerificationChangeSet): Verification
       id: "revision-match",
       tier: 0,
       required: true,
+      tool: "fs.read_many",
       covers: ["revision_match"],
       reason: "each mutated file revision must match the recorded mutation result before anything is trusted",
     },
@@ -212,6 +217,7 @@ export function planVerification(changeSet: VerificationChangeSet): Verification
       id: "parse-sanity",
       tier: 0,
       required: true,
+      tool: "fs.read_many",
       covers: ["parse"],
       reason: "changed source must remain syntactically valid",
     },
@@ -284,6 +290,7 @@ export function planVerification(changeSet: VerificationChangeSet): Verification
     tier: 3,
     required: true,
     command: { program: "git", args: ["diff", "--check"], timeoutMs: 30_000 },
+    tool: "git.diff",
     covers: ["diff_integrity", "authoritative_change_set"],
     reason: "confirm the final diff is bounded and free of whitespace corruption",
   });
@@ -317,7 +324,6 @@ export function planVerification(changeSet: VerificationChangeSet): Verification
     impact: Object.freeze(impact),
     requiredCoverage: Object.freeze([...new Set(requiredCoverage)]),
     steps: Object.freeze(steps),
-    partialIfMissing: true,
   };
 }
 
@@ -403,6 +409,7 @@ export function buildTurnVerificationContract(
     .map((step) => ({
       id: step.id,
       ...(step.command === undefined ? {} : { command: verificationCommandDisplay(step.command) }),
+      ...(step.tool === undefined ? {} : { tool: step.tool }),
       scope: Object.freeze(step.tier <= 1 && changedPaths.length > 0 ? [...changedPaths] : [...impactedPackages]),
       required: true,
     }));
