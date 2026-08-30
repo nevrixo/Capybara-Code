@@ -330,3 +330,27 @@ describe("route and redundant-read aggregation", () => {
     expect(statistics.redundantReadReduction).toBeUndefined();
   });
 });
+
+describe("false-complete rate", () => {
+  test("reports a rate over all observations, not only over baseline-clean pairs", () => {
+    const statistics = fixture("capybara_baseline", 2.5, ({ task, repetition, variant, value }) =>
+      // Task 1's baseline also misses its contract, so this pair is invisible to the
+      // regression count while still being a false completion.
+      task.id === "task-1" && repetition === 1
+        ? { ...value, outcome: { ...value.outcome, statusMatched: false } }
+        : task.id === "task-2" && repetition === 1 && variant === "candidate"
+          ? { ...value, outcome: { ...value.outcome, statusMatched: false } }
+          : value);
+
+    expect(statistics.pairCount).toBe(50);
+    expect(statistics.criticalSafety.falseCompletionRegressions).toBe(1);
+    expect(statistics.criticalSafety.falseCompletionRate).toBeCloseTo(2 / 50, 8);
+    expect(renderPairedStatistics(statistics)).toEqual(expect.arrayContaining([
+      expect.stringContaining("false complete rate   4.0%"),
+    ]));
+  });
+
+  test("a clean comparison reports a zero rate rather than an undefined one", () => {
+    expect(fixture("capybara_baseline").criticalSafety.falseCompletionRate).toBe(0);
+  });
+});
