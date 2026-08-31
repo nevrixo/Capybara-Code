@@ -180,12 +180,37 @@ export function isCapturingOverlay(kind: OverlayKind): boolean {
   return kind === "command_palette" || kind === "model_picker" || kind === "reasoning_picker" || kind === "sessions";
 }
 
+export interface OverlayViewportStatus {
+  readonly offset: number;
+  readonly totalRows: number;
+  readonly visibleRows: number;
+}
+
+export interface RenderOverlayOptions {
+  readonly capturing?: boolean;
+  /** Fixed navigation/status row for an already-windowed document body. */
+  readonly viewport?: OverlayViewportStatus;
+}
+
+export interface OverlayViewportRender {
+  readonly lines: readonly StyledLine[];
+  readonly offset: number;
+  readonly maxOffset: number;
+  readonly pageRows: number;
+  readonly totalRows: number;
+}
+
+/** Rows available to a document after overlay chrome and breathing room. */
+export function overlayViewportBodyRows(frameRows: number): number {
+  return Math.max(1, Math.floor(frameRows) - 8);
+}
+
 /** Frame an overlay as a centered modal popup with borders and title. */
 export function renderOverlay(
   kind: OverlayKind,
   body: readonly StyledLine[],
   context: BlockContext,
-  options: { readonly capturing?: boolean } = {},
+  options: RenderOverlayOptions = {},
 ): StyledLine[] {
   const title = OVERLAY_TITLES[kind] ?? kind;
   const capturing = options.capturing ?? isCapturingOverlay(kind);
@@ -195,8 +220,14 @@ export function renderOverlay(
       ? "esc to close"
       : "esc to close · typing stays in editor";
   const unicode = context.capabilities.unicode;
+  const viewportText = options.viewport === undefined
+    ? undefined
+    : unicode
+      ? `Rows ${options.viewport.offset + 1}–${Math.min(options.viewport.totalRows, options.viewport.offset + options.viewport.visibleRows)}/${options.viewport.totalRows} · ↑↓ scroll · PgUp/PgDn page · Home/End`
+      : `Rows ${options.viewport.offset + 1}-${Math.min(options.viewport.totalRows, options.viewport.offset + options.viewport.visibleRows)}/${options.viewport.totalRows} | up/down scroll | PgUp/PgDn page | Home/End`;
 
   let maxContentWidth = stringWidth(`${title}  ${capHint}`);
+  if (viewportText !== undefined) maxContentWidth = Math.max(maxContentWidth, stringWidth(viewportText));
   for (const lineEntry of body) {
     let w = 0;
     for (const seg of lineEntry.segments) {
@@ -251,6 +282,23 @@ export function renderOverlay(
     context,
   );
 
+  const topPaddingLine = viewportText === undefined
+    ? emptyPaddingLine
+    : (() => {
+        const status = truncateToWidth(viewportText, boxInnerWidth);
+        const rightPad = Math.max(0, boxInnerWidth - stringWidth(status));
+        return fitLine(
+          "overlay",
+          [
+            segment(leftMargin, { fg: "fg.primary" }),
+            segment(`${vertical}  `, { fg: "border.warm" }),
+            segment(status, { fg: "fg.muted" }),
+            segment(`${" ".repeat(rightPad)}  ${vertical}`, { fg: "border.warm" }),
+          ],
+          context,
+        );
+      })();
+
   const boxBodyLines: StyledLine[] = body.map((styled) => {
     let lineWidth = 0;
     for (const seg of styled.segments) {
@@ -278,7 +326,42 @@ export function renderOverlay(
     context,
   );
 
-  return [topHeaderLine, emptyPaddingLine, ...boxBodyLines, emptyPaddingLine, bottomBorderLine];
+  return [topHeaderLine, topPaddingLine, ...boxBodyLines, emptyPaddingLine, bottomBorderLine];
+}
+
+/**
+ * Frame only the visible slice of a document overlay.
+ *
+ * The caller keeps the original semantic lines for scrolling, while width
+ * measurement, padding, and serialization touch at most one terminal page.
+ */
+export function renderOverlayViewport(
+  kind: OverlayKind,
+  body: readonly StyledLine[],
+  context: BlockContext,
+  options: {
+    readonly offset: number;
+    readonly frameRows: number;
+    readonly capturing?: boolean;
+  },
+): OverlayViewportRender {
+  const pageRows = overlayViewportBodyRows(options.frameRows);
+  const maxOffset = Math.max(0, body.length - pageRows);
+  const offset = Math.min(maxOffset, Math.max(0, Math.floor(options.offset)));
+  const visible = body.slice(offset, offset + pageRows);
+  const lines = renderOverlay(kind, visible, context, {
+    ...(options.capturing === undefined ? {} : { capturing: options.capturing }),
+    ...(maxOffset === 0
+      ? {}
+      : {
+          viewport: {
+            offset,
+            totalRows: body.length,
+            visibleRows: visible.length,
+          },
+        }),
+  });
+  return { lines, offset, maxOffset, pageRows, totalRows: body.length };
 }
 
 /**

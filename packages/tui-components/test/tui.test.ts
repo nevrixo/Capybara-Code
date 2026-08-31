@@ -78,6 +78,7 @@ import {
   lineWidth,
   moveCompletion,
   offsetForColumn,
+  overlayViewportBodyRows,
   padToWidth,
   palette,
   parseHex,
@@ -99,6 +100,7 @@ import {
   renderMiniDiff,
   renderNotice,
   renderOverlay,
+  renderOverlayViewport,
   renderPlan,
   renderRightSidebar,
   renderSkillBrowserDetail,
@@ -2714,6 +2716,43 @@ describe("overlays and the diff viewer (§6.17, §6.18)", () => {
     expect(skills).toContain("type to filter");
     expect(model).toContain("esc to close");
     expect(model).not.toContain("type to filter");
+  });
+
+  test("a long document overlay frames only one viewport and reports its position", () => {
+    const body = Array.from({ length: 200 }, (_, index) =>
+      line("body", [segment(`context row ${index}`)]),
+    );
+    const rendered = renderOverlayViewport("context", body, context(120), {
+      offset: 80,
+      frameRows: 24,
+    });
+    const text = rendered.lines.map(lineText).join("\n");
+
+    expect(overlayViewportBodyRows(24)).toBe(16);
+    expect(rendered.pageRows).toBe(16);
+    expect(rendered.lines).toHaveLength(20);
+    expect(rendered.offset).toBe(80);
+    expect(rendered.maxOffset).toBe(184);
+    expect(text).toContain("Rows 81–96/200");
+    expect(text).toContain("context row 80");
+    expect(text).toContain("context row 95");
+    expect(text).not.toContain("context row 0");
+    expect(text).not.toContain("context row 96");
+  });
+
+  test("document overlay viewport clamps to the final complete page", () => {
+    const body = Array.from({ length: 40 }, (_, index) =>
+      line("body", [segment(`row ${index}`)]),
+    );
+    const rendered = renderOverlayViewport("context", body, context(80), {
+      offset: 9_999,
+      frameRows: 20,
+    });
+    const text = rendered.lines.map(lineText).join("\n");
+
+    expect(rendered.offset).toBe(28);
+    expect(text).toContain("Rows 29–40/40");
+    expect(text).toContain("row 39");
   });
 
   test("a selectable list marks the selection without colour (AC-45)", () => {
