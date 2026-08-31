@@ -8,9 +8,9 @@
 
 import { sanitizeInline } from "./sanitize.ts";
 import { renderPlanContract, type PlanContractRenderInput } from "./todo.ts";
-import { blank, fitLine, line, segment, type BlockContext, type Segment, type StyledLine } from "./segments.ts";
+import { blank, fitLine, line, lineWidth, segment, type BlockContext, type Segment, type StyledLine } from "./segments.ts";
 import { icon, treeGlyphs, type ThemeToken } from "./theme.ts";
-import { stringWidth, truncateToWidth } from "./width.ts";
+import { stringWidth, truncateToWidth, wrapToWidth } from "./width.ts";
 
 /** §6.17's overlay set. */
 export type OverlayKind =
@@ -347,6 +347,257 @@ export function renderSelectableList(
     }
     return fitLine("overlay", segments, context);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Large Skill catalog browser
+// ---------------------------------------------------------------------------
+
+/** Stage-1 metadata needed by the interactive Skill catalog. Bodies stay lazy. */
+export interface SkillBrowserEntry {
+  readonly name: string;
+  readonly description: string;
+  readonly scope: "project" | "user" | "builtin";
+  readonly origin: string;
+  readonly path: string;
+  readonly version?: string;
+}
+
+export interface SkillBrowserListOptions {
+  readonly query: string;
+  readonly selected: number;
+  readonly top: number;
+  /** Maximum number of catalog rows to materialize for this frame. */
+  readonly pageRows: number;
+  readonly notice?: string;
+}
+
+export interface SkillBrowserListRender {
+  readonly lines: readonly StyledLine[];
+  readonly matches: readonly SkillBrowserEntry[];
+  readonly selected: number;
+  readonly top: number;
+  readonly pageRows: number;
+}
+
+export interface SkillBrowserDetailOptions {
+  readonly offset: number;
+  /** Maximum number of wrapped detail rows to materialize for this frame. */
+  readonly pageRows: number;
+}
+
+export interface SkillBrowserDetailRender {
+  readonly lines: readonly StyledLine[];
+  readonly offset: number;
+  readonly totalRows: number;
+  readonly pageRows: number;
+}
+
+/**
+ * Search the complete stage-1 catalog without ever loading a Skill body.
+ *
+ * Whitespace-delimited terms are ANDed, so `project deploy` narrows naturally.
+ * Source and path participate because names alone are not enough when compatible
+ * Skill directories contain similarly named entries.
+ */
+export function filterSkillBrowserEntries(
+  entries: readonly SkillBrowserEntry[],
+  query: string,
+): readonly SkillBrowserEntry[] {
+  const terms = normalizeSkillSearch(query).split(/\s+/u).filter((term) => term.length > 0);
+  if (terms.length === 0) return entries;
+  return entries.filter((entry) => {
+    const haystack = normalizeSkillSearch([
+      entry.name,
+      entry.description,
+      entry.scope,
+      entry.origin,
+      entry.path,
+      entry.version ?? "",
+    ].join(" "));
+    return terms.every((term) => haystack.includes(term));
+  });
+}
+
+/**
+ * Render only the visible Skill rows. A 900-entry catalog costs the same number
+ * of layout rows as a 9-entry catalog; filtering is the only complete-catalog
+ * pass and uses stage-1 strings exclusively.
+ */
+export function renderSkillBrowserList(
+  entries: readonly SkillBrowserEntry[],
+  options: SkillBrowserListOptions,
+  context: BlockContext,
+): SkillBrowserListRender {
+  const matches = filterSkillBrowserEntries(entries, options.query);
+  const pageRows = Math.max(1, Math.floor(options.pageRows));
+  const selected = matches.length === 0
+    ? 0
+    : Math.min(matches.length - 1, Math.max(0, Math.floor(options.selected)));
+  const maxTop = Math.max(0, matches.length - pageRows);
+  let top = Math.min(maxTop, Math.max(0, Math.floor(options.top)));
+  if (selected < top) top = selected;
+  if (selected >= top + pageRows) top = selected - pageRows + 1;
+
+  const content = overlayContentContext(context);
+  const lines: StyledLine[] = [
+    fitLine("overlay", [
+      segment("Filter  ", { fg: "fg.muted", bold: true }),
+      options.query.length > 0
+        ? segment(sanitizeInline(options.query, 160), { fg: "fg.primary", underline: true })
+        : segment("type to search name, description, source, or path", { fg: "fg.muted", italic: true }),
+    ], content),
+  ];
+
+  if (options.notice !== undefined && options.notice.length > 0) {
+    lines.push(fitLine("overlay", [segment(sanitizeInline(options.notice), { fg: "accent.green" })], content));
+  }
+
+  const first = matches.length === 0 ? 0 : top + 1;
+  const last = Math.min(matches.length, top + pageRows);
+  const totalSuffix = matches.length === entries.length
+    ? `${matches.length} total`
+    : `${matches.length} matched · ${entries.length} total`;
+  lines.push(
+    fitLine("overlay", [
+      segment("Skills  ", { fg: "accent.coral", bold: true }),
+      segment(matches.length === 0 ? `0 of ${totalSuffix}` : `${first}–${last} of ${totalSuffix}`, { fg: "fg.muted" }),
+    ], content),
+    blank(),
+  );
+
+  const visible = matches.slice(top, top + pageRows);
+  if (visible.length === 0) {
+    lines.push(line("overlay", [
+      segment("  No Skills match this filter.", { fg: "fg.muted", italic: true }),
+    ]));
+  } else {
+    const labelWidth = Math.min(
+      30,
+      visible.reduce((maximum, entry) => Math.max(maximum, stringWidth(`$${entry.name}`)), 0),
+    );
+    const scrollbar = catalogScrollbar(visible.length, top, pageRows, matches.length, context);
+    visible.forEach((entry, index) => {
+      const active = top + index === selected;
+      const marker = active ? (context.capabilities.unicode ? "▸ " : "> ") : "  ";
+      const fullLabel = `$${sanitizeInline(entry.name, 160)}`;
+      const rawLabel = stringWidth(fullLabel) <= labelWidth
+        ? fullLabel
+        : truncateToWidth(fullLabel, labelWidth);
+      const label = rawLabel + " ".repeat(Math.max(0, labelWidth - stringWidth(rawLabel)));
+      const version = entry.version === undefined ? "" : ` v${sanitizeInline(entry.version, 40)}`;
+      const badge = `[${entry.scope}/${sanitizeInline(entry.origin, 40)}${version}]`;
+      const row = fitLine("overlay", [
+        segment(marker, active ? { fg: "accent.cyan", bold: true } : { fg: "fg.muted" }),
+        segment(label, active ? { fg: "fg.primary", bold: true } : { fg: "fg.primary" }),
+        segment(`  ${badge}  `, { fg: scopeToken(entry.scope), dim: !active }),
+        segment(sanitizeInline(entry.description, 600), active ? { fg: "fg.primary" } : { fg: "fg.muted" }),
+      ], { ...content, columns: Math.max(1, content.columns - 2) });
+      lines.push(withCatalogRail(row, scrollbar[index] ?? " ", content));
+    });
+  }
+
+  lines.push(
+    blank(),
+    fitLine("overlay", [
+      segment("↑↓", { fg: "accent.cyan", bold: true }),
+      segment(" move · ", { fg: "fg.muted" }),
+      segment("PgUp/PgDn", { fg: "accent.cyan" }),
+      segment(" page · ", { fg: "fg.muted" }),
+      segment("Enter", { fg: "accent.cyan" }),
+      segment(" details · ", { fg: "fg.muted" }),
+      segment("Esc", { fg: "accent.cyan" }),
+      segment(" close", { fg: "fg.muted" }),
+    ], content),
+  );
+
+  return { lines, matches, selected, top, pageRows };
+}
+
+/** Render a wrapped, independently scrollable detail document for one Skill. */
+export function renderSkillBrowserDetail(
+  entry: SkillBrowserEntry,
+  detail: readonly string[],
+  options: SkillBrowserDetailOptions,
+  context: BlockContext,
+): SkillBrowserDetailRender {
+  const content = overlayContentContext(context);
+  const pageRows = Math.max(1, Math.floor(options.pageRows));
+  const wrapped: string[] = [];
+  for (const raw of detail) {
+    const safe = sanitizeInline(raw, 8_000);
+    wrapped.push(...wrapToWidth(safe.length > 0 ? safe : " ", content.columns));
+  }
+  const totalRows = wrapped.length;
+  const maxOffset = Math.max(0, totalRows - pageRows);
+  const offset = Math.min(maxOffset, Math.max(0, Math.floor(options.offset)));
+  const first = totalRows === 0 ? 0 : offset + 1;
+  const last = Math.min(totalRows, offset + pageRows);
+  const lines: StyledLine[] = [
+    fitLine("overlay", [
+      segment(`$${sanitizeInline(entry.name, 160)}`, { fg: "accent.coral", bold: true }),
+      segment(`  [${entry.scope}/${sanitizeInline(entry.origin, 40)}]`, { fg: scopeToken(entry.scope) }),
+      segment(`  ${first}–${last} of ${totalRows}`, { fg: "fg.muted" }),
+    ], content),
+    blank(),
+    ...wrapped.slice(offset, offset + pageRows).map((value, index) =>
+      line("overlay", [segment(value, index === 0 && offset === 0 ? { fg: "fg.primary", bold: true } : { fg: "fg.primary" })]),
+    ),
+    blank(),
+    fitLine("overlay", [
+      segment("↑↓", { fg: "accent.cyan", bold: true }),
+      segment(" scroll · ", { fg: "fg.muted" }),
+      segment("PgUp/PgDn", { fg: "accent.cyan" }),
+      segment(" page · ", { fg: "fg.muted" }),
+      segment("←/Esc", { fg: "accent.cyan" }),
+      segment(" back", { fg: "fg.muted" }),
+    ], content),
+  ];
+  return { lines, offset, totalRows, pageRows };
+}
+
+function normalizeSkillSearch(value: string): string {
+  return sanitizeInline(value.normalize("NFKC"), 8_000).toLowerCase();
+}
+
+function overlayContentContext(context: BlockContext): BlockContext {
+  return { ...context, columns: Math.max(20, context.columns - 10) };
+}
+
+function scopeToken(scope: SkillBrowserEntry["scope"]): ThemeToken {
+  if (scope === "project") return "accent.green";
+  if (scope === "user") return "accent.cyan";
+  return "fg.muted";
+}
+
+function catalogScrollbar(
+  visibleRows: number,
+  top: number,
+  pageRows: number,
+  totalRows: number,
+  context: BlockContext,
+): string[] {
+  if (visibleRows === 0 || totalRows <= pageRows) return Array.from({ length: visibleRows }, () => " ");
+  const thumbRows = Math.max(1, Math.min(visibleRows, Math.round((pageRows * pageRows) / totalRows)));
+  const travel = Math.max(0, visibleRows - thumbRows);
+  const maxTop = Math.max(1, totalRows - pageRows);
+  const thumbStart = Math.round((Math.min(top, maxTop) / maxTop) * travel);
+  const track = context.capabilities.unicode ? "│" : "|";
+  const thumb = context.capabilities.unicode ? "█" : "#";
+  return Array.from({ length: visibleRows }, (_, index) =>
+    index >= thumbStart && index < thumbStart + thumbRows ? thumb : track,
+  );
+}
+
+function withCatalogRail(row: StyledLine, rail: string, context: BlockContext): StyledLine {
+  const padding = Math.max(1, context.columns - lineWidth(row) - 1);
+  return line("overlay", [
+    ...row.segments,
+    segment(" ".repeat(padding)),
+    segment(rail, rail === "█" || rail === "#"
+      ? { fg: "accent.cyan", bold: true }
+      : { fg: "fg.muted", dim: true }),
+  ]);
 }
 
 // ---------------------------------------------------------------------------

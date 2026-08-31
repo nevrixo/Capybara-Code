@@ -101,6 +101,8 @@ import {
   renderOverlay,
   renderPlan,
   renderRightSidebar,
+  renderSkillBrowserDetail,
+  renderSkillBrowserList,
   sidebarFromViewModel,
   renderSelectableList,
   renderStatusBar,
@@ -117,6 +119,7 @@ import {
   sanitizeInline,
   sanitizeText,
   searchSlashCommands,
+  filterSkillBrowserEntries,
   selectedCandidate,
   segment,
   sidebarModeFor,
@@ -147,6 +150,7 @@ import {
   TOAST_DURATION_MS,
   type TerminalCapabilities,
   type SelectionState,
+  type SkillBrowserEntry,
   type StyledLine,
   type ToastState,
 } from "../src/index.ts";
@@ -2713,6 +2717,76 @@ describe("overlays and the diff viewer (§6.17, §6.18)", () => {
 
   test("an empty list says so rather than rendering nothing", () => {
     expect(lineText(renderSelectableList([], 0, context())[0]!)).toContain("nothing to show");
+  });
+
+  test("a large Skill catalog renders only one viewport with position and a scrollbar", () => {
+    const entries: SkillBrowserEntry[] = Array.from({ length: 90 }, (_, index) => ({
+      name: `skill-${String(index).padStart(2, "0")}`,
+      description: `Description for Skill ${index}`,
+      scope: index < 10 ? "project" : index < 30 ? "user" : "builtin",
+      origin: index < 10 ? "capybara" : index < 30 ? "agents" : "bundled",
+      path: `/skills/skill-${index}/SKILL.md`,
+    }));
+    const rendered = renderSkillBrowserList(entries, {
+      query: "",
+      selected: 44,
+      top: 40,
+      pageRows: 8,
+    }, context(120));
+    const text = rendered.lines.map(lineText).join("\n");
+
+    expect(rendered.matches).toHaveLength(90);
+    expect(rendered.lines.length).toBeLessThanOrEqual(13);
+    expect(text).toContain("41–48 of 90 total");
+    expect(text).toContain("skill-44");
+    expect(text).not.toContain("skill-00");
+    expect(text).toContain("│");
+    expect(text).toContain("█");
+  });
+
+  test("Skill filtering ANDs terms across metadata without loading details", () => {
+    const entries: SkillBrowserEntry[] = [
+      {
+        name: "release",
+        description: "Publish the next alpha",
+        scope: "project",
+        origin: "capybara",
+        path: "/repo/.capybara/skills/release/SKILL.md",
+      },
+      {
+        name: "release-notes",
+        description: "Summarize changes",
+        scope: "builtin",
+        origin: "bundled",
+        path: "/opt/capybara/skills/release-notes/SKILL.md",
+      },
+    ];
+
+    expect(filterSkillBrowserEntries(entries, "PROJECT publish").map((entry) => entry.name)).toEqual(["release"]);
+    expect(filterSkillBrowserEntries(entries, ".capybara release").map((entry) => entry.name)).toEqual(["release"]);
+    expect(filterSkillBrowserEntries(entries, "missing")).toEqual([]);
+  });
+
+  test("Skill details wrap and virtualize independently from the catalog", () => {
+    const entry: SkillBrowserEntry = {
+      name: "deploy",
+      description: "Deploy safely",
+      scope: "user",
+      origin: "agents",
+      path: "/home/dev/.agents/skills/deploy/SKILL.md",
+    };
+    const rendered = renderSkillBrowserDetail(entry, [
+      "$deploy",
+      "A deliberately long description that wraps into multiple rows in a narrow popup.",
+      "Path /home/dev/.agents/skills/deploy/SKILL.md",
+      "Trust operator-installed",
+    ], { offset: 1, pageRows: 3 }, context(46));
+    const text = rendered.lines.map(lineText).join("\n");
+
+    expect(rendered.totalRows).toBeGreaterThan(3);
+    expect(rendered.lines.length).toBe(7);
+    expect(text).toContain("2–4 of");
+    expect(text).toContain("PgUp/PgDn");
   });
 
   test("a unified diff parses into files and hunks", () => {
