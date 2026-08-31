@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-30T20:22:20.508Z",
+  "generatedAt": "2026-08-31T13:54:42.458Z",
   "git": {
-    "commit": "a153921ba1997d8c292f17335504bfeb8bc2982f",
+    "commit": "fc5251921c3d17801df723d4e8c76b8ed722177e",
     "dirty": true,
-    "dirtyHash": "9e0a3a71c1e51c4a77788821fb856761d38472afc7f32c849b64a844cba73f66"
+    "dirtyHash": "15207b2c81654670266c6945547fd9af05c1ffad6a6cb539f2ca30d9bd5897f3"
   },
   "roots": [
     "apps",
@@ -550,8 +550,8 @@
     },
     {
       "path": "apps/cbc/src/tui-frame.ts",
-      "bytes": 57582,
-      "sha256": "3781613d2e1789a1a133da36e4c3c4b932cf205397c9125285dc3e08ad95209b"
+      "bytes": 57729,
+      "sha256": "8e563603de8b4d37ba7e4d87946e288c096a41a6682102359770db2b6b0c5fa4"
     },
     {
       "path": "apps/cbc/src/tui-lifecycle.ts",
@@ -625,8 +625,8 @@
     },
     {
       "path": "apps/cbc/test/cbc.test.ts",
-      "bytes": 267054,
-      "sha256": "9248c4cb94418d6e91338890635c8e2c1d1ea81fcd094176cd0095e9f4778633"
+      "bytes": 267331,
+      "sha256": "9cb012692307501f9ef37d2703abc6421279676dbad5501b1a567c1bdf3bf7c4"
     },
     {
       "path": "apps/cbc/test/config-template.test.ts",
@@ -910,8 +910,8 @@
     },
     {
       "path": "apps/cbc/test/tui-frame-revision.test.ts",
-      "bytes": 10438,
-      "sha256": "5e6a2ac5d58fdd1d2517e58af156f55847078d056763ee8d226231787e0b8b36"
+      "bytes": 10601,
+      "sha256": "455faab1c2319810ddc6ad0224849bac5717a5a43d5f5833c6935383151c16b8"
     },
     {
       "path": "apps/cbc/test/tui-golden.test.ts",
@@ -3799,5 +3799,5 @@
       "sha256": "8391ee841757695b95ddefc5dfd0ac274ecc32a76d733f2193b0a02a605a83df"
     }
   ],
-  "digest": "4ccc697ca63fa141cb912f34fc414dce995a2605955a8ca3382632d071152a1d"
+  "digest": "1770af9581e8e7ce888595a6d4cdcd3ede195efc2f332e26a367ff668c893ea4"
 }

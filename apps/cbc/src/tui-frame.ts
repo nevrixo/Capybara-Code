@@ -248,11 +248,11 @@ function planControlParts(model: PlanControlModel): Segment[] {
       segment("  ·  type feedback + Enter", { fg: "accent.cyan" }),
     ];
   }
-  return [
-    segment("Plan ready", { fg: "accent.cyan", bold: true }),
-    segment("  ·  ", { fg: "fg.muted" }),
-    segment("Choose an option below", { fg: "accent.cyan" }),
-  ];
+  // A ready Plan gets no banner. The other branches above each carry something
+  // the reader cannot get elsewhere — a blocker, or the key that proceeds —
+  // while "Plan ready" restated the mode label already on the same row and
+  // pointed at options that are only on screen when the approval picker is up.
+  return [];
 }
 
 /** Plan-mode actions stay visible in both fullscreen and append-only renderers. */

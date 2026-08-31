@@ -1606,16 +1606,6 @@ describe("interactive UI (§6.2, §6.21)", () => {
       ...base,
       modeState: { ...base.modeState, selected: "plan" as const },
     };
-
-    instance.status(model);
-    const afterFirst = output();
-    expect(afterFirst).toContain("Plan");
-    const bannerCount = (afterFirst.match(/Choose an option below/g) ?? []).length;
-
-    instance.status(model);
-    expect((output().match(/Choose an option below/g) ?? []).length).toBe(bannerCount);
-
-    // A changed banner must still reach the transcript.
     const blocked = {
       ...model,
       todo: {
@@ -1623,8 +1613,22 @@ describe("interactive UI (§6.2, §6.21)", () => {
         items: [{ id: "a", text: "Do the thing", status: "blocked" as const }],
       },
     };
+
     instance.status(blocked);
-    expect(output()).toContain("Plan needs work");
+    const afterFirst = output();
+    expect(afterFirst).toContain("Plan needs work");
+    const bannerCount = (afterFirst.match(/Plan needs work/g) ?? []).length;
+    expect(bannerCount).toBe(1);
+
+    instance.status(blocked);
+    expect((output().match(/Plan needs work/g) ?? []).length).toBe(bannerCount);
+
+    // A ready Plan clears the banner instead of replacing it with prose: the
+    // mode label already says Plan, and the actions live in the approval picker.
+    instance.status(model);
+    expect((output().match(/Plan needs work/g) ?? []).length).toBe(bannerCount);
+    expect(output()).not.toContain("Plan ready");
+    expect(output()).not.toContain("Choose an option below");
     instance.restore();
   });
 

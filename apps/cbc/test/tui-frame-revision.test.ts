@@ -96,8 +96,10 @@ describe("revision session frame", () => {
     expect(planBorder).toBeDefined();
     expect(buildBorder).toBeDefined();
     const planText = plan.lines.map(lineText).join("\n");
-    expect(planText).toContain("Plan ready");
-    expect(planText).toContain("Choose an option below");
+    // A ready Plan carries no readiness banner: the mode label already says
+    // Plan, and the options it used to point at live in the approval picker.
+    expect(planText).not.toContain("Plan ready");
+    expect(planText).not.toContain("Choose an option below");
     expect(planText).not.toContain("/plan");
     expect(planText).toContain("Plan · READ");
     expect(planText).not.toContain("Mode: Plan");
