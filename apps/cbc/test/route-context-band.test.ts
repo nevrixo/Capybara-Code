@@ -1,10 +1,20 @@
 /**
- * §5.15: `contextBand` → ContextCompiler hard/target budget.
+ * §5.15: the *configured* context band is the ContextCompiler budget.
  *
- * The band was computed, announced as `model.route_decided`, and stored on the
- * session — and then nothing read it. These tests pin the consumption, because a
- * band that does not move the compaction boundary is exactly the telemetry-only
- * router field P0-03 exists to remove.
+ * An earlier attempt wired the route's **measured** `contextBand` into the
+ * pressure budget. That could not work, and these tests previously pinned the
+ * bug: `selectContextBand` returns the smallest band that already covers
+ * `prompt.inputTokens`, so consuming it as a budget compares a request against a
+ * number derived from that same request. Every prompt therefore sat in the top
+ * of its own band and the upper tenth of every band crossed the 0.9 emergency
+ * line — a trivial turn emergency-compacted at ~58k on a 1M-window model and
+ * then died with CONTEXT_BUDGET_EXCEEDED. It is also non-monotonic: shrinking a
+ * request across a band boundary drops the budget by a whole band, so compaction
+ * could raise the ratio it was lowering.
+ *
+ * The intent behind §5.15 — a deliberately narrow band should compact earlier —
+ * is real, and is carried by `model.context.defaultBand`: a policy chosen before
+ * the prompt is seen. The measured band stays a routing/telemetry field.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -65,19 +75,20 @@ async function runTurn(softContextTokens: number) {
   };
 }
 
-describe("the route's context band is the compiler budget (§5.15)", () => {
-  test("the pressure budget is the band minus the route's own output reserve", async () => {
-    const reserve = loadConfig({ projectTrusted: true, env: {} })
-      .config.model.context.reserveOutputTokens;
-    // A configured budget wider than the band, so the band is the binding limit
-    // and the assertion cannot pass by accident.
+describe("the configured context band is the compiler budget (§5.15)", () => {
+  test("the enforced budget is the configured band, not the measured one", async () => {
+    const defaultBand = loadConfig({ projectTrusted: true, env: {} })
+      .config.model.context.defaultBand;
+    // A configured soft budget wider than nothing here; the point is that the
+    // measured band (64k) does not appear in the enforced number at all.
     const { band, inputBudgetTokens } = await runTurn(96_000);
 
     expect(band).toBe(64_000);
-    // Before this was wired the budget was the configured 96k, derived from the
-    // model's whole window: a 64k band on a 1M-window model compacted at 1M.
-    expect(inputBudgetTokens).toBe(64_000 - reserve);
-    expect(inputBudgetTokens!).toBeLessThan(96_000);
+    // This assertion previously read `64_000 - reserve` (= 32_000) and encoded
+    // the defect: a 58k request was judged against a 32k budget.
+    expect(inputBudgetTokens).toBe(Math.min(96_000, defaultBand));
+    expect(inputBudgetTokens).not.toBe(64_000 - loadConfig({ projectTrusted: true, env: {} })
+      .config.model.context.reserveOutputTokens);
   });
 
   test("the band is a ceiling, so a tighter configured budget still wins", async () => {

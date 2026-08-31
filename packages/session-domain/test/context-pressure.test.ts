@@ -64,6 +64,63 @@ describe("adaptive context pressure", () => {
     expect(decision.reasonCodes).toContain("compaction_generation_guard");
   });
 
+  test("a budget derived from the request cannot bound the request", () => {
+    // Why the route's measured context band is unusable as a budget: it is the
+    // smallest band that already covers the request, so request/budget is pinned
+    // in the top of the band and the upper tenth of every band is `emergency`.
+    for (const band of [64_000, 192_000, 272_000, 512_000, 1_000_000]) {
+      const decision = evaluateContextPressure({
+        ...base,
+        currentCompiledTokens: band - 1,
+        inputBudgetTokens: band,
+        recentRequestGrowthP95: 0,
+        reservedToolExpansionTokens: 0,
+      });
+      expect(decision.state).toBe("emergency");
+    }
+  });
+
+  test("the compaction target is strictly below the emergency line", () => {
+    // DEFAULT_TARGET_RATIO.off and DEFAULT_EMERGENCY_RATIO were both 0.9 and the
+    // state test is `>=`, so a perfectly hit target immediately re-entered
+    // emergency and compaction could never settle. Uses a production-scale
+    // budget so the absolute 1_024 target floor is not the binding term.
+    const wide = {
+      inputBudgetTokens: 96_000,
+      pendingHistoryDeltaTokens: 0,
+      pendingContextPackTokens: 0,
+      recentRequestGrowthP95: 500,
+      reservedToolExpansionTokens: 800,
+    };
+    for (const level of ["off", "light", "balanced", "strong"] as const) {
+      const decision = evaluateContextPressure({
+        ...wide,
+        currentCompiledTokens: 92_000,
+        tokenSavingLevel: level,
+      });
+      expect(decision.targetTokens).toBeDefined();
+      expect(decision.targetTokens! / 96_000).toBeLessThan(0.9);
+      const afterTarget = evaluateContextPressure({
+        ...wide,
+        currentCompiledTokens: decision.targetTokens!,
+        tokenSavingLevel: level,
+      });
+      expect(afterTarget.state).not.toBe("emergency");
+    }
+  });
+
+  test("the generation guard does not demote when the session really grew", () => {
+    // The guard's threshold is max(256, requiredFreeTokens / 2), so growth has to
+    // clear the 256-token absolute floor before the guard stops demoting.
+    const decision = evaluateContextPressure({
+      ...base,
+      currentCompiledTokens: 89,
+      recentRequestGrowthP95: 8,
+      lastCompaction: { generation: 2, tokensAfter: 40, newTokensSince: 512 },
+    });
+    expect(decision.reasonCodes).not.toContain("compaction_generation_guard");
+  });
+
   test("tracks request growth with a bounded p95 window", () => {
     const controller = new ContextPressureController({ growthWindow: 3 });
     controller.observeCompiledTokens(10);

@@ -583,6 +583,14 @@ export class AgentSession {
   #lastContextInspection: ContextInspection | undefined;
   #lastRepositoryContext: readonly string[] = [];
   #currentRoute: InferencePolicyDecision | undefined;
+  /**
+   * The route's measured context band, for telemetry and the context inspector.
+   *
+   * Deliberately not an input to the pressure budget: `selectContextBand`
+   * derives it from the prompt it would bound, so consuming it as a budget
+   * compares a request against a number computed from that request. See
+   * `#inputBudgetTokens`.
+   */
   #currentContextBand: string | number | undefined;
   /** True once a route has supplied the epoch's real capability digest. */
   #capabilityDigestObserved = false;
@@ -620,6 +628,12 @@ export class AgentSession {
   #compacting = false;
   readonly #contextPressure = new ContextPressureController();
   #lastContextPressure: ContextPressureDecision | undefined;
+  /** Compiled size at the guard's first pass, so the verify pass can tell whether
+   *  the recompile made material progress or hit the incompressible floor. */
+  #lastGuardTokens: number | undefined;
+  /** Compiled size at the last compaction, so the anti-spin generation guard
+   *  can tell whether the session has grown materially since. */
+  #lastCompactionPromptTokens: number | undefined;
   #epochAnnounced = false;
   readonly #contextScopes = new Map<string, AgentContextScope>();
   #rootContextScope!: AgentContextScope;
@@ -1387,7 +1401,7 @@ export class AgentSession {
         if (accumulated) this.#lastToolOutputCompactionHistoryLength = this.kernel.history.length;
         await this.#prepareContextPack();
       },
-      contextPressureGuard: (prompt) => this.#guardContextPressure(prompt),
+      contextPressureGuard: (prompt, attempt) => this.#guardContextPressure(prompt, attempt),
       onProviderContextError: () => {
         const pressure = this.#lastContextPressure ?? {
           state: "emergency" as const,
@@ -1543,6 +1557,10 @@ export class AgentSession {
     this.kernel.hydrateHistory(
       historyFromEvents(events, options.seed?.promptHistory ?? []),
     );
+    // Everything replayed from the journal has already been sampled. Leaving the
+    // cursor at 0 made every compaction in a resumed session a no-op, so a
+    // long-running session could never shed its replayed history.
+    this.#lastCompiledRootHistoryLength = this.kernel.history.length;
     // Context/evidence stores are intentionally not trusted across process restart.
     // Every hydrated read output (including a prior locator) must be reread before use.
     for (const item of this.kernel.history) {
@@ -2390,10 +2408,11 @@ export class AgentSession {
     const modelWindowTokens = this.#currentRoute?.capability.contextWindow ??
       this.#options.config.model.softContextTokens + this.#options.config.model.context.reserveOutputTokens;
     const reserveOutputTokens = this.#options.config.model.context.reserveOutputTokens;
-    const budgetTokens = Math.min(
-      this.#options.config.model.softContextTokens,
-      Math.max(0, modelWindowTokens - reserveOutputTokens),
-    );
+    // The gauge must report the allowance the pressure guard actually enforces.
+    // Deriving it separately let the interface show ~922k free at the moment the
+    // guard aborted the turn against a far smaller number, which made the
+    // failure undiagnosable from the UI.
+    const budgetTokens = this.#inputBudgetTokens().budget;
     const contextUsage = makeContextUsageSnapshot({
       packId,
       ...(metadata?.requestId === undefined ? {} : { requestId: metadata.requestId }),
@@ -2520,30 +2539,42 @@ export class AgentSession {
         : item));
   }
 
-  #guardContextPressure(prompt: CompiledModelRequest): ContextPressureGuardResult {
-    const routeWindow = this.#currentRoute?.capability.contextWindow;
-    // §5.15: `contextBand` → ContextCompiler hard/target budget. The band was
-    // computed, announced, and stored, but the pressure budget was derived from
-    // the model's whole window — so a route that deliberately selected a 64k band
-    // on a 1M-window model still compacted at the 1M boundary, and the band it
-    // announced described nothing. The band is a ceiling, never a licence, so it
-    // narrows the configured budget rather than replacing it.
-    const routeBand = this.#currentRoute?.contextBand;
+  /**
+   * The single enforced input allowance, shared by the pressure guard and the
+   * context gauge so the interface can never report headroom the guard denies.
+   *
+   * §5.15 honestly: a *configured* band may narrow the budget, because it is a
+   * policy the session chose before seeing this prompt. The route's measured
+   * `contextBand` may not. `selectContextBand` returns the smallest band that
+   * already covers `prompt.inputTokens`, so consuming it as a budget compares a
+   * request against a number derived from that same request — which pins the
+   * ratio in the top of whichever band the request landed in, and crosses the
+   * emergency line for the upper tenth of every band regardless of the reserve.
+   * It is also non-monotonic: shrinking a request across a band boundary drops
+   * the budget by a whole band, so compaction could raise the ratio it was
+   * trying to lower. The measured band stays a routing/telemetry field.
+   */
+  #inputBudgetTokens(): { budget: number; windowBudget: number; window: number | undefined } {
+    const window = this.#currentRoute?.capability.contextWindow;
     const reserve = this.#currentRoute?.outputReserveTokens
       ?? this.#options.config.model.context.reserveOutputTokens;
     const configuredBudget = this.#options.config.model.softContextTokens;
-    const windowBudget = routeWindow === undefined
+    const windowBudget = window === undefined
       ? configuredBudget
-      : Math.max(1, routeWindow - reserve);
-    const inputBudgetTokens = Math.min(
-      configuredBudget,
+      : Math.max(1, window - reserve);
+    const policyBand = Math.max(1, Math.floor(this.#options.config.model.context.defaultBand));
+    return {
+      budget: Math.min(configuredBudget, windowBudget, policyBand),
       windowBudget,
-      // An unallowed band was refused on cost or policy grounds, not resized, so
-      // it must not be mistaken for a smaller budget the turn agreed to.
-      routeBand === undefined || this.#currentRoute?.context.allowed !== true
-        ? windowBudget
-        : Math.max(1, routeBand - reserve),
-    );
+      window,
+    };
+  }
+
+  #guardContextPressure(
+    prompt: CompiledModelRequest,
+    attempt: { readonly recompiled: boolean } = { recompiled: false },
+  ): ContextPressureGuardResult {
+    const { budget: inputBudgetTokens, window: routeWindow } = this.#inputBudgetTokens();
     const savingLevel = this.#tokenSavingLastPlan?.effectiveLevel ?? this.#options.config.agent.tokenSaving;
     const decision = evaluateContextPressure({
       currentCompiledTokens: prompt.inputTokens,
@@ -2558,8 +2589,23 @@ export class AgentSession {
       emergencyRatio: this.#options.config.model.context.emergencyRatio,
       ...(this.#options.config.model.context.minFreeTokens === "auto" ? {} : { minFreeTokens: this.#options.config.model.context.minFreeTokens }),
       ...(this.#options.config.model.context.targetFreeTokens === "auto" ? {} : { targetFreeTokens: this.#options.config.model.context.targetFreeTokens }),
+      // The anti-spin guard this enables was dead: `lastCompaction` was never
+      // supplied, so a compaction that freed nothing was retried at full
+      // strength instead of being demoted to `prepare`.
+      ...(this.#lastCompactionCapsule === undefined || this.#lastCompactionPromptTokens === undefined
+        ? {}
+        : {
+            lastCompaction: {
+              generation: this.#lastCompactionCapsule.generation,
+              tokensAfter: this.#lastCompactionPromptTokens,
+              newTokensSince: Math.max(0, prompt.inputTokens - this.#lastCompactionPromptTokens),
+            },
+          }),
     });
-    this.#contextPressure.observeCompiledTokens(prompt.inputTokens);
+    // The verification pass re-measures the same logical request. Feeding it to
+    // the growth window a second time would inflate `recentRequestGrowthP95` and
+    // make the *next* turn compact earlier for a request that never grew.
+    if (!attempt.recompiled) this.#contextPressure.observeCompiledTokens(prompt.inputTokens);
     this.#lastContextPressure = decision;
     const compactionPolicy = this.#options.config.model.context.compactionPolicy;
     if (decision.state !== "compact" && decision.state !== "emergency") {
@@ -2571,23 +2617,51 @@ export class AgentSession {
     if (compactionPolicy === "legacy" && decision.state === "compact") {
       return { action: "accept", decision };
     }
-    const compacted = this.compactContext({
-      pressure: decision,
-      ...(decision.targetTokens === undefined ? {} : { targetTokens: decision.targetTokens }),
-    });
-    if (compacted === undefined) {
-      // Returning the action still forces the kernel's one-recompile boundary;
-      // the second evaluation will become CONTEXT_BUDGET_EXCEEDED if nothing
-      // changed, rather than silently sending an over-budget request.
+    if (attempt.recompiled) {
+      // The kernel's second call is a verification boundary, so it must not
+      // compact again — a mutating "query" is what turned one doomed turn into
+      // four identical compactions and three emergency notices.
+      const previous = this.#lastGuardTokens;
+      const floorReached = previous !== undefined &&
+        prompt.inputTokens >= previous - Math.max(256, Math.floor(prompt.inputTokens * 0.01));
+      const fitsWindow = routeWindow === undefined || prompt.inputTokens <= routeWindow;
+      if (floorReached && fitsWindow) {
+        // Compaction is structurally unable to help: what remains is the
+        // incompressible floor (L0-L4, L6, tool schemas, the current message),
+        // which compaction never touches. Degrade rather than kill. The local
+        // budget is a heuristic estimate over escaped JSON, and the provider's
+        // tokenizer is the authority — a real rejection still comes back as
+        // `context_length` and reaches the kernel's one-shot recovery.
+        this.#emit("context.compaction_target_missed", {
+          ...(decision.targetTokens === undefined ? {} : { targetTokens: decision.targetTokens }),
+          tokensAfter: prompt.inputTokens,
+          projectedTokens: decision.projectedTokens,
+          reasonCodes: [
+            ...decision.reasonCodes,
+            "irreducible_prompt_floor",
+            "sent_for_provider_arbitration",
+          ],
+        });
+        this.#lastGuardTokens = undefined;
+        return { action: "accept", decision };
+      }
       return {
         action: decision.state === "emergency" ? "emergency" : "compact",
         targetTokens: decision.targetTokens ?? Math.max(1_024, Math.floor(inputBudgetTokens * 0.7)),
         decision,
       };
     }
+    this.#lastGuardTokens = prompt.inputTokens;
+    this.compactContext({
+      pressure: decision,
+      ...(decision.targetTokens === undefined ? {} : { targetTokens: decision.targetTokens }),
+    });
+    // Either way the kernel's one-recompile boundary is forced; the difference is
+    // that the second evaluation now degrades instead of synthesizing a terminal
+    // error, so a heuristic estimate can no longer kill a turn on its own.
     return {
       action: decision.state === "emergency" ? "emergency" : "compact",
-      targetTokens: decision.targetTokens ?? compacted.tokensAfter,
+      targetTokens: decision.targetTokens ?? Math.max(1_024, Math.floor(inputBudgetTokens * 0.7)),
       decision,
     };
   }
@@ -2669,20 +2743,31 @@ export class AgentSession {
       this.#compactState = state;
       this.#lastCompactionCapsule = result.capsule;
       this.#contextPressure.noteCompaction(result.capsule.generation);
+      this.#lastCompactionPromptTokens = options.pressure?.projectedTokens ?? result.tokensBefore;
       // The journal retains every event; only the provider-facing replay is
       // shortened. This is what prevents old tool output from being paid again
       // on every sample after compaction.
-      this.kernel.hydrateHistory(retainHistoryForPrompt(
-        this.kernel.history,
-        this.#lastCompiledRootHistoryLength,
-      ));
+      const historyBefore = this.kernel.history.length;
+      // A cursor of 0 means "nothing has been sampled yet", not "everything up to
+      // index 0 was". Pass undefined so the retainer treats the whole array as
+      // the protected tail instead of reading 0 as a licence to keep it all.
+      const sampledThrough = this.#lastCompiledRootHistoryLength > 0
+        ? this.#lastCompiledRootHistoryLength
+        : undefined;
+      const retained = retainHistoryForPrompt(this.kernel.history, sampledThrough);
+      this.kernel.hydrateHistory(retained);
       // Hydration drops provider continuation, so the next full replay must
       // restate the saving directive from scratch.
       this.#tokenSaving.resetDirectiveTracking();
-      this.#lastCompiledRootHistoryLength = Math.min(
-        this.#lastCompiledRootHistoryLength,
-        this.kernel.history.length,
+      // The cursor means "everything from here on is unsampled tail", so it is
+      // anchored to the END of the array. Compaction removes from the front, so
+      // clamping it to the new length re-pointed it at an already-sampled item.
+      // Preserve the tail length instead.
+      const unsampledTail = Math.max(
+        0,
+        historyBefore - Math.min(this.#lastCompiledRootHistoryLength, historyBefore),
       );
+      this.#lastCompiledRootHistoryLength = Math.max(0, retained.length - unsampledTail);
       this.#pruneReadFreshnessState();
       this.#lastToolOutputCompactionHistoryLength = this.kernel.history.length;
       this.kernel.resetProviderContinuation();
@@ -4787,12 +4872,47 @@ function retainHistoryForPrompt(
   // output may be the only remaining copy when exact L6 promotion was rejected.
   // Older turns are represented by compactState; retain their final answer only
   // for conversational shape, plus every item from the latest user onward.
-  return history
-    .filter((_item, index) =>
+  //
+  // The cursor is 0 until this session's first prompt has been compiled, and 0
+  // cannot mean "everything before index 0 was already sampled" — it means
+  // nothing was. Read literally, `index >= 0` matched every item and compaction
+  // reclaimed nothing at all, which is why a doomed turn recompiled to a
+  // byte-identical prompt.
+  const keepFrom = sampledThrough !== undefined && sampledThrough > 0
+    ? Math.min(Math.floor(sampledThrough), history.length)
+    : history.length;
+  const keep = new Set<number>();
+  history.forEach((_item, index) => {
+    if (
+      index >= keepFrom ||
       (lastUserIndex >= 0 && index >= lastUserIndex) ||
-      (sampledThrough !== undefined && index >= sampledThrough) ||
       index === lastFinalIndex
-    )
+    ) keep.add(index);
+  });
+  // A retained call without its output (or the reverse) is an item the provider
+  // cannot interpret, and nothing downstream repairs an orphaned pair. Widen the
+  // retained set rather than emit one.
+  const callIndex = new Map<string, number>();
+  history.forEach((item, index) => {
+    if (item.type === "function_call" || item.type === "program") callIndex.set(item.callId, index);
+  });
+  for (const index of [...keep]) {
+    const item = history[index];
+    if (item === undefined) continue;
+    if (item.type === "function_call_output" || item.type === "program_output") {
+      const paired = callIndex.get(item.callId);
+      if (paired !== undefined) keep.add(paired);
+    }
+    if (item.type === "function_call" || item.type === "program") {
+      const paired = history.findIndex((candidate, candidateIndex) =>
+        candidateIndex > index &&
+        (candidate.type === "function_call_output" || candidate.type === "program_output") &&
+        candidate.callId === item.callId);
+      if (paired >= 0) keep.add(paired);
+    }
+  }
+  return history
+    .filter((_item, index) => keep.has(index))
     .map((item) => {
       if (item.type !== "function_call_output" || item.output.length <= 4_096) return item;
       const handles = item.output.match(/\[artifact [^\]\n]+\]/g);
@@ -4802,7 +4922,7 @@ function retainHistoryForPrompt(
       if (handle === undefined) return item;
       return {
         ...item,
-        output: `${item.output.slice(0, 512)}\n??compacted recoverable output ??n${handle}`,
+        output: `${item.output.slice(0, 512)}\n[compacted; recoverable output] ${handle}`,
       };
     });
 }
