@@ -6137,6 +6137,11 @@ export function renderReflectionPrompt(analysis: ReflectionAnalysis): string {
       "",
       "fs.read correction: NOT_FOUND means the path is absent; do not repeat the read. If the task is to create it, use fs.write with intent=create after checking the parent directory.",
     );
+  } else if (analysis.toolId === "fs.list" && analysis.errorCategory === "logic_bug") {
+    lines.push(
+      "",
+      "fs.list correction: NOT_FOUND means the directory is absent, not empty. Do not list it again. For a new tree, list the nearest existing parent once, then create target files directly with fs.write intent=create.",
+    );
   }
   lines.push(
     "",

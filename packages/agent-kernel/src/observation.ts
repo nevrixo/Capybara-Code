@@ -245,6 +245,9 @@ function guidanceFor(category: FailureCategory, toolId: string): string {
       if (toolId === "fs.read") {
         return "the requested path is absent; do not repeat the read. If the task is to create it, use fs.write with intent=create after checking the parent directory";
       }
+      if (toolId === "fs.list") {
+        return "the requested directory is absent, not empty; do not repeat the listing. For a new tree, inspect the nearest existing parent and create target files with fs.write intent=create";
+      }
       return "the assumption behind this call was wrong; re-read the relevant source before attempting another edit";
   }
 }
