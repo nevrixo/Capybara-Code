@@ -5252,15 +5252,14 @@ export class AgentKernel {
 
     const attempts = this.#recordStreak(hint.signature);
 
-    // The approach — not just the call — is suspect when the same failure has
-    // already survived one correction, when the action is outside the granted
-    // scope (retrying cannot widen it), or when the same category keeps
-    // recurring under different signatures.
-    const sameCategory = this.#reflections.filter(
-      (prior) => prior.errorCategory === hint.category,
-    ).length;
+    // The approach — not just the call — is suspect when the same evidenced
+    // failure has already survived one correction, or when the action is outside
+    // the granted scope (retrying cannot widen it). Failure categories are
+    // deliberately coarse: several different test failures are all `logic_bug`,
+    // but that alone does not prove an iterative repair approach should be
+    // abandoned and its workspace changes rolled back.
     const approachInvalid =
-      attempts >= 2 || hint.category === "permission_denied" || sameCategory >= 2;
+      attempts >= 2 || hint.category === "permission_denied";
 
     const deterministic: ReflectionAnalysis = {
       errorCategory: hint.category,

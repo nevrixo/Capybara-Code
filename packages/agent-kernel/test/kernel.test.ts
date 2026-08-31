@@ -3287,6 +3287,33 @@ describe("failure taxonomy (§11.2)", () => {
     expect(different).not.toBe(a);
   });
 
+  test("generic process errors use diagnostic output to distinguish repair attempts", () => {
+    const first = classifyFailure({
+      toolId: "process.run",
+      code: "PROCESS_EXIT_NONZERO",
+      message: "bun test exited with 1",
+      text: "FAIL src/parser.test.ts:41\nexpected token, received eof",
+      exitCode: 1,
+    });
+    const sameCause = classifyFailure({
+      toolId: "process.run",
+      code: "PROCESS_EXIT_NONZERO",
+      message: "bun test exited with 1",
+      text: "FAIL src/parser.test.ts:987\nexpected token, received eof",
+      exitCode: 1,
+    });
+    const differentCause = classifyFailure({
+      toolId: "process.run",
+      code: "PROCESS_EXIT_NONZERO",
+      message: "bun test exited with 1",
+      text: "FAIL src/router.test.ts:55\nexpected redirect, received 404",
+      exitCode: 1,
+    });
+
+    expect(sameCause.signature).toBe(first.signature);
+    expect(differentCause.signature).not.toBe(first.signature);
+  });
+
   test("a failed observation carries its hint; a successful one does not", async () => {
     const failed = await normalizeObservation({
       toolId: "fs.read",
@@ -3483,6 +3510,75 @@ describe("self-correction loop (§11.2, §11.3)", () => {
     expect(result.report.risks.some((r) => r.includes("b.ts") && r.includes("could not be rolled back"))).toBe(
       true,
     );
+  });
+
+  test("distinct test failures during iterative repair do not roll back the turn", async () => {
+    const rollbacks: string[] = [];
+    let failure = 0;
+    const diagnostics = [
+      "FAIL src/parser.test.ts\nexpected token, received eof",
+      "FAIL src/router.test.ts\nexpected redirect, received 404",
+      "FAIL src/cache.test.ts\nexpected fresh value, received stale value",
+    ];
+    const { kernel, events } = harness({
+      steps: [
+        {
+          toolCalls: [
+            { callId: "write-1", name: "fs.write", arguments: { path: "src/app.ts", content: "v1", intent: "create" } },
+          ],
+        },
+        {
+          toolCalls: [
+            { callId: "test-1", name: "process.run", arguments: { program: "bun", args: ["test"], timeoutMs: 60_000 } },
+          ],
+        },
+        {
+          toolCalls: [
+            { callId: "write-2", name: "fs.write", arguments: { path: "src/app.ts", content: "v2", intent: "replace" } },
+          ],
+        },
+        {
+          toolCalls: [
+            { callId: "test-2", name: "process.run", arguments: { program: "bun", args: ["test"], timeoutMs: 60_000 } },
+          ],
+        },
+        {
+          toolCalls: [
+            { callId: "write-3", name: "fs.write", arguments: { path: "src/app.ts", content: "v3", intent: "replace" } },
+          ],
+        },
+        {
+          toolCalls: [
+            { callId: "test-3", name: "process.run", arguments: { program: "bun", args: ["test"], timeoutMs: 60_000 } },
+          ],
+        },
+        { text: "The distinct failures are diagnosed; keep the current repair for the next step." },
+      ],
+      toolResults: {
+        "fs.write": { result: okResult("wrote src/app.ts") },
+        "process.run": () => ({
+          result: errorResult("PROCESS_EXIT_NONZERO", "bun test exited with 1"),
+          text: diagnostics[failure++] ?? "FAIL unknown",
+          exitCode: 1,
+        }),
+      },
+      checkpoints: {
+        current: () => "ckpt_repair",
+        rollbackTo: async (checkpointId) => {
+          rollbacks.push(checkpointId);
+          return { checkpointId, revertedPaths: ["src/app.ts"] };
+        },
+      },
+    });
+
+    const result = await kernel.runTurn("repair the implementation until its tests pass", new AbortController().signal);
+    const rolledBack = payloadsOf(events, "transaction.rolled_back");
+    expect(result.reflections).toHaveLength(3);
+    expect(result.reflections.every((reflection) => reflection.attempts === 1)).toBe(true);
+    expect(result.reflections.every((reflection) => reflection.approachInvalid === false)).toBe(true);
+    expect(rollbacks).toEqual([]);
+    expect(rolledBack).toHaveLength(0);
+    expect(result.report.changedFiles.map((file) => file.path)).toContain("src/app.ts");
   });
 
   for (const [code, message, category] of [

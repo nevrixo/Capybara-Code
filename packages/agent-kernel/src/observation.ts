@@ -7,6 +7,8 @@
  * observation. Raw tool output never goes straight into the prompt.
  */
 
+import { createHash } from "node:crypto";
+
 import type { ArtifactRef, ToolResult } from "@cbc/tool-registry";
 
 /** §11.6 default inline limits. */
@@ -188,7 +190,11 @@ export function classifyFailure(input: {
   return {
     category,
     code,
-    signature: failureSignature(input.toolId, category, code, input.message),
+    // Process errors commonly have a generic message such as "exited with 1".
+    // Include the normalized diagnostic output as a digest so two repair runs
+    // that expose different failing assertions are not mistaken for the same
+    // failed attempt and allowed to trigger an unrelated checkpoint rollback.
+    signature: failureSignature(input.toolId, category, code, input.message, input.text),
     guidance: guidanceFor(category, input.toolId),
     retryable: input.retryable ?? category === "environment_issue",
     implicatedPaths,
@@ -205,16 +211,26 @@ export function failureSignature(
   category: FailureCategory,
   code: string,
   message: string,
+  diagnostic?: string,
 ): string {
-  const normalized = message
+  const normalized = normalizeFailureText(message).slice(0, 160);
+  const normalizedDiagnostic = diagnostic === undefined
+    ? ""
+    : normalizeFailureText(diagnostic);
+  const diagnosticDigest = normalizedDiagnostic.length === 0
+    ? ""
+    : `|diagnostic:${createHash("sha256").update(normalizedDiagnostic, "utf8").digest("hex").slice(0, 16)}`;
+  return `${toolId}|${category}|${code}|${normalized}${diagnosticDigest}`;
+}
+
+function normalizeFailureText(value: string): string {
+  return value
     .toLowerCase()
     .replace(/0x[0-9a-f]+/g, "#")
     .replace(/\b[a-f0-9]{7,}\b/g, "#")
     .replace(/\d+(\.\d+)?(ms|s|us|ns|%|kib|mib|bytes?)?/g, "#")
     .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 160);
-  return `${toolId}|${category}|${code}|${normalized}`;
+    .trim();
 }
 
 function guidanceFor(category: FailureCategory, toolId: string): string {
