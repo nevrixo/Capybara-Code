@@ -572,6 +572,25 @@ export interface RuntimeOptions {
   readonly spawner?: RuntimeSpawner;
 }
 
+/** Identity fields every capability-protected runtime RPC must carry together. */
+export interface RuntimeCapabilityBinding {
+  readonly capabilityReceipt: string;
+  readonly capabilitySessionId: string;
+  readonly capabilityActionHash: string;
+}
+
+export interface WorktreeCreateRequest extends RuntimeCapabilityBinding {
+  readonly path: string;
+  readonly commit: string;
+  readonly requireClean?: boolean;
+  readonly allowLongPath?: boolean;
+}
+
+export interface WorktreeRemoveRequest extends RuntimeCapabilityBinding {
+  readonly path: string;
+  readonly hasActiveWriter?: boolean;
+}
+
 /**
  * The sidecar, as the rest of the CLI sees it.
  *
@@ -1004,22 +1023,19 @@ export class Runtime {
 
   // ---- transactions ----
 
-  async beginTransaction(options: {
+  async beginTransaction(options: RuntimeCapabilityBinding & {
     turnId?: string;
     agentId?: string;
     leasePathGlobs?: readonly string[];
     /** §11.2: the approach this transaction belongs to, for checkpoint rollback. */
     checkpointId?: string;
-    capabilityReceipt?: string;
-    capabilitySessionId?: string;
-    capabilityActionHash?: string;
   }): Promise<{ transactionId: string }> {
     return (await this.#client.request("fs.transaction.begin", { ...options })) as {
       transactionId: string;
     };
   }
 
-  async patch(params: Record<string, unknown>): Promise<unknown> {
+  async patch(params: Record<string, unknown> & RuntimeCapabilityBinding): Promise<unknown> {
     return await this.#client.request("fs.patch", params);
   }
 
@@ -1028,23 +1044,23 @@ export class Runtime {
     return (await this.#client.request("fs.edit", params)) as StructuredEditResponse;
   }
 
-  async write(params: Record<string, unknown>): Promise<unknown> {
+  async write(params: Record<string, unknown> & RuntimeCapabilityBinding): Promise<unknown> {
     return await this.#client.request("fs.write", params);
   }
 
-  async move(params: Record<string, unknown>): Promise<unknown> {
+  async move(params: Record<string, unknown> & RuntimeCapabilityBinding): Promise<unknown> {
     return await this.#client.request("fs.move", params);
   }
 
-  async delete(params: Record<string, unknown>): Promise<unknown> {
+  async delete(params: Record<string, unknown> & RuntimeCapabilityBinding): Promise<unknown> {
     return await this.#client.request("fs.delete", params);
   }
 
-  async commitTransaction(transactionId: string, capability?: { capabilityReceipt: string; capabilitySessionId: string; capabilityActionHash: string }): Promise<unknown> {
+  async commitTransaction(transactionId: string, capability: RuntimeCapabilityBinding): Promise<unknown> {
     return await this.#client.request("fs.transaction.commit", { transactionId, ...capability });
   }
 
-  async rollbackTransaction(transactionId: string, capability?: { capabilityReceipt: string; capabilitySessionId: string; capabilityActionHash: string }): Promise<unknown> {
+  async rollbackTransaction(transactionId: string, capability: RuntimeCapabilityBinding): Promise<unknown> {
     return await this.#client.request("fs.transaction.rollback", { transactionId, ...capability });
   }
 
@@ -1075,7 +1091,10 @@ export class Runtime {
 
   // ---- processes ----
 
-  async run(params: Record<string, unknown>, signal?: AbortSignal): Promise<ProcessOutcome> {
+  async run(
+    params: Record<string, unknown> & RuntimeCapabilityBinding,
+    signal?: AbortSignal,
+  ): Promise<ProcessOutcome> {
     return (await this.#client.request(
       "process.run",
       params,
@@ -1083,7 +1102,9 @@ export class Runtime {
     )) as ProcessOutcome;
   }
 
-  async startJob(params: Record<string, unknown>): Promise<{ jobId: string; display: string }> {
+  async startJob(
+    params: Record<string, unknown> & RuntimeCapabilityBinding,
+  ): Promise<{ jobId: string; display: string }> {
     return (await this.#client.request("process.start", params)) as {
       jobId: string;
       display: string;
@@ -1156,11 +1177,11 @@ export class Runtime {
     return await this.#client.request("worktree.inspect", params);
   }
 
-  async createWorktree(params: Record<string, unknown>): Promise<unknown> {
+  async createWorktree(params: WorktreeCreateRequest): Promise<unknown> {
     return await this.#client.request("worktree.create", params);
   }
 
-  async removeWorktree(params: Record<string, unknown>): Promise<unknown> {
+  async removeWorktree(params: WorktreeRemoveRequest): Promise<unknown> {
     return await this.#client.request("worktree.remove", params);
   }
 

@@ -12,7 +12,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { ToolExecutor } from "@cbc/agent-kernel";
 import { isSensitivePath } from "@cbc/context-engine";
 import { actionHash, classifyCommand, type ProposedAction } from "@cbc/permissions";
@@ -28,7 +28,7 @@ import { errorResult, okResult, type ArtifactRef, type ToolResult } from "@cbc/t
 
 import { MergeCoordinator, containsConflictMarkers } from "../../capy-daemon/src/merge-coordinator.ts";
 import { resolvePaths, type Host } from "./host.ts";
-import type { ProcessOutcome, Runtime } from "./runtime.ts";
+import type { ProcessOutcome, Runtime, RuntimeCapabilityBinding } from "./runtime.ts";
 import { normalizePath } from "./normalizer.ts";
 import {
   classifyVerificationAction,
@@ -1813,9 +1813,13 @@ export class RuntimeToolExecutor implements ToolExecutor {
         if (path === undefined || commit === undefined) {
           return { result: errorResult("INVALID_ARGUMENT", "worktree.create requires path and commit") };
         }
-        const capability = await this.#issueCapability(action);
+        const runtimePath = workspacePath(path, workspace);
+        const capability = await this.#issueCapability(
+          action,
+          [resolve(runtime.dataDir, runtimePath)],
+        );
         const data = (await runtime.createWorktree({
-          path: workspacePath(path, workspace),
+          path: runtimePath,
           commit,
           requireClean: args(action).requireClean !== false,
           capabilityReceipt: capability.id,
@@ -1839,9 +1843,13 @@ export class RuntimeToolExecutor implements ToolExecutor {
         if (path === undefined) {
           return { result: errorResult("INVALID_ARGUMENT", "worktree.remove requires path") };
         }
-        const capability = await this.#issueCapability(action);
+        const runtimePath = workspacePath(path, workspace);
+        const capability = await this.#issueCapability(
+          action,
+          [resolve(runtime.dataDir, runtimePath)],
+        );
         const data = (await runtime.removeWorktree({
-          path: workspacePath(path, workspace),
+          path: runtimePath,
           capabilityReceipt: capability.id,
           capabilitySessionId: capability.sessionId,
           capabilityActionHash: capability.actionHash,
@@ -2111,7 +2119,10 @@ export class RuntimeToolExecutor implements ToolExecutor {
     return await bridge(action, signal);
   }
 
-  async #issueCapability(action: ProposedAction): Promise<CapabilityReceipt> {
+  async #issueCapability(
+    action: ProposedAction,
+    resourceOverride?: readonly string[],
+  ): Promise<CapabilityReceipt> {
     const runtime = this.#options.runtime as Runtime & {
       issueCapability?: (params: Record<string, unknown>) => Promise<CapabilityReceipt>;
     };
@@ -2125,7 +2136,9 @@ export class RuntimeToolExecutor implements ToolExecutor {
         operation: action.writes !== undefined && action.writes.length > 0
           ? "fs.transaction"
           : action.toolId === "fs.read_many" ? "fs.read" : action.toolId,
-        resources: [...(action.reads ?? []), ...(action.writes ?? [])],
+        resources: resourceOverride === undefined
+          ? [...(action.reads ?? []), ...(action.writes ?? [])]
+          : [...resourceOverride],
         network: "deny",
         expiresAtMs: Number.MAX_SAFE_INTEGER,
         singleUse: true,
@@ -2141,9 +2154,11 @@ export class RuntimeToolExecutor implements ToolExecutor {
     const cwd = command !== undefined
       ? workspacePath(command.cwd, this.#options.runtime.workspace)
       : undefined;
-    const resources = [...(action.reads ?? []), ...(action.writes ?? [])].map((path) =>
-      workspacePath(path, this.#options.runtime.workspace),
-    );
+    const resources = resourceOverride === undefined
+      ? [...(action.reads ?? []), ...(action.writes ?? [])].map((path) =>
+          workspacePath(path, this.#options.runtime.workspace),
+        )
+      : [...resourceOverride];
     if (command !== undefined) resources.push(environmentBinding(raw.env));
     return await runtime.issueCapability({
       sessionId: this.#options.sessionId ?? "session-unknown",
@@ -2161,11 +2176,14 @@ export class RuntimeToolExecutor implements ToolExecutor {
     });
   }
 
-  #processParams(action: ProposedAction, capabilityId: string): Record<string, unknown> {
+  #processParams(
+    action: ProposedAction,
+    capabilityId: string,
+  ): Record<string, unknown> & RuntimeCapabilityBinding {
     const raw = args(action);
     const workspace = this.#options.runtime.workspace;
     const command = action.command;
-    const base: Record<string, unknown> = {
+    const base: Record<string, unknown> & RuntimeCapabilityBinding = {
       program: command?.program ?? str(action, "program") ?? "",
       args: command?.args ?? [],
       cwd: workspacePath(command?.cwd ?? ".", workspace),
