@@ -3747,12 +3747,18 @@ export class InteractiveUi {
     }
     const overlayLines =
       this.#overlay !== undefined
-        ? renderOverlay(
-            this.#overlay.kind,
-            this.#overlay.body,
-            blockContext(capabilities, width),
-            { capturing: this.#skillBrowser !== undefined },
-          )
+        ? this.#skillBrowser === undefined
+          ? renderOverlay(
+              this.#overlay.kind,
+              this.#overlay.body,
+              blockContext(capabilities, width),
+            )
+          : renderOverlay(
+              this.#overlay.kind,
+              this.#overlay.body,
+              blockContext(capabilities, width),
+              { capturing: true },
+            )
         : undefined;
 
     const targetWidth = this.#plan.showSidebar ? this.#plan.mainWidth : width;

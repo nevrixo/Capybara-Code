@@ -2705,6 +2705,17 @@ describe("overlays and the diff viewer (§6.17, §6.18)", () => {
     expect(text).toContain("esc to close");
   });
 
+  test("only the interactive Skills catalog advertises type-to-filter capture", () => {
+    const skills = renderOverlay("skills", [], context(), { capturing: true })
+      .map(lineText).join("\n");
+    const model = renderOverlay("model_picker", [], context())
+      .map(lineText).join("\n");
+
+    expect(skills).toContain("type to filter");
+    expect(model).toContain("esc to close");
+    expect(model).not.toContain("type to filter");
+  });
+
   test("a selectable list marks the selection without colour (AC-45)", () => {
     const lines = renderSelectableList(
       [{ label: "gpt-5.6", detail: "default" }, { label: "gpt-5.6-terra" }],
