@@ -259,7 +259,7 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
   {
     id: "fs.list",
     title: "List",
-    description: "List an existing directory. For a new tree, list its nearest existing parent; a missing target returns NOT_FOUND and its files can be created directly with fs.write.",
+    description: "List dir; if absent, list parent.",
     source: "native",
     defaultRisk: "R0",
     maxRisk: "R0",

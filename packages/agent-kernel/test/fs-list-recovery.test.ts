@@ -8,9 +8,8 @@ describe("missing directory recovery", () => {
   test("fs.list advertises the creation-safe parent-directory workflow", () => {
     const list = NATIVE_TOOLS.find((tool) => tool.id === "fs.list");
 
-    expect(list?.description).toContain("nearest existing parent");
-    expect(list?.description).toContain("NOT_FOUND");
-    expect(list?.description).toContain("fs.write");
+    expect(list?.description).toContain("if absent");
+    expect(list?.description).toContain("list parent");
   });
 
   test("a missing listing is diagnosed as absent rather than empty", () => {
