@@ -44,6 +44,7 @@ import type { ToolBridges } from "../tools.ts";
 import { EXIT, type ExitCode } from "../exit.ts";
 import { InputReader } from "../input-reader.ts";
 import { inertKeyStream } from "../keys.ts";
+import type { SkillDiscoverySnapshot } from "../skill-discovery.ts";
 import { configuredMcpSidebarServices } from "../mcp-host.ts";
 import { WorkspacePathMentionIndex } from "../path-mentions.ts";
 import { buildResumeCandidates } from "../resume-picker.ts";
@@ -2136,6 +2137,27 @@ async function handleOverlay(
     case "skills": {
       const raw = argument?.trim() ?? "";
       const [action, ...rest] = raw.split(/\s+/).filter((part) => part.length > 0);
+      const openBrowser = (snapshot: SkillDiscoverySnapshot, notice?: string): void => {
+        const fallback = renderSkillSnapshotList(snapshot);
+        ui.openSkillBrowser(
+          snapshot.accepted.map((definition) => ({
+            name: definition.manifest.name,
+            description: definition.manifest.description,
+            scope: definition.scope,
+            origin: definition.origin,
+            path: definition.path,
+            ...(definition.manifest.version === undefined
+              ? {}
+              : { version: definition.manifest.version }),
+          })),
+          {
+            ...(notice === undefined ? {} : { notice }),
+            fallbackBody: notice === undefined ? fallback : [notice, "", ...fallback],
+            detail: (entry) =>
+              renderSkillSnapshotDetail(snapshot, session.skills, entry.name),
+          },
+        );
+      };
       if (action === "reload") {
         const snapshot = await boot.skillDiscovery.reload(boot.skillDiscoveryInput);
         if (snapshot.applied) {
@@ -2149,13 +2171,12 @@ async function handleOverlay(
             invalidated: snapshot.invalidated,
           });
         }
-        ui.openOverlay("skills", [
+        openBrowser(
+          snapshot,
           snapshot.applied
             ? `Reloaded Skills at revision ${snapshot.revision}.`
             : `Skill reload was incomplete; retained revision ${snapshot.revision}.`,
-          "",
-          ...renderSkillSnapshotList(snapshot),
-        ]);
+        );
         return "continue";
       }
       const snapshot = boot.skillDiscovery.lastSnapshot();
@@ -2181,7 +2202,7 @@ async function handleOverlay(
         ui.openOverlay("skills", renderSkillSnapshotDetail(snapshot, session.skills, action));
         return "continue";
       }
-      ui.openOverlay("skills", renderSkillSnapshotList(snapshot));
+      openBrowser(snapshot);
       return "continue";
     }
 

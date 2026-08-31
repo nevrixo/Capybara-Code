@@ -185,9 +185,11 @@ export function renderOverlay(
   kind: OverlayKind,
   body: readonly StyledLine[],
   context: BlockContext,
+  options: { readonly capturing?: boolean } = {},
 ): StyledLine[] {
   const title = OVERLAY_TITLES[kind] ?? kind;
-  const capHint = isCapturingOverlay(kind) ? "esc to close" : "esc to close · typing stays in editor";
+  const capturing = options.capturing ?? isCapturingOverlay(kind);
+  const capHint = capturing ? "type to filter · esc to close" : "esc to close · typing stays in editor";
   const unicode = context.capabilities.unicode;
 
   let maxContentWidth = stringWidth(`${title}  ${capHint}`);

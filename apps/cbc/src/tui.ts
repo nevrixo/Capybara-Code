@@ -53,6 +53,8 @@ import {
   renderPlanApprovalPicker,
   renderInputPrompt,
   renderQuestionnaire,
+  renderSkillBrowserDetail,
+  renderSkillBrowserList,
   renderUserAsk,
   renderCompletionPopup,
   renderComposer,
@@ -93,6 +95,7 @@ import {
   type SelectionState,
   type Segment,
   type SidebarService,
+  type SkillBrowserEntry,
   type StyledLine,
   type SubagentDetail,
   type TerminalCapabilities,
@@ -254,6 +257,33 @@ interface SettingsMenuState {
   editing: boolean;
   valueSelected: number;
   onChange: SettingsMenuChangeHandler;
+}
+
+export interface SkillBrowserOpenOptions {
+  readonly notice?: string;
+  readonly fallbackBody?: readonly StyledLine[] | readonly string[];
+  /** Builds one detail document on demand; the catalog never loads every detail. */
+  readonly detail?: (entry: SkillBrowserEntry) => readonly string[];
+}
+
+interface SkillBrowserState {
+  readonly entries: readonly SkillBrowserEntry[];
+  readonly notice?: string;
+  readonly detailFor?: (entry: SkillBrowserEntry) => readonly string[];
+  query: string;
+  matches: readonly SkillBrowserEntry[];
+  selected: number;
+  top: number;
+  pageRows: number;
+  mode: "list" | "detail";
+  activeEntry: SkillBrowserEntry | undefined;
+  detailLines: readonly string[] | undefined;
+  detailOffset: number;
+  detailRows: number;
+}
+
+function compareOverlayText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 /** Provider phases that may arrive as low-latency assistant deltas. */
@@ -801,6 +831,8 @@ export class InteractiveUi {
    * three-line notice queue silently destroyed everything past line three.
    */
   #overlay: { kind: OverlayKind; body: readonly StyledLine[]; offset: number } | undefined;
+  /** Search/selection state for the virtualized `/skills` catalog. */
+  #skillBrowser: SkillBrowserState | undefined;
   /**
    * The pending approval, owned by the frame. While it is set, the single key
    * stream routes to {@link handleApprovalKey}; no second stdin reader is ever
@@ -858,7 +890,8 @@ export class InteractiveUi {
 
   /** Whether the open overlay owns printable/editor keys instead of the composer. */
   get overlayCapturesInput(): boolean {
-    return this.#settingsMenu !== undefined ||
+    return this.#skillBrowser !== undefined ||
+      this.#settingsMenu !== undefined ||
       (this.#overlay !== undefined && isCapturingOverlay(this.#overlay.kind));
   }
 
@@ -894,6 +927,7 @@ export class InteractiveUi {
    * append-only mode prints it inline, which is the honest equivalent (§19.3).
    */
   openOverlay(kind: OverlayKind, body: readonly StyledLine[] | readonly string[]): void {
+    this.#skillBrowser = undefined;
     this.#settingsMenu = undefined;
     this.#invalidateTimelineScrollRange();
     const lines = body.map((entry) =>
@@ -912,6 +946,243 @@ export class InteractiveUi {
   }
 
   /**
+   * Open the large-catalog `/skills` browser.
+   *
+   * Full-screen mode keeps only one viewport of rows in the overlay and builds a
+   * detail document only after Enter. Append-only mode retains the complete,
+   * auditable text list because it has terminal scrollback instead of a viewport.
+   */
+  openSkillBrowser(
+    entries: readonly SkillBrowserEntry[],
+    options: SkillBrowserOpenOptions = {},
+  ): void {
+    if (!this.#fullScreen) {
+      const fallback = options.fallbackBody ?? [
+        `Skills ${entries.length} available`,
+        "",
+        ...entries.map((entry) =>
+          `  $${entry.name}  [${entry.scope}/${entry.origin}]  ${entry.description}`
+        ),
+      ];
+      this.openOverlay("skills", fallback);
+      return;
+    }
+
+    const scopeRank = { project: 0, user: 1, builtin: 2 } as const;
+    const sorted = [...entries].sort((left, right) =>
+      scopeRank[left.scope] - scopeRank[right.scope] ||
+      compareOverlayText(left.name, right.name) ||
+      compareOverlayText(left.path, right.path)
+    );
+    this.#settingsMenu = undefined;
+    this.#invalidateTimelineScrollRange();
+    this.#skillBrowser = {
+      entries: sorted,
+      ...(options.notice === undefined ? {} : { notice: options.notice }),
+      ...(options.detail === undefined ? {} : { detailFor: options.detail }),
+      query: "",
+      matches: sorted,
+      selected: 0,
+      top: 0,
+      pageRows: 1,
+      mode: "list",
+      activeEntry: undefined,
+      detailLines: undefined,
+      detailOffset: 0,
+      detailRows: 0,
+    };
+    this.#refreshSkillBrowserOverlay();
+  }
+
+  #refreshSkillBrowserOverlay(
+    dimensions: { readonly columns: number; readonly rows: number } = this.#terminalSize(),
+    schedule = true,
+  ): void {
+    const browser = this.#skillBrowser;
+    if (browser === undefined) return;
+    const context = blockContext({
+      ...this.capabilities,
+      columns: dimensions.columns,
+      rows: dimensions.rows,
+    }, dimensions.columns);
+
+    if (browser.mode === "detail" && browser.activeEntry !== undefined) {
+      const rendered = renderSkillBrowserDetail(
+        browser.activeEntry,
+        browser.detailLines ?? this.#defaultSkillDetail(browser.activeEntry),
+        {
+          offset: browser.detailOffset,
+          pageRows: Math.max(1, dimensions.rows - 10),
+        },
+        context,
+      );
+      browser.detailOffset = rendered.offset;
+      browser.detailRows = rendered.totalRows;
+      browser.pageRows = rendered.pageRows;
+      this.#overlay = { kind: "skills", body: rendered.lines, offset: 0 };
+    } else {
+      browser.mode = "list";
+      browser.activeEntry = undefined;
+      browser.detailLines = undefined;
+      const rendered = renderSkillBrowserList(browser.entries, {
+        query: browser.query,
+        selected: browser.selected,
+        top: browser.top,
+        pageRows: Math.max(1, dimensions.rows - 12 - (browser.notice === undefined ? 0 : 1)),
+        ...(browser.notice === undefined ? {} : { notice: browser.notice }),
+      }, context);
+      browser.matches = rendered.matches;
+      browser.selected = rendered.selected;
+      browser.top = rendered.top;
+      browser.pageRows = rendered.pageRows;
+      this.#overlay = { kind: "skills", body: rendered.lines, offset: 0 };
+    }
+    if (schedule) this.#scheduleFrame();
+  }
+
+  #defaultSkillDetail(entry: SkillBrowserEntry): readonly string[] {
+    return [
+      `$${entry.name}${entry.version === undefined ? "" : ` v${entry.version}`}`,
+      entry.description,
+      "",
+      `Source        ${entry.scope}/${entry.origin}`,
+      `Path          ${entry.path}`,
+    ];
+  }
+
+  #moveSkillBrowser(delta: number): void {
+    const browser = this.#skillBrowser;
+    if (browser === undefined || delta === 0) return;
+    if (browser.mode === "detail") {
+      const maxOffset = Math.max(0, browser.detailRows - browser.pageRows);
+      browser.detailOffset = Math.min(maxOffset, Math.max(0, browser.detailOffset + Math.trunc(delta)));
+    } else if (browser.matches.length > 0) {
+      browser.selected = Math.min(
+        browser.matches.length - 1,
+        Math.max(0, browser.selected + Math.trunc(delta)),
+      );
+    }
+    this.#refreshSkillBrowserOverlay();
+  }
+
+  #setSkillBrowserQuery(query: string): void {
+    const browser = this.#skillBrowser;
+    if (browser === undefined) return;
+    browser.query = graphemes(query).slice(0, 160).join("");
+    browser.selected = 0;
+    browser.top = 0;
+    this.#refreshSkillBrowserOverlay();
+  }
+
+  #openSelectedSkillDetail(): void {
+    const browser = this.#skillBrowser;
+    if (browser === undefined || browser.mode !== "list") return;
+    const entry = browser.matches[browser.selected];
+    if (entry === undefined) return;
+    browser.mode = "detail";
+    browser.activeEntry = entry;
+    browser.detailOffset = 0;
+    try {
+      browser.detailLines = browser.detailFor?.(entry) ?? this.#defaultSkillDetail(entry);
+    } catch (error) {
+      browser.detailLines = [
+        `$${entry.name}`,
+        "",
+        `Skill details are unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      ];
+    }
+    this.#refreshSkillBrowserOverlay();
+  }
+
+  #returnToSkillList(): void {
+    const browser = this.#skillBrowser;
+    if (browser === undefined) return;
+    browser.mode = "list";
+    browser.activeEntry = undefined;
+    browser.detailLines = undefined;
+    browser.detailOffset = 0;
+    browser.detailRows = 0;
+    this.#refreshSkillBrowserOverlay();
+  }
+
+  #handleSkillBrowserKey(event: InputEvent): boolean {
+    const browser = this.#skillBrowser;
+    if (browser === undefined || isMouseEvent(event)) return false;
+
+    switch (event.key) {
+      case "up":
+      case "ctrl+p":
+        this.#moveSkillBrowser(-1);
+        return true;
+      case "down":
+      case "ctrl+n":
+      case "tab":
+        this.#moveSkillBrowser(1);
+        return true;
+      case "shift+tab":
+        this.#moveSkillBrowser(-1);
+        return true;
+      case "pageup":
+        this.#moveSkillBrowser(-browser.pageRows);
+        return true;
+      case "pagedown":
+        this.#moveSkillBrowser(browser.pageRows);
+        return true;
+      case "home":
+        if (browser.mode === "detail") browser.detailOffset = 0;
+        else browser.selected = 0;
+        this.#refreshSkillBrowserOverlay();
+        return true;
+      case "end":
+        if (browser.mode === "detail") {
+          browser.detailOffset = Math.max(0, browser.detailRows - browser.pageRows);
+        } else {
+          browser.selected = Math.max(0, browser.matches.length - 1);
+        }
+        this.#refreshSkillBrowserOverlay();
+        return true;
+      case "enter":
+      case "right":
+        if (browser.mode === "list") this.#openSelectedSkillDetail();
+        return true;
+      case "left":
+        if (browser.mode === "detail") this.#returnToSkillList();
+        return true;
+      case "escape":
+        if (browser.mode === "detail") this.#returnToSkillList();
+        else this.closeOverlay();
+        return true;
+      case "backspace":
+        if (browser.mode === "detail") {
+          this.#returnToSkillList();
+        } else {
+          const clusters = graphemes(browser.query);
+          clusters.pop();
+          this.#setSkillBrowserQuery(clusters.join(""));
+        }
+        return true;
+      case "ctrl+u":
+        if (browser.mode === "list") this.#setSkillBrowserQuery("");
+        return true;
+      case "ctrl+w":
+        if (browser.mode === "list") {
+          this.#setSkillBrowserQuery(browser.query.replace(/\s*\S+\s*$/u, ""));
+        }
+        return true;
+      case "text":
+        if (browser.mode === "list") {
+          const inserted = (event.text ?? "")
+            .replace(/\r?\n/gu, " ")
+            .replace(/[\u0000-\u001F\u007F-\u009F]/gu, "");
+          if (inserted.length > 0) this.#setSkillBrowserQuery(browser.query + inserted);
+        }
+        return true;
+      default:
+        return true;
+    }
+  }
+
+  /**
    * Open the persistent settings picker. Passing a setting key skips the overview
    * and opens that setting's value picker immediately.
    */
@@ -927,6 +1198,7 @@ export class InteractiveUi {
     if (selected < 0) return false;
     const selectedItem = items[selected];
     if (selectedItem === undefined) return false;
+    this.#skillBrowser = undefined;
     this.#settingsMenu = {
       items: items.map((item) => ({ ...item, values: [...item.values] })),
       selected,
@@ -940,6 +1212,7 @@ export class InteractiveUi {
 
   /** Handle keys for the persistent settings picker. */
   handleOverlayKey(event: InputEvent): boolean {
+    if (this.#skillBrowser !== undefined) return this.#handleSkillBrowserKey(event);
     const menu = this.#settingsMenu;
     if (menu === undefined || isMouseEvent(event)) return false;
 
@@ -1083,6 +1356,10 @@ export class InteractiveUi {
 
   scrollOverlay(delta: number): void {
     if (!this.#fullScreen || this.#overlay === undefined || delta === 0) return;
+    if (this.#skillBrowser !== undefined) {
+      this.#moveSkillBrowser(delta);
+      return;
+    }
     const rows = Math.max(1, this.#openTui?.rows || this.#options.host.io.rows || 24);
     const bodyRows = Math.max(0, rows - 7);
     const contentRows = Math.max(0, this.#overlay.body.length - 2);
@@ -1097,6 +1374,7 @@ export class InteractiveUi {
   closeOverlay(): OverlayKind | undefined {
     if (this.#overlay === undefined) return undefined;
     const kind = this.#overlay.kind;
+    this.#skillBrowser = undefined;
     this.#settingsMenu = undefined;
     this.#overlay = undefined;
     this.#invalidateTimelineScrollRange();
@@ -3464,12 +3742,16 @@ export class InteractiveUi {
     const planApproval = this.#planApproval;
     const userAsk = this.#userAsk;
     const questionnaire = this.#questionnaire;
+    if (this.#skillBrowser !== undefined) {
+      this.#refreshSkillBrowserOverlay({ columns: width, rows }, false);
+    }
     const overlayLines =
       this.#overlay !== undefined
         ? renderOverlay(
             this.#overlay.kind,
             this.#overlay.body,
             blockContext(capabilities, width),
+            { capturing: this.#skillBrowser !== undefined },
           )
         : undefined;
 

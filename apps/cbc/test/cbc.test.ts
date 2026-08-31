@@ -2518,6 +2518,58 @@ describe("interactive UI (§6.2, §6.21)", () => {
     instance.restore();
   });
 
+  test("the Skills browser virtualizes, filters, and loads details only on demand", () => {
+    const host = createFakeHost({ isTty: true, columns: 120, env: { NO_COLOR: "1" } });
+    const decision = decideRenderMode({ host, rendererAvailable: true });
+    const instance = new InteractiveUi({
+      host,
+      decision,
+      writer: new LineWriter(host, decision),
+      workspacePath: "/work/project",
+      version: "0.1.0-test",
+    });
+    const entries = Array.from({ length: 90 }, (_, index) => ({
+      name: `skill-${String(index).padStart(2, "0")}`,
+      description: index === 89 ? "unique release sentinel" : `Skill description ${index}`,
+      scope: index < 5 ? "project" as const : "builtin" as const,
+      origin: index < 5 ? "capybara" : "bundled",
+      path: `/skills/skill-${index}/SKILL.md`,
+    }));
+    let detailCalls = 0;
+
+    instance.flush(emptyViewModel("ses_skill_browser"));
+    instance.openSkillBrowser(entries, {
+      detail: (entry) => {
+        detailCalls += 1;
+        return [`Details for $${entry.name}`, "Trust operator-installed"];
+      },
+    });
+
+    const initial = host.out.at(-1) ?? "";
+    expect(initial).toContain("1–18 of 90 total");
+    expect(initial).toContain("skill-00");
+    expect(initial).not.toContain("skill-89");
+    expect(instance.overlayCapturesInput).toBe(true);
+    expect(detailCalls).toBe(0);
+
+    expect(instance.handleOverlayKey({ key: "text", text: "release sentinel" })).toBe(true);
+    const filtered = host.out.at(-1) ?? "";
+    expect(filtered).toContain("1–1 of 1 matched · 90 total");
+    expect(filtered).toContain("skill-89");
+    expect(detailCalls).toBe(0);
+
+    expect(instance.handleOverlayKey({ key: "enter" })).toBe(true);
+    expect(host.out.at(-1) ?? "").toContain("Details for $skill-89");
+    expect(detailCalls).toBe(1);
+
+    expect(instance.handleOverlayKey({ key: "escape" })).toBe(true);
+    expect(instance.overlayOpen).toBe(true);
+    expect(host.out.at(-1) ?? "").toContain("release sentinel");
+    expect(instance.handleOverlayKey({ key: "escape" })).toBe(true);
+    expect(instance.overlayOpen).toBe(false);
+    instance.restore();
+  });
+
   test("a native Windows TTY paints the colour Unicode home banner without environment hints", () => {
     const host = createFakeHost({
       isTty: true,
