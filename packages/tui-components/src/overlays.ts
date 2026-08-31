@@ -285,7 +285,9 @@ export function renderOverlay(
   const topPaddingLine = viewportText === undefined
     ? emptyPaddingLine
     : (() => {
-        const status = truncateToWidth(viewportText, boxInnerWidth);
+        const status = stringWidth(viewportText) <= boxInnerWidth
+          ? viewportText
+          : truncateToWidth(viewportText, boxInnerWidth);
         const rightPad = Math.max(0, boxInnerWidth - stringWidth(status));
         return fitLine(
           "overlay",

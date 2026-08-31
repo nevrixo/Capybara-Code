@@ -46,6 +46,7 @@ import {
   hasExplicitToolAction,
   stringWidth,
   line,
+  renderContextUsage,
   segment,
   toolActionLabel,
 } from "@cbc/tui-components";
@@ -2515,6 +2516,47 @@ describe("interactive UI (§6.2, §6.21)", () => {
       instance.closeOverlay();
     }
 
+    instance.restore();
+  });
+
+  test("the Context overlay virtualizes large inspections and exposes real paging", () => {
+    const host = createFakeHost({ isTty: true, columns: 120, env: { NO_COLOR: "1" } });
+    const decision = decideRenderMode({ host, rendererAvailable: true });
+    const instance = new InteractiveUi({
+      host,
+      decision,
+      writer: new LineWriter(host, decision),
+      workspacePath: "/work/project",
+      version: "0.1.0-test",
+    });
+    const document = renderContextUsage(undefined, instance.blockContext, {
+      inspection: {
+        skills: Array.from({ length: 90 }, (_, index) => ({
+          name: `context-skill-${String(index).padStart(2, "0")}`,
+          version: "1.0.0",
+          source: "builtin",
+        })),
+      },
+    });
+
+    instance.flush(emptyViewModel("ses_context_overlay"));
+    instance.openOverlay("context", document);
+
+    const initial = host.out.at(-1) ?? "";
+    expect(initial).toContain(`Rows 1-22/${document.length}`);
+    expect(initial).toContain("Context Usage");
+    expect(initial).not.toContain("context-skill-89");
+
+    instance.scrollOverlayPage(1);
+    expect(host.out.at(-1) ?? "").toContain(`Rows 23-44/${document.length}`);
+
+    expect(instance.scrollOverlayTo("end")).toBe(true);
+    const finalPage = host.out.at(-1) ?? "";
+    expect(finalPage).toContain(`Rows ${document.length - 21}-${document.length}/${document.length}`);
+    expect(finalPage).toContain("context-skill-89");
+
+    expect(instance.scrollOverlayTo("start")).toBe(true);
+    expect(host.out.at(-1) ?? "").toContain(`Rows 1-22/${document.length}`);
     instance.restore();
   });
 

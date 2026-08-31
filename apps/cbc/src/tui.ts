@@ -59,6 +59,7 @@ import {
   renderCompletionPopup,
   renderComposer,
   renderOverlay,
+  renderOverlayViewport,
   renderPlain,
   renderRightSidebar,
   renderIntervalMs,
@@ -73,6 +74,7 @@ import {
   segment,
   stringWidth,
   graphemes,
+  overlayViewportBodyRows,
   palette,
   sidebarFromViewModel,
   statusFromViewModel,
@@ -1360,14 +1362,54 @@ export class InteractiveUi {
       this.#moveSkillBrowser(delta);
       return;
     }
-    const rows = Math.max(1, this.#openTui?.rows || this.#options.host.io.rows || 24);
-    const bodyRows = Math.max(0, rows - 7);
-    const contentRows = Math.max(0, this.#overlay.body.length - 2);
-    const maxOffset = Math.max(0, contentRows - bodyRows);
+    const pageRows = overlayViewportBodyRows(this.#overlayTerminalRows());
+    const maxOffset = Math.max(0, this.#overlay.body.length - pageRows);
     const next = Math.min(maxOffset, Math.max(0, this.#overlay.offset + Math.trunc(delta)));
     if (next === this.#overlay.offset) return;
     this.#overlay = { ...this.#overlay, offset: next };
     this.#scheduleFrame();
+  }
+
+  /** Move an open document by one real viewport instead of the legacy three rows. */
+  scrollOverlayPage(direction: -1 | 1): void {
+    if (!this.#fullScreen || this.#overlay === undefined) return;
+    if (this.#skillBrowser !== undefined) {
+      this.#moveSkillBrowser(direction * this.#skillBrowser.pageRows);
+      return;
+    }
+    this.scrollOverlay(direction * overlayViewportBodyRows(this.#overlayTerminalRows()));
+  }
+
+  /** Jump a scrollable document to its first or final complete page. */
+  scrollOverlayTo(edge: "start" | "end"): boolean {
+    if (!this.#fullScreen || this.#overlay === undefined) return false;
+    if (this.#skillBrowser !== undefined) {
+      const browser = this.#skillBrowser;
+      if (browser.mode === "detail") {
+        browser.detailOffset = edge === "start"
+          ? 0
+          : Math.max(0, browser.detailRows - browser.pageRows);
+      } else {
+        browser.selected = edge === "start" ? 0 : Math.max(0, browser.matches.length - 1);
+      }
+      this.#refreshSkillBrowserOverlay();
+      return true;
+    }
+    const maxOffset = Math.max(
+      0,
+      this.#overlay.body.length - overlayViewportBodyRows(this.#overlayTerminalRows()),
+    );
+    if (maxOffset === 0) return false;
+    const next = edge === "start" ? 0 : maxOffset;
+    if (next !== this.#overlay.offset) {
+      this.#overlay = { ...this.#overlay, offset: next };
+      this.#scheduleFrame();
+    }
+    return true;
+  }
+
+  #overlayTerminalRows(): number {
+    return this.#terminalSize().rows;
   }
 
   /** Close the open overlay, returning its kind for focus restoration. */
@@ -3745,21 +3787,29 @@ export class InteractiveUi {
     if (this.#skillBrowser !== undefined) {
       this.#refreshSkillBrowserOverlay({ columns: width, rows }, false);
     }
-    const overlayLines =
-      this.#overlay !== undefined
-        ? this.#skillBrowser === undefined
-          ? renderOverlay(
-              this.#overlay.kind,
-              this.#overlay.body,
-              blockContext(capabilities, width),
-            )
-          : renderOverlay(
-              this.#overlay.kind,
-              this.#overlay.body,
-              blockContext(capabilities, width),
-              { capturing: true },
-            )
-        : undefined;
+    let overlayLines: readonly StyledLine[] | undefined;
+    if (this.#overlay !== undefined) {
+      const overlayContext = blockContext(capabilities, width);
+      if (this.#skillBrowser !== undefined) {
+        overlayLines = renderOverlay(
+          this.#overlay.kind,
+          this.#overlay.body,
+          overlayContext,
+          { capturing: true },
+        );
+      } else {
+        const viewport = renderOverlayViewport(
+          this.#overlay.kind,
+          this.#overlay.body,
+          overlayContext,
+          { offset: this.#overlay.offset, frameRows: rows },
+        );
+        if (viewport.offset !== this.#overlay.offset) {
+          this.#overlay = { ...this.#overlay, offset: viewport.offset };
+        }
+        overlayLines = viewport.lines;
+      }
+    }
 
     const targetWidth = this.#plan.showSidebar ? this.#plan.mainWidth : width;
     const approvalCardLines =
@@ -3848,7 +3898,8 @@ export class InteractiveUi {
           ...(overlayLines !== undefined
             ? {
                 overlay: overlayLines,
-                overlayScrollOffset: this.#overlay?.offset ?? 0,
+                // The semantic document was already windowed before framing.
+                overlayScrollOffset: 0,
               }
             : {}),
           ...(activeCardLines !== undefined ? { approvalCard: activeCardLines } : {}),

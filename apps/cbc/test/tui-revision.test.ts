@@ -204,6 +204,34 @@ describe("revision input semantics", () => {
     reader.stop();
   });
 
+  test("routes document overlays by real pages and supports first/last jumps", async () => {
+    const keys = new TestKeyStream();
+    const overlay = { open: true, closes: 0 };
+    const pages: number[] = [];
+    const edges: string[] = [];
+    const ui = testUi(overlay);
+    (ui as unknown as { scrollOverlayPage: (direction: -1 | 1) => void }).scrollOverlayPage =
+      (direction) => { pages.push(direction); };
+    (ui as unknown as { scrollOverlayTo: (edge: "start" | "end") => boolean }).scrollOverlayTo =
+      (edge) => { edges.push(edge); return true; };
+    const reader = new InputReader({ keys, ui });
+    reader.start();
+    const prompt = reader.readPrompt();
+
+    keys.emit({ key: "pagedown" });
+    keys.emit({ key: "pageup" });
+    keys.emit({ key: "end" });
+    keys.emit({ key: "home" });
+    expect(pages).toEqual([1, -1]);
+    expect(edges).toEqual(["end", "start"]);
+
+    keys.emit({ key: "q" });
+    keys.emit({ key: "ctrl+d" });
+    keys.emit({ key: "ctrl+d" });
+    expect(await prompt).toBeUndefined();
+    reader.stop();
+  });
+
   test("first Escape interrupts only the exact awaited task", async () => {
     const keys = new TestKeyStream();
     const reader = new InputReader({ keys, ui: testUi() });

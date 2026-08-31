@@ -235,16 +235,23 @@ export class InputReader {
       if (closed === "plan") onPlanOverlayClosed?.();
       return true;
     }
-    if (
-      event.key === "pageup" ||
-      event.key === "pagedown" ||
-      event.key === "up" ||
-      event.key === "down"
-    ) {
-      this.#ui.scrollOverlay(
-        event.key === "pageup" || event.key === "up" ? -3 : 3,
-      );
+    if (event.key === "pageup" || event.key === "pagedown") {
+      const page = (this.#ui as unknown as {
+        scrollOverlayPage?: (direction: -1 | 1) => void;
+      }).scrollOverlayPage;
+      if (page !== undefined) page.call(this.#ui, event.key === "pageup" ? -1 : 1);
+      else this.#ui.scrollOverlay(event.key === "pageup" ? -3 : 3);
       return true;
+    }
+    if (event.key === "up" || event.key === "down") {
+      this.#ui.scrollOverlay(event.key === "up" ? -1 : 1);
+      return true;
+    }
+    if (event.key === "home" || event.key === "end") {
+      const handled = (this.#ui as unknown as {
+        scrollOverlayTo?: (edge: "start" | "end") => boolean;
+      }).scrollOverlayTo?.(event.key === "home" ? "start" : "end");
+      if (handled === true) return true;
     }
     // Read-only document overlays are a lens over the session, not a second input
     // reader. Printable keys and composer actions continue below this router.

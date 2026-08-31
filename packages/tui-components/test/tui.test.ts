@@ -2734,6 +2734,7 @@ describe("overlays and the diff viewer (§6.17, §6.18)", () => {
     expect(rendered.offset).toBe(80);
     expect(rendered.maxOffset).toBe(184);
     expect(text).toContain("Rows 81–96/200");
+    expect(text).toContain("PgUp/PgDn page · Home/End");
     expect(text).toContain("context row 80");
     expect(text).toContain("context row 95");
     expect(text).not.toContain("context row 0");
