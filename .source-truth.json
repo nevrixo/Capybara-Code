@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-31T13:54:42.458Z",
+  "generatedAt": "2026-08-31T16:11:35.936Z",
   "git": {
-    "commit": "fc5251921c3d17801df723d4e8c76b8ed722177e",
+    "commit": "6903078ee9d10c73e7c6917106668f43f401b95b",
     "dirty": true,
-    "dirtyHash": "15207b2c81654670266c6945547fd9af05c1ffad6a6cb539f2ca30d9bd5897f3"
+    "dirtyHash": "3d3476db89a02423c6ee4c848f1ec9936b8ecce02237e89139a010b792e0c791"
   },
   "roots": [
     "apps",
@@ -55,7 +55,7 @@
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
     "typescript": "5.9.3"
   },
-  "fileCount": 748,
+  "fileCount": 749,
   "historicalArtifacts": [],
   "files": [
     {
@@ -230,8 +230,8 @@
     },
     {
       "path": "apps/cbc/src/agent.ts",
-      "bytes": 235564,
-      "sha256": "5e1c2625a50cd3b88c078cb6400af247f6cfc6006a9b668ca83b286cbf488f83"
+      "bytes": 242327,
+      "sha256": "aa5364d203e9fff6a76e6a0e6269aa78a39594d2623278156ab0ad552b4658bf"
     },
     {
       "path": "apps/cbc/src/approvals.ts",
@@ -639,6 +639,11 @@
       "sha256": "cf108054ea6add62634d1829120f0d7f0f15c8fde88ca921aefd7b18fe4240ff"
     },
     {
+      "path": "apps/cbc/test/context-pressure-regression.test.ts",
+      "bytes": 6799,
+      "sha256": "17fc878ad297a2010bbb05f010efc0c101624b583e6eaac3647a068d169f045b"
+    },
+    {
       "path": "apps/cbc/test/credential-security.test.ts",
       "bytes": 11137,
       "sha256": "0db7f4867faa6ceee2648f271670dfcbcf4d58bcdd108bc1487356f928601e5d"
@@ -835,8 +840,8 @@
     },
     {
       "path": "apps/cbc/test/route-context-band.test.ts",
-      "bytes": 3354,
-      "sha256": "f836ee8f89448358a9c6f5565a1a525f615506cf94ab339ca299f92cde900b05"
+      "bytes": 4184,
+      "sha256": "ebcb82a59960435ca696e870faac69bb1a0d363d6eec8ee43b4139d204ff260e"
     },
     {
       "path": "apps/cbc/test/runtime-read.test.ts",
@@ -1820,8 +1825,8 @@
     },
     {
       "path": "packages/agent-kernel/src/kernel.ts",
-      "bytes": 273982,
-      "sha256": "7f015c8745445439401c25d97c247723c8208315752e7a33f3091e3c8d5a539f"
+      "bytes": 274252,
+      "sha256": "46ec0c47b7011fccdd7192a4e153856f56ae6ecdc739af6ae3620eae3aa83071"
     },
     {
       "path": "packages/agent-kernel/src/observation.ts",
@@ -1975,8 +1980,8 @@
     },
     {
       "path": "packages/config-schema/src/key-status.ts",
-      "bytes": 18909,
-      "sha256": "477a67c262ccfb0c8dee7571bb0f5433ef0ef71c6520fe3c47124b35fca96ad9"
+      "bytes": 18876,
+      "sha256": "3293432f01a6e13949b02e0fd87ede5b260105e263a1add09b6bd5d5c3d3f153"
     },
     {
       "path": "packages/config-schema/src/performance-rollbacks.ts",
@@ -1985,8 +1990,8 @@
     },
     {
       "path": "packages/config-schema/src/schema.ts",
-      "bytes": 76753,
-      "sha256": "83ff83aaeef1a32129ae5bb5136ff07fbb4c59282dbb3360fac1447fecb1c8b6"
+      "bytes": 77760,
+      "sha256": "97b269dcbd35c1781f578f58552df9abdff70d071cf45082e50ed674a8982d31"
     },
     {
       "path": "packages/config-schema/src/toml.ts",
@@ -3070,13 +3075,13 @@
     },
     {
       "path": "packages/session-domain/src/compaction.ts",
-      "bytes": 24742,
-      "sha256": "8dfe09eb86a67d539fda5db50096215dc872b66a117d336bf421d85711db93c1"
+      "bytes": 26672,
+      "sha256": "884a884de7e145b6b513d10280691d3dc6adafaec793b4b0a03c2c6ef5745a2c"
     },
     {
       "path": "packages/session-domain/src/context-pressure.ts",
-      "bytes": 9781,
-      "sha256": "5767bb274c74fcae64d0e39a926412311344860a040be265ba7bd5448850810f"
+      "bytes": 10351,
+      "sha256": "84fab2be7bb5b11e2230d2dfaaf0edee360d323549135fbc90e244d671c1896c"
     },
     {
       "path": "packages/session-domain/src/context-usage.ts",
@@ -3140,8 +3145,8 @@
     },
     {
       "path": "packages/session-domain/test/context-pressure.test.ts",
-      "bytes": 2759,
-      "sha256": "456fccae8bf66e0f4f04222f67304d7b3038255a54179c2ba06c258b6a2f655d"
+      "bytes": 5144,
+      "sha256": "8ae2b94b1d667327b191502e4aae2895642682d7f0240dd6b51e942b759f2f07"
     },
     {
       "path": "packages/session-domain/test/deep-plan.test.ts",
@@ -3799,5 +3804,5 @@
       "sha256": "8391ee841757695b95ddefc5dfd0ac274ecc32a76d733f2193b0a02a605a83df"
     }
   ],
-  "digest": "1770af9581e8e7ce888595a6d4cdcd3ede195efc2f332e26a367ff668c893ea4"
+  "digest": "ae9be0708811a63c191ca349e24a427ec09d3f086ece9e49633340b9ee084ab2"
 }

@@ -65,7 +65,7 @@ const KEY_STATUS: ReadonlyArray<readonly [string, ConfigKeyInfo]> = [
   ["model.router.targetLatencyMs", { status: "wired", consumer: "provider-openai latency routing objective" }],
   ["model.router.recordDecisions", { status: "wired", consumer: "AgentSession kernel-event filtering" }],
   ["model.router.phasePolicy", { status: "wired", consumer: "agent-kernel phase-aware sampling policy" }],
-  ["model.context.defaultBand", { status: "experimental", note: "routing currently derives the band from measured prompt tokens" }],
+  ["model.context.defaultBand", { status: "wired", consumer: "agent.ts (pressure input budget)" }],
   ["model.context.reserveOutputTokens", { status: "wired", consumer: "agent.ts (compaction reserve)" }],
   ["model.context.premiumBandPolicy", { status: "wired", consumer: "agent.ts (utility gating)" }],
   ["model.context.orientationMode", { status: "wired", consumer: "bootstrap.ts / AgentSession progressive repository warmup" }],

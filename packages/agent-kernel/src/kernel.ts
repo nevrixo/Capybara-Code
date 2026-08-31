@@ -628,8 +628,16 @@ export interface KernelOptions {
   readonly promptInputs: () => PromptInputs;
   /** Give the host a chance to compact before a new provider sample. */
   readonly beforeSample?: () => void | Promise<void>;
-  /** Evaluate the exact candidate request and compact at most once before sending it. */
-  readonly contextPressureGuard?: (prompt: CompiledModelRequest) => ContextPressureGuardResult | Promise<ContextPressureGuardResult>;
+  /**
+   * Evaluate the exact candidate request and compact at most once before sending it.
+   *
+   * `attempt.recompiled` distinguishes the two calls: the first may compact, the
+   * second is a verification boundary and must not mutate session state.
+   */
+  readonly contextPressureGuard?: (
+    prompt: CompiledModelRequest,
+    attempt: { readonly recompiled: boolean },
+  ) => ContextPressureGuardResult | Promise<ContextPressureGuardResult>;
   /** One-shot local recovery hook for a provider context-length response. */
   readonly onProviderContextError?: () => void | Promise<void>;
   /** §10.4 features for adaptive effort selection. */
@@ -2878,7 +2886,7 @@ export class AgentKernel {
 
     const guard = this.#options.contextPressureGuard;
     if (guard !== undefined) {
-      const firstDecision = await guard(assembled);
+      const firstDecision = await guard(assembled, { recompiled: false });
       emit("context.pressure_evaluated", {
         state: firstDecision.decision?.state ?? "stable",
         projectedTokens: firstDecision.decision?.projectedTokens ?? assembled.inputTokens,
@@ -2899,7 +2907,7 @@ export class AgentKernel {
         // The host callback performs the local compaction. Rebuild the exact
         // candidate once; a second pressure result is a hard safety boundary.
         assembled = await this.#compilePrompt(userInput, emit);
-        const secondDecision = await guard(assembled);
+        const secondDecision = await guard(assembled, { recompiled: true });
         emit("context.pressure_evaluated", {
           state: secondDecision.decision?.state ?? "stable",
           projectedTokens: secondDecision.decision?.projectedTokens ?? assembled.inputTokens,

@@ -1829,6 +1829,28 @@ function validateSemantics(
       message: "soft context budget must be at least 4000 tokens",
     });
   }
+  // `defaultBand` is the enforced pressure budget, so a tiny value silently makes
+  // every turn compact and can put the budget below the prompt's incompressible
+  // floor. It was constrained only to `minimum: 1`.
+  if (config.model.context.defaultBand < 8_000) {
+    issues.push({
+      severity: "error",
+      path: "model.context.defaultBand",
+      source: sourceOf("model.context.defaultBand"),
+      message: "context band must be at least 8000 tokens",
+    });
+  }
+  // A reserve at or above the soft budget leaves no input capacity at all; the
+  // Math.max(1, ...) guards downstream turn that into a permanent 1-token budget
+  // with no diagnostic naming the cause.
+  if (config.model.context.reserveOutputTokens >= config.model.softContextTokens) {
+    issues.push({
+      severity: "error",
+      path: "model.context.reserveOutputTokens",
+      source: sourceOf("model.context.reserveOutputTokens"),
+      message: "output reserve must be smaller than the soft context budget",
+    });
+  }
   if (config.model.cache.ttlMinutes !== 30) {
     issues.push({
       severity: "warning",

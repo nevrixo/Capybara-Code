@@ -170,12 +170,22 @@ export function evaluateContextPressure(input: ContextPressureInput): ContextPre
   const target = Math.max(1_024, Math.floor(Math.min(
     budget - targetFree,
     budget * targetRatioFor(input),
+    // A target at or above the emergency line is unsatisfiable: hitting it
+    // exactly re-triggers `currentRatio >= emergencyRatio` on the next
+    // evaluation. At the shipped default both ratios are 0.9, so a perfectly
+    // executed compaction re-entered emergency immediately.
+    budget * emergencyRatio - 1,
   )));
   return {
     state,
     projectedTokens,
     requiredFreeTokens,
-    ...(state === "compact" || state === "emergency" ? { targetTokens: Math.min(current, target) } : {}),
+    ...(state === "compact" || state === "emergency"
+      // Clamped to what is actually there: a target above `current` would ask
+      // compaction to grow the prompt. The emergency-line floor is applied when
+      // `target` is computed, so the clamp cannot re-raise it past the line.
+      ? { targetTokens: Math.min(current, target) }
+      : {}),
     reasonCodes: [...new Set(reasons)],
     currentRatio,
     inputBudgetTokens: budget,

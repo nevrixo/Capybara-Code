@@ -146,7 +146,19 @@ export interface CompactionResult {
   readonly state: CompactState;
   readonly trigger: CompactionTrigger;
   readonly tokensBefore: number;
+  /**
+   * Size of the rendered L5 capsule.
+   *
+   * This is NOT the size of the next request. `tokensBefore` measures the whole
+   * projected prompt, so presenting the two as a before/after pair claims a
+   * reduction that compaction cannot deliver on its own: the fixed layers (L0-L4,
+   * L6, tool schemas) are rebuilt every compile and are untouched here. Retained
+   * for journal compatibility; prefer `capsuleTokens` when the capsule is what
+   * you mean.
+   */
   readonly tokensAfter: number;
+  /** Size of the rendered capsule alone. Never a prompt size. */
+  readonly capsuleTokens: number;
   readonly eventsSummarized: number;
   readonly capsule: CompactionCapsule;
   /** §18.9: the journal is untouched. */
@@ -387,6 +399,7 @@ export function compact(
     trigger,
     tokensBefore,
     tokensAfter,
+    capsuleTokens: tokensAfter,
     eventsSummarized: model.timeline.length,
     capsule,
     journalPreserved: true,
@@ -458,7 +471,31 @@ function boundCompactState(
     };
     if (estimateTokens(renderCompactState(candidate)) <= target) return candidate;
   }
-  return state;
+  // Every group is now empty and the target is still missed, so what remains is
+  // pinned state — and `userGoal` is the only unbounded field among it. A long
+  // first message otherwise floored every compaction at the same size forever,
+  // making the capsule incompressible for the life of the session.
+  const goalBudgetChars = Math.max(240, target * 2);
+  const floored: CompactState = {
+    ...state,
+    decisions: [],
+    filesRead: [],
+    testEvidence: [],
+    taskResults: [],
+    unresolved: state.unresolved.slice(-2),
+    userGoal: state.userGoal.length <= goalBudgetChars
+      ? state.userGoal
+      : `${state.userGoal.slice(0, goalBudgetChars)} …[truncated ${state.userGoal.length - goalBudgetChars} chars]`,
+    hierarchy: {
+      decisions: buildGroup("Decisions", [], { retainPerGroup: 0, maxItemChars: 240 }),
+      diffSummary: buildGroup("Diff summary", state.filesChanged.map((file) => `${file.path} (${file.summary})`), { retainPerGroup: 1, maxItemChars: 240 }),
+      unresolved: buildGroup("Unresolved", state.unresolved.slice(-2), { retainPerGroup: 1, maxItemChars: 240 }),
+    },
+  };
+  // Return the floored candidate whether or not it met the target: it is never
+  // larger than the input, and returning the unbounded original discarded the
+  // reduction that was already achieved.
+  return floored;
 }
 
 /**
