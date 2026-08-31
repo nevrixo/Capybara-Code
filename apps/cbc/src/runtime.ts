@@ -699,6 +699,11 @@ export class Runtime {
     return this.#options.workspace;
   }
 
+  /** Runtime-owned root used for managed worktrees and other sidecar state. */
+  get dataDir(): string {
+    return this.#options.dataDir;
+  }
+
   async issueCapability(params: {
     readonly sessionId: string;
     readonly callId: string;

@@ -22,6 +22,7 @@ import type {
   TaskContextCapsule,
 } from "../../../packages/context-engine/src/context-ops.ts";
 import {
+  actionHash,
   mutationBlockReason,
   processBlockReason,
   type PermissionContext,
@@ -847,10 +848,28 @@ export class SubagentBridge {
       roleDefinition(instance.role).canWrite
     ) {
       try {
+        const path = join(this.#options.runtime.dataDir, "worktrees", instance.id);
+        const action: ProposedAction = {
+          callId: "writer-worktree-" + instance.id,
+          toolId: "worktree.create",
+          arguments: { path, commit: "HEAD", requireClean: false },
+          display: "create isolated writer worktree " + instance.id,
+          writes: [path],
+        };
+        const capability = await this.#options.runtime.issueCapability({
+          sessionId: this.#options.sessionId,
+          callId: action.callId,
+          actionHash: actionHash(action),
+          operation: "worktree.create",
+          resources: [path],
+        });
         const created = await this.#options.runtime.createWorktree({
-          path: join(".capybara", "worktrees", instance.id),
+          path,
           commit: "HEAD",
           requireClean: false,
+          capabilityReceipt: capability.id,
+          capabilitySessionId: capability.sessionId,
+          capabilityActionHash: capability.actionHash,
         }) as { worktree?: { path?: string } };
         const root = created.worktree?.path;
         if (typeof root === "string" && root.length > 0) {

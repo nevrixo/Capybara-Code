@@ -154,6 +154,108 @@ describe("recursive AgentGraph bridge", () => {
     expect(JSON.stringify(terminal?.payload)).toContain("worktree isolation preflight failed");
   });
 
+  test("authorizes the isolated worktree before sampling a writer", async () => {
+    const provider = new MockProvider({
+      steps: [
+        {
+          toolCalls: [{
+            callId: "writer-spawn",
+            name: "task.spawn",
+            arguments: {
+              role: "executor",
+              title: "Implement landing page",
+              goal: "Build the landing page in src and verify it.",
+              constraints: ["Keep the change inside the delegated worktree."],
+              expectedOutput: ["Return the implementation and verification."],
+              context: [],
+              allowedPaths: ["src/**"],
+              forbiddenPaths: [],
+              verification: ["bun test"],
+              dependencies: [],
+            },
+          }],
+        },
+        { text: "Writer completed the landing page in its isolated worktree." },
+        { text: "Root accepted the isolated writer result." },
+      ],
+    });
+    const issued: Record<string, unknown>[] = [];
+    const created: Record<string, unknown>[] = [];
+    let stopped = false;
+    const runtime = {
+      ...runtimeStub(),
+      dataDir: "/data",
+      async issueCapability(params: Record<string, unknown>) {
+        issued.push(params);
+        return {
+          id: "cap_writer_worktree",
+          sessionId: params.sessionId,
+          callId: params.callId,
+          actionHash: params.actionHash,
+          workspaceId: "workspace_recursive",
+          operation: params.operation,
+          resources: params.resources,
+          network: "deny" as const,
+          expiresAtMs: Number.MAX_SAFE_INTEGER,
+          singleUse: true as const,
+        };
+      },
+      async createWorktree(params: Record<string, unknown>) {
+        created.push(params);
+        return { worktree: { path: String(params.path) } };
+      },
+      async forkSidecar(workspace: string) {
+        return {
+          ...runtimeStub(),
+          workspace,
+          stop: async () => { stopped = true; },
+        };
+      },
+    };
+    const events: CbcEvent[] = [];
+    let now = 20_000;
+    const agent = new AgentSession({
+      host: { now: () => ++now } as never,
+      runtime: runtime as never,
+      config: loadConfig({ projectTrusted: true, env: {} }).config,
+      workspacePath: "/work",
+      workspaceIdentityDigest: "b".repeat(64),
+      trust: "trusted-always",
+      sessionId: "session_writer_authorized",
+      provider,
+      approvals: { request: async () => ({ kind: "allow_once" as const }) },
+      granted: new GrantedRules(),
+      nonInteractive: false,
+      now: () => ++now,
+      onEvent: (event) => { events.push(event); },
+    });
+    agent.registry.activate(["task.spawn"]);
+
+    const result = await agent.submit(
+      "Delegate the landing-page implementation.",
+      new AbortController().signal,
+    );
+
+    expect(result.answer).toContain("Root accepted");
+    expect(provider.requests).toHaveLength(3);
+    expect(issued).toHaveLength(1);
+    expect(issued[0]).toMatchObject({
+      sessionId: "session_writer_authorized",
+      operation: "worktree.create",
+      resources: [expect.stringContaining("worktrees")],
+    });
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({
+      commit: "HEAD",
+      requireClean: false,
+      capabilityReceipt: "cap_writer_worktree",
+      capabilitySessionId: "session_writer_authorized",
+      capabilityActionHash: issued[0]?.actionHash,
+    });
+    expect(stopped).toBe(true);
+    expect(events.some((event) => event.kind === "task.failed")).toBe(false);
+  });
+
   test("discovers and spawns a package custom agent with narrowed hard limits", async () => {
     const custom: CustomAgentDefinition = {
       name: "package-reviewer",
