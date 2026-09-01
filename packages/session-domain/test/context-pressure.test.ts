@@ -7,48 +7,77 @@ import {
 } from "../src/context-pressure.ts";
 
 const base = {
-  currentCompiledTokens: 60,
-  inputBudgetTokens: 100,
+  currentCompiledTokens: 6_000,
+  inputBudgetTokens: 10_000,
+  modelContextWindowTokens: 12_000,
+  outputReserveTokens: 2_000,
   pendingHistoryDeltaTokens: 0,
   pendingContextPackTokens: 0,
-  recentRequestGrowthP95: 2,
-  reservedToolExpansionTokens: 4,
+  recentRequestGrowthP95: 200,
+  reservedToolExpansionTokens: 400,
   tokenSavingLevel: "off" as const,
 };
 
-describe("adaptive context pressure", () => {
+describe("model-input-capacity context pressure", () => {
   test("uses the projected next request rather than only current usage", () => {
     const decision = evaluateContextPressure({
       ...base,
-      pendingContextPackTokens: 44,
+      pendingContextPackTokens: 4_400,
     });
-    expect(decision.state).toBe("compact");
-    expect(decision.projectedTokens).toBe(108);
+    expect(decision.state).toBe("hard_emergency");
+    expect(decision.projectedTokens).toBe(10_800);
     expect(decision.reasonCodes).toContain("pending_context_pack");
   });
 
   test("keeps a low-growth 70 percent request stable", () => {
     const decision = evaluateContextPressure({
       ...base,
-      currentCompiledTokens: 70,
-      recentRequestGrowthP95: 1,
-      reservedToolExpansionTokens: 2,
+      currentCompiledTokens: 7_000,
+      recentRequestGrowthP95: 100,
+      reservedToolExpansionTokens: 200,
     });
     expect(decision.state).toBe("stable");
   });
 
-  test("treats the emergency ratio as a safety line", () => {
-    const decision = evaluateContextPressure({
+  test("uses distinct 80/90/97 percent state boundaries", () => {
+    const exact = (currentCompiledTokens: number) => evaluateContextPressure({
       ...base,
-      currentCompiledTokens: 91,
+      currentCompiledTokens,
+      recentRequestGrowthP95: 0,
+      reservedToolExpansionTokens: 0,
     });
-    expect(decision.state).toBe("emergency");
-    expect(decision.reasonCodes).toContain("current_emergency_ratio");
+    expect(exact(7_999).state).toBe("stable");
+    expect(exact(8_000).state).toBe("prepare");
+    expect(exact(8_999).state).toBe("prepare");
+    expect(exact(9_000).state).toBe("compact");
+    expect(exact(9_699).state).toBe("compact");
+    expect(exact(9_700).state).toBe("emergency");
+    expect(exact(10_001).state).toBe("hard_emergency");
+  });
+
+  test("compacts at 89.9 percent only when projection reaches 90 percent", () => {
+    const below = evaluateContextPressure({
+      ...base,
+      currentCompiledTokens: 8_990,
+      recentRequestGrowthP95: 0,
+      reservedToolExpansionTokens: 0,
+    });
+    const crossing = evaluateContextPressure({
+      ...base,
+      currentCompiledTokens: 8_990,
+      recentRequestGrowthP95: 10,
+      reservedToolExpansionTokens: 10,
+    });
+    expect(below.state).toBe("prepare");
+    expect(crossing.state).toBe("compact");
+    expect(crossing.reasonCodes).toContain("projected_trigger_ratio");
   });
 
   test("strong saving changes the target, not the safety line", () => {
-    const off = evaluateContextPressure({ ...base, currentCompiledTokens: 91, tokenSavingLevel: "off" });
-    const strong = evaluateContextPressure({ ...base, currentCompiledTokens: 91, tokenSavingLevel: "strong" });
+    const stableProjection = { recentRequestGrowthP95: 0, reservedToolExpansionTokens: 0 };
+    const off = evaluateContextPressure({ ...base, ...stableProjection, currentCompiledTokens: 9_700, tokenSavingLevel: "off" });
+    const strong = evaluateContextPressure({ ...base, ...stableProjection, currentCompiledTokens: 9_700, tokenSavingLevel: "strong" });
+    expect(off.state).toBe("emergency");
     expect(strong.state).toBe("emergency");
     expect(strong.requiredFreeTokens).toBe(off.requiredFreeTokens);
     expect(strong.targetTokens).toBeLessThanOrEqual(off.targetTokens ?? 0);
@@ -57,36 +86,50 @@ describe("adaptive context pressure", () => {
   test("guards against repeated compaction decisions in one generation", () => {
     const decision = evaluateContextPressure({
       ...base,
-      currentCompiledTokens: 89,
-      recentRequestGrowthP95: 8,
-      lastCompaction: { generation: 2, tokensAfter: 95, newTokensSince: 1 },
+      currentCompiledTokens: 9_100,
+      recentRequestGrowthP95: 0,
+      reservedToolExpansionTokens: 0,
+      lastCompaction: { generation: 2, tokensAfter: 9_000, newTokensSince: 100 },
     });
+    expect(decision.state).toBe("prepare");
     expect(decision.reasonCodes).toContain("compaction_generation_guard");
   });
 
-  test("a budget derived from the request cannot bound the request", () => {
-    // Why the route's measured context band is unusable as a budget: it is the
-    // smallest band that already covers the request, so request/budget is pinned
-    // in the top of the band and the upper tenth of every band is `emergency`.
-    for (const band of [64_000, 192_000, 272_000, 512_000, 1_000_000]) {
+  test("the generation guard stops demoting after the configured growth floor", () => {
+    const decision = evaluateContextPressure({
+      ...base,
+      currentCompiledTokens: 9_100,
+      recentRequestGrowthP95: 0,
+      reservedToolExpansionTokens: 0,
+      lastCompaction: { generation: 2, tokensAfter: 4_000, newTokensSince: 4_096 },
+    });
+    expect(decision.state).toBe("compact");
+    expect(decision.reasonCodes).not.toContain("compaction_generation_guard");
+  });
+
+  test("reports the shared model input capacity basis", () => {
+    for (const budget of [64_000, 192_000, 272_000, 512_000, 1_000_000]) {
       const decision = evaluateContextPressure({
         ...base,
-        currentCompiledTokens: band - 1,
-        inputBudgetTokens: band,
+        currentCompiledTokens: Math.floor(budget * 0.9),
+        inputBudgetTokens: budget,
+        modelContextWindowTokens: budget + 32_000,
+        outputReserveTokens: 32_000,
         recentRequestGrowthP95: 0,
         reservedToolExpansionTokens: 0,
       });
-      expect(decision.state).toBe("emergency");
+      expect(decision.state).toBe("compact");
+      expect(decision.basis).toBe("model_input_capacity");
+      expect(decision.modelContextWindowTokens).toBe(budget + 32_000);
+      expect(decision.triggerTokens).toBe(Math.floor(budget * 0.9));
     }
   });
 
-  test("the compaction target is strictly below the emergency line", () => {
-    // DEFAULT_TARGET_RATIO.off and DEFAULT_EMERGENCY_RATIO were both 0.9 and the
-    // state test is `>=`, so a perfectly hit target immediately re-entered
-    // emergency and compaction could never settle. Uses a production-scale
-    // budget so the absolute 1_024 target floor is not the binding term.
+  test("targets at most 60 percent by default", () => {
     const wide = {
       inputBudgetTokens: 96_000,
+      modelContextWindowTokens: 128_000,
+      outputReserveTokens: 32_000,
       pendingHistoryDeltaTokens: 0,
       pendingContextPackTokens: 0,
       recentRequestGrowthP95: 500,
@@ -99,26 +142,14 @@ describe("adaptive context pressure", () => {
         tokenSavingLevel: level,
       });
       expect(decision.targetTokens).toBeDefined();
-      expect(decision.targetTokens! / 96_000).toBeLessThan(0.9);
+      expect(decision.targetTokens! / 96_000).toBeLessThanOrEqual(0.6);
       const afterTarget = evaluateContextPressure({
         ...wide,
         currentCompiledTokens: decision.targetTokens!,
         tokenSavingLevel: level,
       });
-      expect(afterTarget.state).not.toBe("emergency");
+      expect(afterTarget.state).toBe("stable");
     }
-  });
-
-  test("the generation guard does not demote when the session really grew", () => {
-    // The guard's threshold is max(256, requiredFreeTokens / 2), so growth has to
-    // clear the 256-token absolute floor before the guard stops demoting.
-    const decision = evaluateContextPressure({
-      ...base,
-      currentCompiledTokens: 89,
-      recentRequestGrowthP95: 8,
-      lastCompaction: { generation: 2, tokensAfter: 40, newTokensSince: 512 },
-    });
-    expect(decision.reasonCodes).not.toContain("compaction_generation_guard");
   });
 
   test("tracks request growth with a bounded p95 window", () => {

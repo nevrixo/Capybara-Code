@@ -11,7 +11,11 @@ export type TokenSavingLevel = "off" | "light" | "balanced" | "strong";
 
 export interface ContextPressureInput {
   readonly currentCompiledTokens: number;
+  /** Effective model input capacity after the output reserve and explicit hard cap. */
   readonly inputBudgetTokens: number;
+  /** Full provider/model context window, retained for receipts and diagnostics. */
+  readonly modelContextWindowTokens?: number;
+  readonly outputReserveTokens?: number;
 
   readonly pendingHistoryDeltaTokens: number;
   readonly pendingContextPackTokens: number;
@@ -30,12 +34,16 @@ export interface ContextPressureInput {
   readonly minFreeTokens?: number;
   readonly targetFreeTokens?: number;
   readonly safetyMultiplier?: number;
+  readonly prepareRatio?: number;
+  readonly triggerRatio?: number;
   readonly emergencyRatio?: number;
   /** A lower target is allowed for stronger saving, but never changes safety. */
   readonly targetRatio?: number;
+  /** Minimum post-compaction growth before another attempt may run. */
+  readonly minNewTokens?: number;
 }
 
-export type ContextPressureState = "stable" | "prepare" | "compact" | "emergency";
+export type ContextPressureState = "stable" | "prepare" | "compact" | "emergency" | "hard_emergency";
 
 export interface ContextPressureDecision {
   readonly state: ContextPressureState;
@@ -45,6 +53,14 @@ export interface ContextPressureDecision {
   readonly reasonCodes: readonly string[];
   readonly currentRatio: number;
   readonly inputBudgetTokens: number;
+  readonly basis: "model_input_capacity";
+  readonly modelContextWindowTokens: number;
+  readonly outputReserveTokens: number;
+  readonly prepareRatio: number;
+  readonly triggerRatio: number;
+  readonly emergencyRatio: number;
+  readonly targetRatio: number;
+  readonly triggerTokens: number;
 }
 
 export interface ContextPressureSnapshot {
@@ -53,7 +69,11 @@ export interface ContextPressureSnapshot {
   readonly generation: number;
 }
 
-const DEFAULT_EMERGENCY_RATIO = 0.9;
+const DEFAULT_PREPARE_RATIO = 0.8;
+const DEFAULT_TRIGGER_RATIO = 0.9;
+const DEFAULT_EMERGENCY_RATIO = 0.97;
+const DEFAULT_TARGET_COMPILED_RATIO = 0.6;
+const DEFAULT_MIN_NEW_TOKENS = 4_096;
 const DEFAULT_GROWTH_WINDOW = 6;
 const DEFAULT_SAFETY_MULTIPLIER: Readonly<Record<TokenSavingLevel, number>> = {
   off: 1.25,
@@ -62,12 +82,12 @@ const DEFAULT_SAFETY_MULTIPLIER: Readonly<Record<TokenSavingLevel, number>> = {
   strong: 1.5,
 };
 const DEFAULT_TARGET_RATIO: Readonly<Record<TokenSavingLevel, number>> = {
-  // These are compaction targets, not trigger thresholds. The safety line is
-  // still controlled by requiredFreeTokens for every level, including off.
-  off: 0.9,
-  light: 0.84,
-  balanced: 0.76,
-  strong: 0.68,
+  // Token saving may ask for a smaller post-compaction request, but the default
+  // product contract remains 60% of actual model input capacity.
+  off: DEFAULT_TARGET_COMPILED_RATIO,
+  light: 0.58,
+  balanced: 0.55,
+  strong: 0.5,
 };
 
 function finiteNonNegative(value: number | undefined, fallback = 0): number {
@@ -98,6 +118,12 @@ function targetRatioFor(input: ContextPressureInput): number {
   return DEFAULT_TARGET_RATIO[input.tokenSavingLevel] ?? DEFAULT_TARGET_RATIO.off;
 }
 
+function ratio(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 1
+    ? value
+    : fallback;
+}
+
 /** Evaluate one candidate prompt. This function never mutates input or state. */
 export function evaluateContextPressure(input: ContextPressureInput): ContextPressureDecision {
   const budget = Math.floor(finitePositive(input.inputBudgetTokens, 0));
@@ -109,6 +135,14 @@ export function evaluateContextPressure(input: ContextPressureInput): ContextPre
       reasonCodes: ["invalid_input_budget"],
       currentRatio: 1,
       inputBudgetTokens: 0,
+      basis: "model_input_capacity",
+      modelContextWindowTokens: 0,
+      outputReserveTokens: 0,
+      prepareRatio: DEFAULT_PREPARE_RATIO,
+      triggerRatio: DEFAULT_TRIGGER_RATIO,
+      emergencyRatio: DEFAULT_EMERGENCY_RATIO,
+      targetRatio: DEFAULT_TARGET_COMPILED_RATIO,
+      triggerTokens: 0,
     };
   }
 
@@ -118,9 +152,18 @@ export function evaluateContextPressure(input: ContextPressureInput): ContextPre
   const growthP95 = Math.floor(finiteNonNegative(input.recentRequestGrowthP95));
   const reservedTool = Math.floor(finiteNonNegative(input.reservedToolExpansionTokens));
   const projectedTokens = current + pendingHistory + pendingPack + Math.max(growthP95, reservedTool);
-  const emergencyRatio = input.emergencyRatio !== undefined && Number.isFinite(input.emergencyRatio) && input.emergencyRatio > 0 && input.emergencyRatio <= 1
-    ? input.emergencyRatio
-    : DEFAULT_EMERGENCY_RATIO;
+  const prepareRatio = ratio(input.prepareRatio, DEFAULT_PREPARE_RATIO);
+  const triggerRatio = Math.max(prepareRatio, ratio(input.triggerRatio, DEFAULT_TRIGGER_RATIO));
+  const emergencyRatio = Math.max(triggerRatio, ratio(input.emergencyRatio, DEFAULT_EMERGENCY_RATIO));
+  const configuredTargetRatio = Math.min(
+    triggerRatio,
+    ratio(targetRatioFor(input), DEFAULT_TARGET_COMPILED_RATIO),
+  );
+  const outputReserveTokens = Math.floor(finiteNonNegative(input.outputReserveTokens));
+  const modelContextWindowTokens = Math.max(
+    budget + outputReserveTokens,
+    Math.floor(finitePositive(input.modelContextWindowTokens, budget + outputReserveTokens)),
+  );
   const safetyMultiplier = finitePositive(input.safetyMultiplier, DEFAULT_SAFETY_MULTIPLIER[input.tokenSavingLevel] ?? DEFAULT_SAFETY_MULTIPLIER.off);
   const modelMinimum = Math.min(
     budget,
@@ -139,48 +182,56 @@ export function evaluateContextPressure(input: ContextPressureInput): ContextPre
   if (growthP95 > 0) reasons.push("recent_growth_p95");
   if (reservedTool > 0) reasons.push("reserved_tool_expansion");
 
+  const projectedRatio = projectedTokens / budget;
+  const hardByCurrent = current > budget;
+  const hardByProjection = projectedTokens > budget;
   const emergencyByCurrent = currentRatio >= emergencyRatio;
-  const emergencyByProjection = projectedTokens > budget && currentRatio >= emergencyRatio;
-  const budgetExceeded = projectedTokens > budget;
+  const emergencyByProjection = projectedRatio >= emergencyRatio;
+  const compactByCurrent = currentRatio >= triggerRatio;
+  const compactByProjection = projectedRatio >= triggerRatio;
+  const prepareByCurrent = currentRatio >= prepareRatio;
+  const prepareByProjection = projectedRatio >= prepareRatio;
   let state: ContextPressureState;
-  if (emergencyByCurrent || emergencyByProjection) {
+  if (hardByCurrent || hardByProjection) {
+    state = "hard_emergency";
+    if (hardByCurrent) reasons.push("current_request_over_budget");
+    if (hardByProjection) reasons.push("projected_request_over_budget");
+  } else if (emergencyByCurrent || emergencyByProjection) {
     state = "emergency";
     if (emergencyByCurrent) reasons.push("current_emergency_ratio");
-    if (emergencyByProjection) reasons.push("projected_request_over_budget");
-  } else if (budgetExceeded || projectedTokens + requiredFreeTokens > budget) {
+    if (emergencyByProjection) reasons.push("projected_emergency_ratio");
+  } else if (compactByCurrent || compactByProjection) {
     state = "compact";
-    if (budgetExceeded) reasons.push("projected_request_over_budget");
-    else reasons.push("required_free_space_at_risk");
-  } else if (projectedTokens + requiredFreeTokens > Math.floor(budget * 0.8) || currentRatio >= 0.8) {
+    if (compactByCurrent) reasons.push("current_trigger_ratio");
+    if (compactByProjection) reasons.push("projected_trigger_ratio");
+  } else if (prepareByCurrent || prepareByProjection) {
     state = "prepare";
-    reasons.push("prepare_free_space");
+    if (prepareByCurrent) reasons.push("current_prepare_ratio");
+    if (prepareByProjection) reasons.push("projected_prepare_ratio");
   } else {
     state = "stable";
-    reasons.push("within_adaptive_budget");
+    reasons.push("within_model_input_capacity");
   }
 
-  if (input.lastCompaction !== undefined && input.lastCompaction.newTokensSince < Math.max(256, Math.floor(requiredFreeTokens / 2)) && state === "compact" && projectedTokens <= budget && currentRatio < emergencyRatio) {
-    // A generation guard prevents a compile/compact callback from spinning when
-    // a compaction did not materially change the next candidate.
+  const minNewTokens = Math.floor(finiteNonNegative(input.minNewTokens, DEFAULT_MIN_NEW_TOKENS));
+  if (
+    input.lastCompaction !== undefined &&
+    input.lastCompaction.newTokensSince < minNewTokens &&
+    (state === "compact" || state === "emergency") &&
+    projectedTokens <= budget
+  ) {
+    // A generation guard prevents a successful compaction whose staged result
+    // remains above 90% from immediately invoking the model again.
     state = "prepare";
     reasons.push("compaction_generation_guard");
   }
 
-  const targetFree = Math.max(requiredFreeTokens, configuredMinimum, configuredTargetFree);
-  const target = Math.max(1_024, Math.floor(Math.min(
-    budget - targetFree,
-    budget * targetRatioFor(input),
-    // A target at or above the emergency line is unsatisfiable: hitting it
-    // exactly re-triggers `currentRatio >= emergencyRatio` on the next
-    // evaluation. At the shipped default both ratios are 0.9, so a perfectly
-    // executed compaction re-entered emergency immediately.
-    budget * emergencyRatio - 1,
-  )));
+  const target = Math.max(1_024, Math.floor(budget * configuredTargetRatio));
   return {
     state,
     projectedTokens,
     requiredFreeTokens,
-    ...(state === "compact" || state === "emergency"
+    ...(state === "compact" || state === "emergency" || state === "hard_emergency"
       // Clamped to what is actually there: a target above `current` would ask
       // compaction to grow the prompt. The emergency-line floor is applied when
       // `target` is computed, so the clamp cannot re-raise it past the line.
@@ -189,6 +240,14 @@ export function evaluateContextPressure(input: ContextPressureInput): ContextPre
     reasonCodes: [...new Set(reasons)],
     currentRatio,
     inputBudgetTokens: budget,
+    basis: "model_input_capacity",
+    modelContextWindowTokens,
+    outputReserveTokens,
+    prepareRatio,
+    triggerRatio,
+    emergencyRatio,
+    targetRatio: configuredTargetRatio,
+    triggerTokens: Math.floor(budget * triggerRatio),
   };
 }
 
@@ -250,6 +309,10 @@ export class ContextPressureController {
 }
 
 export const CONTEXT_PRESSURE_DEFAULTS = {
+  prepareRatio: DEFAULT_PREPARE_RATIO,
+  triggerRatio: DEFAULT_TRIGGER_RATIO,
   emergencyRatio: DEFAULT_EMERGENCY_RATIO,
+  targetRatio: DEFAULT_TARGET_COMPILED_RATIO,
+  minNewTokens: DEFAULT_MIN_NEW_TOKENS,
   growthWindow: DEFAULT_GROWTH_WINDOW,
 } as const;

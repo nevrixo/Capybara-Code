@@ -1428,6 +1428,16 @@ export class AgentSession {
           reasonCodes: ["provider_context_error"],
           currentRatio: 1,
           inputBudgetTokens: this.recorder.model.contextBudgetTokens,
+          basis: "model_input_capacity" as const,
+          modelContextWindowTokens:
+            this.recorder.model.contextBudgetTokens +
+            this.#options.config.model.context.reserveOutputTokens,
+          outputReserveTokens: this.#options.config.model.context.reserveOutputTokens,
+          prepareRatio: 0.8,
+          triggerRatio: 0.9,
+          emergencyRatio: this.#options.config.model.context.emergencyRatio,
+          targetRatio: 0.6,
+          triggerTokens: Math.floor(this.recorder.model.contextBudgetTokens * 0.9),
         };
         this.compactContext({ pressure: { ...pressure, state: "emergency", reasonCodes: [...pressure.reasonCodes, "provider_context_error"] } });
       },
