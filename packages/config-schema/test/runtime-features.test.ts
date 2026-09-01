@@ -14,6 +14,7 @@ describe("durable runtime configuration gates", () => {
       worktreeMultiAgent: true,
       pluginRuntime: true,
       appServer: true,
+      contextCompactionV2: true,
     });
     expect(config.edit.maxOperationsPerPlan).toBe(100);
     expect(config.memory.privacy.storeRawTranscript).toBe(false);

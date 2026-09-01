@@ -61,6 +61,7 @@ export interface UiConfig {
 export type ModelRouterStrategy = "utility" | "latency" | "cost";
 export type PremiumBandPolicy = "deny" | "allow" | "utility-gated";
 export type CacheMode = "roi" | "always" | "implicit" | "explicit" | "off";
+export type ContextCompactionStrategy = "model-summary" | "provider-native" | "hybrid" | "off";
 /**
  * §8.4 reasoning continuity ladder. `adaptive` is the task-epoch behaviour the
  * kernel already implements: all-turn continuity inside an epoch, current-turn
@@ -108,7 +109,23 @@ export interface ModelContextConfig {
   compactionPolicy: "off" | "legacy" | "adaptive";
   minFreeTokens: number | "auto";
   targetFreeTokens: number | "auto";
+  /** Legacy emergency ratio, dual-read for one migration window. */
   emergencyRatio: number;
+  compactionPrepareRatio: number;
+  compactionTriggerRatio: number;
+  compactionEmergencyRatio: number;
+  compactionTargetRatio: number;
+  compactionStrategy: ContextCompactionStrategy;
+  compactionModel: string;
+  compactionReasoningEffort: ReasoningEffort;
+  compactionRecentTurns: number;
+  compactionMaxAttemptsPerGeneration: number;
+  compactionMinNewTokens: number;
+  compactionFallback: "evidence-ledger" | "off";
+  contextGaugeBasis: "model-input-capacity";
+  optimizationTargetTokens: number;
+  /** `auto` means the model input capacity is the only hard ceiling. */
+  maxInputTokens: number | "auto";
 }
 
 export interface ModelCacheConfig {
@@ -420,6 +437,7 @@ export interface ExperimentalConfig {
   worktreeMultiAgent: boolean;
   pluginRuntime: boolean;
   appServer: boolean;
+  contextCompactionV2: boolean;
 }
 
 export interface EditConfig {
@@ -648,7 +666,21 @@ export function defaultConfig(): CbcConfig {
         compactionPolicy: "adaptive",
         minFreeTokens: "auto",
         targetFreeTokens: "auto",
-        emergencyRatio: 0.9,
+        emergencyRatio: 0.97,
+        compactionPrepareRatio: 0.8,
+        compactionTriggerRatio: 0.9,
+        compactionEmergencyRatio: 0.97,
+        compactionTargetRatio: 0.6,
+        compactionStrategy: "model-summary",
+        compactionModel: "same",
+        compactionReasoningEffort: "low",
+        compactionRecentTurns: 2,
+        compactionMaxAttemptsPerGeneration: 1,
+        compactionMinNewTokens: 4_096,
+        compactionFallback: "evidence-ledger",
+        contextGaugeBasis: "model-input-capacity",
+        optimizationTargetTokens: 192_000,
+        maxInputTokens: "auto",
       },
       cache: {
         mode: "roi",
@@ -787,6 +819,7 @@ export function defaultConfig(): CbcConfig {
       worktreeMultiAgent: true,
       pluginRuntime: true,
       appServer: true,
+      contextCompactionV2: true,
     },
     edit: {
       engine: "anchor-range-v2",
@@ -1032,6 +1065,7 @@ const MONOTONIC_PROJECT_BOOLEAN_STRICT_VALUE: Readonly<Record<string, boolean>> 
   "experimental.worktreeMultiAgent": false,
   "experimental.pluginRuntime": false,
   "experimental.appServer": false,
+  "experimental.contextCompactionV2": false,
   "edit.safeRebase": false,
   "lsp.mutations.rename": false,
   "lsp.mutations.codeActions": false,
@@ -1053,6 +1087,10 @@ const ENUMS: Record<string, readonly string[]> = {
   "model.context.orientationMode": ["strict", "progressive"],
   "model.context.compactionPolicy": ["off", "legacy", "adaptive"],
   "model.context.providerCompactionMode": ["off", "auto", "on"],
+  "model.context.compactionStrategy": ["model-summary", "provider-native", "hybrid", "off"],
+  "model.context.compactionReasoningEffort": ["none", "low", "medium", "high", "xhigh", "max"],
+  "model.context.compactionFallback": ["evidence-ledger", "off"],
+  "model.context.contextGaugeBasis": ["model-input-capacity"],
   "model.context.premiumBandPolicy": ["deny", "allow", "utility-gated"],
   "model.cache.mode": ["roi", "always", "implicit", "explicit", "off"],
   "model.cache.breakpoint": ["stable-prefix"],
@@ -1386,7 +1424,10 @@ export function mergeConfig(
         continue;
       }
 
-      const adaptiveContextScalar = target === "model.context.minFreeTokens" || target === "model.context.targetFreeTokens";
+      const adaptiveContextScalar =
+        target === "model.context.minFreeTokens" ||
+        target === "model.context.targetFreeTokens" ||
+        target === "model.context.maxInputTokens";
       if (
         existing !== undefined &&
         !adaptiveContextScalar &&
@@ -1434,6 +1475,64 @@ export function mergeConfig(
   // Thinking keys are dual-read for one compatibility window. New keys win;
   // aliases are materialized so older consumers see the same effective value.
   syncThinkingAliases(config, provenance);
+  // Context compaction v2 dual-reads the previous surface for one release. The
+  // new keys always win; legacy values are translated only when their v2
+  // replacement was not explicitly configured.
+  if (
+    provenance["model.context.optimizationTargetTokens"] === undefined &&
+    provenance["model.softContextTokens"] !== undefined
+  ) {
+    config.model.context.optimizationTargetTokens = config.model.softContextTokens;
+    provenance["model.context.optimizationTargetTokens"] = provenance["model.softContextTokens"]!;
+  }
+  if (
+    provenance["model.context.compactionEmergencyRatio"] === undefined &&
+    provenance["model.context.emergencyRatio"] !== undefined
+  ) {
+    config.model.context.compactionEmergencyRatio = config.model.context.emergencyRatio;
+    provenance["model.context.compactionEmergencyRatio"] = provenance["model.context.emergencyRatio"]!;
+  }
+  if (provenance["model.context.compactionStrategy"] === undefined) {
+    const policySource = provenance["model.context.compactionPolicy"];
+    const providerModeSource = provenance["model.context.providerCompactionMode"];
+    const providerBooleanSource = provenance["model.context.providerCompaction"];
+    if (config.model.context.compactionPolicy === "off" && policySource !== undefined) {
+      config.model.context.compactionStrategy = "off";
+      provenance["model.context.compactionStrategy"] = policySource;
+    } else if (providerModeSource !== undefined && config.model.context.providerCompactionMode !== "off") {
+      config.model.context.compactionStrategy =
+        config.model.context.providerCompactionMode === "on" ? "provider-native" : "hybrid";
+      provenance["model.context.compactionStrategy"] = providerModeSource;
+    } else if (providerBooleanSource !== undefined && config.model.context.providerCompaction) {
+      config.model.context.compactionStrategy = "hybrid";
+      provenance["model.context.compactionStrategy"] = providerBooleanSource;
+    }
+  }
+  if (
+    provenance["model.context.compactionFallback"] === undefined &&
+    provenance["model.context.compaction"] !== undefined
+  ) {
+    config.model.context.compactionFallback = "evidence-ledger";
+    provenance["model.context.compactionFallback"] = provenance["model.context.compaction"]!;
+  }
+  for (const legacyPath of [
+    "model.softContextTokens",
+    "model.context.compactionPolicy",
+    "model.context.compaction",
+    "model.context.providerCompaction",
+    "model.context.providerCompactionMode",
+    "model.context.compactionThresholdTokens",
+    "model.context.emergencyRatio",
+  ]) {
+    const source = provenance[legacyPath];
+    if (source === undefined) continue;
+    issues.push({
+      severity: "warning",
+      path: legacyPath,
+      source,
+      message: `'${legacyPath}' is deprecated by context compaction v2; run 'capy config migrate'`,
+    });
+  }
   // Legacy config values are migrated at load time without widening authority.
   // Explicit new fields always win.
   if (provenance["agent.interactionMode"] === undefined && config.agent.permissionMode === "plan") {
@@ -1498,12 +1597,22 @@ function validateDynamicValue(path: string, value: unknown): string | undefined 
   if (path === "skills.paths" || path === "skills.builtin.disabled") {
     return isStringArray(value) ? undefined : "expected an array of paths or Skill names";
   }
-  if (path === "model.context.minFreeTokens" || path === "model.context.targetFreeTokens") {
+  if (
+    path === "model.context.minFreeTokens" ||
+    path === "model.context.targetFreeTokens" ||
+    path === "model.context.maxInputTokens"
+  ) {
     return value === "auto" || (typeof value === "number" && Number.isFinite(value) && value >= 0)
       ? undefined
       : "expected 'auto' or a non-negative finite number";
   }
-  if (path === "model.context.emergencyRatio") {
+  if (
+    path === "model.context.emergencyRatio" ||
+    path === "model.context.compactionPrepareRatio" ||
+    path === "model.context.compactionTriggerRatio" ||
+    path === "model.context.compactionEmergencyRatio" ||
+    path === "model.context.compactionTargetRatio"
+  ) {
     return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 1
       ? undefined
       : "expected a finite ratio between 0 and 1";
@@ -1646,6 +1755,10 @@ const INTEGER_CONSTRAINTS: Readonly<Record<string, IntegerConstraint>> = {
   "model.context.premiumThresholdTokens": { minimum: 1 },
   "model.context.reserveOutputTokens": { minimum: 1 },
   "model.context.compactionThresholdTokens": { minimum: 1_024 },
+  "model.context.optimizationTargetTokens": { minimum: 1_024 },
+  "model.context.compactionRecentTurns": { minimum: 0, maximum: 10 },
+  "model.context.compactionMaxAttemptsPerGeneration": { minimum: 1, maximum: 3 },
+  "model.context.compactionMinNewTokens": { minimum: 0 },
   "model.cache.maxWritesPerTurn": { minimum: 0 },
   "model.cache.ttlMinutes": { minimum: 1 },
   "agent.toolGraph.maxParallelReads": { minimum: 1 },
@@ -1840,15 +1953,27 @@ function validateSemantics(
       message: "context band must be at least 8000 tokens",
     });
   }
-  // A reserve at or above the soft budget leaves no input capacity at all; the
-  // Math.max(1, ...) guards downstream turn that into a permanent 1-token budget
-  // with no diagnostic naming the cause.
-  if (config.model.context.reserveOutputTokens >= config.model.softContextTokens) {
+  if (
+    typeof config.model.context.maxInputTokens === "number" &&
+    config.model.context.maxInputTokens < 1_024
+  ) {
     issues.push({
       severity: "error",
-      path: "model.context.reserveOutputTokens",
-      source: sourceOf("model.context.reserveOutputTokens"),
-      message: "output reserve must be smaller than the soft context budget",
+      path: "model.context.maxInputTokens",
+      source: sourceOf("model.context.maxInputTokens"),
+      message: "explicit maximum input tokens must be at least 1024",
+    });
+  }
+  const prepareRatio = config.model.context.compactionPrepareRatio;
+  const triggerRatio = config.model.context.compactionTriggerRatio;
+  const emergencyRatio = config.model.context.compactionEmergencyRatio;
+  const targetRatio = config.model.context.compactionTargetRatio;
+  if (!(targetRatio < triggerRatio && prepareRatio <= triggerRatio && triggerRatio <= emergencyRatio)) {
+    issues.push({
+      severity: "error",
+      path: "model.context.compactionTriggerRatio",
+      source: sourceOf("model.context.compactionTriggerRatio"),
+      message: "context ratios must satisfy target < trigger, prepare <= trigger <= emergency",
     });
   }
   if (config.model.cache.ttlMinutes !== 30) {

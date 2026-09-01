@@ -316,7 +316,11 @@ describe("defaults (§21.4)", () => {
     expect(config.ui.finalAnswer).toEqual({ style: "chat", evidence: "hidden", attentionDetails: false });
     expect(config.model.context.compactionPolicy).toBe("adaptive");
     expect(config.model.context.providerCompactionMode).toBe("auto");
-    expect(config.model.context.emergencyRatio).toBe(0.9);
+    expect(config.model.context.emergencyRatio).toBe(0.97);
+    expect(config.model.context.compactionStrategy).toBe("model-summary");
+    expect(config.model.context.compactionTriggerRatio).toBe(0.9);
+    expect(config.model.context.compactionEmergencyRatio).toBe(0.97);
+    expect(config.model.context.compactionTargetRatio).toBe(0.6);
   });
 });
 
