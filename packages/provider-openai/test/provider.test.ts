@@ -910,6 +910,32 @@ describe("SSE normalization (§10.2, §25.6)", () => {
       }),
     });
   });
+
+  test("preserves streamed compaction ciphertext beyond the old 64 KiB display bound", async () => {
+    const opaque = `opaque-${"z".repeat(70_000)}`;
+    const events = await collect(
+      parseResponseStream(
+        sseStream([
+          {
+            type: "response.output_item.done",
+            item_id: "cmp_1",
+            item: { type: "compaction", encrypted_content: opaque },
+          },
+          { type: "response.completed", response: { id: "r" } },
+        ]),
+      ),
+    );
+
+    const item = events.find((event) =>
+      event.type === "response.item" && event.item.kind === "compaction"
+    );
+    expect(item).toMatchObject({
+      type: "response.item",
+      item: { kind: "compaction", opaque },
+    });
+    if (item?.type === "response.item") expect(item.item.opaque).toHaveLength(opaque.length);
+  });
+
   test("marks a completed output item as authoritative recovery data", async () => {
     const events = await collect(
       parseResponseStream(
@@ -2123,6 +2149,100 @@ describe("configured request headers", () => {
     expect(Object.keys(headers).sort()).toEqual(["Accept", "Authorization", "Content-Type"]);
   });
 });
+
+describe("explicit provider compaction", () => {
+  test("posts replay state to /responses/compact and preserves the opaque item exactly", async () => {
+    let capturedUrl = "";
+    let capturedHeaders: Record<string, string> = {};
+    let capturedBody: Record<string, unknown> = {};
+    const opaque = `encrypted-${"x".repeat(70_000)}`;
+    const provider = new OpenAiResponsesProvider({
+      credential: fakeLease(),
+      fetchImpl: (async (url, init) => {
+        capturedUrl = url;
+        capturedHeaders = { ...((init as RequestInit).headers as Record<string, string>) };
+        capturedBody = JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>;
+        return new Response(JSON.stringify({
+          id: "resp_compact_1",
+          object: "response.compaction",
+          output: [
+            {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: "keep me" }],
+            },
+            { type: "compaction", encrypted_content: opaque },
+          ],
+          usage: {
+            input_tokens: 12_277,
+            input_tokens_details: { cached_tokens: 2_000, cache_write_tokens: 0 },
+            output_tokens: 451,
+            output_tokens_details: { reasoning_tokens: 32 },
+            total_tokens: 12_728,
+          },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }) as FetchLike,
+    });
+
+    const result = await provider.compact({
+      requestId: "compact_1",
+      model: "gpt-5.6-sol",
+      input: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "keep me" }] },
+        { type: "function_call", callId: "call_1", name: "fs.read", argumentsText: "{}" },
+        { type: "function_call_output", callId: "call_1", output: "done" },
+      ],
+      tools: [{ name: "fs.read", description: "read", parameters: { type: "object" }, strict: true }],
+      serviceTier: "standard",
+    }, new AbortController().signal);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(capturedUrl).toBe("https://api.openai.com/v1/responses/compact");
+    expect(capturedHeaders.Accept).toBe("application/json");
+    expect(capturedHeaders["session-id"]).toBeUndefined();
+    expect(capturedBody.stream).toBeUndefined();
+    expect(capturedBody.store).toBeUndefined();
+    expect((capturedBody.input as Array<Record<string, unknown>>)[1]?.name).not.toContain(".");
+    expect(result.output.at(-1)).toEqual({ type: "compaction", opaque });
+    expect((result.output.at(-1) as { opaque: string }).opaque).toHaveLength(opaque.length);
+    expect(result.usage).toMatchObject({ inputTokens: 12_277, outputTokens: 451, reasoningTokens: 32 });
+  });
+
+  test("uses the account backend compact route and account headers", async () => {
+    let capturedUrl = "";
+    let capturedHeaders: Record<string, string> = {};
+    const provider = new OpenAiResponsesProvider({
+      credential: fakeLease(),
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      chatGpt: { accountId: "acct_123", originator: "capybara" },
+      fetchImpl: (async (url, init) => {
+        capturedUrl = url;
+        capturedHeaders = { ...((init as RequestInit).headers as Record<string, string>) };
+        return new Response(JSON.stringify({
+          id: "resp_account_compact",
+          object: "response.compaction",
+          output: [{ type: "compaction", encrypted_content: "opaque-account" }],
+          usage: { input_tokens: 10, output_tokens: 4, total_tokens: 14 },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }) as FetchLike,
+    });
+
+    const result = await provider.compact({
+      requestId: "compact_account",
+      model: "gpt-5.6-luna",
+      input: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "prior" }] }],
+      tools: [],
+    }, new AbortController().signal);
+
+    expect(result.ok).toBe(true);
+    expect(capturedUrl).toBe("https://chatgpt.com/backend-api/codex/responses/compact");
+    expect(capturedHeaders["ChatGPT-Account-Id"]).toBe("acct_123");
+    expect(capturedHeaders.originator).toBe("capybara");
+    expect(capturedHeaders["session-id"]).toBe("compact_account");
+  });
+});
+
 describe("ChatGPT account transport", () => {
   test("uses the ChatGPT Responses route and Capybara-owned request contract", async () => {
     let capturedUrl = "";

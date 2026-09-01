@@ -309,6 +309,30 @@ export interface ModelRequest {
   readonly previousResponseId?: string;
 }
 
+/** One explicit provider compaction pass over caller-owned conversation state. */
+export interface ModelCompactionRequest {
+  readonly requestId: string;
+  readonly model: string;
+  readonly input: ModelInputItem[];
+  /** Used only to round-trip provider-safe function names in historical items. */
+  readonly tools: ModelToolSchema[];
+  readonly serviceTier?: "standard" | "fast";
+}
+
+/** Provider-neutral result of `POST /responses/compact`. */
+export type ModelCompactionResult =
+  | {
+      readonly ok: true;
+      readonly responseId: string;
+      /** All retained user messages followed by the opaque compaction item. */
+      readonly output: ModelInputItem[];
+      readonly usage: ModelUsage;
+    }
+  | {
+      readonly ok: false;
+      readonly error: ProviderError;
+    };
+
 export interface CredentialLease {
   readonly leaseId: string;
   readonly account: string;
@@ -343,6 +367,8 @@ export interface ModelProvider {
   createTurnSession?(): ProviderTurnSession;
   listModels(signal?: AbortSignal): Promise<ModelDescriptor[]>;
   stream(request: ModelRequest, signal: AbortSignal): AsyncIterable<ModelEvent>;
+  /** Explicit provider-owned context compaction. Absence means unsupported. */
+  compact?(request: ModelCompactionRequest, signal: AbortSignal): Promise<ModelCompactionResult>;
   validateCredential(
     credential: CredentialLease,
     signal?: AbortSignal,

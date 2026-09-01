@@ -33,8 +33,11 @@ import {
   type GeneratedImageOutput,
   type HostedToolCallName,
   type ModelAvailabilityReport,
+  type ModelCompactionRequest,
+  type ModelCompactionResult,
   type ModelDescriptor,
   type ModelEvent,
+  type ModelInputItem,
   type ModelProvider,
   type ModelRequest,
   type ModelResponseItem,
@@ -369,6 +372,100 @@ export class OpenAiResponsesProvider implements ModelProvider {
 
     yield { type: "response.started", requestId: request.requestId };
     yield* parseResponseStream(response.body, signal, toolNames.fromProvider);
+  }
+
+  async compact(
+    request: ModelCompactionRequest,
+    signal: AbortSignal,
+  ): Promise<ModelCompactionResult> {
+    const toolNames = createToolNameCodec(request);
+    const body: Record<string, unknown> = {
+      model: request.model,
+      input: request.input.map((item) =>
+        serializeInputItem(item, false, toolNames.toProvider, false)
+      ),
+    };
+    if (
+      this.#options.chatGpt === undefined &&
+      this.capabilities.fastTier &&
+      request.serviceTier !== undefined
+    ) {
+      body.service_tier = request.serviceTier === "fast" ? "priority" : "default";
+    }
+
+    let response: Response;
+    try {
+      response = await this.#fetch(`${this.#baseUrl()}/responses/compact`, {
+        method: "POST",
+        headers: {
+          ...this.#headers(request.requestId),
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(body),
+        signal,
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        error: signal.aborted
+          ? cancelledError()
+          : {
+              kind: "network",
+              message: error instanceof Error ? error.message : String(error),
+              retryable: true,
+            },
+      };
+    }
+
+    if (!response.ok) return { ok: false, error: await httpError(response) };
+
+    let raw: unknown;
+    try {
+      raw = await response.json();
+    } catch (error) {
+      return {
+        ok: false,
+        error: {
+          kind: "server",
+          message: `provider returned invalid compaction JSON: ${error instanceof Error ? error.message : String(error)}`,
+          retryable: true,
+        },
+      };
+    }
+    if (!isRecord(raw) || !Array.isArray(raw.output)) {
+      return {
+        ok: false,
+        error: {
+          kind: "server",
+          message: "provider compaction response omitted its output items",
+          retryable: true,
+        },
+      };
+    }
+
+    const output = raw.output.map(parseCompactedOutputItem);
+    if (
+      output.some((item) => item === undefined) ||
+      output.filter((item) => item?.type === "compaction").length !== 1 ||
+      output.at(-1)?.type !== "compaction"
+    ) {
+      return {
+        ok: false,
+        error: {
+          kind: "server",
+          message: "provider returned a malformed compacted conversation",
+          retryable: true,
+        },
+      };
+    }
+
+    return {
+      ok: true,
+      responseId: typeof raw.id === "string" && raw.id.length > 0 ? raw.id : request.requestId,
+      output: output as ModelInputItem[],
+      usage: extractUsage(raw.usage) ?? emptyUsage(),
+    };
   }
 
   #baseUrl(): string {
@@ -726,6 +823,35 @@ function serializeInputItem(
         status: item.status,
       };
   }
+}
+
+/** Parse only the output contract of `POST /responses/compact`. */
+function parseCompactedOutputItem(
+  raw: unknown,
+): ModelInputItem | undefined {
+  if (!isRecord(raw) || typeof raw.type !== "string") return undefined;
+  if (raw.type === "compaction") {
+    return typeof raw.encrypted_content === "string" && raw.encrypted_content.length > 0
+      ? { type: "compaction", opaque: raw.encrypted_content }
+      : undefined;
+  }
+  if (raw.type !== "message") return undefined;
+  if (raw.role !== "developer" && raw.role !== "user" && raw.role !== "assistant") return undefined;
+  if (!Array.isArray(raw.content)) return undefined;
+  const content = raw.content.map((part) => {
+    if (!isRecord(part) || typeof part.text !== "string") return undefined;
+    if (part.type === "input_text") return { type: "input_text" as const, text: part.text };
+    if (part.type === "output_text") return { type: "output_text" as const, text: part.text };
+    return undefined;
+  });
+  if (content.some((part) => part === undefined)) return undefined;
+  // The compact endpoint currently returns user messages plus one compaction
+  // item. Preserve the broader message shape for compatible gateways.
+  return {
+    type: "message",
+    role: raw.role,
+    content: content as Array<{ type: "input_text" | "output_text"; text: string }>,
+  };
 }
 
 function inputProgramCaller(
@@ -1296,7 +1422,14 @@ function normalizeResponseItem(item: Record<string, unknown>, itemId: string, se
     return { ...base, kind: "reasoning", ...(encrypted !== undefined ? { opaque: encrypted } : {}), ...(reasoningText !== undefined ? { reasoningText } : {}), ...(summary !== undefined ? { summaryText: summary } : {}) };
   }
   if (rawType === "compaction") {
-    const opaque = boundedOpaque(item.encrypted_content ?? item.opaque ?? item);
+    // This ciphertext must round-trip byte-for-byte. The display-oriented
+    // `boundedOpaque` helper truncates at 64 KiB and would corrupt a valid
+    // continuation item returned by provider-side compaction.
+    const opaque = typeof item.encrypted_content === "string"
+      ? item.encrypted_content
+      : typeof item.opaque === "string"
+        ? item.opaque
+        : undefined;
     return { ...base, kind: "compaction", ...(opaque !== undefined ? { opaque } : {}) };
   }
   if (rawType === "program") {
@@ -1599,7 +1732,9 @@ function cancelledError(): ProviderError {
  * The per-request map keeps wire names valid without leaking the provider constraint
  * into the registry, permission rules, journals, or MCP routing.
  */
-function createToolNameCodec(request: ModelRequest): ToolNameCodec {
+function createToolNameCodec(
+  request: Pick<ModelRequest, "tools" | "input">,
+): ToolNameCodec {
   const names = new Set(request.tools.map((tool) => tool.name));
   for (const item of request.input) {
     if (item.type === "function_call") names.add(item.name);

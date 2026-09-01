@@ -13,6 +13,8 @@ import {
   type CredentialLease,
   type CredentialValidation,
   type ModelDescriptor,
+  type ModelCompactionRequest,
+  type ModelCompactionResult,
   type ModelEvent,
   type ModelProvider,
   type ModelRequest,
@@ -49,12 +51,15 @@ export interface MockProviderOptions {
   readonly models?: ModelDescriptor[];
   readonly validation?: CredentialValidation;
   readonly capabilities?: Partial<ProviderCapabilities>;
+  readonly compactionError?: ProviderError;
+  readonly compactionOpaque?: string;
 }
 
 export class MockProvider implements ModelProvider {
   readonly id = "mock";
   readonly capabilities: ProviderCapabilities;
   readonly requests: ModelRequest[] = [];
+  readonly compactionRequests: ModelCompactionRequest[] = [];
   #index = 0;
   readonly #options: MockProviderOptions;
 
@@ -83,6 +88,7 @@ export class MockProvider implements ModelProvider {
   reset(): void {
     this.#index = 0;
     this.requests.length = 0;
+    this.compactionRequests.length = 0;
   }
 
   async listModels(): Promise<ModelDescriptor[]> {
@@ -97,6 +103,48 @@ export class MockProvider implements ModelProvider {
         availableModels: (this.#options.models ?? MODEL_REGISTRY).map((m) => m.id),
       }
     );
+  }
+
+  async compact(
+    request: ModelCompactionRequest,
+    signal: AbortSignal,
+  ): Promise<ModelCompactionResult> {
+    this.compactionRequests.push(structuredClone(request));
+    if (signal.aborted) {
+      return {
+        ok: false,
+        error: { kind: "cancelled", message: "request cancelled by the user", retryable: false },
+      };
+    }
+    if (this.#options.compactionError !== undefined) {
+      return { ok: false, error: this.#options.compactionError };
+    }
+
+    const retainedUsers = request.input
+      .filter((item) => item.type === "message" && item.role === "user")
+      .map((item) => structuredClone(item));
+    const output = [
+      ...retainedUsers,
+      {
+        type: "compaction" as const,
+        opaque: this.#options.compactionOpaque ?? `mock-compaction-${this.compactionRequests.length}`,
+      },
+    ];
+    const inputTokens = Math.max(1, Math.ceil(JSON.stringify(request.input).length / 4));
+    const outputTokens = Math.max(1, Math.ceil(JSON.stringify(output).length / 4));
+    return {
+      ok: true,
+      responseId: `mock-compact-${this.compactionRequests.length}`,
+      output,
+      usage: {
+        inputTokens,
+        cachedInputTokens: 0,
+        cacheWriteTokens: 0,
+        outputTokens,
+        reasoningTokens: 0,
+        totalTokens: inputTokens + outputTokens,
+      },
+    };
   }
 
   async *stream(request: ModelRequest, signal: AbortSignal): AsyncIterable<ModelEvent> {
