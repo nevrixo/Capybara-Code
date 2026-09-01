@@ -71,6 +71,7 @@ import {
   backendProfileOf,
   bundledCapability,
   CachePlanner,
+  estimateCostUsd,
   InferenceUtilityController,
   selectContextBand,
   type InferencePolicyDecision,
@@ -78,6 +79,7 @@ import {
   type ModelInputItem,
   DEFAULT_HOSTED_SCOUT_POLICY,
   type ModelProvider,
+  type ProviderError,
 } from "@cbc/provider-openai";
 import {
   assessDeepPlanReadiness,
@@ -319,6 +321,22 @@ export interface AgentSessionHydrationOptions {
   readonly snapshotPosition?: SessionHydrationPosition;
   readonly finalPosition?: SessionHydrationPosition;
 }
+
+export type ProviderContextCompactionOutcome =
+  | {
+      readonly kind: "compacted";
+      readonly provider: string;
+      readonly responseId: string;
+      readonly inputTokens: number;
+      readonly outputTokens: number;
+      readonly totalTokens: number;
+      readonly itemsBefore: number;
+      readonly itemsAfter: number;
+    }
+  | { readonly kind: "nothing" }
+  | { readonly kind: "busy" }
+  | { readonly kind: "unsupported"; readonly message: string }
+  | { readonly kind: "failed"; readonly error: ProviderError };
 
 function isSnapshotHistoryItem(value: unknown): value is ModelInputItem {
   if (!isRecord(value) || typeof value.type !== "string") return false;
@@ -1570,7 +1588,15 @@ export class AgentSession {
     }
     const compacted = [...events].reverse().find((event) => event.kind === "session.compacted");
     const payload = compacted !== undefined && isRecord(compacted.payload) ? compacted.payload : undefined;
-    if (typeof payload?.compactState === "string" && payload.compactState.length > 0) {
+    if (
+      typeof payload?.providerCompactionOpaque === "string" &&
+      payload.providerCompactionOpaque.length > 0
+    ) {
+      // Provider compaction replaces the local L5 prose with one opaque item.
+      // Keeping both would pay for and potentially contradict two summaries.
+      this.#compactState = undefined;
+      this.#lastCompactionCapsule = undefined;
+    } else if (typeof payload?.compactState === "string" && payload.compactState.length > 0) {
       this.#compactState = payload.compactState;
     }
     if (isCompactionCapsule(payload?.capsule)) {
@@ -2801,6 +2827,157 @@ export class AgentSession {
     }
   }
 
+  /**
+   * Explicit user-facing compaction through the provider's Responses API.
+   *
+   * Automatic pressure recovery deliberately remains local so an unavailable
+   * endpoint cannot turn a recoverable context boundary into a dead session.
+   * `/compact`, however, must never present a deterministic local extraction as
+   * provider work: it either adopts the returned opaque item or reports why it
+   * could not.
+   */
+  async compactContextWithProvider(
+    signal: AbortSignal = new AbortController().signal,
+  ): Promise<ProviderContextCompactionOutcome> {
+    if (this.#compacting) return { kind: "busy" };
+    const providerCompact = this.#options.provider.compact;
+    if (providerCompact === undefined) {
+      return {
+        kind: "unsupported",
+        message: `${this.#options.provider.id} does not expose provider context compaction`,
+      };
+    }
+
+    const history = this.kernel.history.map((item) => structuredClone(item));
+    const hasCompressibleHistory = this.#compactState !== undefined || history.some((item) =>
+      item.type !== "message" || item.role !== "user"
+    );
+    if (!hasCompressibleHistory) return { kind: "nothing" };
+
+    const input: ModelInputItem[] = [
+      ...(this.#compactState === undefined
+        ? []
+        : [{
+            type: "message" as const,
+            role: "developer" as const,
+            content: [{
+              type: "input_text" as const,
+              text: [
+                "Prior local session state to preserve during provider compaction:",
+                this.#compactState,
+              ].join("\n\n"),
+            }],
+          }]),
+      ...history,
+    ];
+    const requestId = [
+      "compact",
+      this.#options.sessionId,
+      this.recorder.lastSequence + 1,
+      this.#contextPressure.generation + 1,
+    ].join("_");
+    const itemsBefore = input.length;
+
+    this.#compacting = true;
+    try {
+      let result: Awaited<ReturnType<NonNullable<ModelProvider["compact"]>>>;
+      try {
+        result = await providerCompact.call(this.#options.provider, {
+          requestId,
+          model: this.liveModelId,
+          input,
+          tools: this.registry
+            .activeToolsFor(this.recorder.model.modeState.selected)
+            .map((tool) => toModelSchema(tool)),
+          serviceTier: this.#options.config.provider.openai.serviceTier,
+        }, signal);
+      } catch (error) {
+        return {
+          kind: "failed",
+          error: signal.aborted
+            ? { kind: "cancelled", message: "context compaction was cancelled", retryable: false }
+            : {
+                kind: "network",
+                message: error instanceof Error ? error.message : String(error),
+                retryable: true,
+              },
+        };
+      }
+      if (!result.ok) return { kind: "failed", error: result.error };
+
+      const opaque = result.output.at(-1);
+      if (opaque?.type !== "compaction" || opaque.opaque.length === 0) {
+        return {
+          kind: "failed",
+          error: {
+            kind: "server",
+            message: "provider compaction returned no opaque continuation item",
+            retryable: true,
+          },
+        };
+      }
+
+      const inputTokens = result.usage.inputTokens > 0
+        ? result.usage.inputTokens
+        : estimateTokens(JSON.stringify(input));
+      const outputTokens = result.usage.outputTokens > 0
+        ? result.usage.outputTokens
+        : estimateTokens(JSON.stringify(result.output));
+      const generation = Math.max(
+        this.recorder.model.contextGeneration + 1,
+        this.#contextPressure.generation + 1,
+      );
+
+      this.kernel.hydrateHistory(result.output);
+      this.#compactState = undefined;
+      this.#lastCompactionCapsule = undefined;
+      this.#contextPressure.noteCompaction(generation);
+      this.#lastCompactionPromptTokens = outputTokens;
+      this.#lastCompiledRootHistoryLength = this.kernel.history.length;
+      this.#lastToolOutputCompactionHistoryLength = this.kernel.history.length;
+      this.#tokenSaving.resetDirectiveTracking();
+      this.#pruneReadFreshnessState();
+
+      this.#emit("session.compacted", {
+        trigger: "user_requested",
+        method: "responses.compact",
+        provider: this.#options.provider.id,
+        responseId: result.responseId,
+        tokensBefore: inputTokens,
+        tokensAfter: outputTokens,
+        providerInputTokens: inputTokens,
+        providerOutputTokens: outputTokens,
+        providerTotalTokens: result.usage.totalTokens,
+        eventsSummarized: this.recorder.model.timeline.length,
+        generation,
+        providerCompactionOpaque: opaque.opaque,
+        itemsBefore,
+        itemsAfter: result.output.length,
+      });
+      this.#emit("usage.updated", {
+        ...result.usage,
+        estimatedCostUsd: estimateCostUsd(this.liveModelId, result.usage),
+        requestId,
+        operation: "responses.compact",
+      });
+      await this.flush();
+      await this.snapshot(true);
+
+      return {
+        kind: "compacted",
+        provider: this.#options.provider.id,
+        responseId: result.responseId,
+        inputTokens,
+        outputTokens,
+        totalTokens: result.usage.totalTokens,
+        itemsBefore,
+        itemsAfter: result.output.length,
+      };
+    } finally {
+      this.#compacting = false;
+    }
+  }
+
   get todo(): ReturnType<TodoController["current"]> {
     return this.#todoController.current();
   }
@@ -2872,13 +3049,24 @@ export class AgentSession {
     const readiness = this.#todoController.readiness();
     if (!readiness.ready) return { ok: false, message: "Plan is not ready for execution", blockers: readiness.blockers };
     if (state.approval === undefined || !this.#todoController.approvalValid()) return { ok: false, message: "Plan has not been approved; choose Yes, proceed in the Plan prompt first" };
+    if (state.approval.contextStrategy === "compact") {
+      const compacted = await this.compactContextWithProvider(AbortSignal.timeout(120_000));
+      if (compacted.kind === "unsupported") {
+        return { ok: false, message: `Plan context compaction is unavailable: ${compacted.message}` };
+      }
+      if (compacted.kind === "failed") {
+        return { ok: false, message: `Plan context compaction failed: ${compacted.error.message}` };
+      }
+      if (compacted.kind === "busy") {
+        return { ok: false, message: "Plan context compaction is already running" };
+      }
+    }
     this.#planExecution = { digest: state.approval.digest, contextStrategy: state.approval.contextStrategy };
     const mode = await this.requestInteractionMode("build", via === "ui" || via === "shift_tab" ? "key" : "slash");
     if (mode.kind !== "applied" && this.recorder.model.modeState.selected !== "build") {
       this.#planExecution = undefined;
       return { ok: false, message: "Build mode could not be installed; resolve quiescence blockers first" };
     }
-    if (state.approval.contextStrategy === "compact") this.compactContext({ userRequested: true });
     return {
       ok: true,
       state,
@@ -4954,6 +5142,22 @@ function historyFromEvents(
     const payload = isRecord(event.payload) ? event.payload : {};
     switch (event.kind) {
       case "session.compacted": {
+        if (
+          typeof payload.providerCompactionOpaque === "string" &&
+          payload.providerCompactionOpaque.length > 0
+        ) {
+          // The compact endpoint returns every user message followed by exactly
+          // one encrypted compaction item. The journal already has the messages,
+          // so persisting the opaque item is sufficient for crash-safe replay.
+          const retainedUsers = history.filter(
+            (item) => item.type === "message" && item.role === "user",
+          );
+          history.splice(0, history.length, ...retainedUsers, {
+            type: "compaction",
+            opaque: payload.providerCompactionOpaque,
+          });
+          break;
+        }
         // A compact marker without its summary can come from an older journal or
         // a truncated append. Keep the full replay in that case rather than
         // dropping context the provider has no replacement for.

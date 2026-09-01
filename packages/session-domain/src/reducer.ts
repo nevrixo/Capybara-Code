@@ -912,9 +912,13 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
 
     case "session.compacted": {
       const p = payloadOf(event);
+      const providerCompaction = p.method === "responses.compact";
+      const compactedTokens = providerCompaction
+        ? num(p.providerOutputTokens, num(p.tokensAfter, next.contextUsedTokens))
+        : num(p.tokensAfter, next.contextUsedTokens);
       next.compactedAt = event.sequence;
       next.contextGeneration = Math.max(next.contextGeneration + 1, num(p.generation, next.contextGeneration + 1));
-      next.contextUsedTokens = num(p.tokensAfter, next.contextUsedTokens);
+      next.contextUsedTokens = compactedTokens;
       next.contextPressure = {
         state: "stable",
         projectedTokens: next.contextUsedTokens,
@@ -926,7 +930,9 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
         notice(
           event,
           "info",
-          `Context compacted: ${num(p.tokensBefore)} → ${num(p.tokensAfter)} tokens`,
+          providerCompaction
+            ? `Provider compaction completed: ${num(p.providerInputTokens, num(p.tokensBefore))} input · ${compactedTokens} output tokens`
+            : `Context compacted: ${num(p.tokensBefore)} → ${num(p.tokensAfter)} tokens`,
           "●",
         ),
       );

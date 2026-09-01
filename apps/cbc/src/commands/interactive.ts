@@ -2047,15 +2047,20 @@ async function handleSlash(
     }
 
     case "compact": {
-      const result = session.compactContext({ userRequested: true });
-      if (result === undefined) {
-        ui.text("Nothing to compact yet.");
-        return "continue";
+      ui.text("Compacting context with the OpenAI Responses API...");
+      const result = await session.compactContextWithProvider(AbortSignal.timeout(120_000));
+      if (result.kind === "nothing") ui.text("Nothing to compact yet.");
+      else if (result.kind === "busy") ui.text("Context compaction is already running.");
+      else if (result.kind === "unsupported") {
+        ui.text(`Provider compaction is unavailable: ${result.message}.`);
+      } else if (result.kind === "failed") {
+        ui.text(`Provider compaction failed: ${result.error.message}`);
+      } else {
+        ui.text(
+          `Provider compacted ${result.itemsBefore} → ${result.itemsAfter} item(s); API usage ${result.inputTokens} input · ${result.outputTokens} output tokens.`,
+        );
+        ui.text("Original journal events were retained; subsequent turns use the opaque provider continuation.");
       }
-      ui.text(
-        `Compacted ${result.eventsSummarized} event(s): ${result.tokensBefore} →${result.tokensAfter} estimated tokens (${result.trigger}).`,
-      );
-      ui.text("Original journal events were retained.");
       return "continue";
     }
     case "overlay":
