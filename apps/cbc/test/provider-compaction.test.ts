@@ -96,7 +96,7 @@ describe("explicit provider context compaction", () => {
     expect(usage?.payload).toMatchObject({ operation: "responses.compact" });
     expect(session.viewModel.timeline.at(-1)).toMatchObject({
       type: "notice",
-      text: expect.stringContaining("Provider compaction completed"),
+      text: expect.stringContaining("provider native"),
     });
   });
 
@@ -144,5 +144,43 @@ describe("explicit provider context compaction", () => {
     expect(session.kernel.history.some(
       (item) => item.type === "message" && item.role === "assistant",
     )).toBe(true);
+  });
+});
+
+describe("model-summary compaction persistence", () => {
+  test("restores the exact retained tail and summary once after journal replay", async () => {
+    const provider = new MockProvider({
+      steps: [
+        { text: "First answer." },
+        { text: "Second answer." },
+        { text: "Third answer." },
+      ],
+    });
+    const events: CbcEvent[] = [];
+    const { session } = makeSession(provider, events, "model-summary-resume");
+    await session.submit("First instruction", new AbortController().signal);
+    await session.submit("Second instruction", new AbortController().signal);
+    await session.submit("Third instruction", new AbortController().signal);
+
+    const outcome = await session.compactContext({ userRequested: true });
+    expect(outcome !== undefined && "kind" in outcome ? outcome.kind : "legacy").toBe("compacted");
+    expect(provider.requests.filter((request) =>
+      request.responseFormat?.name === "context_compaction_summary_v2")).toHaveLength(1);
+    expect(session.compactState).toContain("Session state (model-compacted)");
+    const liveHistory = structuredClone(session.kernel.history);
+    expect(events.filter((event) => event.kind === "session.compacted")).toHaveLength(1);
+
+    const replayEvents: CbcEvent[] = [];
+    const replayProvider = new MockProvider({ steps: [] });
+    const { session: replayed } = makeSession(
+      replayProvider,
+      replayEvents,
+      "model-summary-resume",
+    );
+    replayed.hydrate(events);
+
+    expect(replayed.kernel.history).toEqual(liveHistory);
+    expect(replayed.compactState).toBe(session.compactState);
+    expect(replayed.viewModel.contextGeneration).toBe(1);
   });
 });

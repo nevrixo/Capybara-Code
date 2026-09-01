@@ -409,7 +409,7 @@ export interface TokenSavingViewState {
 }
 
 export interface ContextPressureViewState {
-  readonly state: "stable" | "prepare" | "compact" | "emergency";
+  readonly state: "stable" | "prepare" | "compact" | "emergency" | "hard_emergency";
   readonly projectedTokens: number;
   readonly requiredFreeTokens: number;
   readonly targetTokens?: number;
@@ -450,6 +450,7 @@ export interface SessionViewModel {
   readonly skillCatalogDigest?: string;
   readonly contextUsedTokens: number;
   readonly contextBudgetTokens: number;
+  readonly contextOptimizationTargetTokens: number;
   readonly notices: TimelineNotice[];
   readonly turnCount: number;
   readonly cancelledTurns: number;
@@ -475,7 +476,11 @@ export interface GoalContractView {
   readonly statement: string;
 }
 
-export function emptyViewModel(sessionId: string, budgetTokens = 96_000): SessionViewModel {
+export function emptyViewModel(
+  sessionId: string,
+  budgetTokens = 96_000,
+  optimizationTargetTokens = 192_000,
+): SessionViewModel {
   return {
     sessionId,
     timeline: [],
@@ -504,6 +509,7 @@ export function emptyViewModel(sessionId: string, budgetTokens = 96_000): Sessio
     permissionMode: "auto-review",
     contextUsedTokens: 0,
     contextBudgetTokens: budgetTokens,
+    contextOptimizationTargetTokens: optimizationTargetTokens,
     notices: [],
     turnCount: 0,
     cancelledTurns: 0,
@@ -610,6 +616,13 @@ function legacyCompletionPresentation(report: CompletionReportView): CompletionP
 
 function num(value: unknown, fallback = 0): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function shortTokens(value: number): string {
+  const normalized = Math.max(0, Math.floor(value));
+  if (normalized >= 1_000_000) return `${(normalized / 1_000_000).toFixed(2)}M`;
+  if (normalized >= 1_000) return `${(normalized / 1_000).toFixed(1)}K`;
+  return String(normalized);
 }
 
 function validateTransitionTrace(
@@ -884,6 +897,9 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
       if (typeof p.contextBudgetTokens === "number") {
         next.contextBudgetTokens = p.contextBudgetTokens;
       }
+      if (typeof p.contextOptimizationTargetTokens === "number") {
+        next.contextOptimizationTargetTokens = p.contextOptimizationTargetTokens;
+      }
       if (isInteractionModeValue(p.interactionMode)) {
         next.modeState = {
           ...next.modeState,
@@ -910,8 +926,107 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
       break;
     }
 
+    case "context.compaction_prepared":
+    case "context.compaction_model_completed": {
+      break;
+    }
+
+    case "context.compaction_started": {
+      const p = payloadOf(event);
+      const before = num(p.compiledTokensBefore);
+      const budget = num(p.inputBudgetTokens);
+      next.timeline.push(notice(
+        event,
+        "info",
+        `Compacting context with ${str(p.model, "the active model")}… ${shortTokens(before)} / ${shortTokens(budget)}`,
+        "●",
+      ));
+      break;
+    }
+
+    case "context.compaction_validation_failed": {
+      const p = payloadOf(event);
+      const count = Array.isArray(p.issues) ? p.issues.length : 0;
+      next.timeline.push(notice(
+        event,
+        "warning",
+        `Context summary validation failed${count > 0 ? ` (${count} issue${count === 1 ? "" : "s"})` : ""}; the previous history was retained.`,
+        "!",
+      ));
+      break;
+    }
+
+    case "context.compaction_aborted": {
+      const p = payloadOf(event);
+      const reasons = strArray(p.reasonCodes);
+      next.timeline.push(notice(
+        event,
+        "warning",
+        `Context compaction aborted; previous history retained${reasons.length > 0 ? `: ${reasons.join(", ")}` : "."}`,
+        "!",
+      ));
+      break;
+    }
+
+    case "context.compaction_committed": {
+      const p = payloadOf(event);
+      const receipt = typeof p.receipt === "object" && p.receipt !== null
+        ? p.receipt as Record<string, unknown>
+        : {};
+      const before = num(receipt.compiledTokensBefore, next.contextUsedTokens);
+      const after = num(receipt.compiledTokensAfter, next.contextUsedTokens);
+      const budget = num(receipt.inputBudgetTokens, next.contextBudgetTokens);
+      const summaryTokens = num(receipt.summaryTokens);
+      const ratioBefore = num(receipt.ratioBefore, budget > 0 ? before / budget : 0);
+      const ratioAfter = num(receipt.ratioAfter, budget > 0 ? after / budget : 0);
+      const strategy = str(receipt.strategy);
+      const generation = num(receipt.generation, next.contextGeneration + 1);
+      next.compactedAt = event.sequence;
+      next.contextGeneration = Math.max(next.contextGeneration, generation);
+      next.contextUsedTokens = after;
+      next.contextBudgetTokens = budget;
+      const usage = p.contextUsage;
+      if (isContextUsageSnapshot(usage)) {
+        next.contextUsage = usage;
+        if (usage.optimizationTargetTokens !== undefined) {
+          next.contextOptimizationTargetTokens = usage.optimizationTargetTokens;
+        }
+      }
+      next.contextPressure = {
+        state: ratioAfter >= 0.8 ? "prepare" : "stable",
+        projectedTokens: after,
+        requiredFreeTokens: 0,
+        reasonCodes: ["compaction_committed"],
+        currentRatio: ratioAfter,
+        inputBudgetTokens: budget,
+      };
+      const label = strategy === "model_summary"
+        ? "model summary"
+        : strategy === "provider_native"
+          ? "provider native"
+          : "emergency fallback";
+      next.timeline.push(notice(
+        event,
+        strategy === "deterministic_fallback" ? "warning" : "info",
+        `Context compacted · ${label} · ${shortTokens(before)} → ${shortTokens(after)} · ${(ratioBefore * 100).toFixed(1)}% → ${(ratioAfter * 100).toFixed(1)}% · summary ${shortTokens(summaryTokens)}`,
+        strategy === "deterministic_fallback" ? "!" : "●",
+      ));
+      break;
+    }
+
     case "session.compacted": {
       const p = payloadOf(event);
+      const receipt = typeof p.receipt === "object" && p.receipt !== null
+        ? p.receipt as Record<string, unknown>
+        : undefined;
+      if (p.schemaVersion === "2.0" || receipt?.schemaVersion === "2.0") {
+        next.compactedAt = event.sequence;
+        next.contextGeneration = Math.max(
+          next.contextGeneration,
+          num(p.generation, num(receipt?.generation, next.contextGeneration)),
+        );
+        break;
+      }
       const providerCompaction = p.method === "responses.compact";
       const compactedTokens = providerCompaction
         ? num(p.providerOutputTokens, num(p.tokensAfter, next.contextUsedTokens))
@@ -1465,7 +1580,7 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
 
     case "context.pressure_evaluated": {
       const p = payloadOf(event);
-      const state = ["stable", "prepare", "compact", "emergency"].includes(String(p.state))
+      const state = ["stable", "prepare", "compact", "emergency", "hard_emergency"].includes(String(p.state))
         ? p.state as ContextPressureViewState["state"]
         : "stable";
       next.contextPressure = {
@@ -1507,7 +1622,13 @@ export function reduce(model: SessionViewModel, event: CbcEvent): SessionViewMod
 
     case "context.pack_compiled": {
       const snapshot = payloadOf(event).contextUsage;
-      if (isContextUsageSnapshot(snapshot)) next.contextUsage = snapshot;
+      if (isContextUsageSnapshot(snapshot)) {
+        next.contextUsage = snapshot;
+        next.contextBudgetTokens = snapshot.budgetTokens;
+        if (snapshot.optimizationTargetTokens !== undefined) {
+          next.contextOptimizationTargetTokens = snapshot.optimizationTargetTokens;
+        }
+      }
       const tokens = num(payloadOf(event).totalInputTokens, next.contextUsedTokens);
       if (tokens > 0) next.contextUsedTokens = tokens;
       const owner = subagentOwner(next.timeline, event, indexes);

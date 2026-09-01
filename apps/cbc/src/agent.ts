@@ -781,6 +781,8 @@ export class AgentSession {
       sessionId: options.sessionId,
       transport: new RuntimeJournalTransport(options.runtime),
       contextBudgetTokens: initialInputBudget,
+      contextOptimizationTargetTokens:
+        options.config.model.context.optimizationTargetTokens,
       snapshotEveryEvents: options.config.sessions.autoSnapshotEvents,
       serializeSnapshot: (model) => {
         const prompt = promptHistoryCapsule(this.kernel.history);
@@ -2528,6 +2530,8 @@ export class AgentSession {
       budgetTokens,
       modelWindowTokens,
       outputReserveTokens: reserveOutputTokens,
+      optimizationTargetTokens:
+        this.#options.config.model.context.optimizationTargetTokens,
       usedTokens: assembled.inputTokens,
       categories: assembled.usageBreakdown.categories,
       source: "estimated",
@@ -2749,6 +2753,8 @@ export class AgentSession {
       budgetTokens: candidate.receipt.inputBudgetTokens,
       modelWindowTokens: candidate.receipt.modelContextWindowTokens,
       outputReserveTokens: candidate.receipt.outputReserveTokens,
+      optimizationTargetTokens:
+        this.#options.config.model.context.optimizationTargetTokens,
       usedTokens: candidate.receipt.compiledTokensAfter,
       categories: candidate.compiled.usageBreakdown.categories,
       source: "estimated",
@@ -3444,15 +3450,23 @@ export class AgentSession {
     if (!readiness.ready) return { ok: false, message: "Plan is not ready for execution", blockers: readiness.blockers };
     if (state.approval === undefined || !this.#todoController.approvalValid()) return { ok: false, message: "Plan has not been approved; choose Approve and start building in Plan review first" };
     if (state.approval.contextStrategy === "compact") {
-      const compacted = await this.compactContextWithProvider(AbortSignal.timeout(120_000));
-      if (compacted.kind === "unsupported") {
-        return { ok: false, message: `Plan context compaction is unavailable: ${compacted.message}` };
-      }
-      if (compacted.kind === "failed") {
-        return { ok: false, message: `Plan context compaction failed: ${compacted.error.message}` };
-      }
-      if (compacted.kind === "busy") {
-        return { ok: false, message: "Plan context compaction is already running" };
+      const compacted = await this.compactContext({
+        userRequested: true,
+        signal: AbortSignal.timeout(120_000),
+      });
+      if (compacted !== undefined && "kind" in compacted) {
+        if (compacted.kind === "disabled") {
+          return { ok: false, message: "Plan context compaction is disabled" };
+        }
+        if (compacted.kind === "aborted") {
+          return {
+            ok: false,
+            message: `Plan context compaction aborted: ${compacted.reasonCodes.join(", ")}`,
+          };
+        }
+        if (compacted.kind === "busy") {
+          return { ok: false, message: "Plan context compaction is already running" };
+        }
       }
     }
     this.#planExecution = { digest: state.approval.digest, contextStrategy: state.approval.contextStrategy };
@@ -5094,7 +5108,9 @@ export class AgentSession {
         interactionMode: initialInteractionMode,
         permissionPreset: this.#permissionPreset,
         reasoningEffort: this.#options.config.model.reasoningEffort,
-        contextBudgetTokens: this.#options.config.model.softContextTokens,
+        contextBudgetTokens: this.#inputBudgetTokens().budget,
+        contextOptimizationTargetTokens:
+          this.#options.config.model.context.optimizationTargetTokens,
         trust: this.#options.trust,
       });
     }
@@ -5538,6 +5554,19 @@ function historyFromEvents(
     const payload = isRecord(event.payload) ? event.payload : {};
     switch (event.kind) {
       case "session.compacted": {
+        if (
+          Array.isArray(payload.retainedHistory) &&
+          payload.retainedHistory.every(isSnapshotHistoryItem)
+        ) {
+          const retained = structuredClone(payload.retainedHistory) as ModelInputItem[];
+          const expectedDigest = typeof payload.retainedHistoryDigest === "string"
+            ? payload.retainedHistoryDigest
+            : undefined;
+          if (expectedDigest === undefined || stableDigest(retained) === expectedDigest) {
+            history.splice(0, history.length, ...retained);
+            break;
+          }
+        }
         if (
           typeof payload.providerCompactionOpaque === "string" &&
           payload.providerCompactionOpaque.length > 0

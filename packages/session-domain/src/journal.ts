@@ -179,6 +179,7 @@ export interface SessionRecorderOptions {
   readonly snapshotEveryEvents?: number;
   readonly snapshotEveryBytes?: number;
   readonly contextBudgetTokens?: number;
+  readonly contextOptimizationTargetTokens?: number;
   /** In-memory timeline bounds; durable journal history is never deleted. */
   readonly residentTimelineMaxItems?: number;
   readonly residentTimelineMaxBytes?: number;
@@ -227,7 +228,11 @@ export class SessionRecorder {
   constructor(options: SessionRecorderOptions) {
     this.#options = options;
     this.#sequencer = new EventSequencer(options.startAfterSequence ?? 0);
-    this.#model = emptyViewModel(options.sessionId, options.contextBudgetTokens);
+    this.#model = emptyViewModel(
+      options.sessionId,
+      options.contextBudgetTokens,
+      options.contextOptimizationTargetTokens,
+    );
   }
 
   get model(): SessionViewModel {
@@ -593,6 +598,7 @@ export function serializeModel(model: SessionViewModel): Record<string, unknown>
     permissionPreset: model.permissionPreset,
     contextUsedTokens: model.contextUsedTokens,
     contextBudgetTokens: model.contextBudgetTokens,
+    contextOptimizationTargetTokens: model.contextOptimizationTargetTokens,
     changedFiles: [...model.changedFiles.entries()],
     turnCount: model.turnCount,
     cancelledTurns: model.cancelledTurns,
@@ -627,6 +633,7 @@ export function deserializeModel(raw: unknown): SessionViewModel | undefined {
     "lastSequence",
     "contextUsedTokens",
     "contextBudgetTokens",
+    "contextOptimizationTargetTokens",
     "turnCount",
     "cancelledTurns",
   ] as const) {

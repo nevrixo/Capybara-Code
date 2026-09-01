@@ -2047,19 +2047,34 @@ async function handleSlash(
     }
 
     case "compact": {
-      ui.text("Compacting context with the OpenAI Responses API...");
-      const result = await session.compactContextWithProvider(AbortSignal.timeout(120_000));
-      if (result.kind === "nothing") ui.text("Nothing to compact yet.");
-      else if (result.kind === "busy") ui.text("Context compaction is already running.");
-      else if (result.kind === "unsupported") {
-        ui.text(`Provider compaction is unavailable: ${result.message}.`);
-      } else if (result.kind === "failed") {
-        ui.text(`Provider compaction failed: ${result.error.message}`);
+      ui.text("Compacting context with the configured strategy...");
+      const result = await session.compactContext({
+        userRequested: true,
+        signal: AbortSignal.timeout(120_000),
+      });
+      if (result === undefined) {
+        ui.text("Nothing to compact yet.");
+      } else if ("kind" in result) {
+        if (result.kind === "nothing") ui.text("Nothing to compact yet.");
+        else if (result.kind === "busy") ui.text("Context compaction is already running.");
+        else if (result.kind === "disabled") ui.text("Context compaction is disabled.");
+        else if (result.kind === "aborted") {
+          ui.text(`Context compaction aborted; previous history retained: ${result.reasonCodes.join(", ")}.`);
+        } else {
+          const receipt = result.receipt;
+          ui.text(
+            `Context compacted · ${receipt.strategy} · ${receipt.compiledTokensBefore.toLocaleString("en-US")} → ${receipt.compiledTokensAfter.toLocaleString("en-US")} input tokens · summary ${receipt.summaryTokens.toLocaleString("en-US")}.`,
+          );
+          if (receipt.fallbackUsed) {
+            ui.text("The model/provider summary failed at the emergency boundary; the deterministic evidence ledger was used.");
+          }
+          ui.text("Original journal events were retained.");
+        }
       } else {
         ui.text(
-          `Provider compacted ${result.itemsBefore} → ${result.itemsAfter} item(s); API usage ${result.inputTokens} input · ${result.outputTokens} output tokens.`,
+          `Legacy context capsule created: ${result.tokensBefore.toLocaleString("en-US")} input estimate · ${result.capsuleTokens.toLocaleString("en-US")} capsule tokens.`,
         );
-        ui.text("Original journal events were retained; subsequent turns use the opaque provider continuation.");
+        ui.text("Original journal events were retained.");
       }
       return "continue";
     }

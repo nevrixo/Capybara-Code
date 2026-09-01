@@ -19,6 +19,8 @@ export interface ContextUsageSnapshot {
   readonly budgetTokens: number;
   readonly modelWindowTokens: number;
   readonly outputReserveTokens: number;
+  /** Optimization-only target. It never participates in safety ratios. */
+  readonly optimizationTargetTokens?: number;
   readonly usedTokens: number;
   readonly freeTokens: number;
   readonly overageTokens: number;
@@ -97,6 +99,7 @@ export function makeContextUsageSnapshot(input: {
   readonly budgetTokens: number;
   readonly modelWindowTokens?: number;
   readonly outputReserveTokens?: number;
+  readonly optimizationTargetTokens?: number;
   readonly usedTokens: number;
   readonly cachedInputTokens?: number;
   readonly categories: ContextUsageCategories;
@@ -116,6 +119,14 @@ export function makeContextUsageSnapshot(input: {
     budgetTokens,
     modelWindowTokens: Math.max(0, Math.floor(input.modelWindowTokens ?? budgetTokens)),
     outputReserveTokens: Math.max(0, Math.floor(input.outputReserveTokens ?? 0)),
+    ...(input.optimizationTargetTokens === undefined
+      ? {}
+      : {
+          optimizationTargetTokens: Math.max(
+            0,
+            Math.floor(input.optimizationTargetTokens),
+          ),
+        }),
     usedTokens,
     freeTokens,
     overageTokens,

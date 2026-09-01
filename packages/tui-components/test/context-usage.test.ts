@@ -30,6 +30,7 @@ const sampleSnapshot: ContextUsageSnapshot = {
   budgetTokens: 272_000,
   modelWindowTokens: 400_000,
   outputReserveTokens: 32_000,
+  optimizationTargetTokens: 20_000,
   usedTokens: 29_900,
   freeTokens: 242_100,
   overageTokens: 0,
@@ -63,6 +64,8 @@ describe("renderContextUsage", () => {
     expect(text).toContain("window 400.0k");
     expect(text).toContain("reserve 32.0k");
     expect(text).toContain("provider-reconciled");
+    expect(text).toContain("Soft target 29.9k/20.0k");
+    expect(text).toContain("exceeded (optimization only)");
   });
 
   test("renders side-by-side grid and legend in wide terminals", () => {

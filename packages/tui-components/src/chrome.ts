@@ -380,8 +380,7 @@ function buildStatusFields(
   }
 
   if (plan.showContextPercent && input.contextBudgetTokens > 0) {
-    // §6.13: the percentage is against the configured soft budget (§10.10), not the
-    // model's window.
+    // The status percentage uses the same effective model input capacity as the guard.
     const percent = (input.contextUsedTokens / input.contextBudgetTokens) * 100;
     const token: ThemeToken =
       percent >= 90 ? "accent.red" : percent >= 70 ? "accent.amber" : "accent.cyan";
@@ -705,6 +704,7 @@ export interface SidebarInput {
   readonly title?: string;
   readonly contextUsedTokens: number;
   readonly contextBudgetTokens: number;
+  readonly contextOptimizationTargetTokens?: number;
   readonly usage?: UsageTotals;
   readonly subagents: readonly SidebarSubagent[];
   readonly todo: readonly PlanItem[];
@@ -802,6 +802,26 @@ export function renderRightSidebar(
       }),
     ]),
   );
+  if (
+    input.contextOptimizationTargetTokens !== undefined &&
+    input.contextOptimizationTargetTokens > 0
+  ) {
+    const exceeded = input.contextUsedTokens > input.contextOptimizationTargetTokens;
+    lines.push(fitLine(
+      "sidebar",
+      [
+        segment("  Soft ", { fg: "fg.muted" }),
+        segment(
+          `${formatTokens(input.contextUsedTokens)} / ${formatTokens(input.contextOptimizationTargetTokens)}`,
+          { fg: exceeded ? "accent.amber" : "fg.muted" },
+        ),
+        segment(exceeded ? " (optimization only, exceeded)" : " (optimization only)", {
+          fg: "fg.muted",
+        }),
+      ],
+      context,
+    ));
+  }
 
   const usage = input.usage;
   if (usage !== undefined) {
@@ -1185,6 +1205,7 @@ export function sidebarFromViewModel(
     ...(extras.title !== undefined ? { title: extras.title } : {}),
     contextUsedTokens: model.contextUsedTokens,
     contextBudgetTokens: model.contextBudgetTokens,
+    contextOptimizationTargetTokens: model.contextOptimizationTargetTokens,
     usage: model.usage,
     subagents,
     todo: model.plan,

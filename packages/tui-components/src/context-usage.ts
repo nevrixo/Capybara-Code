@@ -91,13 +91,13 @@ export function renderContextUsage(
     ? Math.min(100, (snapshot.usedTokens / snapshot.budgetTokens) * 100)
     : 0;
 
-  const usageTokenColor: ThemeToken = percent > 90 ? "accent.red" : percent > 75 ? "accent.amber" : "accent.cyan";
+  const usageTokenColor: ThemeToken = percent >= 90 ? "accent.red" : percent >= 75 ? "accent.amber" : "accent.cyan";
   const source = snapshot.source === "provider_reconciled" ? "provider-reconciled" : snapshot.source;
 
   const lines: StyledLine[] = [
     ...(options.pressure === undefined ? [] : [fitLine("notice", [
       segment("  Pressure: ", { fg: "fg.muted", bold: true }),
-      segment(options.pressure.state, { fg: options.pressure.state === "emergency" ? "accent.red" : options.pressure.state === "compact" ? "accent.amber" : "accent.cyan", bold: true }),
+      segment(options.pressure.state, { fg: options.pressure.state === "emergency" || options.pressure.state === "hard_emergency" ? "accent.red" : options.pressure.state === "compact" ? "accent.amber" : "accent.cyan", bold: true }),
       ...(options.pressure.reasonCodes.length > 0 ? [segment(` · ${options.pressure.reasonCodes.join(", ")}`, { fg: "fg.muted" })] : []),
     ], context)]),
     fitLine(
@@ -118,6 +118,25 @@ export function renderContextUsage(
       ],
       context,
     ),
+    ...(snapshot.optimizationTargetTokens === undefined
+      ? []
+      : [fitLine(
+          "body",
+          [
+            segment("  └ Soft target ", { fg: "fg.muted" }),
+            segment(
+              `${formatTokens(snapshot.usedTokens)}/${formatTokens(snapshot.optimizationTargetTokens)}`,
+              { fg: snapshot.usedTokens > snapshot.optimizationTargetTokens ? "accent.amber" : "fg.muted" },
+            ),
+            segment(
+              snapshot.usedTokens > snapshot.optimizationTargetTokens
+                ? " · exceeded (optimization only)"
+                : " · optimization only",
+              { fg: "fg.muted" },
+            ),
+          ],
+          context,
+        )]),
     fitLine("body", [segment("")], context),
   ];
 
