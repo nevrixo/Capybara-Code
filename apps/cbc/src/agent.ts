@@ -4500,8 +4500,11 @@ export class AgentSession {
         writeTokens: usage.cacheWriteTokens,
       },
       compaction: {
-        mode: config.model.context.compactionPolicy + " local \u00b7 "
-          + config.model.context.providerCompactionMode + " provider",
+        mode: config.model.context.compactionStrategy + " \u00b7 "
+          + Math.round(config.model.context.compactionTriggerRatio * 100) + "/"
+          + Math.round(config.model.context.compactionEmergencyRatio * 100) + "\u2192"
+          + Math.round(config.model.context.compactionTargetRatio * 100) + "% \u00b7 "
+          + config.model.context.compactionFallback + " fallback",
         generation: this.#lastCompactionCapsule?.generation ?? 0,
       },
       fallbacks: this.kernel.nativeFallbackTally(),

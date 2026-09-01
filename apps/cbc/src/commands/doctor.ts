@@ -238,7 +238,7 @@ export async function doctorCommand(
       writeTokens: 0,
     },
     compaction: {
-      mode: `${config.model.context.compactionPolicy} local · ${config.model.context.providerCompactionMode} provider`,
+      mode: `${config.model.context.compactionStrategy} · ${Math.round(config.model.context.compactionTriggerRatio * 100)}/${Math.round(config.model.context.compactionEmergencyRatio * 100)}→${Math.round(config.model.context.compactionTargetRatio * 100)}% · ${config.model.context.compactionFallback} fallback`,
       generation: 0,
     },
     fallbacks: { count: 0, recentReasons: [] },

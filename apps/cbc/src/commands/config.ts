@@ -1,9 +1,13 @@
 /** Low-level global configuration setter and the key-status explainer. */
 
-import { configKeyStatusEntries } from "@cbc/config-schema";
+import {
+  configKeyStatusEntries,
+  normalizeConfigKeys,
+  parseToml,
+} from "@cbc/config-schema";
 
 import { configError, EXIT } from "../exit.ts";
-import { setUserConfigValue } from "../state.ts";
+import { setUserConfigValue, updateUserConfigTransaction } from "../state.ts";
 import { ok, type CommandContext, type CommandResult } from "./context.ts";
 export interface ConfigSetArgs {
   readonly path: string;
@@ -60,6 +64,62 @@ export async function configValidate(
     context.outLines(renderKeyStatusExplanation(loaded.provenance));
   }
   return { code: errors.length > 0 ? EXIT.config : EXIT.ok };
+}
+
+/** Atomically migrate the one-release context-compaction compatibility surface. */
+export async function configMigrate(
+  context: CommandContext,
+): Promise<CommandResult> {
+  const loaded = await context.config();
+  const contextConfig = loaded.config.model.context;
+  const userToml = await context.host.fs.read(loaded.userConfigPath);
+  const explicitUserValues = normalizeConfigKeys(parseToml(userToml ?? "").values);
+  const explicitlySet = (path: string): boolean =>
+    Object.prototype.hasOwnProperty.call(explicitUserValues, path);
+  const set: Record<string, unknown> = {};
+  const v2Values: Readonly<Record<string, unknown>> = {
+    "model.context.compactionPrepareRatio": contextConfig.compactionPrepareRatio,
+    "model.context.compactionTriggerRatio": contextConfig.compactionTriggerRatio,
+    "model.context.compactionEmergencyRatio": contextConfig.compactionEmergencyRatio,
+    "model.context.compactionTargetRatio": contextConfig.compactionTargetRatio,
+    "model.context.compactionStrategy": contextConfig.compactionStrategy,
+    "model.context.compactionModel": contextConfig.compactionModel,
+    "model.context.compactionReasoningEffort": contextConfig.compactionReasoningEffort,
+    "model.context.compactionRecentTurns": contextConfig.compactionRecentTurns,
+    "model.context.compactionMaxAttemptsPerGeneration": contextConfig.compactionMaxAttemptsPerGeneration,
+    "model.context.compactionMinNewTokens": contextConfig.compactionMinNewTokens,
+    "model.context.compactionFallback": contextConfig.compactionFallback,
+    "model.context.contextGaugeBasis": contextConfig.contextGaugeBasis,
+    "model.context.optimizationTargetTokens": contextConfig.optimizationTargetTokens,
+  };
+  for (const [path, value] of Object.entries(v2Values)) {
+    if (!explicitlySet(path)) set[path] = value;
+  }
+  const legacyPaths = [
+    "model.softContextTokens",
+    "model.context.compactionPolicy",
+    "model.context.compaction",
+    "model.context.providerCompaction",
+    "model.context.providerCompactionMode",
+    "model.context.compactionThresholdTokens",
+    "model.context.emergencyRatio",
+  ];
+  const unset = legacyPaths.filter(explicitlySet);
+  if (Object.keys(set).length === 0 && unset.length === 0) {
+    context.out("Context compaction configuration is already migrated.");
+    return ok();
+  }
+  const result = await updateUserConfigTransaction(context.host, { set, unset });
+  const errors = result.issues.filter((issue) => issue.severity === "error");
+  if (errors.length > 0) {
+    throw configError(
+      "Context compaction configuration was not migrated",
+      errors.map((issue) => `  ${issue.path}: ${issue.message}`),
+    );
+  }
+  context.out(`Migrated context compaction configuration to v2 in ${result.path}`);
+  if (unset.length > 0) context.out(`Removed legacy keys: ${unset.join(", ")}`);
+  return ok();
 }
 
 /**

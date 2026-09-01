@@ -309,7 +309,21 @@
             "compactionPolicy",
             "minFreeTokens",
             "targetFreeTokens",
-            "emergencyRatio"
+            "emergencyRatio",
+            "compactionPrepareRatio",
+            "compactionTriggerRatio",
+            "compactionEmergencyRatio",
+            "compactionTargetRatio",
+            "compactionStrategy",
+            "compactionModel",
+            "compactionReasoningEffort",
+            "compactionRecentTurns",
+            "compactionMaxAttemptsPerGeneration",
+            "compactionMinNewTokens",
+            "compactionFallback",
+            "contextGaugeBasis",
+            "optimizationTargetTokens",
+            "maxInputTokens"
           ],
           "properties": {
             "bands": {
@@ -399,7 +413,84 @@
               "type": "number",
               "exclusiveMinimum": 0,
               "maximum": 1,
+              "default": 0.97
+            },
+            "compactionPrepareRatio": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 1,
+              "default": 0.8
+            },
+            "compactionTriggerRatio": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 1,
               "default": 0.9
+            },
+            "compactionEmergencyRatio": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 1,
+              "default": 0.97
+            },
+            "compactionTargetRatio": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 1,
+              "default": 0.6
+            },
+            "compactionStrategy": {
+              "type": "string",
+              "enum": ["model-summary", "provider-native", "hybrid", "off"],
+              "default": "model-summary"
+            },
+            "compactionModel": {
+              "type": "string",
+              "minLength": 1,
+              "default": "same"
+            },
+            "compactionReasoningEffort": {
+              "type": "string",
+              "enum": ["none", "low", "medium", "high", "xhigh", "max"],
+              "default": "low"
+            },
+            "compactionRecentTurns": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10,
+              "default": 2
+            },
+            "compactionMaxAttemptsPerGeneration": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3,
+              "default": 1
+            },
+            "compactionMinNewTokens": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 4096
+            },
+            "compactionFallback": {
+              "type": "string",
+              "enum": ["evidence-ledger", "off"],
+              "default": "evidence-ledger"
+            },
+            "contextGaugeBasis": {
+              "const": "model-input-capacity",
+              "default": "model-input-capacity"
+            },
+            "optimizationTargetTokens": {
+              "type": "integer",
+              "minimum": 1024,
+              "default": 192000
+            },
+            "maxInputTokens": {
+              "oneOf": [
+                { "const": "auto" },
+                { "type": "integer", "minimum": 1024 }
+              ],
+              "default": "auto"
             }
           }
         },
@@ -1159,7 +1250,7 @@
       "description": "Feature gates. Defaults are on; a user may disable any gate and a project cannot re-enable a user-disabled gate.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["editEngineV2", "fullLsp", "sessionDaemon", "durableMemory", "persistentAgentGraph", "worktreeMultiAgent", "pluginRuntime", "appServer"],
+      "required": ["editEngineV2", "fullLsp", "sessionDaemon", "durableMemory", "persistentAgentGraph", "worktreeMultiAgent", "pluginRuntime", "appServer", "contextCompactionV2"],
       "properties": {
         "editEngineV2": { "type": "boolean", "default": true },
         "fullLsp": { "type": "boolean", "default": true },
@@ -1168,7 +1259,8 @@
         "persistentAgentGraph": { "type": "boolean", "default": true },
         "worktreeMultiAgent": { "type": "boolean", "default": true },
         "pluginRuntime": { "type": "boolean", "default": true },
-        "appServer": { "type": "boolean", "default": true }
+        "appServer": { "type": "boolean", "default": true },
+        "contextCompactionV2": { "type": "boolean", "default": true }
       }
     },
     "edit": {

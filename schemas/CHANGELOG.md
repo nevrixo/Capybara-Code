@@ -38,6 +38,22 @@ does not fail validation, so nothing would catch it except a human reading this 
 
 ---
 
+## events/config 1.0 — context compaction v2
+
+Added the prepared, started, model-completed, validation-failed, committed, and
+aborted context-compaction lifecycle kinds. The committed event carries a v2
+receipt whose before/after values are full compiled prompt sizes; summary size is
+reported separately. Existing session.compacted events remain as a compatibility
+alias.
+
+Added model-input-capacity trigger/target ratios, strategy/model/fallback controls,
+an optimization-only soft target, an optional explicit hard input cap, and the
+contextCompactionV2 rollback gate. Legacy compaction keys remain dual-read for one
+migration window.
+
+This is additive for event consumers and config readers. Older event consumers
+skip the new kinds; existing config keys continue to load with migration warnings.
+
 ## config 1.0 — action surface groups
 
 Added agent.actionSurface, a list of the §6.5 groups (inspect, change, verify,

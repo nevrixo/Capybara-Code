@@ -33,6 +33,24 @@ provider_summary = "auto"
 # [model]
 # profile = "auto"
 
+# Context compaction v2. Safety ratios use the model's input capacity after the
+# output reserve; the soft target is optimization-only and never an overflow cap.
+# [model.context]
+# compaction_strategy = "model-summary"
+# compaction_prepare_ratio = 0.80
+# compaction_trigger_ratio = 0.90
+# compaction_emergency_ratio = 0.97
+# compaction_target_ratio = 0.60
+# compaction_model = "same"
+# compaction_reasoning_effort = "low"
+# compaction_recent_turns = 2
+# compaction_max_attempts_per_generation = 1
+# compaction_min_new_tokens = 4096
+# compaction_fallback = "evidence-ledger"
+# context_gauge_basis = "model-input-capacity"
+# optimization_target_tokens = 192000
+# max_input_tokens = 900000 # optional explicit hard cap; omit for model capacity
+
 # Provider backend and transport (§8.4). \`transport\` and \`service_tier\` are wired.
 # \`profile\` is experimental: the backend is derived from the credential type, and
 # this key states an expectation rather than overriding it.
@@ -129,4 +147,5 @@ timeout_ms = 15000
 # worktree_multi_agent = true
 # plugin_runtime = true
 # app_server = true
+# context_compaction_v2 = true
 `;

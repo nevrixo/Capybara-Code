@@ -390,6 +390,10 @@ describe("parseArgs", () => {
       path: "ui.sidebar",
       value: "hide",
     });
+    expect(parseArgs(["config", "migrate"]).command).toEqual({
+      kind: "config",
+      sub: "migrate",
+    });
     expect(() => parseArgs(["config", "get"])).toThrow(/needs a subcommand/);
     expect(() => parseArgs(["config", "set", "ui.sidebar"])).toThrow(/needs <path> <value>/);
     expect(() => parseArgs(["config", "set", "a", "b", "c"])).toThrow(/at most 2 argument/);
@@ -6656,6 +6660,7 @@ describe("router", () => {
     const output = host.out.join("");
     expect(output).toContain("capy run");
     expect(output).toContain("config set");
+    expect(output).toContain("config migrate");
     expect(output).not.toContain("session");
   });
 
@@ -6681,6 +6686,41 @@ describe("router", () => {
     });
     expect(code).toBe(EXIT.ok);
     expect(host.files.get(resolvePaths(host).configFile)).toContain('sidebar = "hide"');
+  });
+
+  test("config migrate preserves explicit v2 values and removes only legacy keys", async () => {
+    const host = createFakeHost();
+    const configFile = resolvePaths(host).configFile;
+    host.files.set(configFile, [
+      "[ui]",
+      'sidebar = "hide"',
+      "",
+      "[model]",
+      "soft_context_tokens = 144000",
+      "",
+      "[model.context]",
+      'compaction_policy = "adaptive"',
+      'provider_compaction_mode = "auto"',
+      'compaction_strategy = "off"',
+      "emergency_ratio = 0.95",
+      "",
+    ].join("\n"));
+    const { route } = await import("../src/router.ts");
+    const code = await route({
+      host,
+      version: "0.1.0",
+      command: { kind: "config", sub: "migrate" },
+    });
+    expect(code).toBe(EXIT.ok);
+    const migrated = host.files.get(configFile) ?? "";
+    expect(migrated).toContain('sidebar = "hide"');
+    expect(migrated).toContain('compaction_strategy = "off"');
+    expect(migrated).toContain("optimization_target_tokens = 144000");
+    expect(migrated).toContain("compaction_emergency_ratio = 0.95");
+    expect(migrated).not.toContain("soft_context_tokens");
+    expect(migrated).not.toContain("compaction_policy");
+    expect(migrated).not.toContain("provider_compaction_mode");
+    expect(migrated).not.toMatch(/^emergency_ratio\s*=/mu);
   });
 });
 

@@ -1077,12 +1077,19 @@ export class SubagentBridge {
       maxOutputTokens: this.#options.config.model.maxOutputTokens,
       reserveOutputTokens: this.#options.config.model.context.reserveOutputTokens,
       parallelToolCalls: this.#options.config.agent.toolGraph.providerParallelTools,
-      nativeCompaction: this.#options.config.model.context.providerCompactionMode === "off"
-        ? false
-        : this.#options.config.model.context.providerCompactionMode === "on"
-          ? true
-          : this.#options.config.model.context.providerCompaction,
-      nativeCompactionDynamic: this.#options.config.model.context.compactionPolicy === "adaptive",
+      nativeCompaction: this.#options.config.experimental.contextCompactionV2
+        ? (
+            this.#options.config.model.context.compactionStrategy === "provider-native" ||
+            this.#options.config.model.context.compactionStrategy === "hybrid"
+          )
+        : this.#options.config.model.context.providerCompactionMode === "off"
+          ? false
+          : this.#options.config.model.context.providerCompactionMode === "on"
+            ? true
+            : this.#options.config.model.context.providerCompaction,
+      nativeCompactionDynamic: this.#options.config.experimental.contextCompactionV2
+        ? true
+        : this.#options.config.model.context.compactionPolicy === "adaptive",
       compactionThresholdTokens: this.#options.config.model.context.compactionThresholdTokens,
       serviceTier: this.#options.config.provider.openai.serviceTier,
       premiumContextPolicy: this.#options.config.model.context.premiumBandPolicy,

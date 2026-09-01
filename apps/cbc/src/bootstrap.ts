@@ -355,12 +355,19 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
     safetyIdentifier: safetyIdentifierFor(install),
     transport: effective.provider.openai.transport,
     serviceTier: effective.provider.openai.serviceTier,
-    nativeCompaction: effective.model.context.providerCompactionMode === "off"
-      ? false
-      : effective.model.context.providerCompactionMode === "on"
-        ? true
-        : effective.model.context.providerCompaction,
-    nativeCompactionDynamic: effective.model.context.compactionPolicy === "adaptive",
+    nativeCompaction: effective.experimental.contextCompactionV2
+      ? (
+          effective.model.context.compactionStrategy === "provider-native" ||
+          effective.model.context.compactionStrategy === "hybrid"
+        )
+      : effective.model.context.providerCompactionMode === "off"
+        ? false
+        : effective.model.context.providerCompactionMode === "on"
+          ? true
+          : effective.model.context.providerCompaction,
+    nativeCompactionDynamic: effective.experimental.contextCompactionV2
+      ? true
+      : effective.model.context.compactionPolicy === "adaptive",
     compactionThresholdTokens: effective.model.context.compactionThresholdTokens,
     enableToolSearch: effective.provider.openai.toolSearch,
   });

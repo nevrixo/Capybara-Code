@@ -100,6 +100,10 @@ export const COMMAND_REGISTRY: readonly CommandSpec[] = [
           { name: "--explain", kind: "boolean", summary: "print every key's status, consumer, and fallback" },
         ],
       },
+      {
+        name: "migrate",
+        summary: "migrate legacy context compaction settings to v2",
+      },
     ],
   },
   {
@@ -282,8 +286,8 @@ export const COMMAND_REGISTRY: readonly CommandSpec[] = [
         ],
         positionals: [{ label: "<path>", required: true }],
       },
-    ],
-  },
+        ],
+      },
   {
     name: "learn",
     summary: "review and decide evidence-backed strategy capsules",
