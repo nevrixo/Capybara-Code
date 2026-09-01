@@ -96,6 +96,10 @@ export interface CompactionOptions {
   readonly maxItemChars?: number;
   /** Hands an oversized entry to the artifact store. */
   readonly spill?: (label: string, content: string) => SummaryHandle | undefined;
+  /** Latest authoritative goal contract; deterministic fallback never guesses older intent. */
+  readonly currentGoal?: string;
+  /** Explicit user constraints already extracted into the source bundle. */
+  readonly userConstraints?: readonly string[];
 }
 
 export const DEFAULT_RETAIN_PER_GROUP = 6;
@@ -218,17 +222,17 @@ export function shouldCompact(
  * generative: §18.9 requires decisions, files, tests, and unresolved items to
  * survive compaction, and a deterministic extraction cannot hallucinate them.
  */
-export function compact(
+export function compactDeterministicFallback(
   model: SessionViewModel,
   trigger: CompactionTrigger,
   estimateTokens: (text: string) => number,
   options: CompactionOptions = {},
 ): CompactionResult {
   const userMessages = model.timeline.filter((i) => i.type === "user");
-  const userGoal =
-    userMessages.length > 0 && userMessages[0]?.type === "user"
-      ? userMessages[0].text
-      : "";
+  const userGoal = options.currentGoal ??
+    (userMessages.length > 0 && userMessages.at(-1)?.type === "user"
+      ? userMessages.at(-1)!.text
+      : "");
 
   const decisions: string[] = [];
   const filesRead: Array<{ path: string; why: string }> = [];
@@ -297,9 +301,12 @@ export function compact(
   }));
 
   const todoItems = model.todo.items.length > 0 ? model.todo.items : model.plan;
-  const constraints = todoItems
-    .filter((item) => item.status === "blocked")
-    .map((item) => `blocked: ${item.text}`);
+  const constraints = [
+    ...(options.userConstraints ?? []),
+    ...todoItems
+      .filter((item) => item.status === "blocked")
+      .map((item) => `blocked: ${item.text}`),
+  ];
 
   const nextAction =
     todoItems.find((item) => item.status === "active")?.text ??
@@ -405,6 +412,9 @@ export function compact(
     journalPreserved: true,
   };
 }
+
+/** @deprecated Use compactDeterministicFallback only at the emergency boundary. */
+export const compact = compactDeterministicFallback;
 
 /** Merge adjacent capsules without reopening their source timeline ranges. */
 export function mergeCompactionCapsules(

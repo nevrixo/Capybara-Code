@@ -8,6 +8,7 @@ export * from "./mode.ts";
 export * from "./todo.ts";
 export * from "./context-usage.ts";
 export * from "./compaction.ts";
+export * from "./compaction-v2.ts";
 export * from "./context-pressure.ts";
 export * from "./journal.ts";
 export * from "./persistence.ts";
