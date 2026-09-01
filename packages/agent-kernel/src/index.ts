@@ -10,3 +10,4 @@ export * from "./kernel.ts";
 export * from "./risk.ts";
 export * from "./token-saving.ts";
 export * from "./thinking.ts";
+export * from "./compaction.ts";

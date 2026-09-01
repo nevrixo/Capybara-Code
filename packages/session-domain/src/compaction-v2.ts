@@ -132,10 +132,17 @@ export interface ModelCompactionSummaryV2 {
     readonly nextAction: string | null;
     readonly evidenceRefs: readonly string[];
   }[];
-  readonly todos: readonly CompactTodoSnapshot[];
+  readonly todos: readonly ModelCompactionTodoSnapshot[];
   readonly approvals: readonly ApprovalSnapshot[];
   readonly pendingQuestionnaire: PendingQuestionnaireSnapshot | null;
   readonly nextAction: string;
+}
+
+export interface ModelCompactionTodoSnapshot {
+  readonly id: string;
+  readonly text: string;
+  readonly status: CompactTodoSnapshot["status"];
+  readonly blockedReason: string | null;
 }
 
 export interface CompactionReceiptV2 {
@@ -626,7 +633,13 @@ export function validateModelCompactionSummary(
     }
   }
 
-  if (JSON.stringify(value.todos) !== JSON.stringify(bundle.todos)) {
+  const normalizedTodos = value.todos.map((item) => ({
+    id: item.id,
+    text: item.text,
+    status: item.status,
+    ...(item.blockedReason === null ? {} : { blockedReason: item.blockedReason }),
+  }));
+  if (JSON.stringify(normalizedTodos) !== JSON.stringify(bundle.todos)) {
     issues.push({
       code: "todo_mismatch",
       path: "$.todos",
@@ -800,12 +813,12 @@ function isEvidenceBoundText(value: unknown): value is EvidenceBoundText {
     isEvidenceRefs(value.evidenceRefs);
 }
 
-function isTodoSnapshot(value: unknown): value is CompactTodoSnapshot {
+function isTodoSnapshot(value: unknown): value is ModelCompactionTodoSnapshot {
   if (!isRecord(value) || !hasOnlyKeys(value, ["id", "text", "status", "blockedReason"])) return false;
   return isString(value.id) &&
     isString(value.text) &&
     ["pending", "active", "done", "blocked", "skipped"].includes(String(value.status)) &&
-    (value.blockedReason === undefined || isString(value.blockedReason));
+    (value.blockedReason === null || value.blockedReason === undefined || isString(value.blockedReason));
 }
 
 function isApprovalSnapshot(value: unknown): value is ApprovalSnapshot {

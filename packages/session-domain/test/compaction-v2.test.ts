@@ -144,7 +144,10 @@ function validSummary(bundle: CompactionSourceBundle): ModelCompactionSummaryV2 
       evidenceRefs: failure.evidenceRefs,
     })),
     unresolved: [],
-    todos: bundle.todos.map((item) => ({ ...item })),
+    todos: bundle.todos.map((item) => ({
+      ...item,
+      blockedReason: item.blockedReason ?? null,
+    })),
     approvals: bundle.approvals.map((item) => ({ ...item })),
     pendingQuestionnaire: bundle.pendingQuestionnaire === null
       ? null
