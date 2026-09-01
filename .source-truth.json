@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-31T18:06:12.245Z",
+  "generatedAt": "2026-08-31T18:26:54.986Z",
   "git": {
-    "commit": "unavailable",
-    "dirty": false,
-    "dirtyHash": "23d0087430f5923716636d0079e98da69ea68f449ab0193fea515a93f51a141f"
+    "commit": "2ff8c5adb628bba01ab39e7f7daf9a2fcf303b62",
+    "dirty": true,
+    "dirtyHash": "5104ed5a1a774cd96b8fab687cd4b897029c37c655181e0660eeed4aea1229e0"
   },
   "roots": [
     "apps",
@@ -53,9 +53,9 @@
     "node": "v24.3.0",
     "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
-    "typescript": "unavailable"
+    "typescript": "5.9.3"
   },
-  "fileCount": 751,
+  "fileCount": 755,
   "historicalArtifacts": [],
   "files": [
     {
@@ -230,8 +230,8 @@
     },
     {
       "path": "apps/cbc/src/agent.ts",
-      "bytes": 242327,
-      "sha256": "aa5364d203e9fff6a76e6a0e6269aa78a39594d2623278156ab0ad552b4658bf"
+      "bytes": 249813,
+      "sha256": "710c334d550f052dc26226f8310d1daf53339eb454168aef085a712a3b5996cf"
     },
     {
       "path": "apps/cbc/src/approvals.ts",
@@ -300,8 +300,8 @@
     },
     {
       "path": "apps/cbc/src/commands/interactive.ts",
-      "bytes": 103513,
-      "sha256": "ebbb8a3008db50987667de149a31412d7bac76b803ef48228de36a93d58df0fb"
+      "bytes": 104003,
+      "sha256": "d4d72ed297f769eda64345f6fda6a66d0d3ea3b55f2c84719f0b51e23d5a6cfa"
     },
     {
       "path": "apps/cbc/src/commands/learn.ts",
@@ -824,6 +824,11 @@
       "sha256": "0cba66f53e8eb2d8843f662bb56c7b051dbbfec985b280e0bee42275225ed679"
     },
     {
+      "path": "apps/cbc/test/provider-compaction.test.ts",
+      "bytes": 5762,
+      "sha256": "bdfa419401b5694f851140c09d91e54acf440d76f7ee32011be0cd50e6746686"
+    },
+    {
       "path": "apps/cbc/test/read-cache.test.ts",
       "bytes": 6618,
       "sha256": "214279657526df6cc3ffc7a08c04ab30041a86467a26954930d4ff098fe7f2a3"
@@ -967,6 +972,21 @@
       "path": "apps/cbc/test/windows-tui-fallback.test.ts",
       "bytes": 276,
       "sha256": "6b913265b4ce56c1ded84193031c5002b3c81b67c77c10962cc53331ebc6281c"
+    },
+    {
+      "path": "apps/cbc/test/zz-layers.ts",
+      "bytes": 1888,
+      "sha256": "1a2e0998861b2ae611306ad8b89da7b00f3c088d0ffe8ebf248ee43e707b6ca3"
+    },
+    {
+      "path": "apps/cbc/test/zz-multiturn.ts",
+      "bytes": 2525,
+      "sha256": "0eead6a70c03d69c1d537c3df6bde09f5e1bc35f2e74bd79bd1181b59df6cfcc"
+    },
+    {
+      "path": "apps/cbc/test/zz-trace-compact.ts",
+      "bytes": 2094,
+      "sha256": "486dad545ff1e7f2e2fc81dd737b803b0ee76a74b3f977e3a8ae6716894b5148"
     },
     {
       "path": "benchmarks/cbc-bench/README.md",
@@ -2890,8 +2910,8 @@
     },
     {
       "path": "packages/provider-openai/src/mock.ts",
-      "bytes": 8524,
-      "sha256": "5e69fc0d143f304f3a6a81edcd3835a64e044742f9d11620e133d366cc475eac"
+      "bytes": 10114,
+      "sha256": "d6d1d8bbb2c84ee18e5cafef7c07bd75f2ae345abe03362ac10382a15354fd5a"
     },
     {
       "path": "packages/provider-openai/src/multi-agent.ts",
@@ -2905,8 +2925,8 @@
     },
     {
       "path": "packages/provider-openai/src/openai.ts",
-      "bytes": 67111,
-      "sha256": "a4860457dd5184251b029e19b8ca56e402820f316db4a76f40830c4a413d6c74"
+      "bytes": 71496,
+      "sha256": "f0b7b6c0942ddad78d95ca0ca70ea9dc40a61f8ecce4a54fa7268685ca70d5ac"
     },
     {
       "path": "packages/provider-openai/src/policy.ts",
@@ -2930,8 +2950,8 @@
     },
     {
       "path": "packages/provider-openai/src/types.ts",
-      "bytes": 17679,
-      "sha256": "9ed594d0c5e25c6fd161f5157bd61c6931d86febbc3445dd64c8fd6f185ab364"
+      "bytes": 18644,
+      "sha256": "8fdf53fcd56107290af8dd2ce0b8324b6827d61f6400e4c185f9c07378015fa8"
     },
     {
       "path": "packages/provider-openai/src/utility.ts",
@@ -2960,8 +2980,8 @@
     },
     {
       "path": "packages/provider-openai/test/provider.test.ts",
-      "bytes": 85910,
-      "sha256": "f53f48beb1ed26f605bc2d9ecd7338a1b3f463946b1eaa80ee8c56b7efe8982e"
+      "bytes": 90985,
+      "sha256": "d0d9993ef15ad79090a04ef5ec2520cd43100a09a41ef7daf968fdd330f038a4"
     },
     {
       "path": "packages/provider-openai/test/ptc-wire.test.ts",
@@ -3140,8 +3160,8 @@
     },
     {
       "path": "packages/session-domain/src/reducer.ts",
-      "bytes": 97179,
-      "sha256": "bed4580b27e3cb2efce005cb6ed37193f6906a92bd466a81d2b12f94f87ff600"
+      "bytes": 97577,
+      "sha256": "425f8c7db99c40376869c1f33dd188390cb648711316c4b7f4fa9697e7e82e6d"
     },
     {
       "path": "packages/session-domain/src/todo.ts",
@@ -3814,5 +3834,5 @@
       "sha256": "8391ee841757695b95ddefc5dfd0ac274ecc32a76d733f2193b0a02a605a83df"
     }
   ],
-  "digest": "1ca769fbaa6cac320fd726c95fe777c416740673b3874ef5b8f2bde877955e9e"
+  "digest": "433aabc92da0389e2c08d1471dcf8216679572852f3310c80843de6b7998eed1"
 }
