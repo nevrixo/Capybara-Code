@@ -321,14 +321,8 @@ export function computePlanReadiness(
     const detail = item as PlanItemView;
     if ((detail.files?.length ?? 0) === 0) blockers.push(`implementation step '${item.id}' has no file anchor`);
     if ((detail.acceptanceCriteria?.length ?? 0) === 0) blockers.push(`implementation step '${item.id}' has no acceptance criteria`);
-    if (document !== undefined && detail.files !== undefined && detail.files.length > 0 && document.criticalFiles.length > 0) {
-      const allowed = document.criticalFiles.map((file) => file.path);
-      for (const file of detail.files) {
-        if (!allowed.some((anchor) => file === anchor || file.startsWith(`${anchor}/`))) {
-          blockers.push(`implementation file '${file}' is outside Critical files`);
-        }
-      }
-    }
+    // Critical files highlight the important evidence anchors. The item files
+    // independently declare execution scope and need not be nested beneath them.
   }
   if (items.some((item) => item.status === "blocked")) blockers.push("blocked approach step exists");
   // An open analysis step is deliberately NOT a blocker. Analysis is the reading

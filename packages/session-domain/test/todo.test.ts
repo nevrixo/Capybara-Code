@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { TodoController, planDigest, type PlanItem } from "../src/index.ts";
+import { assessPlanReadiness, TodoController, planDigest, type PlanItem } from "../src/index.ts";
 
 function controller(mode: "build" | "plan" = "build"): TodoController {
   return new TodoController({
@@ -20,6 +20,35 @@ function pendingItem(): PlanItem {
 }
 
 describe("TodoController completion integrity", () => {
+
+  test("allows implementation files outside the highlighted critical anchors", () => {
+    const readiness = assessPlanReadiness({
+      goal: "Create a Vite landing page",
+      context: ["The workspace needs a new frontend"],
+      criticalFiles: [{ path: "src/App.tsx" }],
+      verification: [{ command: "npm run build" }],
+      risks: [],
+      rollback: [],
+    }, [
+      {
+        id: "implement",
+        text: "Create the application and supporting build configuration",
+        status: "pending",
+        kind: "implementation",
+        files: ["src/App.tsx", "tsconfig.json", "vite.config.ts", "src/vite-env.d.ts"],
+        acceptanceCriteria: ["The production build succeeds"],
+      },
+      {
+        id: "verify",
+        text: "Build the application",
+        status: "pending",
+        kind: "verification",
+      },
+    ]);
+
+    expect(readiness.ready).toBe(true);
+    expect(readiness.blockers).toEqual([]);
+  });
 
   test("Plan mode keeps future execution work pending instead of blocking the draft", () => {
     const todos = controller("plan");

@@ -55,6 +55,20 @@ const items = [
 ];
 
 describe("Plan Contract UI", () => {
+  test("does not treat supplemental implementation files as missing critical anchors", () => {
+    const supplementalItems = items.map((item) => item.id === "implement"
+      ? { ...item, files: ["src/parser.ts", "tsconfig.json", "vite.config.ts", "src/vite-env.d.ts"] }
+      : item);
+
+    const view = computePlanReadiness(document, supplementalItems);
+    const domain = assessPlanReadiness(document, supplementalItems);
+
+    expect(view).toMatchObject({ ready: true });
+    expect(view.blockers ?? []).toEqual([]);
+    expect(domain.ready).toBe(true);
+    expect(domain.blockers).toEqual([]);
+  });
+
   test("renders every contract section and execution metadata", () => {
     const lines = renderPlanContract({
       document,

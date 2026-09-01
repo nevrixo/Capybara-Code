@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-08-31T18:26:54.986Z",
+  "generatedAt": "2026-09-01T20:39:04.547Z",
   "git": {
-    "commit": "2ff8c5adb628bba01ab39e7f7daf9a2fcf303b62",
+    "commit": "25fec66510c31442484b310b1788ace0806ef8a7",
     "dirty": true,
-    "dirtyHash": "5104ed5a1a774cd96b8fab687cd4b897029c37c655181e0660eeed4aea1229e0"
+    "dirtyHash": "9b354b4fb086082d4e37bbd9de42f37fb8e7d0bb1b9c727bcc50ad688ad96b4b"
   },
   "roots": [
     "apps",
@@ -3165,8 +3165,8 @@
     },
     {
       "path": "packages/session-domain/src/todo.ts",
-      "bytes": 54379,
-      "sha256": "61020a615be3940d83fe8bdeb18be64298216674f9a353f56d6894b64cb54a58"
+      "bytes": 54092,
+      "sha256": "7e9818e1fb92a548261394f6a50045f4d3acbe305f05ec0b5f5b51ac99b32750"
     },
     {
       "path": "packages/session-domain/test/compaction-capsule.test.ts",
@@ -3220,8 +3220,8 @@
     },
     {
       "path": "packages/session-domain/test/todo.test.ts",
-      "bytes": 20310,
-      "sha256": "fca7907fdb85fdba2ea860135cf5ead4453856d8d0beefdd39574dd43c00e7da"
+      "bytes": 21267,
+      "sha256": "2ea0bacd9b314c548c98357d12085e82f39886d0fb6d211de8169739dc568ce3"
     },
     {
       "path": "packages/skills/package.json",
@@ -3530,8 +3530,8 @@
     },
     {
       "path": "packages/tui-components/src/todo.ts",
-      "bytes": 40394,
-      "sha256": "b8d5d44870462a126525db6b8ba21a0eb4e4fdc10d94b11f0671b86c5b7e33ed"
+      "bytes": 40116,
+      "sha256": "ffbece64536b3c28709779b53793d8546b9c191dfa915b142e683d10a85c6023"
     },
     {
       "path": "packages/tui-components/src/width.ts",
@@ -3560,8 +3560,8 @@
     },
     {
       "path": "packages/tui-components/test/plan-contract-ui.test.ts",
-      "bytes": 15146,
-      "sha256": "cfe670bbdaac86b1817fd7799dfb1e3a07cc3cd4abcb11d779b936e4549af99b"
+      "bytes": 15750,
+      "sha256": "0c38b1b3ad6b9beca34370dac92c16334d57c6c6f318ea9e1eee60e2ca4da195"
     },
     {
       "path": "packages/tui-components/test/questionnaire.test.ts",
@@ -3834,5 +3834,5 @@
       "sha256": "8391ee841757695b95ddefc5dfd0ac274ecc32a76d733f2193b0a02a605a83df"
     }
   ],
-  "digest": "433aabc92da0389e2c08d1471dcf8216679572852f3310c80843de6b7998eed1"
+  "digest": "4d05374c36288953bb8a3cc2d2a0e3616cca1d3853c635b30aa67e8c5b45f743"
 }

@@ -371,12 +371,6 @@ function sameScope(documentA: PlanDocument | undefined, itemsA: readonly PlanIte
   return planDigest(documentA, itemsA) === planDigest(documentB, itemsB);
 }
 
-function pathWithinAnchor(path: string, anchor: string): boolean {
-  const a = normalizedPlanPath(anchor).replace(/\/$/u, "");
-  const p = normalizedPlanPath(path).replace(/\/$/u, "");
-  return p === a || p.startsWith(`${a}/`);
-}
-
 export function assessPlanReadiness(document: PlanDocument | undefined, items: readonly PlanItem[]): PlanReadiness {
   const blockers: string[] = [];
   if (document === undefined) blockers.push("structured Plan document is missing");
@@ -402,11 +396,9 @@ export function assessPlanReadiness(document: PlanDocument | undefined, items: r
   for (const item of implementations) {
     if ((item.files?.length ?? 0) === 0) blockers.push(`implementation step '${item.id}' needs file anchors`);
     if ((item.acceptanceCriteria?.length ?? 0) === 0) blockers.push(`implementation step '${item.id}' needs acceptance criteria`);
-    if (document !== undefined) {
-      for (const path of item.files ?? []) {
-        if (!document.criticalFiles.some((anchor) => pathWithinAnchor(path, anchor.path))) blockers.push(`implementation file '${path}' is outside Critical Files`);
-      }
-    }
+    // Critical files are evidence anchors, not an exhaustive implementation
+    // allowlist. Execution remains digest-bound to the union of these anchors
+    // and every implementation item's files.
   }
   const digest = document === undefined ? undefined : planDigest(document, items);
   return digest === undefined ? { ready: blockers.length === 0, blockers } : { ready: blockers.length === 0, blockers, digest };
