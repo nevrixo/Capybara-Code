@@ -291,6 +291,13 @@ export interface ModelRequest {
     readonly ttl: string;
   };
   readonly maxOutputTokens: number;
+  /** Provider-neutral Structured Outputs request. */
+  readonly responseFormat?: {
+    readonly type: "json_schema";
+    readonly name: string;
+    readonly schema: Readonly<Record<string, unknown>>;
+    readonly strict: true;
+  };
   /** §10.6: `store:false` keeps session ownership local. */
   readonly store: false;
   /** §10.6 privacy-preserving identifier: a keyed hash, never PII. */

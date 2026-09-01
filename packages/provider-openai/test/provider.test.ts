@@ -1517,6 +1517,31 @@ describe("request body policy (§10.6, §10.14)", () => {
     expect(body.stream).toBe(true);
   });
 
+  test("serializes strict JSON Schema structured outputs under text.format", async () => {
+    const schema = {
+      type: "object",
+      properties: { goal: { type: "string" } },
+      required: ["goal"],
+      additionalProperties: false,
+    };
+    const body = await captureBody(request({
+      responseFormat: {
+        type: "json_schema",
+        name: "context_compaction_summary_v2",
+        schema,
+        strict: true,
+      },
+    }));
+    expect(body.text).toEqual({
+      format: {
+        type: "json_schema",
+        name: "context_compaction_summary_v2",
+        schema,
+        strict: true,
+      },
+    });
+  });
+
   test("sends reasoning mode, effort, summary, and context", async () => {
     const body = await captureBody(
       request({

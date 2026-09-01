@@ -571,6 +571,16 @@ export class OpenAiResponsesProvider implements ModelProvider {
     if (this.#options.chatGpt === undefined) {
       body.max_output_tokens = request.maxOutputTokens;
     }
+    if (request.responseFormat !== undefined) {
+      body.text = {
+        format: {
+          type: request.responseFormat.type,
+          name: request.responseFormat.name,
+          schema: request.responseFormat.schema,
+          strict: request.responseFormat.strict,
+        },
+      };
+    }
 
     const reasoning: Record<string, unknown> = {
       effort: request.reasoning.effort,
