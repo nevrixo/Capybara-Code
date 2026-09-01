@@ -138,6 +138,11 @@ import { SubagentBridge } from "./subagent-bridge.ts";
 import { HostActionNormalizer, type McpHintResolver } from "./normalizer.ts";
 import type { ExecutableCapabilities, Runtime } from "./runtime.ts";
 import {
+  ContextCompactionController,
+  type ContextCompactionCandidate,
+  type ContextCompactionOutcome,
+} from "./context-compaction-controller.ts";
+import {
   ReadCache,
   RuntimeToolExecutor,
   workspaceChangeObserved,
@@ -645,6 +650,7 @@ export class AgentSession {
   #backgroundJobsReconciled = true;
   #compacting = false;
   readonly #contextPressure = new ContextPressureController();
+  #contextCompactionController!: ContextCompactionController;
   #lastContextPressure: ContextPressureDecision | undefined;
   /** Compiled size at the guard's first pass, so the verify pass can tell whether
    *  the recompile made material progress or hit the incompressible floor. */
@@ -761,10 +767,20 @@ export class AgentSession {
       escalationModel: options.config.model.router.escalationTier,
       maxCostUsd: options.config.model.router.maxCostUsdPerTurn,
     });
+    const initialWindow = bundledCapability(options.config.model.default)?.contextWindow;
+    const initialWindowBudget = initialWindow === undefined
+      ? options.config.model.context.defaultBand
+      : Math.max(
+          1,
+          initialWindow - options.config.model.context.reserveOutputTokens,
+        );
+    const initialInputBudget = typeof options.config.model.context.maxInputTokens === "number"
+      ? Math.min(initialWindowBudget, options.config.model.context.maxInputTokens)
+      : initialWindowBudget;
     this.recorder = new SessionRecorder({
       sessionId: options.sessionId,
       transport: new RuntimeJournalTransport(options.runtime),
-      contextBudgetTokens: options.config.model.softContextTokens,
+      contextBudgetTokens: initialInputBudget,
       snapshotEveryEvents: options.config.sessions.autoSnapshotEvents,
       serializeSnapshot: (model) => {
         const prompt = promptHistoryCapsule(this.kernel.history);
@@ -817,8 +833,14 @@ export class AgentSession {
     this.context = new ContextEngine({
       reader: new RuntimeInstructionReader(options.runtime),
       ...(options.globalInstructionReader !== undefined ? { globalReader: options.globalInstructionReader } : {}),
-      softContextTokens: options.config.model.softContextTokens,
-      activeExcerptTokens: Math.min(24_000, Math.max(2_000, Math.floor(options.config.model.softContextTokens * 0.2))),
+      softContextTokens: options.config.model.context.optimizationTargetTokens,
+      activeExcerptTokens: Math.min(
+        24_000,
+        Math.max(
+          2_000,
+          Math.floor(options.config.model.context.optimizationTargetTokens * 0.2),
+        ),
+      ),
       ...(options.workspaceIdentityDigest !== undefined ? { workspaceIdentityDigest: options.workspaceIdentityDigest } : {}),
       ...(options.now !== undefined ? { now: options.now } : {}),
     });
@@ -1284,12 +1306,19 @@ export class AgentSession {
         maxIntermediateBytes: options.config.provider.openai.native.maxProgramIntermediateBytes,
         maxRetries: options.config.provider.openai.native.maxProgramRetries,
       },
-      nativeCompaction: options.config.model.context.providerCompactionMode === "off"
-        ? false
-        : options.config.model.context.providerCompactionMode === "on"
-          ? true
-          : options.config.model.context.providerCompaction,
-      nativeCompactionDynamic: options.config.model.context.compactionPolicy === "adaptive",
+      nativeCompaction: options.config.experimental.contextCompactionV2
+        ? (
+            options.config.model.context.compactionStrategy === "provider-native" ||
+            options.config.model.context.compactionStrategy === "hybrid"
+          )
+        : options.config.model.context.providerCompactionMode === "off"
+          ? false
+          : options.config.model.context.providerCompactionMode === "on"
+            ? true
+            : options.config.model.context.providerCompaction,
+      nativeCompactionDynamic: options.config.experimental.contextCompactionV2
+        ? true
+        : options.config.model.context.compactionPolicy === "adaptive",
       compactionThresholdTokens: options.config.model.context.compactionThresholdTokens,
       serviceTier: options.config.provider.openai.serviceTier,
       premiumContextPolicy: options.config.model.context.premiumBandPolicy,
@@ -1413,14 +1442,32 @@ export class AgentSession {
         );
         const accumulated = hasTruncatedObservation || newToolBytes > 128 * 1024;
         if (accumulated) await this.#artifactizeAccumulatedOutputs(newToolOutputs);
-        if (accumulated || this.#options.config.model.context.compactionPolicy === "legacy") {
-          this.compactContext({ toolOutputAccumulation: accumulated });
+        if (
+          !this.#options.config.experimental.contextCompactionV2 &&
+          (accumulated || this.#options.config.model.context.compactionPolicy === "legacy")
+        ) {
+          this.#compactContextLegacy({ toolOutputAccumulation: accumulated });
         }
         if (accumulated) this.#lastToolOutputCompactionHistoryLength = this.kernel.history.length;
         await this.#prepareContextPack();
       },
       contextPressureGuard: (prompt, attempt) => this.#guardContextPressure(prompt, attempt),
-      onProviderContextError: () => {
+      onProviderContextError: async (signal) => {
+        if (this.#options.config.experimental.contextCompactionV2) {
+          const prompt = this.kernel.previewHistory({
+            history: this.kernel.history,
+            ...(this.#compactState === undefined ? {} : { compactState: this.#compactState }),
+            contextGeneration: this.#contextPressure.generation,
+          });
+          await this.#contextCompactionController.compact({
+            prompt,
+            signal,
+            trigger: "provider_context_error",
+            pressureState: "hard_emergency",
+            reasonCodes: ["provider_context_error"],
+          });
+          return;
+        }
         const pressure = this.#lastContextPressure ?? {
           state: "emergency" as const,
           projectedTokens: this.recorder.model.contextUsedTokens,
@@ -1439,7 +1486,13 @@ export class AgentSession {
           targetRatio: 0.6,
           triggerTokens: Math.floor(this.recorder.model.contextBudgetTokens * 0.9),
         };
-        this.compactContext({ pressure: { ...pressure, state: "emergency", reasonCodes: [...pressure.reasonCodes, "provider_context_error"] } });
+        this.#compactContextLegacy({
+          pressure: {
+            ...pressure,
+            state: "emergency",
+            reasonCodes: [...pressure.reasonCodes, "provider_context_error"],
+          },
+        });
       },
       testCommandFor: (paths) => testCommandFor(paths, options.config.perf.verificationPlannerV2 !== false),
       ...(options.verificationContract !== undefined
@@ -1499,6 +1552,23 @@ export class AgentSession {
         },
       },
       ...(options.now !== undefined ? { now: options.now } : {}),
+    });
+    this.#contextCompactionController = new ContextCompactionController({
+      provider: options.provider,
+      config: options.config,
+      host: {
+        snapshot: () => this.#contextCompactionSnapshot(),
+        preview: (input) => this.kernel.previewHistory({
+          history: input.history,
+          ...(input.compactState === undefined ? {} : { compactState: input.compactState }),
+          contextGeneration: input.generation,
+          ...(input.userInput === undefined ? {} : { userInput: input.userInput }),
+        }),
+        commit: (candidate) => this.#commitContextCompaction(candidate),
+        emit: (kind, payload) => {
+          this.#emit(kind, payload);
+        },
+      },
     });
   }
 
@@ -2442,7 +2512,8 @@ export class AgentSession {
     const epoch = this.taskEpoch.current();
     const modelId = metadata?.modelId ?? this.#currentRoute?.model ?? this.#options.config.model.default;
     const modelWindowTokens = this.#currentRoute?.capability.contextWindow ??
-      this.#options.config.model.softContextTokens + this.#options.config.model.context.reserveOutputTokens;
+      bundledCapability(modelId)?.contextWindow ??
+      this.#inputBudgetTokens().budget + this.#options.config.model.context.reserveOutputTokens;
     const reserveOutputTokens = this.#options.config.model.context.reserveOutputTokens;
     // The gauge must report the allowance the pressure guard actually enforces.
     // Deriving it separately let the interface show ~922k free at the moment the
@@ -2590,31 +2661,171 @@ export class AgentSession {
    * the budget by a whole band, so compaction could raise the ratio it was
    * trying to lower. The measured band stays a routing/telemetry field.
    */
-  #inputBudgetTokens(): { budget: number; windowBudget: number; window: number | undefined } {
-    const window = this.#currentRoute?.capability.contextWindow;
+  #inputBudgetTokens(): {
+    budget: number;
+    windowBudget: number;
+    window: number | undefined;
+    reserve: number;
+  } {
+    const window = this.#currentRoute?.capability.contextWindow ??
+      bundledCapability(this.liveModelId)?.contextWindow;
     const reserve = this.#currentRoute?.outputReserveTokens
       ?? this.#options.config.model.context.reserveOutputTokens;
-    const configuredBudget = this.#options.config.model.softContextTokens;
     const windowBudget = window === undefined
-      ? configuredBudget
+      ? Math.max(1, this.#options.config.model.context.defaultBand)
       : Math.max(1, window - reserve);
-    const policyBand = Math.max(1, Math.floor(this.#options.config.model.context.defaultBand));
+    const explicitHardCap = this.#options.config.model.context.maxInputTokens;
+    const budget = typeof explicitHardCap === "number"
+      ? Math.min(windowBudget, Math.max(1, Math.floor(explicitHardCap)))
+      : windowBudget;
     return {
-      budget: Math.min(configuredBudget, windowBudget, policyBand),
+      budget,
       windowBudget,
       window,
+      reserve,
     };
   }
 
-  #guardContextPressure(
+  #contextCompactionSnapshot() {
+    const capacity = this.#inputBudgetTokens();
+    const goal = this.#goalContract.current();
+    const goalEvaluation = this.#goalContract.evaluation();
+    const sourceIdentity = stableDigest({
+      history: this.kernel.history,
+      compactState: this.#compactState,
+      contextGeneration: this.#contextPressure.generation,
+      todoRevision: this.recorder.model.todo.revision,
+      goalDigest: goal?.goalDigest,
+      workspaceGeneration: this.#workspaceGeneration,
+    });
+    return {
+      model: this.recorder.model,
+      history: this.kernel.history,
+      ...(this.#compactState === undefined ? {} : { compactState: this.#compactState }),
+      ...(goal === undefined ? {} : { currentGoal: goal }),
+      ...(goalEvaluation === undefined ? {} : { goalEvaluation }),
+      reflections: this.context.reflections.map((reflection) => ({
+        toolId: reflection.toolId,
+        category: reflection.category,
+        rootCause: reflection.rootCause,
+        correctiveAction: reflection.correctiveAction,
+        paths: [...reflection.paths],
+      })),
+      generation: this.#contextPressure.generation,
+      sourceIdentity,
+      ...(this.#lastCompiledRootHistoryLength <= 0
+        ? {}
+        : { sampledThrough: this.#lastCompiledRootHistoryLength }),
+      modelId: this.liveModelId,
+      inputBudgetTokens: capacity.budget,
+      modelContextWindowTokens: capacity.window ?? capacity.budget + capacity.reserve,
+      outputReserveTokens: capacity.reserve,
+    };
+  }
+
+  async #commitContextCompaction(candidate: ContextCompactionCandidate): Promise<void> {
+    const historyBefore = this.kernel.history.length;
+    const unsampledTail = Math.max(
+      0,
+      historyBefore - Math.min(this.#lastCompiledRootHistoryLength, historyBefore),
+    );
+    this.#compactState = candidate.compactState;
+    this.#lastCompactionCapsule = candidate.capsule;
+    this.kernel.hydrateHistory(candidate.history);
+    this.#lastCompiledRootHistoryLength = Math.max(
+      0,
+      candidate.history.length - unsampledTail,
+    );
+    this.#contextPressure.noteCompaction(candidate.generation);
+    this.#lastCompactionPromptTokens = candidate.receipt.compiledTokensAfter;
+    this.#lastGuardTokens = undefined;
+    this.#lastToolOutputCompactionHistoryLength = this.kernel.history.length;
+    this.#tokenSaving.resetDirectiveTracking();
+    this.#pruneReadFreshnessState();
+
+    const contextUsage = makeContextUsageSnapshot({
+      packId: candidate.compiled.packId,
+      modelId: this.liveModelId,
+      budgetTokens: candidate.receipt.inputBudgetTokens,
+      modelWindowTokens: candidate.receipt.modelContextWindowTokens,
+      outputReserveTokens: candidate.receipt.outputReserveTokens,
+      usedTokens: candidate.receipt.compiledTokensAfter,
+      categories: candidate.compiled.usageBreakdown.categories,
+      source: "estimated",
+    });
+    this.#emit("context.compaction_committed", {
+      receipt: candidate.receipt,
+      contextUsage,
+      method: candidate.strategy === "provider_native"
+        ? "responses.compact"
+        : candidate.strategy === "model_summary"
+          ? "model.summary"
+          : "evidence-ledger",
+    });
+    const retainedHistory = candidate.history.map((item) => structuredClone(item));
+    this.#emit("session.compacted", {
+      schemaVersion: "2.0",
+      trigger: candidate.receipt.trigger,
+      strategy: candidate.receipt.strategy,
+      method: candidate.strategy === "provider_native"
+        ? "responses.compact"
+        : candidate.strategy === "model_summary"
+          ? "model.summary"
+          : "evidence-ledger",
+      tokensBefore: candidate.receipt.compiledTokensBefore,
+      tokensAfter: candidate.receipt.compiledTokensAfter,
+      capsuleTokens: candidate.receipt.summaryTokens,
+      compiledTokensBefore: candidate.receipt.compiledTokensBefore,
+      compiledTokensAfter: candidate.receipt.compiledTokensAfter,
+      eventsSummarized: this.recorder.model.timeline.length,
+      generation: candidate.generation,
+      receipt: candidate.receipt,
+      retainedHistory,
+      retainedHistoryDigest: stableDigest(retainedHistory),
+      ...(candidate.compactState === undefined ? {} : { compactState: candidate.compactState }),
+      ...(candidate.capsule === undefined ? {} : { capsule: candidate.capsule }),
+      ...(candidate.providerOpaque === undefined
+        ? {}
+        : { providerCompactionOpaque: candidate.providerOpaque }),
+      ...(candidate.providerResponseId === undefined
+        ? {}
+        : { responseId: candidate.providerResponseId }),
+    });
+    if (candidate.providerUsage !== undefined) {
+      const operation = candidate.strategy === "provider_native"
+        ? "responses.compact"
+        : "context.model_summary";
+      const usageModel = candidate.strategy === "model_summary" &&
+          this.#options.config.model.context.compactionModel !== "same"
+        ? this.#options.config.model.context.compactionModel
+        : this.liveModelId;
+      this.#emit("usage.updated", {
+        ...candidate.providerUsage,
+        estimatedCostUsd: estimateCostUsd(usageModel, candidate.providerUsage),
+        requestId: `compact_${this.#options.sessionId}_${candidate.generation}`,
+        operation,
+      });
+    }
+    await this.flush();
+    await this.snapshot(true);
+  }
+
+  async #guardContextPressure(
     prompt: CompiledModelRequest,
-    attempt: { readonly recompiled: boolean } = { recompiled: false },
-  ): ContextPressureGuardResult {
-    const { budget: inputBudgetTokens, window: routeWindow } = this.#inputBudgetTokens();
+    attempt: {
+      readonly recompiled: boolean;
+      readonly userInput?: string;
+      readonly signal: AbortSignal;
+    },
+  ): Promise<ContextPressureGuardResult> {
+    const capacity = this.#inputBudgetTokens();
+    const { budget: inputBudgetTokens, window: routeWindow } = capacity;
     const savingLevel = this.#tokenSavingLastPlan?.effectiveLevel ?? this.#options.config.agent.tokenSaving;
     const decision = evaluateContextPressure({
       currentCompiledTokens: prompt.inputTokens,
       inputBudgetTokens,
+      modelContextWindowTokens: capacity.window ?? inputBudgetTokens + capacity.reserve,
+      outputReserveTokens: capacity.reserve,
       pendingHistoryDeltaTokens: 0,
       pendingContextPackTokens: 0,
       recentRequestGrowthP95: this.#contextPressure.recentRequestGrowthP95,
@@ -2622,7 +2833,11 @@ export class AgentSession {
       // expansion reserve for provider-side activation/continuation metadata.
       reservedToolExpansionTokens: Math.min(8_192, Math.ceil(estimateTokens(prompt.serializedTools) * 0.1)),
       tokenSavingLevel: savingLevel,
-      emergencyRatio: this.#options.config.model.context.emergencyRatio,
+      prepareRatio: this.#options.config.model.context.compactionPrepareRatio,
+      triggerRatio: this.#options.config.model.context.compactionTriggerRatio,
+      emergencyRatio: this.#options.config.model.context.compactionEmergencyRatio,
+      targetRatio: this.#options.config.model.context.compactionTargetRatio,
+      minNewTokens: this.#options.config.model.context.compactionMinNewTokens,
       ...(this.#options.config.model.context.minFreeTokens === "auto" ? {} : { minFreeTokens: this.#options.config.model.context.minFreeTokens }),
       ...(this.#options.config.model.context.targetFreeTokens === "auto" ? {} : { targetFreeTokens: this.#options.config.model.context.targetFreeTokens }),
       // The anti-spin guard this enables was dead: `lastCompaction` was never
@@ -2643,8 +2858,15 @@ export class AgentSession {
     // make the *next* turn compact earlier for a request that never grew.
     if (!attempt.recompiled) this.#contextPressure.observeCompiledTokens(prompt.inputTokens);
     this.#lastContextPressure = decision;
+    if (this.#options.config.experimental.contextCompactionV2) {
+      return await this.#guardContextPressureV2(prompt, attempt, decision);
+    }
     const compactionPolicy = this.#options.config.model.context.compactionPolicy;
-    if (decision.state !== "compact" && decision.state !== "emergency") {
+    if (
+      decision.state !== "compact" &&
+      decision.state !== "emergency" &&
+      decision.state !== "hard_emergency"
+    ) {
       return { action: "accept", decision };
     }
     if (compactionPolicy === "off" && decision.state !== "emergency") {
@@ -2682,13 +2904,15 @@ export class AgentSession {
         return { action: "accept", decision };
       }
       return {
-        action: decision.state === "emergency" ? "emergency" : "compact",
+        action: decision.state === "emergency" || decision.state === "hard_emergency"
+          ? "emergency"
+          : "compact",
         targetTokens: decision.targetTokens ?? Math.max(1_024, Math.floor(inputBudgetTokens * 0.7)),
         decision,
       };
     }
     this.#lastGuardTokens = prompt.inputTokens;
-    this.compactContext({
+    this.#compactContextLegacy({
       pressure: decision,
       ...(decision.targetTokens === undefined ? {} : { targetTokens: decision.targetTokens }),
     });
@@ -2696,8 +2920,78 @@ export class AgentSession {
     // that the second evaluation now degrades instead of synthesizing a terminal
     // error, so a heuristic estimate can no longer kill a turn on its own.
     return {
-      action: decision.state === "emergency" ? "emergency" : "compact",
+      action: decision.state === "emergency" || decision.state === "hard_emergency"
+        ? "emergency"
+        : "compact",
       targetTokens: decision.targetTokens ?? Math.max(1_024, Math.floor(inputBudgetTokens * 0.7)),
+      decision,
+    };
+  }
+
+  async #guardContextPressureV2(
+    prompt: CompiledModelRequest,
+    attempt: {
+      readonly recompiled: boolean;
+      readonly userInput?: string;
+      readonly signal: AbortSignal;
+    },
+    decision: ContextPressureDecision,
+  ): Promise<ContextPressureGuardResult> {
+    if (
+      decision.state !== "compact" &&
+      decision.state !== "emergency" &&
+      decision.state !== "hard_emergency"
+    ) {
+      return { action: "accept", decision };
+    }
+    if (attempt.recompiled) {
+      // The controller already performed the exact staged compile. This second
+      // kernel compile is a verification boundary, never another model call.
+      if (
+        decision.state === "hard_emergency" &&
+        prompt.inputTokens > decision.inputBudgetTokens
+      ) {
+        return {
+          action: "emergency",
+          targetTokens: decision.targetTokens ??
+            Math.max(1_024, Math.floor(decision.inputBudgetTokens * decision.targetRatio)),
+          decision,
+        };
+      }
+      return {
+        action: "accept",
+        decision: {
+          ...decision,
+          reasonCodes: [...new Set([
+            ...decision.reasonCodes,
+            "compaction_generation_guard",
+          ])],
+        },
+      };
+    }
+    const outcome = await this.#contextCompactionController.compact({
+      prompt,
+      ...(attempt.userInput === undefined ? {} : { userInput: attempt.userInput }),
+      signal: attempt.signal,
+      trigger: decision.currentRatio >= decision.triggerRatio ? "ratio" : "projection",
+      pressureState: decision.state,
+      reasonCodes: decision.reasonCodes,
+    });
+    if (outcome.kind !== "compacted") {
+      if (decision.state === "hard_emergency") {
+        return {
+          action: "emergency",
+          targetTokens: decision.targetTokens ??
+            Math.max(1_024, Math.floor(decision.inputBudgetTokens * decision.targetRatio)),
+          decision,
+        };
+      }
+      return { action: "accept", decision };
+    }
+    return {
+      action: decision.state === "compact" ? "compact" : "emergency",
+      targetTokens: decision.targetTokens ??
+        Math.max(1_024, Math.floor(decision.inputBudgetTokens * decision.targetRatio)),
       decision,
     };
   }
@@ -2741,7 +3035,51 @@ export class AgentSession {
     return restored;
   }
 
-  compactContext(options: {
+  async compactContext(options: {
+    readonly userRequested?: boolean;
+    readonly signal?: AbortSignal;
+    readonly forceStrategy?: CbcConfig["model"]["context"]["compactionStrategy"];
+  } = {}): Promise<ContextCompactionOutcome | CompactionResult | undefined> {
+    if (!this.#options.config.experimental.contextCompactionV2) {
+      return this.#compactContextLegacy({
+        ...(options.userRequested === undefined
+          ? {}
+          : { userRequested: options.userRequested }),
+      });
+    }
+    return await this.#compactContextUnified(
+      options.signal ?? new AbortController().signal,
+      options.forceStrategy,
+    );
+  }
+
+  async #compactContextUnified(
+    signal: AbortSignal,
+    forceStrategy?: CbcConfig["model"]["context"]["compactionStrategy"],
+  ): Promise<ContextCompactionOutcome> {
+    const capacity = this.#inputBudgetTokens();
+    const prompt = this.kernel.previewHistory({
+      history: this.kernel.history,
+      ...(this.#compactState === undefined ? {} : { compactState: this.#compactState }),
+      contextGeneration: this.#contextPressure.generation,
+    });
+    const ratio = prompt.inputTokens / capacity.budget;
+    const pressureState = prompt.inputTokens > capacity.budget
+      ? "hard_emergency"
+      : ratio >= this.#options.config.model.context.compactionEmergencyRatio
+        ? "emergency"
+        : "compact";
+    return await this.#contextCompactionController.compact({
+      prompt,
+      signal,
+      trigger: "manual",
+      pressureState,
+      reasonCodes: ["manual_compaction"],
+      ...(forceStrategy === undefined ? {} : { forceStrategy }),
+    });
+  }
+
+  #compactContextLegacy(options: {
     userRequested?: boolean;
     toolOutputAccumulation?: boolean;
     pressure?: ContextPressureDecision;
@@ -2849,6 +3187,52 @@ export class AgentSession {
   async compactContextWithProvider(
     signal: AbortSignal = new AbortController().signal,
   ): Promise<ProviderContextCompactionOutcome> {
+    if (this.#options.config.experimental.contextCompactionV2) {
+      const outcome = await this.#compactContextUnified(signal, "provider-native");
+      if (outcome.kind === "nothing") return { kind: "nothing" };
+      if (outcome.kind === "busy") return { kind: "busy" };
+      if (outcome.kind === "disabled") {
+        return {
+          kind: "unsupported",
+          message: "provider context compaction is disabled",
+        };
+      }
+      if (outcome.kind === "aborted") {
+        if (outcome.reasonCodes.includes("provider_compaction_unsupported")) {
+          return {
+            kind: "unsupported",
+            message: `${this.#options.provider.id} does not expose provider context compaction`,
+          };
+        }
+        return {
+          kind: "failed",
+          error: outcome.error ?? {
+            kind: "server",
+            message: `provider context compaction aborted: ${outcome.reasonCodes.join(", ")}`,
+            retryable: true,
+          },
+        };
+      }
+      const usage = outcome.providerUsage ?? {
+        inputTokens: outcome.receipt.compiledTokensBefore,
+        cachedInputTokens: 0,
+        cacheWriteTokens: 0,
+        outputTokens: outcome.receipt.summaryTokens,
+        reasoningTokens: 0,
+        totalTokens:
+          outcome.receipt.compiledTokensBefore + outcome.receipt.summaryTokens,
+      };
+      return {
+        kind: "compacted",
+        provider: this.#options.provider.id,
+        responseId: `compact-${outcome.receipt.generation}`,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        totalTokens: usage.totalTokens,
+        itemsBefore: outcome.itemsBefore,
+        itemsAfter: outcome.itemsAfter,
+      };
+    }
     if (this.#compacting) return { kind: "busy" };
     const providerCompact = this.#options.provider.compact;
     if (providerCompact === undefined) {
@@ -4818,7 +5202,9 @@ export class AgentSession {
     // Keep the next turn from inheriting a prompt that already crossed the
     // effective model budget. The kernel repeats this check before each sample,
     // which also covers long tool-heavy turns.
-    this.compactContext();
+    if (!this.#options.config.experimental.contextCompactionV2) {
+      this.#compactContextLegacy();
+    }
     // Include the selected effort on the user boundary so the reducer and a
     // resumed journal agree about the setting before `turn.started` arrives.
     this.#emit("user.message", {

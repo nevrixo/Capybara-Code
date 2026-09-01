@@ -1,25 +1,7 @@
-/**
- * The adaptive context guard must not fail a turn it could have sent.
- *
- * A trivial request on a ~1M-window model reached the emergency safety line at
- * ~58k tokens, compacted four times to byte-identical results, and died with
- * CONTEXT_BUDGET_EXCEEDED having never contacted the provider. Three defects
- * composed:
- *
- *  - the pressure budget was the route's *measured* context band, which
- *    `selectContextBand` derives from the very prompt it was meant to bound;
- *  - `retainHistoryForPrompt` read a cursor of 0 as "everything was sampled",
- *    so compaction reclaimed nothing and the recompile was identical;
- *  - the guard's verification pass compacted again and the kernel converted the
- *    futile recompile into a non-retryable local error.
- *
- * These tests pin the reported numbers so none of the three can return.
- */
-
 import { describe, expect, test } from "bun:test";
 
 import { loadConfig } from "@cbc/config-schema";
-import { MockProvider } from "@cbc/provider-openai";
+import { MockProvider, type MockProviderOptions } from "@cbc/provider-openai";
 import type { CbcEvent } from "@cbc/protocol";
 
 import { AgentSession } from "../src/agent.ts";
@@ -40,9 +22,25 @@ function fakeRuntime() {
 
 async function runTurn(
   input: string,
-  overrides: { defaultBand?: number; softContextTokens?: number } = {},
+  options: {
+    maxInputTokens?: number;
+    optimizationTargetTokens?: number;
+    warmupTurns?: number;
+    warmupResponseChars?: number;
+    contextSummary?: MockProviderOptions["contextSummary"];
+  } = {},
 ) {
-  const provider = new MockProvider({ steps: [{ text: "Done." }] });
+  const warmupTurns = options.warmupTurns ?? 0;
+  const provider = new MockProvider({
+    steps: Array.from({ length: warmupTurns + 1 }, (_, index) => ({
+      text: index < warmupTurns
+        ? `Warmup ${index + 1} complete. ${"w".repeat(options.warmupResponseChars ?? 0)}`
+        : "Done.",
+    })),
+    ...(options.contextSummary === undefined
+      ? {}
+      : { contextSummary: options.contextSummary }),
+  });
   const events: CbcEvent[] = [];
   let now = 1_000;
   const base = loadConfig({ projectTrusted: true, env: {} }).config;
@@ -50,12 +48,11 @@ async function runTurn(
     ...base,
     model: {
       ...base.model,
-      ...(overrides.softContextTokens === undefined
-        ? {}
-        : { softContextTokens: overrides.softContextTokens }),
       context: {
         ...base.model.context,
-        ...(overrides.defaultBand === undefined ? {} : { defaultBand: overrides.defaultBand }),
+        ...(options.optimizationTargetTokens === undefined
+          ? {}
+          : { optimizationTargetTokens: options.optimizationTargetTokens }),
       },
     },
   };
@@ -74,11 +71,19 @@ async function runTurn(
     now: () => ++now,
     onEvent: (event) => { events.push(event); },
   });
-
+  for (let turn = 0; turn < warmupTurns; turn += 1) {
+    await session.submit(
+      `Warmup request ${turn + 1}: remember constraint ${turn + 1}.`,
+      new AbortController().signal,
+    );
+  }
+  if (options.maxInputTokens !== undefined) {
+    config.model.context.maxInputTokens = options.maxInputTokens;
+  }
+  const eventStart = events.length;
   await session.submit(input, new AbortController().signal);
-
-  const count = (kind: string) => events.filter((event) => event.kind === kind).length;
-  const pressure = events
+  const turnEvents = events.slice(eventStart);
+  const pressure = turnEvents
     .filter((event) => event.kind === "context.pressure_evaluated")
     .map((event) => event.payload as {
       state: string;
@@ -86,83 +91,107 @@ async function runTurn(
       inputBudgetTokens?: number;
       currentRatio?: number;
     });
+  const summaryRequests = provider.requests.filter((request) =>
+    request.responseFormat?.name === "context_compaction_summary_v2");
+  const taskRequests = provider.requests.filter((request) =>
+    request.responseFormat?.name !== "context_compaction_summary_v2");
   return {
     events,
+    turnEvents,
     pressure,
-    band: (events.find((event) => event.kind === "model.route_decided")?.payload as
-      { contextBand?: number } | undefined)?.contextBand,
-    compactions: count("session.compacted"),
-    emergencies: count("context.compaction_emergency"),
-    requestsSent: count("provider.request_sent"),
-    providerErrors: events
+    provider,
+    summaryRequests,
+    taskRequests,
+    compactions: turnEvents.filter((event) => event.kind === "session.compacted"),
+    committed: turnEvents.filter((event) => event.kind === "context.compaction_committed"),
+    providerErrors: turnEvents
       .filter((event) => event.kind === "error.provider")
       .map((event) => (event.payload as { message?: string }).message ?? ""),
   };
 }
 
-describe("a sendable request is never failed locally", () => {
-  test("a mid-band prompt on a wide-window model stays stable and reaches the provider", async () => {
-    // ~56k compiled tokens: the size that used to select the 64k band, halve it
-    // to a 32k budget, and report ratio 1.76 on a 1,050,000-token window.
-    const result = await runTurn("build a vite site with routing and tests. ".repeat(1_630));
+describe("context compaction v2 pressure integration", () => {
+  test("uses model input capacity rather than the optimization target", async () => {
+    const result = await runTurn(
+      "build a vite site with routing and tests. ".repeat(1_630),
+      { optimizationTargetTokens: 32_000 },
+    );
     const first = result.pressure[0]!;
-
     expect(first.requestTokens).toBeGreaterThan(50_000);
     expect(first.requestTokens).toBeLessThan(70_000);
-    // The budget is the configured allowance, not a function of the request.
-    expect(first.inputBudgetTokens).toBe(96_000);
+    expect(first.inputBudgetTokens).toBe(1_018_000);
     expect(first.state).toBe("stable");
-    expect(first.currentRatio!).toBeLessThan(0.9);
-
-    expect(result.compactions).toBe(0);
-    expect(result.emergencies).toBe(0);
-    expect(result.requestsSent).toBe(1);
+    expect(result.summaryRequests).toHaveLength(0);
+    expect(result.taskRequests).toHaveLength(1);
     expect(result.providerErrors).toEqual([]);
   });
 
-  test("the measured band is still announced, but never bounds the budget", async () => {
-    const result = await runTurn("Answer briefly");
-
-    // Routing, cost, and premium gating still see the measured band...
-    expect(result.band).toBe(64_000);
-    // ...while the enforced budget comes from configuration alone. Consuming the
-    // band here is what pinned every request into the top of its own band.
-    expect(result.pressure[0]!.inputBudgetTokens).toBe(96_000);
-  });
-
-  test("an over-budget prompt compacts once, not once per guard pass", async () => {
-    const result = await runTurn("build a vite site with routing and tests. ".repeat(5_170));
-
-    // The kernel calls the guard twice: once to decide, once to verify. Only the
-    // deciding pass may compact.
-    expect(result.compactions).toBe(1);
-    expect(result.emergencies).toBe(0);
-  });
-
-  test("an irreducible prompt is sent for provider arbitration instead of dying", async () => {
-    // A band far below the incompressible prompt floor (L0-L4, L6, tool schemas)
-    // cannot be satisfied by any amount of local compaction.
-    const result = await runTurn("Answer briefly", { defaultBand: 4_000, softContextTokens: 4_000 });
-
-    expect(result.requestsSent).toBe(1);
-    expect(result.providerErrors).toEqual([]);
-    const missed = result.events.find((event) => event.kind === "context.compaction_target_missed");
-    expect(missed).toBeDefined();
-    expect((missed!.payload as { reasonCodes?: string[] }).reasonCodes)
-      .toContain("irreducible_prompt_floor");
-  });
-
-  test("a narrower configured band genuinely compacts earlier (§5.15's intent)", async () => {
-    const wide = await runTurn("build a vite site with routing and tests. ".repeat(1_630));
-    const narrow = await runTurn(
-      "build a vite site with routing and tests. ".repeat(1_630),
-      { defaultBand: 32_000 },
+  test("runs one model summary before inference when an explicit hard cap reaches 90 percent", async () => {
+    const result = await runTurn(
+      "Finish the remembered work and report verification.",
+      { maxInputTokens: 38_000, warmupTurns: 6, warmupResponseChars: 20_000 },
     );
+    expect(result.pressure[0]?.currentRatio).toBeGreaterThanOrEqual(0.9);
+    expect(result.summaryRequests).toHaveLength(1);
+    expect(result.compactions).toHaveLength(1);
+    expect(result.committed).toHaveLength(1);
+    expect(result.taskRequests).toHaveLength(7);
+    expect(result.providerErrors).toEqual([]);
+    const receipt = (result.committed[0]?.payload as {
+      receipt?: { strategy?: string; compiledTokensAfter?: number; summaryTokens?: number };
+    }).receipt;
+    expect(result.turnEvents
+      .filter((event) => event.kind === "context.compaction_validation_failed")
+      .map((event) => event.payload)).toEqual([]);
+    expect(receipt?.strategy).toBe("model_summary");
+    expect(receipt?.compiledTokensAfter).not.toBe(receipt?.summaryTokens);
+  });
 
-    expect(wide.pressure[0]!.state).toBe("stable");
-    // The same prompt under a deliberately narrow policy band does compact —
-    // which is what §5.15 wanted, expressed by a number chosen before the prompt.
-    expect(narrow.pressure[0]!.inputBudgetTokens).toBe(32_000);
-    expect(narrow.pressure[0]!.state).not.toBe("stable");
+  test("does not consume a second model attempt in the verification pass", async () => {
+    const result = await runTurn(
+      "Finish the remembered work and report verification.",
+      { maxInputTokens: 38_000, warmupTurns: 6, warmupResponseChars: 20_000 },
+    );
+    expect(result.summaryRequests).toHaveLength(1);
+    expect(result.turnEvents.filter((event) =>
+      event.kind === "context.compaction_started")).toHaveLength(1);
+  });
+
+  test("keeps old history and still sends the task below emergency when validation fails", async () => {
+    const result = await runTurn(
+      "Finish the remembered work and report verification.",
+      {
+        maxInputTokens: 38_000,
+        warmupTurns: 6,
+        warmupResponseChars: 20_000,
+        contextSummary: { output: { schemaVersion: "2.0" } },
+      },
+    );
+    expect(result.summaryRequests).toHaveLength(1);
+    expect(result.compactions).toHaveLength(0);
+    expect(result.taskRequests).toHaveLength(7);
+    expect(result.turnEvents.some((event) =>
+      event.kind === "context.compaction_validation_failed")).toBe(true);
+  });
+
+  test("uses the explicit emergency fallback when the model summary is invalid", async () => {
+    const result = await runTurn(
+      "Finish the remembered work and report verification.",
+      {
+        maxInputTokens: 35_000,
+        warmupTurns: 6,
+        warmupResponseChars: 20_000,
+        contextSummary: { output: { schemaVersion: "2.0" } },
+      },
+    );
+    expect(result.summaryRequests).toHaveLength(1);
+    expect(result.compactions).toHaveLength(1);
+    const receipt = (result.committed[0]?.payload as {
+      receipt?: { strategy?: string; fallbackUsed?: boolean };
+    }).receipt;
+    expect(receipt).toMatchObject({
+      strategy: "deterministic_fallback",
+      fallbackUsed: true,
+    });
   });
 });

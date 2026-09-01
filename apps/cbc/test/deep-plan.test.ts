@@ -218,7 +218,7 @@ describe("Deep Plan AgentSession integration", () => {
     expect(JSON.stringify(provider.requests[1]?.input)).toContain("cache.layer");
     expect(JSON.stringify(provider.requests[3]?.input)).toContain("cache.failure_policy");
     expect(events.filter((event) => event.kind === "assistant.final")).toHaveLength(1);
-    session.compactContext({ userRequested: true });
+    await session.compactContext({ userRequested: true });
     expect(session.promptInputs().deepPlanState).toContain("cache.layer");
     expect(session.promptInputs().deepPlanState).toContain("cache.failure_policy");
 

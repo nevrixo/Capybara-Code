@@ -24,7 +24,7 @@ describe("model-input-capacity context pressure", () => {
       ...base,
       pendingContextPackTokens: 4_400,
     });
-    expect(decision.state).toBe("hard_emergency");
+    expect(decision.state).toBe("compact");
     expect(decision.projectedTokens).toBe(10_800);
     expect(decision.reasonCodes).toContain("pending_context_pack");
   });

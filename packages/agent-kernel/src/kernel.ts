@@ -637,10 +637,14 @@ export interface KernelOptions {
    */
   readonly contextPressureGuard?: (
     prompt: CompiledModelRequest,
-    attempt: { readonly recompiled: boolean },
+    attempt: {
+      readonly recompiled: boolean;
+      readonly userInput?: string;
+      readonly signal: AbortSignal;
+    },
   ) => ContextPressureGuardResult | Promise<ContextPressureGuardResult>;
   /** One-shot local recovery hook for a provider context-length response. */
-  readonly onProviderContextError?: () => void | Promise<void>;
+  readonly onProviderContextError?: (signal: AbortSignal) => void | Promise<void>;
   /** §10.4 features for adaptive effort selection. */
   readonly complexity?: () => ComplexityFeatures;
   /**
@@ -1356,6 +1360,39 @@ export class AgentKernel {
   hydrateHistory(items: readonly ModelInputItem[]): void {
     this.adoptHydratedHistory([...items]);
   }
+
+  /**
+   * Compile a candidate history without mutating provider continuation or local
+   * replay state. Context compaction uses this as its staged commit boundary.
+   */
+  previewHistory(input: {
+    readonly history: readonly ModelInputItem[];
+    readonly compactState?: string;
+    readonly contextGeneration: number;
+    readonly userInput?: string;
+  }): CompiledModelRequest {
+    let promptInputs = this.#options.promptInputs();
+    if (promptInputs.contextProjection !== undefined) {
+      promptInputs = {
+        ...promptInputs,
+        contextProjection: reprojectPromptContextDialogue(
+          promptInputs.contextProjection,
+          input.history,
+        ),
+      };
+    }
+    return assemblePrompt({
+      ...promptInputs,
+      activeTools: this.#options.registry.activeToolsFor(this.#activeInteractionMode),
+      interactionMode: this.#activeInteractionMode,
+      deepPlanMode: this.#activeDeepPlanMode,
+      history: input.history,
+      ...(input.compactState === undefined ? {} : { compactState: input.compactState }),
+      contextGeneration: input.contextGeneration,
+      ...(input.userInput === undefined ? {} : { userInput: input.userInput }),
+    }, { version: this.#options.promptCompiler ?? "v2" });
+  }
+
   /** §11.10: merge a new instruction into the running turn. */
   redirect(text: string): void {
     this.#redirect = text;
@@ -1593,7 +1630,7 @@ export class AgentKernel {
             ) {
               this.#providerContextRecoveryUsed = true;
               machine.apply("provider_error");
-              await this.#options.onProviderContextError();
+               await this.#options.onProviderContextError(signal);
               emit("context.compaction_emergency", {
                 trigger: "provider_context_error",
                 reasonCodes: ["provider_context_error"],
@@ -2897,7 +2934,11 @@ export class AgentKernel {
 
     const guard = this.#options.contextPressureGuard;
     if (guard !== undefined) {
-      const firstDecision = await guard(assembled, { recompiled: false });
+      const firstDecision = await guard(assembled, {
+        recompiled: false,
+        ...(userInput === undefined ? {} : { userInput }),
+        signal,
+      });
       emit("context.pressure_evaluated", {
         state: firstDecision.decision?.state ?? "stable",
         projectedTokens: firstDecision.decision?.projectedTokens ?? assembled.inputTokens,
@@ -2918,7 +2959,11 @@ export class AgentKernel {
         // The host callback performs the local compaction. Rebuild the exact
         // candidate once; a second pressure result is a hard safety boundary.
         assembled = await this.#compilePrompt(userInput, emit);
-        const secondDecision = await guard(assembled, { recompiled: true });
+        const secondDecision = await guard(assembled, {
+          recompiled: true,
+          ...(userInput === undefined ? {} : { userInput }),
+          signal,
+        });
         emit("context.pressure_evaluated", {
           state: secondDecision.decision?.state ?? "stable",
           projectedTokens: secondDecision.decision?.projectedTokens ?? assembled.inputTokens,

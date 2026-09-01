@@ -283,9 +283,18 @@ function defaultContextSummary(request: ModelRequest): unknown {
     sourceDigest: stringValue(bundle.sourceDigest),
     goal: stringValue(currentGoal?.goal),
     currentState: "Compacted from the deterministic source bundle.",
-    constraints: cloneArray(bundle.userConstraints),
-    decisions: cloneArray(bundle.decisions),
-    completedWork: cloneArray(bundle.completedWork),
+    constraints: arrayOfRecords(bundle.userConstraints).map((entry, index) => ({
+      text: `Preserve user instruction ${index + 1}.`,
+      evidenceRefs: cloneArray(entry.evidenceRefs),
+    })),
+    decisions: arrayOfRecords(bundle.decisions).map((entry, index) => ({
+      text: `Preserve decision ${index + 1}.`,
+      evidenceRefs: cloneArray(entry.evidenceRefs),
+    })),
+    completedWork: arrayOfRecords(bundle.completedWork).map((entry, index) => ({
+      text: `Completed work item ${index + 1} is recorded.`,
+      evidenceRefs: cloneArray(entry.evidenceRefs),
+    })),
     workspaceChanges: arrayOfRecords(bundle.changedFiles).map((file) => ({
       path: stringValue(file.path),
       summary: stringValue(file.diffSummary),
@@ -298,7 +307,7 @@ function defaultContextSummary(request: ModelRequest): unknown {
       evidenceRefs: cloneArray(check.evidenceRefs),
     })),
     failedApproaches: failures.map((failure) => ({
-      text: stringValue(failure.summary),
+      text: "A recorded approach failed.",
       reason: typeof failure.correctiveAction === "string"
         ? failure.correctiveAction
         : "inspect the evidence and choose a safe correction",

@@ -184,26 +184,23 @@ export function evaluateContextPressure(input: ContextPressureInput): ContextPre
 
   const projectedRatio = projectedTokens / budget;
   const hardByCurrent = current > budget;
-  const hardByProjection = projectedTokens > budget;
   const emergencyByCurrent = currentRatio >= emergencyRatio;
-  const emergencyByProjection = projectedRatio >= emergencyRatio;
   const compactByCurrent = currentRatio >= triggerRatio;
   const compactByProjection = projectedRatio >= triggerRatio;
   const prepareByCurrent = currentRatio >= prepareRatio;
   const prepareByProjection = projectedRatio >= prepareRatio;
   let state: ContextPressureState;
-  if (hardByCurrent || hardByProjection) {
+  if (hardByCurrent) {
     state = "hard_emergency";
-    if (hardByCurrent) reasons.push("current_request_over_budget");
-    if (hardByProjection) reasons.push("projected_request_over_budget");
-  } else if (emergencyByCurrent || emergencyByProjection) {
+    reasons.push("current_request_over_budget");
+  } else if (emergencyByCurrent) {
     state = "emergency";
-    if (emergencyByCurrent) reasons.push("current_emergency_ratio");
-    if (emergencyByProjection) reasons.push("projected_emergency_ratio");
+    reasons.push("current_emergency_ratio");
   } else if (compactByCurrent || compactByProjection) {
     state = "compact";
     if (compactByCurrent) reasons.push("current_trigger_ratio");
     if (compactByProjection) reasons.push("projected_trigger_ratio");
+    if (projectedTokens > budget) reasons.push("projected_request_over_budget");
   } else if (prepareByCurrent || prepareByProjection) {
     state = "prepare";
     if (prepareByCurrent) reasons.push("current_prepare_ratio");

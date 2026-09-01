@@ -210,7 +210,9 @@ export class ContextCompactionController {
     const snapshot = this.#host.snapshot();
     const split = splitHistoryForCompaction(
       snapshot.history,
-      this.#config.model.context.compactionRecentTurns,
+      request.forceStrategy === "provider-native"
+        ? 0
+        : this.#config.model.context.compactionRecentTurns,
       snapshot.sampledThrough,
     );
     if (split.prefix.length === 0 && snapshot.compactState === undefined) {

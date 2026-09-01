@@ -540,7 +540,7 @@ describe("AgentSession Context P0 production loop", () => {
   });
 
 
-  test("forced compaction preserves an unsampled 401-line raw read through the next sample", async () => {
+  test("model-capacity pressure keeps an unsampled 401-line raw read through the next sample", async () => {
     const provider = new MockProvider({
       steps: [
         {
@@ -578,7 +578,7 @@ describe("AgentSession Context P0 production loop", () => {
     await session.submit("Read the whole large file", new AbortController().signal);
     expect(provider.requests).toHaveLength(2);
     expect(JSON.stringify(provider.requests[1]?.input)).toContain("RAW_COMPACTION_LINE_401");
-    expect(session.compactState).toBeDefined();
+    expect(session.compactState).toBeUndefined();
   });
 
 
