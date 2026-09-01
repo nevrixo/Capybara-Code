@@ -55,7 +55,7 @@
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
     "typescript": "5.9.3"
   },
-  "fileCount": 755,
+  "fileCount": 752,
   "historicalArtifacts": [],
   "files": [
     {
@@ -545,8 +545,8 @@
     },
     {
       "path": "apps/cbc/src/tools.ts",
-      "bytes": 118926,
-      "sha256": "eda25ad7eb12f96cfab4cee88b7f072a5985a9e34f8dd171d2950f10a56f901d"
+      "bytes": 122205,
+      "sha256": "d1c3b020d806a023328d736bf4c791f0937d19d90b43d8133fe446cf8a12f3b8"
     },
     {
       "path": "apps/cbc/src/tui-frame.ts",
@@ -625,8 +625,8 @@
     },
     {
       "path": "apps/cbc/test/cbc.test.ts",
-      "bytes": 271112,
-      "sha256": "49048eed82f92ba4d76a492f45d27772476e8dcf3072eac9c01187d938970203"
+      "bytes": 273895,
+      "sha256": "f7c21140012190ac901bb25a45642ca487000b2e41d8671c7742671eac09bbf1"
     },
     {
       "path": "apps/cbc/test/config-template.test.ts",
@@ -972,21 +972,6 @@
       "path": "apps/cbc/test/windows-tui-fallback.test.ts",
       "bytes": 276,
       "sha256": "6b913265b4ce56c1ded84193031c5002b3c81b67c77c10962cc53331ebc6281c"
-    },
-    {
-      "path": "apps/cbc/test/zz-layers.ts",
-      "bytes": 1888,
-      "sha256": "1a2e0998861b2ae611306ad8b89da7b00f3c088d0ffe8ebf248ee43e707b6ca3"
-    },
-    {
-      "path": "apps/cbc/test/zz-multiturn.ts",
-      "bytes": 2525,
-      "sha256": "0eead6a70c03d69c1d537c3df6bde09f5e1bc35f2e74bd79bd1181b59df6cfcc"
-    },
-    {
-      "path": "apps/cbc/test/zz-trace-compact.ts",
-      "bytes": 2094,
-      "sha256": "486dad545ff1e7f2e2fc81dd737b803b0ee76a74b3f977e3a8ae6716894b5148"
     },
     {
       "path": "benchmarks/cbc-bench/README.md",
@@ -1900,8 +1885,8 @@
     },
     {
       "path": "packages/agent-kernel/test/fs-list-recovery.test.ts",
-      "bytes": 1568,
-      "sha256": "1564fff7340c878388ef4b0b768448b0a27303bc2f29d898119a308aca793192"
+      "bytes": 1577,
+      "sha256": "728e82313a9297da33f53db17fd64fc804982a8afa6991604bc2c93e6b41c077"
     },
     {
       "path": "packages/agent-kernel/test/kernel.test.ts",
@@ -3370,8 +3355,8 @@
     },
     {
       "path": "packages/tool-registry/src/catalog.ts",
-      "bytes": 69017,
-      "sha256": "220e9dde5754d0e9f399fc2f3d47c476eb694a52ae41e75c9f5ef4fb6897f953"
+      "bytes": 69026,
+      "sha256": "195f36630545e6939afc238f43449dc1a4e76fcccb1bd32fcaf0547fb4ebfc2d"
     },
     {
       "path": "packages/tool-registry/src/discovery.ts",
@@ -3834,5 +3819,5 @@
       "sha256": "8391ee841757695b95ddefc5dfd0ac274ecc32a76d733f2193b0a02a605a83df"
     }
   ],
-  "digest": "4d05374c36288953bb8a3cc2d2a0e3616cca1d3853c635b30aa67e8c5b45f743"
+  "digest": "6b1c3bfff07fa16f113e74ad78d44a03eb077076fc28237f6c539a9b0624ac79"
 }

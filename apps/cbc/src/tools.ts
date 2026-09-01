@@ -60,6 +60,15 @@ export interface Execution {
   durationMs?: number;
 }
 
+interface DirectoryListing {
+  readonly path: string;
+  readonly entries: Array<{ path?: string; name?: string; kind?: string }>;
+  readonly truncated: boolean;
+  /** Present only when a missing target was recovered by listing an ancestor. */
+  readonly requestedPath?: string;
+  readonly requestedExists?: false;
+}
+
 export interface StoredGeneratedImage {
   readonly artifact?: ArtifactRef;
   readonly outputPath?: string;
@@ -240,6 +249,40 @@ function workspacePath(raw: string, workspace: string): string {
     return normalizePath(normalizedValue);
   }
   return raw;
+}
+
+/**
+ * Return the parent of a runtime-authoritative workspace-relative path.
+ *
+ * This deliberately refuses absolute paths and unresolved parent segments. The
+ * Rust runtime supplies normalized relative paths in NOT_FOUND details, and it
+ * remains the authority for every ancestor lookup.
+ */
+function workspaceParent(path: string): string | undefined {
+  const normalized = slash(path).replace(/\/+$/, "");
+  if (
+    normalized.length === 0 ||
+    normalized === "." ||
+    normalized.startsWith("/") ||
+    /^[A-Za-z]:/u.test(normalized)
+  ) return undefined;
+
+  const segments = normalized.split("/");
+  if (segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")) {
+    return undefined;
+  }
+  segments.pop();
+  return segments.length === 0 ? "." : segments.join("/");
+}
+
+function isRecoveredDirectoryListing(execution: Execution): boolean {
+  const data = execution.result.data;
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    !Array.isArray(data) &&
+    (data as Record<string, unknown>).requestedExists === false
+  );
 }
 
 function slash(value: string): string {
@@ -823,6 +866,7 @@ export class RuntimeToolExecutor implements ToolExecutor {
       cache !== undefined &&
       cacheKey !== undefined &&
       execution.result.ok &&
+      !isRecoveredDirectoryListing(execution) &&
       !readContainsSensitivePath(effectiveAction, execution) &&
       (cacheEpoch === undefined || cache.version(cacheKey) === cacheEpoch)
     ) {
@@ -1300,16 +1344,28 @@ export class RuntimeToolExecutor implements ToolExecutor {
       }
 
       case "fs.list": {
-        const data = (await runtime.list(workspacePath(str(action, "path") ?? ".", workspace), normalizeRuntimeOptions(stripPath(args(action)), workspace))) as {
-          path: string;
-          entries: Array<{ path?: string; name?: string; kind?: string }>;
-          truncated: boolean;
-        };
-        const text = data.entries
+        const requestedPath = workspacePath(str(action, "path") ?? ".", workspace);
+        const data = await this.#listDirectory(
+          requestedPath,
+          normalizeRuntimeOptions(stripPath(args(action)), workspace),
+        );
+        const entries = data.entries
           .map((entry) => `${entry.kind === "directory" ? "d" : "-"} ${entry.path ?? entry.name ?? ""}`)
           .join("\n");
+        const recovered = data.requestedExists === false && data.requestedPath !== undefined;
+        const notice = recovered
+          ? `[${data.requestedPath} was not found; showing nearest existing parent ${data.path}]`
+          : undefined;
+        const text = [notice, entries]
+          .filter((part): part is string => part !== undefined && part.length > 0)
+          .join("\n");
         return {
-          result: okResult(`${data.entries.length} entries in ${data.path}`, data),
+          result: okResult(
+            recovered
+              ? `${data.requestedPath} absent; ${data.entries.length} entries in nearest parent ${data.path}`
+              : `${data.entries.length} entries in ${data.path}`,
+            data,
+          ),
           text: data.truncated ? `${text}\n[listing truncated]` : text,
         };
       }
@@ -2099,6 +2155,39 @@ export class RuntimeToolExecutor implements ToolExecutor {
           result: errorResult("INVALID_ARGUMENT", `no executor for tool '${action.toolId}'`),
         };
     }
+  }
+
+  /**
+   * Missing directories are a normal discovery result for creation tasks. Keep
+   * the runtime's strict NOT_FOUND contract, but turn this user-facing composite
+   * tool into one successful observation by listing the nearest existing parent.
+   */
+  async #listDirectory(
+    requestedPath: string,
+    options: Record<string, unknown>,
+  ): Promise<DirectoryListing> {
+    let candidate = requestedPath;
+    let missingPath: string | undefined;
+    const attempted = new Set<string>();
+
+    while (!attempted.has(candidate)) {
+      attempted.add(candidate);
+      try {
+        const listing = await this.#options.runtime.list(candidate, options) as DirectoryListing;
+        return missingPath === undefined
+          ? listing
+          : { ...listing, requestedPath: missingPath, requestedExists: false };
+      } catch (error) {
+        if (!(error instanceof RuntimeRpcError) || error.taxonomy !== "NOT_FOUND") throw error;
+        const runtimePath = typeof error.data?.path === "string" ? error.data.path : candidate;
+        missingPath ??= runtimePath;
+        const parent = workspaceParent(runtimePath);
+        if (parent === undefined || attempted.has(parent)) throw error;
+        candidate = parent;
+      }
+    }
+
+    throw new Error("fs.list parent fallback cycled at '" + candidate + "'");
   }
 
   async #viaBridge(

@@ -9,7 +9,7 @@ describe("missing directory recovery", () => {
     const list = NATIVE_TOOLS.find((tool) => tool.id === "fs.list");
 
     expect(list?.description).toContain("if absent");
-    expect(list?.description).toContain("list parent");
+    expect(list?.description).toContain("shows nearest parent");
   });
 
   test("a missing listing is diagnosed as absent rather than empty", () => {

@@ -6481,6 +6481,94 @@ describe("tool execution helpers", () => {
     expect(result.text).toContain("src");
   });
 
+  test("fs.list recovers a missing directory with the nearest existing parent", async () => {
+    const host = createFakeHost();
+    const listed: string[] = [];
+    const runtime = {
+      workspace: "/work/project",
+      list: async (path: string) => {
+        listed.push(path);
+        if (path === "public/assets" || path === "public") {
+          throw new RuntimeRpcError({
+            code: -32003,
+            message: path + " was not found",
+            data: { taxonomy: "NOT_FOUND", path },
+          });
+        }
+        return {
+          path: ".",
+          entries: [{ path: "src", kind: "directory" }],
+          truncated: false,
+        };
+      },
+    };
+    const executor = new RuntimeToolExecutor({
+      runtime: runtime as never,
+      host,
+      readCache: new ReadCache(),
+    });
+    const result = await executor.execute(
+      {
+        callId: "list-missing",
+        toolId: "fs.list",
+        arguments: { path: "public/assets" },
+        display: "fs.list public/assets",
+      },
+      new AbortController().signal,
+    );
+    const repeated = await executor.execute(
+      {
+        callId: "list-missing-again",
+        toolId: "fs.list",
+        arguments: { path: "public/assets" },
+        display: "fs.list public/assets",
+      },
+      new AbortController().signal,
+    );
+
+    expect(listed).toEqual(["public/assets", "public", ".", "public/assets", "public", "."]);
+    expect(result.result.ok).toBe(true);
+    expect(repeated.result.ok).toBe(true);
+    expect(result.result.summary).toContain("public/assets absent");
+    expect(result.result.data).toMatchObject({
+      path: ".",
+      requestedPath: "public/assets",
+      requestedExists: false,
+    });
+    expect(result.text).toContain("public/assets was not found; showing nearest existing parent .");
+    expect(result.text).toContain("d src");
+  });
+
+  test("fs.list does not mask non-NOT_FOUND runtime errors", async () => {
+    const host = createFakeHost();
+    const listed: string[] = [];
+    const runtime = {
+      workspace: "/work/project",
+      list: async (path: string) => {
+        listed.push(path);
+        throw new RuntimeRpcError({
+          code: -32019,
+          message: "listing denied",
+          data: { taxonomy: "PERMISSION_DENIED", path },
+        });
+      },
+    };
+    const executor = new RuntimeToolExecutor({ runtime: runtime as never, host });
+    const result = await executor.execute(
+      {
+        callId: "list-denied",
+        toolId: "fs.list",
+        arguments: { path: "private" },
+        display: "fs.list private",
+      },
+      new AbortController().signal,
+    );
+
+    expect(listed).toEqual(["private"]);
+    expect(result.result.ok).toBe(false);
+    expect(result.result.error?.code).toBe("PERMISSION_DENIED");
+  });
+
   test("a runtime RPC error keeps its taxonomy", () => {
     const result = toolErrorFrom(
       new RuntimeRpcError({

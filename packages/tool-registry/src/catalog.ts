@@ -259,7 +259,7 @@ export const NATIVE_TOOLS: readonly ToolDefinition[] = [
   {
     id: "fs.list",
     title: "List",
-    description: "List dir; if absent, list parent.",
+    description: "List dir; if absent, shows nearest parent.",
     source: "native",
     defaultRisk: "R0",
     maxRisk: "R0",
