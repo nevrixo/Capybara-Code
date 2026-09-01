@@ -130,10 +130,10 @@ interface QuestionnaireFocus {
 
 /** Concise choices shown when a ready Plan Contract asks what to do next. */
 export const PLAN_APPROVAL_CHOICES = [
-  "Yes, proceed",
-  "Approve and keep planning",
-  "Open plan (read-only)",
-  "No, keep planning",
+  "Approve and start building",
+  "Approve and stay in Plan mode",
+  "Review the full plan",
+  "Keep refining the plan",
 ] as const;
 
 import type { Host } from "./host.ts";

@@ -667,7 +667,7 @@ export async function interactive(
           if (choice === 1) {
             const result = boot.session.approveTodo("ui", "keep");
             ui.text(result.ok
-              ? "Plan approved. It remains read-only until you choose Yes, proceed."
+              ? "Plan approved. Press Shift+Tab when you're ready to start building."
               : result.message);
             ui.flush(boot.session.viewModel);
             return undefined;
@@ -779,7 +779,7 @@ export async function interactive(
             if (choice === 1) {
               const approval = boot.session.approveTodo("ui", "keep");
               ui.text(approval.ok
-                ? "Plan approved. It remains read-only until you choose Yes, proceed."
+                ? "Plan approved. Press Shift+Tab when you're ready to start building."
                 : approval.message);
               ui.flush(boot.session.viewModel);
               return undefined;

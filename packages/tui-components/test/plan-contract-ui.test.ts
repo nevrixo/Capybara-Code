@@ -97,22 +97,29 @@ describe("Plan Contract UI", () => {
     for (const row of lines) expect(lineWidth(row)).toBeLessThanOrEqual(32);
   });
 
-  test("shows the unapproved contract digest in the focused picker", () => {
+  test("shows a human-facing Plan ID in the focused picker", () => {
+    const digest = planDigest(document, items)!;
+    const id = digest.slice("plan-sha256-".length, "plan-sha256-".length + 8);
     const lines = renderPlanApprovalPicker({ document, items, revision: 4 }, context(), {
       choices: ["Approve", "Cancel"],
     });
     const text = lines.map(lineText).join("\n");
-    expect(text).toContain("Digest:");
-    expect(text).toMatch(/plan-sha256-[0-9a-f]{8}/u);
+    expect(text).toContain(`Plan ID ${id}`);
+    expect(text).not.toContain("plan-sha256-");
   });
 
-  test("uses the session-domain digest rather than a lossy display projection", () => {
+  test("derives the Plan ID from the session-domain digest and keeps the full digest in review", () => {
     const expected = planDigest(document, items)!;
+    const id = expected.slice("plan-sha256-".length, "plan-sha256-".length + 8);
     const lines = renderPlanApprovalPicker({ document, items, revision: 4 }, context(200), {
       choices: ["Approve", "Cancel"],
     });
     const text = lines.map(lineText).join("\n");
-    expect(text).toContain(expected);
+    expect(text).toContain(`Plan ID ${id}`);
+
+    const contractText = renderPlanContract({ document, items, revision: 4 }, context(200))
+      .map(lineText).join("\n");
+    expect(contractText).toContain(expected);
   });
 
   test("does not mark a changed contract approved from stale overlay metadata", () => {
@@ -133,8 +140,7 @@ describe("Plan Contract UI", () => {
       choices: ["Approve", "Cancel"],
     });
     const text = lines.map(lineText).join("\n");
-    expect(text).toContain("Digest:");
-    expect(text).toMatch(/plan-sha256-[0-9a-f]{8}/u);
+    expect(text).toMatch(/Plan ID [0-9a-f]{8}/u);
   });
 
   test("does not display stale approval metadata as the current scope digest", () => {
@@ -149,7 +155,7 @@ describe("Plan Contract UI", () => {
     }, context(), { choices: ["Approve", "Cancel"] });
     const text = lines.map(lineText).join("\n");
     expect(text).not.toContain("plan-sha256-stale");
-    expect(text).toMatch(/plan-sha256-[0-9a-f]{8}/u);
+    expect(text).toMatch(/Plan ID [0-9a-f]{8}/u);
   });
 
 
@@ -315,28 +321,40 @@ describe("Plan Contract UI", () => {
       // The contract body is what buried the conversation; it belongs in the overlay.
       for (const section of CONTRACT_SECTIONS) expect(text).not.toContain(section);
       expect(text.split("\n").length).toBeLessThan(8);
-      expect(text).toContain("Goal: Make the parser deterministic");
-      expect(text).toContain("Steps: 1/3 done");
+      expect(text).toContain("Goal    Make the parser deterministic");
+      expect(text).toContain("Scope   3 steps · 1 complete · 2 queued · 1 file · 1 check");
+      expect(text).toContain("Next    Implement the parser change");
+    });
+
+    test("keeps status and review action together instead of separating them across a wide row", () => {
+      const rows = timelineText({}, {}, 180).split("\n");
+      expect(rows[0]).toContain("● Ready to review");
+      expect(rows[0]).not.toContain("Ctrl+X P");
+      expect(rows[0]!.length).toBeLessThan(50);
+      expect(rows[rows.length - 1]).toContain("Ctrl+X P  Review full plan");
     });
 
     test("points at the key that opens the full contract", () => {
       expect(timelineText()).toContain("Ctrl+X P");
     });
 
-    test("shortens the digest but keeps it auditable", () => {
+    test("uses a short human-facing ID while keeping protocol metadata out of the summary", () => {
       const text = timelineText();
-      expect(text).toMatch(/plan-sha256-[0-9a-f]{8}/u);
-      // A 64-character hash spends a whole row saying what 8 characters already say.
+      const digest = planDigest(document, items)!;
+      const id = digest.slice("plan-sha256-".length, "plan-sha256-".length + 8);
+      expect(text).toContain(`ID ${id}`);
+      expect(text).not.toContain("plan-sha256-");
       expect(text).not.toMatch(/[0-9a-f]{64}/u);
     });
 
-    test("never hides why execution is blocked", () => {
+    test("surfaces the concrete blocked step without a generic duplicate", () => {
       const blockedItems = items.map((item) =>
         item.kind === "implementation" ? { ...item, status: "blocked" as const } : item,
       );
       const text = timelineText({ items: blockedItems });
-      expect(text).toContain("! Blocked");
-      expect(text).toContain("blocker: blocked approach step exists");
+      expect(text).toContain("! Needs revision");
+      expect(text).toContain("Blocked Implement the parser change");
+      expect(text).not.toContain("blocked approach step exists");
       expect(text).toContain("1 blocked");
     });
 
@@ -345,8 +363,8 @@ describe("Plan Contract UI", () => {
         document: { ...document, context: [], criticalFiles: [], verification: [] },
         items: [],
       });
-      expect((text.match(/blocker: /g) ?? []).length).toBe(2);
-      expect(text).toMatch(/\+\d+ more blockers/u);
+      expect((text.match(/│ Issue/g) ?? []).length).toBe(2);
+      expect(text).toMatch(/\+\d+ more issues/u);
     });
 
     test("an approved digest keeps the existing compact TODO projection", () => {
@@ -376,9 +394,9 @@ describe("Plan Contract UI", () => {
         revision: 3,
         approval: { revision: 3, digest: planDigest(document, blockedItems)! },
       }, context()).map(lineText).join("\n");
-      expect(text).toContain("! Approved scope blocked");
+      expect(text).toContain("! Execution blocked");
       expect(text).not.toContain("✓ Approved");
-      expect(text).toContain("blocker: blocked approach step exists");
+      expect(text).toContain("Blocked Implement the parser change");
     });
 
     test("labels a ready and approved scope as approved", () => {
@@ -389,7 +407,7 @@ describe("Plan Contract UI", () => {
         approval: { revision: 4, digest: planDigest(document, items)! },
       }, context()).map(lineText).join("\n");
       expect(text).toContain("✓ Approved");
-      expect(text).not.toContain("blocker:");
+      expect(text).not.toContain("Issue");
     });
 
     test("planDetail full restores the whole contract for review surfaces", () => {
@@ -397,7 +415,7 @@ describe("Plan Contract UI", () => {
       for (const section of CONTRACT_SECTIONS) expect(text).toContain(section);
     });
 
-    test("stays inside a narrow terminal and keeps the hint on its own line", () => {
+    test("stays inside a narrow terminal and preserves the card hierarchy", () => {
       const columns = 44;
       const lines = renderTimeline(
         [{ type: "plan", id: "plan-1", sequence: 1, document, items, revision: 3 } as never],
@@ -406,7 +424,27 @@ describe("Plan Contract UI", () => {
       for (const row of lines) expect(lineWidth(row)).toBeLessThanOrEqual(columns);
       const text = lines.map(lineText).join("\n");
       const hintRow = text.split("\n").find((row) => row.includes("Ctrl+X P"));
-      expect(hintRow?.trim()).toBe("Ctrl+X P for full contract");
+      expect(hintRow?.startsWith("╰─ Ctrl+X P  Review full plan")).toBe(true);
+      expect(text.split("\n").every((row) => /^[╭│╰]/u.test(row))).toBe(true);
+    });
+
+    test("keeps the state and hierarchy legible without Unicode or color", () => {
+      const capabilities: TerminalCapabilities = {
+        colorDepth: "none",
+        italic: false,
+        unicode: false,
+        stableEmojiWidth: false,
+        reducedMotion: true,
+        mouse: false,
+        columns: 60,
+        rows: 24,
+        hyperlinks: false,
+      };
+      const lines = renderPlanSummary({ document, items, revision: 3 }, blockContext(capabilities, 60));
+      const text = lines.map(lineText).join("\n");
+      expect(text).toContain("+- Plan  r3  ·  * Ready to review");
+      expect(text).toContain("| Goal");
+      expect(text).toContain("+- Ctrl+X P  Review full plan");
     });
   });
 });

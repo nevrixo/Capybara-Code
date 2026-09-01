@@ -195,7 +195,7 @@ export function classifyFailure(input: {
     // that expose different failing assertions are not mistaken for the same
     // failed attempt and allowed to trigger an unrelated checkpoint rollback.
     signature: failureSignature(input.toolId, category, code, input.message, input.text),
-    guidance: guidanceFor(category, input.toolId),
+    guidance: guidanceFor(category, input.toolId, code),
     retryable: input.retryable ?? category === "environment_issue",
     implicatedPaths,
   };
@@ -233,13 +233,19 @@ function normalizeFailureText(value: string): string {
     .trim();
 }
 
-function guidanceFor(category: FailureCategory, toolId: string): string {
+function guidanceFor(category: FailureCategory, toolId: string, code: string): string {
   switch (category) {
     case "schema_mismatch":
       return `the arguments to ${toolId} did not satisfy its schema; correct them and re-issue the same intent rather than switching tools`;
     case "permission_denied":
       return "the action is outside the granted scope; narrow the approach or state what wider scope the task needs — do not retry the same call";
     case "environment_issue":
+      if (toolId === "process.run" && code === "TIMEOUT") {
+        return "process.run waits for exit; if this is an intentional server or watcher, call tool.discover for a background server and use process.start with the exact same program, argv, and cwd. Otherwise diagnose the timeout before retrying";
+      }
+      if (toolId === "process.run") {
+        return "the process failed because of the environment, not the change; restore the missing prerequisite, then rerun the exact command. A process failure is not a permission denial or an out-of-scope command";
+      }
       return "the failure is in the environment, not the change; establish whether the prerequisite exists before editing anything";
     case "logic_bug":
       if (toolId === "fs.read") {
@@ -247,6 +253,9 @@ function guidanceFor(category: FailureCategory, toolId: string): string {
       }
       if (toolId === "fs.list") {
         return "the requested directory is absent, not empty; do not repeat the listing. For a new tree, inspect the nearest existing parent and create target files with fs.write intent=create";
+      }
+      if (toolId === "process.run") {
+        return "inspect the command diagnostics, fix the underlying code or configuration, then rerun the exact command. A failed process is not a permission denial and does not put an approved command out of scope";
       }
       return "the assumption behind this call was wrong; re-read the relevant source before attempting another edit";
   }

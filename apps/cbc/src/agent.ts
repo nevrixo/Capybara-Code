@@ -3048,7 +3048,7 @@ export class AgentSession {
     const state = this.#todoController.current();
     const readiness = this.#todoController.readiness();
     if (!readiness.ready) return { ok: false, message: "Plan is not ready for execution", blockers: readiness.blockers };
-    if (state.approval === undefined || !this.#todoController.approvalValid()) return { ok: false, message: "Plan has not been approved; choose Yes, proceed in the Plan prompt first" };
+    if (state.approval === undefined || !this.#todoController.approvalValid()) return { ok: false, message: "Plan has not been approved; choose Approve and start building in Plan review first" };
     if (state.approval.contextStrategy === "compact") {
       const compacted = await this.compactContextWithProvider(AbortSignal.timeout(120_000));
       if (compacted.kind === "unsupported") {
@@ -3101,7 +3101,7 @@ export class AgentSession {
     // Build is an execution boundary. A plain /mode build or Shift+Tab may not
     // turn a drafted Plan into an execution contract; only preparePlanExecution can.
     if (target === "build" && model.modeState.selected === "plan" && this.#planExecution === undefined && (this.#todoController.current().document !== undefined || this.#todoController.current().items.length > 0)) {
-      this.#emit("error.internal", { code: "PLAN_EXECUTE_REQUIRED", message: "Review the Plan and choose Yes, proceed before switching to Build mode." }, this.#currentScope());
+      this.#emit("error.internal", { code: "PLAN_EXECUTE_REQUIRED", message: "Review the Plan and choose Approve and start building before switching to Build mode." }, this.#currentScope());
       return { kind: "unchanged", state: model.modeState };
     }
     const activity = {
@@ -4716,7 +4716,7 @@ export class AgentSession {
   async submit(prompt: string, signal: AbortSignal): Promise<TurnResult> {
     const planState = this.#todoController.current();
     if (this.recorder.model.modeState.selected === "build" && planState.document !== undefined) {
-      if (this.#planExecution === undefined) throw new Error("A drafted Plan Contract is not executable yet; choose Yes, proceed in the Plan prompt.");
+      if (this.#planExecution === undefined) throw new Error("A drafted Plan Contract is not executable yet; choose Approve and start building in Plan review.");
       if (!this.#todoController.approvalValid() || this.#planExecution.digest !== this.#todoController.digest()) {
         this.#planExecution = undefined;
         throw new Error("The approved Plan Contract digest is stale; review and approve the plan again.");

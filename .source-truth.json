@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "generatedAt": "2026-09-01T20:39:04.547Z",
+  "generatedAt": "2026-09-01T21:15:38.739Z",
   "git": {
-    "commit": "25fec66510c31442484b310b1788ace0806ef8a7",
+    "commit": "9de271b68752eb5c5c2c88c50666c75c15bb8bfe",
     "dirty": true,
-    "dirtyHash": "9b354b4fb086082d4e37bbd9de42f37fb8e7d0bb1b9c727bcc50ad688ad96b4b"
+    "dirtyHash": "921dcfba15b0317b30170e946d15d342b23f71ecb0f07797c685764814f82f60"
   },
   "roots": [
     "apps",
@@ -55,7 +55,7 @@
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
     "typescript": "5.9.3"
   },
-  "fileCount": 752,
+  "fileCount": 753,
   "historicalArtifacts": [],
   "files": [
     {
@@ -230,8 +230,8 @@
     },
     {
       "path": "apps/cbc/src/agent.ts",
-      "bytes": 249813,
-      "sha256": "710c334d550f052dc26226f8310d1daf53339eb454168aef085a712a3b5996cf"
+      "bytes": 249847,
+      "sha256": "b17cb6d53ee09dcd1c5158a35e551f43727c3622a9adf7773f7e63cb9caf3ec2"
     },
     {
       "path": "apps/cbc/src/approvals.ts",
@@ -300,8 +300,8 @@
     },
     {
       "path": "apps/cbc/src/commands/interactive.ts",
-      "bytes": 104003,
-      "sha256": "d4d72ed297f769eda64345f6fda6a66d0d3ea3b55f2c84719f0b51e23d5a6cfa"
+      "bytes": 104005,
+      "sha256": "37f94bb981c40920808a9af0404744e9c1bc38b5779944ee2b08094935bd1e11"
     },
     {
       "path": "apps/cbc/src/commands/learn.ts",
@@ -570,8 +570,8 @@
     },
     {
       "path": "apps/cbc/src/tui.ts",
-      "bytes": 153270,
-      "sha256": "b93e98ebac1b42206d86797069249522f9abd196c30e7d907fa4e2b843d5df70"
+      "bytes": 153292,
+      "sha256": "501d8815dea644aaa8cc5be793bc865f648311946453246f4d92a910f41033bc"
     },
     {
       "path": "apps/cbc/src/update-check.ts",
@@ -1840,8 +1840,8 @@
     },
     {
       "path": "packages/agent-kernel/src/observation.ts",
-      "bytes": 38341,
-      "sha256": "ecc3dfaf4130b61cd66d208b2c4c8b411ace97560a6660fd541bd876b306349a"
+      "bytes": 39202,
+      "sha256": "d03b82006394aa44505bcee33e533934b287c7ed24a779ff5352ac0a97edb3db"
     },
     {
       "path": "packages/agent-kernel/src/prompt.ts",
@@ -1885,8 +1885,8 @@
     },
     {
       "path": "packages/agent-kernel/test/fs-list-recovery.test.ts",
-      "bytes": 1577,
-      "sha256": "728e82313a9297da33f53db17fd64fc804982a8afa6991604bc2c93e6b41c077"
+      "bytes": 1578,
+      "sha256": "2fe4843df82a2716df8a5e1d061b71332fb66ea6b35b3c0bed25dca5d4f9d80d"
     },
     {
       "path": "packages/agent-kernel/test/kernel.test.ts",
@@ -1897,6 +1897,11 @@
       "path": "packages/agent-kernel/test/patch-recovery.test.ts",
       "bytes": 850,
       "sha256": "3f05f7fa0812866eb39fe5f0c41ebb8368b940293bb100665063139a689b06a2"
+    },
+    {
+      "path": "packages/agent-kernel/test/process-recovery-guidance.test.ts",
+      "bytes": 1276,
+      "sha256": "2349ba34f18d49c2203c4d145b65a37d507f6be321a8540f3ebe9b33d2911c6c"
     },
     {
       "path": "packages/agent-kernel/test/prompt-budget.test.ts",
@@ -3355,8 +3360,8 @@
     },
     {
       "path": "packages/tool-registry/src/catalog.ts",
-      "bytes": 69026,
-      "sha256": "195f36630545e6939afc238f43449dc1a4e76fcccb1bd32fcaf0547fb4ebfc2d"
+      "bytes": 69017,
+      "sha256": "ba411514c2406a0c036de9289d9c24578e54e1b12e84d87ce572b792f259b1c8"
     },
     {
       "path": "packages/tool-registry/src/discovery.ts",
@@ -3515,8 +3520,8 @@
     },
     {
       "path": "packages/tui-components/src/todo.ts",
-      "bytes": 40116,
-      "sha256": "ffbece64536b3c28709779b53793d8546b9c191dfa915b142e683d10a85c6023"
+      "bytes": 43885,
+      "sha256": "ed7e0bbb83092ff86de994b52ab59db9c0d83b153782d48a9d9dbed833effae5"
     },
     {
       "path": "packages/tui-components/src/width.ts",
@@ -3545,8 +3550,8 @@
     },
     {
       "path": "packages/tui-components/test/plan-contract-ui.test.ts",
-      "bytes": 15750,
-      "sha256": "0c38b1b3ad6b9beca34370dac92c16334d57c6c6f318ea9e1eee60e2ca4da195"
+      "bytes": 17628,
+      "sha256": "f8a45092d5fa5b6a6784f7cfa9f6a38a7c9b6c9487f09dd3005110d6c3acb5d1"
     },
     {
       "path": "packages/tui-components/test/questionnaire.test.ts",
@@ -3819,5 +3824,5 @@
       "sha256": "8391ee841757695b95ddefc5dfd0ac274ecc32a76d733f2193b0a02a605a83df"
     }
   ],
-  "digest": "6b1c3bfff07fa16f113e74ad78d44a03eb077076fc28237f6c539a9b0624ac79"
+  "digest": "3897008fefdb0e8ab94e119d66c772a663561bdaf2089c3326a406acecbfad02"
 }

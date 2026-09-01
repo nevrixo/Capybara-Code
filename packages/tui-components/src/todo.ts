@@ -11,7 +11,7 @@ import { planDigest, type PlanDocument, type PlanItem, type TodoListState } from
 
 import { fitLine, line, segment, wrapPrefixedLines, type BlockContext, type Segment, type StyledLine } from "./segments.ts";
 import { sanitizeInline } from "./sanitize.ts";
-import { stringWidth } from "./width.ts";
+import { stringWidth, wrapToWidth } from "./width.ts";
 import { todoBox } from "./chrome.ts";
 import type { ThemeToken } from "./theme.ts";
 
@@ -557,9 +557,9 @@ export function renderPlanApprovalPicker(
   const revision = typeof root.revision === "number"
     ? root.revision
     : typeof root.planRevision === "number" ? root.planRevision : 0;
-  // Show the digest that will be recorded even before approval.  The focused
-  // picker is the user's last review point; hiding the contract identity here
-  // would make the approval UI less auditable than the Plan review overlay.
+  // Resolve the digest that will be recorded even before approval. The picker
+  // shows its short human-facing Plan ID; the full identity remains in the
+  // read-only contract overlay for audit and copy/paste.
   const derivedDigest = currentPlanDigest(input, document, items);
   // Prefer the current scope digest over approval metadata: a stale approval
   // must never be presented as the digest of the draft currently on screen.
@@ -572,29 +572,35 @@ export function renderPlanApprovalPicker(
     ? -1
     : Math.max(0, Math.min(choices.length - 1, options.selected ?? 0));
   const divider = context.capabilities.unicode ? "─" : "-";
+  const readinessGlyph = readiness.ready
+    ? context.capabilities.unicode ? "●" : "*"
+    : "!";
+  const readinessLabel = readiness.ready ? "Ready to approve" : "Needs revision";
+  const readinessToken: ThemeToken = readiness.ready ? "accent.green" : "accent.amber";
   const lines: StyledLine[] = [
     fitLine("approval", [segment(divider.repeat(Math.max(12, context.columns)), { fg: "border.warm", dim: true })], context),
     fitLine("approval", [
-      segment("  📋 ", { fg: "accent.cyan" }),
-      segment("Plan ready", { fg: "accent.cyan", bold: true }),
+      segment("  Plan review", { fg: "fg.primary", bold: true }),
       segment(`  r${revision}`, { fg: "fg.muted" }),
+      segment("  ·  ", { fg: "fg.muted" }),
+      segment(`${readinessGlyph} ${readinessLabel}`, { fg: readinessToken, bold: true }),
     ], context),
     fitLine("approval", [], context),
   ];
   if (document?.goal !== undefined) {
     lines.push(fitLine("approval", [
-      segment("    Goal: ", { fg: "fg.muted" }),
+      segment("    Goal    ", { fg: "fg.muted" }),
       segment(sanitizeInline(document.goal, 240), { fg: "fg.primary", bold: true }),
     ], context));
   }
   lines.push(fitLine("approval", [
-    segment("    Scope: ", { fg: "fg.muted" }),
-    segment(`${items.length} step${items.length === 1 ? "" : "s"} · ${document?.criticalFiles.length ?? 0} file anchor${(document?.criticalFiles.length ?? 0) === 1 ? "" : "s"} · ${document?.verification.length ?? 0} verification check${(document?.verification.length ?? 0) === 1 ? "" : "s"}`, { fg: "fg.primary" }),
+    segment("    Scope   ", { fg: "fg.muted" }),
+    segment(`${items.length} step${items.length === 1 ? "" : "s"} · ${document?.criticalFiles.length ?? 0} file${(document?.criticalFiles.length ?? 0) === 1 ? "" : "s"} · ${document?.verification.length ?? 0} check${(document?.verification.length ?? 0) === 1 ? "" : "s"}`, { fg: "fg.primary" }),
   ], context));
   if (digest !== undefined) {
     lines.push(fitLine("approval", [
-      segment("    Digest: ", { fg: "fg.muted" }),
-      segment(sanitizeInline(digest, 160), { fg: "accent.cyan" }),
+      segment("    Plan ID ", { fg: "fg.muted" }),
+      segment(shortPlanId(digest), { fg: "accent.cyan" }),
     ], context));
   }
   if (!readiness.ready) {
@@ -605,7 +611,7 @@ export function renderPlanApprovalPicker(
     ], context));
   }
   lines.push(fitLine("approval", [], context));
-  lines.push(fitLine("approval", [segment("  What would you like to do?", { fg: "fg.primary", bold: true })], context));
+  lines.push(fitLine("approval", [segment("  Choose what happens next", { fg: "fg.primary", bold: true })], context));
   choices.forEach((choice, index) => {
     const active = index === selected;
     const cursor = active ? (context.capabilities.unicode ? "❯ " : "> ") : "  ";
@@ -615,15 +621,15 @@ export function renderPlanApprovalPicker(
       : { fg: "fg.muted" as const };
     lines.push(fitLine("approval", [
       segment(`  ${cursor}`, { fg: "accent.cyan", bold: true, ...(bg === undefined ? {} : { bg }) }),
-      segment(`${index + 1}. `, style),
+      segment(`${index + 1}  `, style),
       segment(sanitizeInline(choice, 180), style),
     ], context));
   });
   lines.push(fitLine("approval", [], context));
   lines.push(fitLine("approval", [
-    segment("  Esc to cancel", { fg: "fg.muted", dim: true }),
-    segment("  ·  ", { fg: "fg.muted", dim: true }),
-    segment("Tab/↑↓: Move  Enter: Select", { fg: "fg.muted", italic: true }),
+    segment(context.capabilities.unicode
+      ? "  ↑↓ / Tab move  ·  Enter select  ·  Esc cancel"
+      : "  Up/Down / Tab move  ·  Enter select  ·  Esc cancel", { fg: "fg.muted", dim: true }),
   ], context));
   lines.push(fitLine("approval", [segment(divider.repeat(Math.max(12, context.columns)), { fg: "border.warm", dim: true })], context));
   return lines;
@@ -671,21 +677,60 @@ export function renderNormalTodoList(
   return lines;
 }
 
-/** Below this width the "full contract" hint gets its own line. */
-const PLAN_SUMMARY_INLINE_HINT_COLUMNS = 60;
-
 /** How the full contract is reached from the collapsed timeline projection. */
-const PLAN_SUMMARY_HINT = "Ctrl+X P for full contract";
+const PLAN_SUMMARY_SHORTCUT = "Ctrl+X P";
+
+/** Fixed label column keeps the compact card scannable without a table layout. */
+const PLAN_SUMMARY_LABEL_COLUMNS = 7;
 
 /** Blockers shown inline before the summary falls back to a "+N more" count. */
 const PLAN_SUMMARY_MAX_BLOCKERS = 2;
+
+function planSummaryGlyphs(context: BlockContext): { readonly top: string; readonly rail: string; readonly bottom: string } {
+  return context.capabilities.unicode
+    ? { top: "╭─ ", rail: "│ ", bottom: "╰─ " }
+    : { top: "+- ", rail: "| ", bottom: "+- " };
+}
+
+function planSummaryRow(
+  label: string,
+  value: string,
+  context: BlockContext,
+  options: {
+    readonly labelToken?: ThemeToken;
+    readonly valueToken?: ThemeToken;
+    readonly valueBold?: boolean;
+  } = {},
+): StyledLine[] {
+  const clean = sanitizeInline(value, 400);
+  if (clean.length === 0) return [];
+  const glyphs = planSummaryGlyphs(context);
+  const labelText = `${label.padEnd(PLAN_SUMMARY_LABEL_COLUMNS)} `;
+  const prefixWidth = stringWidth(glyphs.rail) + stringWidth(labelText);
+  const chunks = wrapToWidth(clean, Math.max(1, context.columns - prefixWidth));
+  return chunks.map((chunk, index) => fitLine("body", [
+    segment(glyphs.rail, { fg: "border.warm" }),
+    segment(index === 0 ? labelText : " ".repeat(stringWidth(labelText)), {
+      fg: options.labelToken ?? "fg.muted",
+      bold: index === 0 && options.labelToken !== undefined,
+    }),
+    segment(chunk, {
+      fg: options.valueToken ?? "fg.primary",
+      ...(options.valueBold === true ? { bold: true } : {}),
+    }),
+  ], context));
+}
+
+function planSummaryCount(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
 
 /**
  * Render the collapsed Plan projection used by the conversation timeline.
  *
  * A Plan Contract is a document, and repainting all of it on every frame buried
  * the conversation it was supposed to describe. This keeps what a reader has to
- * act on — the goal, step progress, readiness, and why execution is blocked —
+ * act on — the goal, scope, next change, readiness, and why execution is blocked —
  * and defers the rest to the Plan/TODO overlay, which still renders in full via
  * `renderPlanContract`.
  *
@@ -713,87 +758,118 @@ export function renderPlanSummary(
   const ready = readiness.ready;
   const approved = ready && approvedScope;
   const executionBlocked = !ready && approvedScope;
+  const statusGlyph = approved
+    ? context.capabilities.unicode ? "✓" : "+"
+    : ready && !executionBlocked
+      ? context.capabilities.unicode ? "●" : "*"
+      : "!";
   const status = approved
-    ? "✓ Approved"
+    ? "Approved"
     : executionBlocked
-      ? "! Approved scope blocked"
-      : ready ? "○ Ready for approval" : "! Blocked";
+      ? "Execution blocked"
+      : ready ? "Ready to review" : "Needs revision";
   const statusStyle: ThemeToken = approved
     ? "accent.green"
     : ready && !executionBlocked ? "accent.cyan" : "accent.amber";
 
+  const glyphs = planSummaryGlyphs(context);
   const heading: Segment[] = [
+    segment(glyphs.top, { fg: "border.warm" }),
     segment("Plan", { fg: "fg.primary", bold: true }),
     segment(revision > 0 ? `  r${revision}` : "", { fg: "fg.muted" }),
     segment("  ·  ", { fg: "fg.muted" }),
-    segment(status, { fg: statusStyle, bold: true }),
+    segment(`${statusGlyph} ${status}`, { fg: statusStyle, bold: true }),
   ];
-  const inlineHint = context.columns >= PLAN_SUMMARY_INLINE_HINT_COLUMNS;
-  if (inlineHint) {
-    const used = heading.reduce((total, part) => total + stringWidth(part.text), 0);
-    const gap = context.columns - used - stringWidth(PLAN_SUMMARY_HINT);
-    if (gap >= 2) {
-      heading.push(segment(" ".repeat(gap), {}));
-      heading.push(segment(PLAN_SUMMARY_HINT, { fg: "fg.muted", dim: true }));
-    }
-  }
   const lines: StyledLine[] = [fitLine("header", heading, context)];
-  if (!inlineHint) {
-    lines.push(fitLine("body", [segment(`  ${PLAN_SUMMARY_HINT}`, { fg: "fg.muted", dim: true })], context));
-  }
 
   if (document !== undefined && document.goal.trim().length > 0) {
-    lines.push(...wrapPrefixedLines(
-      [segment("  Goal: ", { fg: "fg.muted" })],
-      sanitizeInline(document.goal, 400),
-      context,
-      { fg: "fg.primary" },
-    ));
+    lines.push(...planSummaryRow("Goal", document.goal, context, { valueBold: true }));
   }
 
   const done = items.filter((item) => item.status === "done").length;
   const blocked = items.filter((item) => item.status === "blocked").length;
   const active = items.filter((item) => item.status === "active").length;
-  const progress = [
-    `${done}/${items.length} done`,
-    active > 0 ? `${active} active` : undefined,
-    blocked > 0 ? `${blocked} blocked` : undefined,
+  const pending = items.filter((item) => item.status === "pending").length;
+  const skipped = items.filter((item) => item.status === "skipped").length;
+  const scope = [
+    planSummaryCount(items.length, "step"),
+    done > 0 ? planSummaryCount(done, "complete", "complete") : undefined,
+    active > 0 ? planSummaryCount(active, "in progress", "in progress") : undefined,
+    blocked > 0 ? planSummaryCount(blocked, "blocked", "blocked") : undefined,
+    pending > 0 ? planSummaryCount(pending, "queued", "queued") : undefined,
+    skipped > 0 ? planSummaryCount(skipped, "skipped", "skipped") : undefined,
+    document !== undefined ? planSummaryCount(document.criticalFiles.length, "file") : undefined,
+    document !== undefined ? planSummaryCount(document.verification.length, "check") : undefined,
   ].filter((entry): entry is string => entry !== undefined).join(" · ");
-  lines.push(fitLine("body", [
-    segment("  Steps: ", { fg: "fg.muted" }),
-    segment(progress, { fg: blocked > 0 ? "accent.amber" : "fg.primary" }),
-  ], context));
+  lines.push(...planSummaryRow("Scope", scope, context, {
+    valueToken: blocked > 0 ? "accent.amber" : "fg.primary",
+  }));
+
+  const blockedItem = items.find((item) => item.status === "blocked");
+  const activeItem = items.find((item) => item.status === "active");
+  const pendingItem = items.find((item) => item.status === "pending" && item.kind === "implementation") ??
+    items.find((item) => item.status === "pending" && item.kind !== "analysis") ??
+    items.find((item) => item.status === "pending");
+  if (blockedItem !== undefined) {
+    const reason = blockedItem.blockedReason === undefined
+      ? blockedItem.text
+      : `${blockedItem.text} — ${blockedItem.blockedReason}`;
+    lines.push(...planSummaryRow("Blocked", reason, context, {
+      labelToken: "accent.amber",
+      valueToken: "accent.amber",
+    }));
+  } else if (activeItem !== undefined) {
+    lines.push(...planSummaryRow("Now", activeItem.text, context, {
+      labelToken: "accent.coral",
+      valueToken: "fg.primary",
+    }));
+  } else if (pendingItem !== undefined) {
+    lines.push(...planSummaryRow("Next", pendingItem.text, context, {
+      labelToken: "accent.cyan",
+      valueToken: "fg.primary",
+    }));
+  }
 
   if (!ready) {
-    const blockers = readiness.blockers ?? ["Plan is not ready"];
+    // A concrete blocked step above is more useful than the domain's generic
+    // summary of the same condition. Structural blockers remain verbatim.
+    const blockers = (readiness.blockers ?? ["Plan is not ready"])
+      .filter((blocker) => blockedItem === undefined || blocker !== "blocked approach step exists");
     for (const blocker of blockers.slice(0, PLAN_SUMMARY_MAX_BLOCKERS)) {
-      lines.push(...wrapPrefixedLines(
-        [segment("  blocker: ", { fg: "fg.muted" })],
-        sanitizeInline(blocker, 400),
-        context,
-        { fg: "accent.amber" },
-      ));
+      lines.push(...planSummaryRow("Issue", blocker, context, {
+        labelToken: "accent.amber",
+        valueToken: "accent.amber",
+      }));
     }
     const hidden = blockers.length - PLAN_SUMMARY_MAX_BLOCKERS;
     if (hidden > 0) {
-      lines.push(fitLine("body", [
-        segment(`  +${hidden} more blocker${hidden === 1 ? "" : "s"}`, { fg: "accent.amber", dim: true }),
-      ], context));
+      lines.push(...planSummaryRow("", `+${hidden} more issue${hidden === 1 ? "" : "s"}`, context, {
+        valueToken: "accent.amber",
+      }));
     }
   }
 
+  const action = executionBlocked || !ready ? "Inspect full plan" : approved ? "View approved plan" : "Review full plan";
+  const footer: Segment[] = [
+    segment(glyphs.bottom, { fg: "border.warm" }),
+    segment(PLAN_SUMMARY_SHORTCUT, { fg: "accent.cyan", bold: true }),
+    segment(`  ${action}`, { fg: "fg.muted" }),
+  ];
   if (digest !== undefined) {
-    // The short form is enough to tell two scopes apart at a glance; the full
-    // 64-character identity stays available in the overlay and the picker.
-    lines.push(fitLine("body", [segment(`  ${shortPlanDigest(digest)}`, { fg: "accent.cyan", dim: true })], context));
+    // Keep the protocol-shaped hash out of the primary UI. The full digest is
+    // still available in the contract overlay; eight hex characters are enough
+    // for a human to distinguish the draft currently in view.
+    footer.push(segment("  ·  ID ", { fg: "fg.muted", dim: true }));
+    footer.push(segment(shortPlanId(digest), { fg: "accent.cyan", dim: true }));
   }
+  lines.push(fitLine("body", footer, context));
   return lines;
 }
 
-/** `plan-sha256-<8 hex>` — the auditable prefix, not the whole hash. */
-function shortPlanDigest(digest: string): string {
+/** The human-facing eight-character identity for a digest-bound Plan scope. */
+function shortPlanId(digest: string): string {
   const match = /^(plan-sha256-)([0-9a-f]{8})[0-9a-f]*$/u.exec(digest);
-  return match !== null ? `${match[1]}${match[2]}` : sanitizeInline(digest, 24);
+  return match !== null ? match[2]! : sanitizeInline(digest, 12);
 }
 
 /**
