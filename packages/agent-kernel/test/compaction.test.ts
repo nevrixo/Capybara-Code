@@ -67,7 +67,8 @@ describe("context summary model", () => {
   test("collects and parses a structured provider response", async () => {
     const bundle = sourceBundle();
     const provider = new MockProvider({
-      steps: [{ text: JSON.stringify(summary(bundle.sourceDigest)) }],
+      steps: [],
+      contextSummary: { output: summary(bundle.sourceDigest) },
     });
     const model = new ProviderContextSummaryModel(provider);
     const result = await model.summarize({
@@ -89,7 +90,8 @@ describe("context summary model", () => {
   test("fails closed on invalid JSON", async () => {
     const bundle = sourceBundle();
     const model = new ProviderContextSummaryModel(new MockProvider({
-      steps: [{ text: "not-json" }],
+      steps: [],
+      contextSummary: { rawText: "not-json" },
     }));
     const result = await model.summarize({
       requestId: "compact-invalid",
@@ -109,9 +111,10 @@ describe("context summary model", () => {
   test("rejects tool calls from the compaction model", async () => {
     const bundle = sourceBundle();
     const model = new ProviderContextSummaryModel(new MockProvider({
-      steps: [{
+      steps: [],
+      contextSummary: {
         toolCalls: [{ callId: "bad", name: "fs.read", arguments: { path: "x" } }],
-      }],
+      },
     }));
     const result = await model.summarize({
       requestId: "compact-tool",
@@ -133,7 +136,8 @@ describe("context summary model", () => {
     const controller = new AbortController();
     controller.abort();
     const model = new ProviderContextSummaryModel(new MockProvider({
-      steps: [{ text: JSON.stringify(summary(bundle.sourceDigest)) }],
+      steps: [],
+      contextSummary: { output: summary(bundle.sourceDigest) },
     }));
     const result = await model.summarize({
       requestId: "compact-cancel",

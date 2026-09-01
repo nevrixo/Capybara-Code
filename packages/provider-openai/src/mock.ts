@@ -53,6 +53,13 @@ export interface MockProviderOptions {
   readonly capabilities?: Partial<ProviderCapabilities>;
   readonly compactionError?: ProviderError;
   readonly compactionOpaque?: string;
+  /** Dedicated model-summary response that does not consume ordinary task steps. */
+  readonly contextSummary?: {
+    readonly output?: unknown;
+    readonly rawText?: string;
+    readonly error?: ProviderError;
+    readonly toolCalls?: ScriptedStep["toolCalls"];
+  };
 }
 
 export class MockProvider implements ModelProvider {
@@ -150,7 +157,8 @@ export class MockProvider implements ModelProvider {
   async *stream(request: ModelRequest, signal: AbortSignal): AsyncIterable<ModelEvent> {
     this.requests.push(request);
 
-    const step = this.#nextStep();
+    const contextSummary = request.responseFormat?.name === "context_compaction_summary_v2";
+    const step = contextSummary ? this.#contextSummaryStep(request) : this.#nextStep();
     if (!step) {
       yield {
         type: "response.failed",
@@ -242,6 +250,108 @@ export class MockProvider implements ModelProvider {
     }
     return undefined;
   }
+
+  #contextSummaryStep(request: ModelRequest): ScriptedStep {
+    const configured = this.#options.contextSummary;
+    if (configured?.error !== undefined) return { error: configured.error };
+    return {
+      ...(configured?.rawText === undefined
+        ? { text: JSON.stringify(configured?.output ?? defaultContextSummary(request)) }
+        : { text: configured.rawText }),
+      ...(configured?.toolCalls === undefined ? {} : { toolCalls: configured.toolCalls }),
+    };
+  }
+}
+
+function defaultContextSummary(request: ModelRequest): unknown {
+  const bundle = contextSummaryBundle(request);
+  if (bundle === undefined) return {};
+  const currentGoal = record(bundle.currentGoal);
+  const todos = arrayOfRecords(bundle.todos).map((item) => ({
+    id: stringValue(item.id),
+    text: stringValue(item.text),
+    status: stringValue(item.status),
+    blockedReason: typeof item.blockedReason === "string" ? item.blockedReason : null,
+  }));
+  const approvals = arrayOfRecords(bundle.approvals).map((item) => structuredClone(item));
+  const pendingQuestionnaire = bundle.pendingQuestionnaire === null
+    ? null
+    : structuredClone(bundle.pendingQuestionnaire);
+  const failures = arrayOfRecords(bundle.failures);
+  return {
+    schemaVersion: "2.0",
+    sourceDigest: stringValue(bundle.sourceDigest),
+    goal: stringValue(currentGoal?.goal),
+    currentState: "Compacted from the deterministic source bundle.",
+    constraints: cloneArray(bundle.userConstraints),
+    decisions: cloneArray(bundle.decisions),
+    completedWork: cloneArray(bundle.completedWork),
+    workspaceChanges: arrayOfRecords(bundle.changedFiles).map((file) => ({
+      path: stringValue(file.path),
+      summary: stringValue(file.diffSummary),
+      evidenceRefs: cloneArray(file.evidenceRefs),
+    })),
+    verification: arrayOfRecords(bundle.verification).map((check) => ({
+      command: typeof check.command === "string" ? check.command : null,
+      status: stringValue(check.status),
+      text: stringValue(check.summary),
+      evidenceRefs: cloneArray(check.evidenceRefs),
+    })),
+    failedApproaches: failures.map((failure) => ({
+      text: stringValue(failure.summary),
+      reason: typeof failure.correctiveAction === "string"
+        ? failure.correctiveAction
+        : "inspect the evidence and choose a safe correction",
+      evidenceRefs: cloneArray(failure.evidenceRefs),
+    })),
+    unresolved: [],
+    todos,
+    approvals,
+    pendingQuestionnaire,
+    nextAction: stringValue(
+      todos.find((item) => item.status === "active")?.text ??
+      todos.find((item) => item.status === "pending")?.text ??
+      "await user direction",
+    ),
+  };
+}
+
+function contextSummaryBundle(request: ModelRequest): Record<string, unknown> | undefined {
+  const message = request.input.find((item) => item.type === "message" && item.role === "user");
+  const text = message?.type === "message"
+    ? message.content.find((part) => part.type === "input_text")?.text
+    : undefined;
+  if (text === undefined) return undefined;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    const payload = record(parsed);
+    return record(payload?.sourceBundle);
+  } catch {
+    return undefined;
+  }
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function arrayOfRecords(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.flatMap((entry) => {
+        const parsed = record(entry);
+        return parsed === undefined ? [] : [parsed];
+      })
+    : [];
+}
+
+function cloneArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? structuredClone(value) : [];
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
 }
 
 function chunkText(text: string, chunks: number): string[] {
