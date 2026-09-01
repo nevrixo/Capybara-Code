@@ -391,3 +391,47 @@ function cancelledError(): ProviderError {
     retryable: false,
   };
 }
+
+export interface ProviderResponseHistoryUpdate {
+  readonly history: ModelRequest["input"];
+  readonly replaced: boolean;
+}
+
+/**
+ * Provider-native compaction is a replacement candidate, never another opaque
+ * item appended behind the transcript it already summarizes.
+ */
+export function applyProviderResponseHistory(
+  current: readonly ModelRequest["input"][number][],
+  responseItems: readonly ModelRequest["input"][number][],
+): ProviderResponseHistoryUpdate {
+  const compactionIndex = responseItems.findLastIndex((item) => item.type === "compaction");
+  if (compactionIndex < 0) {
+    return { history: [...current, ...responseItems], replaced: false };
+  }
+  const compaction = responseItems[compactionIndex]!;
+  const retainedUsers = dedupeModelItems(
+    [...current, ...responseItems.slice(0, compactionIndex)]
+      .filter((item) => item.type === "message" && item.role === "user"),
+  );
+  return {
+    history: [
+      ...retainedUsers,
+      compaction,
+      ...responseItems.slice(compactionIndex + 1),
+    ],
+    replaced: true,
+  };
+}
+
+function dedupeModelItems<T>(items: readonly T[]): T[] {
+  const seen = new Set<string>();
+  const output: T[] = [];
+  for (const item of items) {
+    const key = JSON.stringify(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(item);
+  }
+  return output;
+}

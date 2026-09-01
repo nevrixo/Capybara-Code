@@ -7,6 +7,7 @@ import {
 } from "@cbc/session-domain";
 import { MockProvider } from "@cbc/provider-openai";
 import {
+  applyProviderResponseHistory,
   ProviderContextSummaryModel,
   buildContextSummaryModelRequest,
 } from "../src/compaction.ts";
@@ -151,6 +152,60 @@ describe("context summary model", () => {
     expect(result).toMatchObject({
       ok: false,
       error: { kind: "cancelled", retryable: false },
+    });
+  });
+});
+
+describe("provider-native compaction history", () => {
+  test("replaces old assistant/tool history instead of appending the opaque item", () => {
+    const user = {
+      type: "message" as const,
+      role: "user" as const,
+      content: [{ type: "input_text" as const, text: "keep this request" }],
+    };
+    const current = [
+      user,
+      {
+        type: "message" as const,
+        role: "assistant" as const,
+        content: [{ type: "output_text" as const, text: "old answer" }],
+      },
+      { type: "function_call" as const, callId: "old", name: "fs.read", argumentsText: "{}" },
+      { type: "function_call_output" as const, callId: "old", output: "large old output" },
+    ];
+    const newAnswer = {
+      type: "message" as const,
+      role: "assistant" as const,
+      content: [{ type: "output_text" as const, text: "new answer" }],
+    };
+    const update = applyProviderResponseHistory(current, [
+      structuredClone(user),
+      { type: "compaction", opaque: "opaque-summary" },
+      newAnswer,
+    ]);
+    expect(update.replaced).toBe(true);
+    expect(update.history).toEqual([
+      user,
+      { type: "compaction", opaque: "opaque-summary" },
+      newAnswer,
+    ]);
+    expect(update.history.some((item) => item.type === "function_call_output")).toBe(false);
+  });
+
+  test("keeps ordinary responses append-only", () => {
+    const current = [{
+      type: "message" as const,
+      role: "user" as const,
+      content: [{ type: "input_text" as const, text: "hello" }],
+    }];
+    const response = [{
+      type: "message" as const,
+      role: "assistant" as const,
+      content: [{ type: "output_text" as const, text: "hi" }],
+    }];
+    expect(applyProviderResponseHistory(current, response)).toEqual({
+      history: [...current, ...response],
+      replaced: false,
     });
   });
 });

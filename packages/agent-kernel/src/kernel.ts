@@ -17,6 +17,7 @@ import {
   THINKING_MAX_SUMMARY_CHARS,
   ThinkingAssembler,
 } from "./thinking.ts";
+import { applyProviderResponseHistory } from "./compaction.ts";
 import {
   estimateCostUsd,
   emptyUsage,
@@ -1211,7 +1212,17 @@ export class AgentKernel {
 
   /** Keep a withheld candidate visible to the next model sample, never to the user as final. */
   #appendWithheldFinal(items: readonly ModelInputItem[]): void {
-    this.#history.push(...asIntermediateAssistantItems(items));
+    this.#adoptResponseItems(asIntermediateAssistantItems(items));
+  }
+
+  #adoptResponseItems(items: readonly ModelInputItem[]): void {
+    const update = applyProviderResponseHistory(this.#history, items);
+    this.#history = update.history;
+    if (update.replaced) {
+      // #recordProviderContinuation ran before the outer loop adopted these
+      // items. Re-anchor its cursor to the replacement view.
+      this.#continuationHistoryCursor = this.#history.length;
+    }
   }
 
   /**
@@ -1647,7 +1658,7 @@ export class AgentKernel {
             // Preserve the provider's opaque items and visible fragment as
             // intermediate context for a user-led continuation. It is never
             // accepted as final-answer history for this turn.
-            this.#history.push(...stepResult.items);
+            this.#adoptResponseItems(stepResult.items);
             const reason = `provider response was incomplete (${stepResult.reason})`;
             this.#stopReason = reason;
             this.#risks.push(reason);
@@ -1666,7 +1677,7 @@ export class AgentKernel {
           if (stepResult.kind === "tool_calls") {
             machine.apply("tool_calls");
             // Carry the model's own items forward so replay stays faithful.
-            this.#history.push(...stepResult.items);
+            this.#adoptResponseItems(stepResult.items);
             this.#pendingCalls = stepResult.calls;
             break;
           }
@@ -1936,7 +1947,7 @@ export class AgentKernel {
           }
 
           // Only an accepted candidate becomes durable final-answer history.
-          this.#history.push(...pendingFinalItems);
+          this.#adoptResponseItems(pendingFinalItems);
           pendingFinalItems = [];
           if (pendingFinalCameFromWrapUp) this.#wrapUpDelivered = true;
           pendingFinalCameFromWrapUp = false;
