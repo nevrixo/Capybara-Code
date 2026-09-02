@@ -255,6 +255,7 @@ describe("model compaction summary validation", () => {
         ...check,
         status: "failed" as const,
       })),
+      nextAction: "invented next action",
     };
     const result = validateModelCompactionSummary(invalid, bundle, {
       estimateTokens,
@@ -268,6 +269,7 @@ describe("model compaction summary validation", () => {
     expect(codes).toContain("todo_mismatch");
     expect(codes).toContain("verification_mismatch");
     expect(codes).toContain("constraint_dropped");
+    expect(codes).toContain("next_action_mismatch");
   });
 
   test("rejects omitted pending state and summaries over budget", () => {

@@ -137,15 +137,25 @@ describe("context compaction v2 pressure integration", () => {
     expect(result.compactions).toHaveLength(1);
     expect(result.committed).toHaveLength(1);
     expect(result.taskRequests).toHaveLength(7);
+    expect(JSON.stringify(result.taskRequests.at(-1)?.input))
+      .toContain("Finish the remembered work and report verification.");
     expect(result.providerErrors).toEqual([]);
     const receipt = (result.committed[0]?.payload as {
-      receipt?: { strategy?: string; compiledTokensAfter?: number; summaryTokens?: number };
+      receipt?: {
+        strategy?: string;
+        compiledTokensAfter?: number;
+        summaryTokens?: number;
+        targetMet?: boolean;
+        ratioAfter?: number;
+      };
     }).receipt;
     expect(result.turnEvents
       .filter((event) => event.kind === "context.compaction_validation_failed")
       .map((event) => event.payload)).toEqual([]);
     expect(receipt?.strategy).toBe("model_summary");
     expect(receipt?.compiledTokensAfter).not.toBe(receipt?.summaryTokens);
+    expect(receipt?.targetMet).toBe(true);
+    expect(receipt?.ratioAfter).toBeLessThanOrEqual(0.6);
   });
 
   test("does not consume a second model attempt in the verification pass", async () => {

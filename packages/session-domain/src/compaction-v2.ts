@@ -98,6 +98,7 @@ export interface CompactionSourceBundle {
   readonly changedFiles: readonly CompactionChangedFile[];
   readonly verification: readonly CompactionVerification[];
   readonly failures: readonly CompactionFailure[];
+  readonly nextAction: EvidenceBoundText | null;
   readonly evidenceCatalog: readonly CompactionEvidenceCatalogEntry[];
   readonly transcriptPrefix: readonly unknown[];
   readonly recentTail: readonly unknown[];
@@ -189,6 +190,7 @@ export interface ModelCompactionValidationIssue {
     | "questionnaire_mismatch"
     | "verification_mismatch"
     | "failure_dropped"
+    | "next_action_mismatch"
     | "budget_exceeded"
     | "source_changed";
   readonly path: string;
@@ -316,6 +318,20 @@ export function buildCompactionSourceBundle(
   const changedFiles = buildChangedFiles(model, register);
   const verification = buildVerification(model, register);
   const failures = buildFailures(model, options.reflections ?? [], register);
+  const nextTodo = todos.find((item) => item.status === "active") ??
+    todos.find((item) => item.status === "pending");
+  const latestFailure = failures.at(-1);
+  const nextAction: EvidenceBoundText | null = nextTodo !== undefined
+    ? {
+        text: nextTodo.text,
+        evidenceRefs: todoEvidenceRefs[nextTodo.id] ?? [],
+      }
+    : latestFailure?.correctiveAction
+      ? {
+          text: latestFailure.correctiveAction,
+          evidenceRefs: latestFailure.evidenceRefs,
+        }
+      : null;
   for (const item of model.timeline) {
     if (item.type !== "tool") continue;
     for (const artifact of item.artifacts ?? []) register(artifact, "artifact");
@@ -346,6 +362,7 @@ export function buildCompactionSourceBundle(
     changedFiles,
     verification,
     failures,
+    nextAction,
     evidenceCatalog: [...catalog.entries()]
       .map(([id, kind]) => ({ id, kind }))
       .sort((left, right) => left.id.localeCompare(right.id)),
@@ -658,6 +675,13 @@ export function validateModelCompactionSummary(
       code: "questionnaire_mismatch",
       path: "$.pendingQuestionnaire",
       message: "pending questionnaire state must remain exact",
+    });
+  }
+  if (bundle.nextAction !== null && value.nextAction !== bundle.nextAction.text) {
+    issues.push({
+      code: "next_action_mismatch",
+      path: "$.nextAction",
+      message: "next action must match the active/pending TODO or corrective action",
     });
   }
 
