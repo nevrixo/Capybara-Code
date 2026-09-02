@@ -2647,7 +2647,7 @@ function summarizeArgs(args: unknown): string {
     .join(" ");
 }
 
-/** §6.13 context percentage against the *soft* budget, not the model window. */
+/** §6.13 safety percentage against the effective model input capacity. */
 export function contextPercent(model: SessionViewModel): number {
   if (model.contextBudgetTokens <= 0) return 0;
   return Math.min(100, (model.contextUsedTokens / model.contextBudgetTokens) * 100);

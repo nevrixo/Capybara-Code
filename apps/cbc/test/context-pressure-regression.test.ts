@@ -28,15 +28,16 @@ async function runTurn(
     warmupTurns?: number;
     warmupResponseChars?: number;
     contextSummary?: MockProviderOptions["contextSummary"];
+    steps?: MockProviderOptions["steps"];
   } = {},
 ) {
   const warmupTurns = options.warmupTurns ?? 0;
   const provider = new MockProvider({
-    steps: Array.from({ length: warmupTurns + 1 }, (_, index) => ({
-      text: index < warmupTurns
-        ? `Warmup ${index + 1} complete. ${"w".repeat(options.warmupResponseChars ?? 0)}`
-        : "Done.",
-    })),
+    steps: options.steps ?? Array.from({ length: warmupTurns + 1 }, (_, index) => ({
+        text: index < warmupTurns
+          ? `Warmup ${index + 1} complete. ${"w".repeat(options.warmupResponseChars ?? 0)}`
+          : "Done.",
+      })),
     ...(options.contextSummary === undefined
       ? {}
       : { contextSummary: options.contextSummary }),
@@ -192,6 +193,39 @@ describe("context compaction v2 pressure integration", () => {
     expect(receipt).toMatchObject({
       strategy: "deterministic_fallback",
       fallbackUsed: true,
+    });
+  });
+
+  test("routes a provider context-length error through the same controller once", async () => {
+    const result = await runTurn(
+      "Retry safely after a provider context error.",
+      {
+        warmupTurns: 3,
+        steps: [
+          { text: "Warmup one." },
+          { text: "Warmup two." },
+          { text: "Warmup three." },
+          {
+            error: {
+              kind: "context_length",
+              message: "provider context limit exceeded",
+              retryable: false,
+            },
+          },
+          { text: "Recovered after compaction." },
+        ],
+      },
+    );
+    expect(result.summaryRequests).toHaveLength(1);
+    expect(result.compactions).toHaveLength(1);
+    expect(result.taskRequests).toHaveLength(5);
+    expect(result.providerErrors).toEqual([]);
+    const receipt = (result.committed[0]?.payload as {
+      receipt?: { trigger?: string; strategy?: string };
+    }).receipt;
+    expect(receipt).toMatchObject({
+      trigger: "provider_context_error",
+      strategy: "model_summary",
     });
   });
 });

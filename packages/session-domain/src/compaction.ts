@@ -159,6 +159,7 @@ export interface CompactionResult {
    * L6, tool schemas) are rebuilt every compile and are untouched here. Retained
    * for journal compatibility; prefer `capsuleTokens` when the capsule is what
    * you mean.
+   * @deprecated Never use this field as compiled context usage.
    */
   readonly tokensAfter: number;
   /** Size of the rendered capsule alone. Never a prompt size. */

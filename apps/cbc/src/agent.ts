@@ -2701,6 +2701,11 @@ export class AgentSession {
       todoRevision: this.recorder.model.todo.revision,
       goalDigest: goal?.goalDigest,
       workspaceGeneration: this.#workspaceGeneration,
+      userInstructions: this.recorder.model.timeline.flatMap((item) =>
+        item.type === "user" ? [[item.id, item.text]] : []),
+      pendingApproval: this.recorder.model.pendingApproval?.approvalId,
+      deepPlanRevision: this.recorder.model.deepPlan?.revision,
+      changedFiles: [...this.recorder.model.changedFiles.entries()],
     });
     return {
       model: this.recorder.model,
@@ -2849,11 +2854,11 @@ export class AgentSession {
       // The anti-spin guard this enables was dead: `lastCompaction` was never
       // supplied, so a compaction that freed nothing was retried at full
       // strength instead of being demoted to `prepare`.
-      ...(this.#lastCompactionCapsule === undefined || this.#lastCompactionPromptTokens === undefined
+      ...(this.#contextPressure.generation <= 0 || this.#lastCompactionPromptTokens === undefined
         ? {}
         : {
             lastCompaction: {
-              generation: this.#lastCompactionCapsule.generation,
+              generation: this.#contextPressure.generation,
               tokensAfter: this.#lastCompactionPromptTokens,
               newTokensSince: Math.max(0, prompt.inputTokens - this.#lastCompactionPromptTokens),
             },
@@ -2865,6 +2870,12 @@ export class AgentSession {
     if (!attempt.recompiled) this.#contextPressure.observeCompiledTokens(prompt.inputTokens);
     this.#lastContextPressure = decision;
     if (this.#options.config.experimental.contextCompactionV2) {
+      if (decision.state === "prepare" && !attempt.recompiled) {
+        this.#contextCompactionController.prepare({
+          prompt,
+          ...(attempt.userInput === undefined ? {} : { userInput: attempt.userInput }),
+        });
+      }
       return await this.#guardContextPressureV2(prompt, attempt, decision);
     }
     const compactionPolicy = this.#options.config.model.context.compactionPolicy;
@@ -4033,7 +4044,10 @@ export class AgentSession {
 
   /** Journal the effective policy for turn reproducibility (§18.2). */
   #emitTokenSavingPolicy(plan: ResolvedTokenSavingPlan): void {
-    const soft = Math.max(0, this.#options.config.model.softContextTokens);
+    const soft = Math.max(
+      0,
+      this.#options.config.model.context.optimizationTargetTokens,
+    );
     this.#emit("token_saving.policy_applied", {
       requestedLevel: plan.requestedLevel,
       effectiveLevel: plan.effectiveLevel,
@@ -4897,8 +4911,12 @@ export class AgentSession {
       .map((record) => record.id)
       .slice(-12);
     const epoch = this.taskEpoch.current();
-    const soft = Math.max(0, this.#options.config.model.softContextTokens);
-    const reserve = Math.max(0, this.#options.config.model.context.reserveOutputTokens);
+    const soft = Math.max(
+      0,
+      this.#options.config.model.context.optimizationTargetTokens,
+    );
+    const capacity = this.#inputBudgetTokens();
+    const reserve = Math.max(0, capacity.reserve);
     const phase = this.#tokenSavingPhase();
     // Token saving only moves the soft target and the exploration ceiling. The
     // hard input limit and the exact-evidence floor are untouched, so saving
@@ -4918,10 +4936,13 @@ export class AgentSession {
         taskEpochId: epoch.id,
       }),
       budget: {
-        modelContextLimit: soft + reserve,
+        modelContextLimit: capacity.window ?? capacity.budget + reserve,
         outputReserve: reserve,
-        hardInputLimit: soft,
-        targetInputTokens: Math.floor(soft * savingPlan.targetInputRatio),
+        hardInputLimit: capacity.budget,
+        targetInputTokens: Math.min(
+          capacity.budget,
+          Math.floor(soft * savingPlan.targetInputRatio),
+        ),
         exactEvidenceFloor: Math.min(this.context.activeExcerptBudget, Math.floor(soft * 0.35)),
         explorationCeiling: Math.floor(soft * savingPlan.explorationRatio),
       },

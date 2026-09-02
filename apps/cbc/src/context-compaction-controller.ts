@@ -188,6 +188,7 @@ export class ContextCompactionController {
   readonly #config: CbcConfig;
   readonly #attempts = new Map<number, number>();
   #active = false;
+  #preparedSourceIdentity: string | undefined;
 
   constructor(options: {
     readonly provider: ModelProvider;
@@ -199,6 +200,44 @@ export class ContextCompactionController {
     this.#host = options.host;
     this.#config = options.config;
     this.#summaryModel = options.summaryModel ?? new ProviderContextSummaryModel(options.provider);
+  }
+
+  prepare(input: {
+    readonly prompt: CompiledModelRequest;
+    readonly userInput?: string;
+  }): void {
+    if (
+      !this.#config.experimental.contextCompactionV2 ||
+      this.#config.model.context.compactionStrategy === "off"
+    ) return;
+    const snapshot = this.#host.snapshot();
+    if (this.#preparedSourceIdentity === snapshot.sourceIdentity) return;
+    const split = splitHistoryForCompaction(
+      snapshot.history,
+      this.#config.model.context.compactionRecentTurns,
+      snapshot.sampledThrough,
+    );
+    if (split.prefix.length === 0 && snapshot.compactState === undefined) return;
+    const bundle = buildCompactionSourceBundle(snapshot.model, {
+      ...(snapshot.currentGoal === undefined ? {} : { currentGoal: snapshot.currentGoal }),
+      ...(snapshot.goalEvaluation === undefined
+        ? {}
+        : { goalEvaluation: snapshot.goalEvaluation }),
+      generation: snapshot.generation,
+      transcriptPrefix: sanitizeTranscript(split.prefix),
+      recentTail: sanitizeTranscript(split.recentTail),
+      ...(snapshot.compactState === undefined
+        ? {}
+        : { priorCompactState: snapshot.compactState }),
+      reflections: snapshot.reflections,
+    });
+    this.#preparedSourceIdentity = snapshot.sourceIdentity;
+    this.#host.emit("context.compaction_prepared", {
+      generation: snapshot.generation,
+      sourceDigest: bundle.sourceDigest,
+      compiledTokensBefore: input.prompt.inputTokens,
+      trigger: "prepare",
+    });
   }
 
   async compact(request: ContextCompactionRequest): Promise<ContextCompactionOutcome> {
@@ -263,7 +302,8 @@ export class ContextCompactionController {
         0,
         request.prompt.inputTokens - fixedPrompt.inputTokens,
       );
-      this.#host.emit("context.compaction_prepared", {
+      if (this.#preparedSourceIdentity !== snapshot.sourceIdentity) {
+        this.#host.emit("context.compaction_prepared", {
         generation: snapshot.generation,
         sourceDigest: bundle.sourceDigest,
         compiledTokensBefore: request.prompt.inputTokens,
@@ -272,7 +312,9 @@ export class ContextCompactionController {
         targetCompiledTokens,
         summaryBudgetTokens: budget.summaryBudgetTokens,
         trigger: request.trigger,
-      });
+        });
+        this.#preparedSourceIdentity = snapshot.sourceIdentity;
+      }
       if (budget.irreducible) {
         this.#host.emit("context.compaction_target_missed", {
           generation: snapshot.generation,
@@ -393,6 +435,7 @@ export class ContextCompactionController {
       if (provider.kind === "ready") return provider;
       lastError = provider.error;
       reasons.push(...provider.reasonCodes);
+      if (provider.error?.kind === "cancelled") return provider;
       if (input.configuredStrategy === "provider-native" && !emergency) {
         return provider;
       }
@@ -405,6 +448,14 @@ export class ContextCompactionController {
       if (model.kind === "ready") return model;
       lastError = model.error ?? lastError;
       reasons.push(...model.reasonCodes);
+      if (model.error?.kind === "cancelled") return model;
+    }
+    if (lastError?.kind === "cancelled") {
+      return {
+        kind: "failed",
+        reasonCodes: ["compaction_cancelled"],
+        error: lastError,
+      };
     }
     if (
       emergency &&
@@ -510,6 +561,9 @@ export class ContextCompactionController {
         kind: "failed",
         reasonCodes: ["model_attempt_limit_reached"],
       };
+    }
+    for (const generation of this.#attempts.keys()) {
+      if (generation < input.snapshot.generation - 2) this.#attempts.delete(generation);
     }
     this.#attempts.set(input.snapshot.generation, attempts + 1);
     const effort = this.#config.model.context.compactionReasoningEffort as ReasoningEffort;

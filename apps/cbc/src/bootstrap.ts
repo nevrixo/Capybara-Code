@@ -798,7 +798,9 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
         modelId: effective.model.default,
         permissionMode: effective.agent.permissionMode,
         reasoningEffort: effective.model.reasoningEffort,
-        contextBudgetTokens: effective.model.softContextTokens,
+        contextBudgetTokens: session.viewModel.contextBudgetTokens,
+        contextOptimizationTargetTokens:
+          effective.model.context.optimizationTargetTokens,
         trust,
         detail: `Restored ${loaded.eventCount ?? loaded.events.length} prior event(s) and conversation history.`,
       });
@@ -812,7 +814,9 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
         modelId: effective.model.default,
         permissionMode: effective.agent.permissionMode,
         reasoningEffort: effective.model.reasoningEffort,
-        contextBudgetTokens: effective.model.softContextTokens,
+        contextBudgetTokens: session.viewModel.contextBudgetTokens,
+        contextOptimizationTargetTokens:
+          effective.model.context.optimizationTargetTokens,
         trust,
         detail: "Session resumed without prior event history.",
       });

@@ -2947,6 +2947,12 @@ export class AgentKernel {
         reasonCodes: firstDecision.decision?.reasonCodes ?? [],
         currentRatio: firstDecision.decision?.currentRatio,
         inputBudgetTokens: firstDecision.decision?.inputBudgetTokens,
+        basis: firstDecision.decision?.basis,
+        modelContextWindowTokens: firstDecision.decision?.modelContextWindowTokens,
+        outputReserveTokens: firstDecision.decision?.outputReserveTokens,
+        triggerTokens: firstDecision.decision?.triggerTokens,
+        triggerRatio: firstDecision.decision?.triggerRatio,
+        emergencyRatio: firstDecision.decision?.emergencyRatio,
         requestTokens: assembled.inputTokens,
       });
       if (firstDecision.action !== "accept") {
@@ -2972,6 +2978,12 @@ export class AgentKernel {
           reasonCodes: secondDecision.decision?.reasonCodes ?? [],
           currentRatio: secondDecision.decision?.currentRatio,
           inputBudgetTokens: secondDecision.decision?.inputBudgetTokens,
+          basis: secondDecision.decision?.basis,
+          modelContextWindowTokens: secondDecision.decision?.modelContextWindowTokens,
+          outputReserveTokens: secondDecision.decision?.outputReserveTokens,
+          triggerTokens: secondDecision.decision?.triggerTokens,
+          triggerRatio: secondDecision.decision?.triggerRatio,
+          emergencyRatio: secondDecision.decision?.emergencyRatio,
           requestTokens: assembled.inputTokens,
           recompilation: 1,
         });

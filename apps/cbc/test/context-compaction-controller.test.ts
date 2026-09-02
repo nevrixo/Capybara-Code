@@ -241,6 +241,20 @@ describe("history compaction split", () => {
 });
 
 describe("ContextCompactionController", () => {
+  test("prepares one source bundle per unchanged source without mutating history", () => {
+    const fixture = sessionFixture();
+    const host = new TestHost(fixture.model, fixture.history);
+    const original = structuredClone(host.history);
+    const prompt = host.preview({ history: host.history, generation: 0 });
+    const controller = makeController(host, new TestSummaryModel());
+    controller.prepare({ prompt });
+    controller.prepare({ prompt });
+    expect(host.events.filter((event) =>
+      event.kind === "context.compaction_prepared")).toHaveLength(1);
+    expect(host.history).toEqual(original);
+    expect(host.committed).toBeUndefined();
+  });
+
   test("validates, stages, recompiles, and commits exact model-summary metrics", async () => {
     const fixture = sessionFixture();
     const host = new TestHost(fixture.model, fixture.history);
@@ -343,6 +357,36 @@ describe("ContextCompactionController", () => {
     expect(result).toMatchObject({
       kind: "aborted",
       reasonCodes: ["source_generation_changed"],
+    });
+    expect(host.committed).toBeUndefined();
+    expect(host.history).toEqual(original);
+  });
+
+  test("cancellation never falls through to the emergency fallback", async () => {
+    const fixture = sessionFixture();
+    const host = new TestHost(fixture.model, fixture.history);
+    const original = structuredClone(host.history);
+    const before = host.preview({ history: host.history, generation: 0 });
+    host.budget = Math.ceil(before.inputTokens / 0.98);
+    const cancelled: ContextSummaryModel = {
+      summarize: async () => ({
+        ok: false,
+        error: {
+          kind: "cancelled",
+          message: "cancelled",
+          retryable: false,
+        },
+      }),
+    };
+    const result = await makeController(host, cancelled).compact({
+      prompt: before,
+      signal: AbortSignal.abort(),
+      trigger: "ratio",
+      pressureState: "emergency",
+    });
+    expect(result).toMatchObject({
+      kind: "aborted",
+      error: { kind: "cancelled" },
     });
     expect(host.committed).toBeUndefined();
     expect(host.history).toEqual(original);
