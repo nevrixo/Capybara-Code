@@ -81,10 +81,14 @@ async function runTurn(options: {
 
   const route = events.find((event) => event.kind === "model.route_decided");
   const pressure = events.find((event) => event.kind === "context.pressure_evaluated");
+  const pack = events.find((event) => event.kind === "context.pack_compiled");
   return {
     band: (route?.payload as { contextBand?: number } | undefined)?.contextBand,
     inputBudgetTokens: (pressure?.payload as { inputBudgetTokens?: number } | undefined)
       ?.inputBudgetTokens,
+    gaugeBudgetTokens: (pack?.payload as {
+      contextUsage?: { budgetTokens?: number };
+    } | undefined)?.contextUsage?.budgetTokens,
   };
 }
 
@@ -100,9 +104,12 @@ describe("routing bands and context safety are independent", () => {
   });
 
   test("an explicit maxInputTokens hard cap still wins", async () => {
-    const { band, inputBudgetTokens } = await runTurn({ maxInputTokens: 12_000 });
+    const { band, gaugeBudgetTokens, inputBudgetTokens } = await runTurn({
+      maxInputTokens: 12_000,
+    });
 
     expect(band).toBeGreaterThan(12_000);
     expect(inputBudgetTokens).toBe(12_000);
+    expect(gaugeBudgetTokens).toBe(12_000);
   });
 });

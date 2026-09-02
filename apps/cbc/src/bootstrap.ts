@@ -227,6 +227,17 @@ async function resolveResumedSession(
   }
 }
 
+/** Keep an account session inside the backend's safe input capacity. */
+export function resolveAccountInputBudget(
+  configuredMaxInputTokens: number | "auto",
+  accountModelBudget: number,
+): number {
+  const accountLimit = Math.max(1, Math.floor(accountModelBudget));
+  return typeof configuredMaxInputTokens === "number"
+    ? Math.min(Math.max(1, Math.floor(configuredMaxInputTokens)), accountLimit)
+    : accountLimit;
+}
+
 /**
  * Bring up a session.
  *
@@ -315,6 +326,10 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
         configuredBudget === undefined
           ? accountModelBudget
           : Math.min(effective.model.softContextTokens, accountModelBudget);
+      effective.model.context.maxInputTokens = resolveAccountInputBudget(
+        effective.model.context.maxInputTokens,
+        accountModelBudget,
+      );
     }
   }
 
