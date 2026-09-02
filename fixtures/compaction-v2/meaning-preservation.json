@@ -1,0 +1,106 @@
+[
+  {
+    "name": "latest goal replaces the first request",
+    "events": [
+      { "kind": "user.message", "payload": { "text": "Build a JSON parser" } },
+      { "kind": "user.message", "payload": { "text": "Change the goal completely: build a CSV parser" } }
+    ],
+    "expect": { "goal": "Change the goal completely: build a CSV parser", "constraintCount": 2 }
+  },
+  {
+    "name": "constraints remain evidence-bound across turns",
+    "events": [
+      { "kind": "user.message", "payload": { "text": "Implement export" } },
+      { "kind": "user.message", "payload": { "text": "Do not add dependencies" } },
+      { "kind": "user.message", "payload": { "text": "Keep Windows paths working" } }
+    ],
+    "expect": { "constraintCount": 3 }
+  },
+  {
+    "name": "ordinary shell work is not verification",
+    "events": [
+      { "kind": "user.message", "payload": { "text": "Install and test" } },
+      { "kind": "tool.started", "payload": { "callId": "install", "toolId": "process.run", "display": "npm install" } },
+      { "kind": "tool.completed", "payload": { "callId": "install", "toolId": "process.run", "summary": "installed" } },
+      { "kind": "tool.started", "payload": { "callId": "test", "toolId": "process.run", "display": "npm test" } },
+      { "kind": "tool.completed", "payload": { "callId": "test", "toolId": "process.run", "summary": "passed" } }
+    ],
+    "expect": { "verificationCommands": ["npm test"], "excludedVerificationCommands": ["npm install"] }
+  },
+  {
+    "name": "failed approach retains its correction",
+    "events": [
+      { "kind": "user.message", "payload": { "text": "Patch the parser" } },
+      { "kind": "tool.started", "payload": { "callId": "patch", "toolId": "fs.patch", "display": "src/parser.ts" } },
+      { "kind": "tool.failed", "payload": { "callId": "patch", "toolId": "fs.patch", "message": "stale anchor", "code": "STALE_ANCHOR" } }
+    ],
+    "reflections": [
+      {
+        "toolId": "fs.patch",
+        "category": "stale_anchor",
+        "rootCause": "the file changed",
+        "correctiveAction": "reread the file and regenerate the patch",
+        "paths": ["src/parser.ts"]
+      }
+    ],
+    "expect": { "failureCorrection": "reread the file and regenerate the patch" }
+  },
+  {
+    "name": "large output artifact remains reachable",
+    "events": [
+      { "kind": "user.message", "payload": { "text": "Inspect the generated report" } },
+      { "kind": "tool.started", "payload": { "callId": "read", "toolId": "fs.read", "display": "reports/large.txt" } },
+      { "kind": "tool.completed", "payload": { "callId": "read", "toolId": "fs.read", "summary": "large report externalized", "artifacts": ["artifact-large-report"] } }
+    ],
+    "expect": { "artifact": "artifact-large-report" }
+  },
+  {
+    "name": "latest semantic file purpose wins repeated edits",
+    "events": [
+      { "kind": "user.message", "payload": { "text": "Refine the parser" } },
+      { "kind": "transaction.committed", "payload": { "operations": [{ "path": "src/parser.ts", "additions": 3, "deletions": 1 }] } },
+      { "kind": "diff.updated", "payload": { "files": [{ "path": "src/parser.ts", "additions": 3, "deletions": 1, "purpose": "add initial CSV parsing" }] } },
+      { "kind": "transaction.committed", "payload": { "operations": [{ "path": "src/parser.ts", "additions": 5, "deletions": 2 }] } },
+      { "kind": "diff.updated", "payload": { "files": [{ "path": "src/parser.ts", "additions": 5, "deletions": 2, "purpose": "preserve quoted comma semantics" }] } }
+    ],
+    "expect": { "path": "src/parser.ts", "fileSummary": "preserve quoted comma semantics" }
+  },
+  {
+    "name": "blocked TODO keeps id status and reason",
+    "events": [
+      { "kind": "user.message", "payload": { "text": "Implement and verify" } },
+      {
+        "kind": "plan.created",
+        "payload": {
+          "revision": 1,
+          "source": "model",
+          "items": [
+            { "id": "impl", "text": "Implement parser", "status": "active" },
+            { "id": "verify", "text": "Verify parser", "status": "blocked", "blockedReason": "implementation incomplete" }
+          ]
+        }
+      }
+    ],
+    "expect": { "todoId": "verify", "todoStatus": "blocked", "blockedReason": "implementation incomplete" }
+  },
+  {
+    "name": "denied approval survives a safe alternative",
+    "events": [
+      { "kind": "user.message", "payload": { "text": "Publish safely" } },
+      {
+        "kind": "approval.requested",
+        "payload": {
+          "approvalId": "publish-1",
+          "action": "process.run",
+          "display": "npm publish",
+          "reason": "external side effect",
+          "riskClass": "R4",
+          "sideEffects": ["publish"]
+        }
+      },
+      { "kind": "approval.resolved", "payload": { "approvalId": "publish-1", "decision": "deny", "reason": "use a dry run" } },
+      { "kind": "assistant.commentary", "payload": { "text": "Using npm pack --dry-run instead." } }
+    ],
+    "expect": { "approvalId": "publish-1", "approvalStatus": "denied", "decisionContains": "npm pack --dry-run" }
+  }
+]
