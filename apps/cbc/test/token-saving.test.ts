@@ -92,8 +92,8 @@ describe("token saving runtime wiring", () => {
     const payload = policy?.payload as Record<string, unknown>;
     expect(payload.requestedLevel).toBe("off");
     expect(payload.effectiveLevel).toBe("off");
-    expect(payload.targetInputTokens).toBe(96_000);
-    expect(payload.explorationCeiling).toBe(28_800);
+    expect(payload.targetInputTokens).toBe(192_000);
+    expect(payload.explorationCeiling).toBe(57_600);
     expect(payload.localCompactionRatio).toBe(0.7);
   });
 
@@ -124,8 +124,8 @@ describe("token saving runtime wiring", () => {
     const payload = policy?.payload as Record<string, unknown>;
     expect(payload.requestedLevel).toBe("balanced");
     expect(payload.effectiveLevel).toBe("balanced");
-    expect(payload.targetInputTokens).toBe(Math.floor(96_000 * 0.85));
-    expect(payload.explorationCeiling).toBe(Math.floor(96_000 * 0.22));
+    expect(payload.targetInputTokens).toBe(Math.floor(192_000 * 0.85));
+    expect(payload.explorationCeiling).toBe(Math.floor(192_000 * 0.22));
     expect(payload.localCompactionRatio).toBe(0.55);
     expect(payload.ponytail).toBe("full");
     expect(payload.responseStyle).toBe("concise");

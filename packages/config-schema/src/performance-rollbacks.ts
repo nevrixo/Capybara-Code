@@ -93,9 +93,9 @@ export const PERFORMANCE_KILL_SWITCHES: readonly PerformanceKillSwitch[] = [
   },
   {
     feature: "provider_compaction",
-    configPath: "model.context.providerCompaction",
+    configPath: "experimental.contextCompactionV2",
     safeValue: false,
-    reason: "use the local evidence-ledger compaction path only",
+    reason: "restore the legacy local evidence-ledger compaction path",
   },
   {
     feature: "tool_search",

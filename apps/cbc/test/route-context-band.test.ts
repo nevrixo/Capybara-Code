@@ -1,5 +1,5 @@
 /**
- * §5.15: the *configured* context band is the ContextCompiler budget.
+ * Context routing bands are telemetry/cost choices, never safety denominators.
  *
  * An earlier attempt wired the route's **measured** `contextBand` into the
  * pressure budget. That could not work, and these tests previously pinned the
@@ -12,9 +12,8 @@
  * request across a band boundary drops the budget by a whole band, so compaction
  * could raise the ratio it was lowering.
  *
- * The intent behind §5.15 — a deliberately narrow band should compact earlier —
- * is real, and is carried by `model.context.defaultBand`: a policy chosen before
- * the prompt is seen. The measured band stays a routing/telemetry field.
+ * A deliberately lower safety ceiling is expressed only by maxInputTokens. The
+ * optimization target and routing bands remain independent.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -39,14 +38,28 @@ function fakeRuntime() {
   };
 }
 
-async function runTurn(softContextTokens: number) {
+async function runTurn(options: {
+  optimizationTargetTokens?: number;
+  maxInputTokens?: number;
+} = {}) {
   const provider = new MockProvider({ steps: [{ text: "Done." }] });
   const events: CbcEvent[] = [];
   let now = 1_000;
   const base = loadConfig({ projectTrusted: true, env: {} }).config;
   const config = {
     ...base,
-    model: { ...base.model, softContextTokens },
+    model: {
+      ...base.model,
+      context: {
+        ...base.model.context,
+        ...(options.optimizationTargetTokens === undefined
+          ? {}
+          : { optimizationTargetTokens: options.optimizationTargetTokens }),
+        ...(options.maxInputTokens === undefined
+          ? {}
+          : { maxInputTokens: options.maxInputTokens }),
+      },
+    },
   };
   const session = new AgentSession({
     host: { now: () => ++now } as never,
@@ -75,24 +88,19 @@ async function runTurn(softContextTokens: number) {
   };
 }
 
-describe("the configured context band is the compiler budget (§5.15)", () => {
-  test("the enforced budget is the configured band, not the measured one", async () => {
-    const defaultBand = loadConfig({ projectTrusted: true, env: {} })
-      .config.model.context.defaultBand;
-    // A configured soft budget wider than nothing here; the point is that the
-    // measured band (64k) does not appear in the enforced number at all.
-    const { band, inputBudgetTokens } = await runTurn(96_000);
+describe("routing bands and context safety are independent", () => {
+  test("the enforced budget is model input capacity, not a measured or soft band", async () => {
+    const { band, inputBudgetTokens } = await runTurn({
+      optimizationTargetTokens: 96_000,
+    });
 
     expect(band).toBe(64_000);
-    // This assertion previously read `64_000 - reserve` (= 32_000) and encoded
-    // the defect: a 58k request was judged against a 32k budget.
-    expect(inputBudgetTokens).toBe(Math.min(96_000, defaultBand));
-    expect(inputBudgetTokens).not.toBe(64_000 - loadConfig({ projectTrusted: true, env: {} })
-      .config.model.context.reserveOutputTokens);
+    expect(inputBudgetTokens).toBe(1_018_000);
+    expect(inputBudgetTokens).not.toBe(96_000);
   });
 
-  test("the band is a ceiling, so a tighter configured budget still wins", async () => {
-    const { band, inputBudgetTokens } = await runTurn(12_000);
+  test("an explicit maxInputTokens hard cap still wins", async () => {
+    const { band, inputBudgetTokens } = await runTurn({ maxInputTokens: 12_000 });
 
     expect(band).toBeGreaterThan(12_000);
     expect(inputBudgetTokens).toBe(12_000);

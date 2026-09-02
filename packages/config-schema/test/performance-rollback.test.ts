@@ -71,7 +71,7 @@ describe("performance rollback contract", () => {
     expect(merged.config.agent.compoundTools).toBe(false);
     expect(merged.config.agent.verification.reviewPolicy).toBe("always");
     expect(merged.config.model.router.phasePolicy).toBe(false);
-    expect(merged.config.model.context.providerCompaction).toBe(false);
+    expect(merged.config.experimental.contextCompactionV2).toBe(false);
     expect(merged.config.provider.openai.toolSearch).toBe(false);
     expect(merged.config.provider.openai.serviceTier).toBe("standard");
   });
